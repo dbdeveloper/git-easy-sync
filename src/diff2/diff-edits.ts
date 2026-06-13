@@ -16,6 +16,7 @@ import { ChangeSet, EditorState, type ChangeDesc, type Text } from "@codemirror/
 import type { EditorView } from "@codemirror/view";
 import type { VerRange } from "./diff-model";
 import { fromRangeSet, readStructure, setStructure, structureField } from "./diff-structure";
+import { replayDispatch } from "./history-log-v2";
 
 // §2.2.4(2): inserts needed to restore a missing content-trailing \n, one per
 // affected ver-block. Positions are in the post-edit doc (insert before the
@@ -53,6 +54,13 @@ export function autoNewlineInserts(
 // structure-replacing transactions (resolution / replay set structure wholesale).
 export const autoNewlineFilter = EditorState.transactionFilter.of((tr) => {
   if (!tr.docChanged) return tr;
+  // bug-16: REPLAY re-dispatches the recorded change, which ALREADY includes this
+  // filter's auto-\n (composed at record time). Re-running the filter on replay
+  // re-maps the structure + composes a fresh ChangeSet against the replay doc — a
+  // second normalization that can desync the running length and throw
+  // "Applying change set to a document with the wrong length" on a later block.
+  // Replay must apply recorded ops VERBATIM → skip.
+  if (tr.annotation(replayDispatch)) return tr;
   if (tr.effects.some((e) => e.is(setStructure))) return tr;
   const mapped = fromRangeSet(tr.startState.field(structureField).map(tr.changes));
   const inserts = autoNewlineInserts(tr.newDoc, mapped);
@@ -89,6 +97,7 @@ export function externalGuardOk(doc: Text, ranges: VerRange[], changes: ChangeDe
 
 export const externalGuardFilter = EditorState.changeFilter.of((tr) => {
   if (!tr.docChanged) return true;
+  if (tr.annotation(replayDispatch)) return true; // replay applies recorded ops verbatim (bug-16)
   if (tr.effects.some((e) => e.is(setStructure))) return true; // resolution / replay
   return externalGuardOk(
     tr.startState.doc,

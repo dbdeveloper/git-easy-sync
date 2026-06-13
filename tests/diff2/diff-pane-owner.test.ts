@@ -177,6 +177,44 @@ describe("DiffPaneOwner (P6.3 view-swap core)", () => {
     expect(await readHistory(fx.vault, conflictId)).toBe(jsonl);
   });
 
+  it("replay of a typing session that triggered auto-\\n reproduces the doc (bug-16 class)", async () => {
+    // ver1 is EMPTY; typing into it fires autoNewlineFilter (composes a \n into the
+    // recorded change). Replay must apply that recorded change VERBATIM — re-running
+    // the filter on replay double-normalizes and can throw "wrong length". This pins
+    // replay==live for that path.
+    const basePath = "Notes/t.md";
+    const siblingPath = "Notes/t.conflict-from-Phone-2026-06-03T10-30-00Z.md";
+    const base = "a\nb\n";
+    const sibling = "a\nX\nb\n";
+    await fx.vault.adapter.writeBinary(basePath, enc(base));
+    await fx.vault.adapter.writeBinary(siblingPath, enc(sibling));
+    const entry = entryFor(basePath, siblingPath);
+    const conflictId = autosaveIdForEntry(entry);
+    await startSession(fx.vault, conflictId, basePath, siblingPath);
+
+    const cfg = { localLabel: "local", remoteLabel: "Phone", date: "", isMarkdown: true };
+    const live = new DiffPaneOwner(fx.vault, conflictId, container, base, sibling, cfg, 0);
+    const lv = live.getView();
+    const v1from = (await import("../../src/diff2/diff-structure"))
+      .readStructure(lv.state)
+      .find((r) => r.ver === 1)!.from;
+    lv.dispatch({ changes: { from: v1from, insert: "w" }, selection: { anchor: v1from + 1 }, userEvent: "input.type" });
+    const liveResolved = live.getResolved();
+    await live.drainHistory();
+    live.dispose();
+
+    const jsonl = await readHistory(fx.vault, conflictId);
+    const rp = document.createElement("div");
+    document.body.appendChild(rp);
+    const replayed = new DiffPaneOwner(fx.vault, conflictId, rp, base, sibling, cfg, scanHistoryV2(jsonl).blocks.length);
+    replayed.replayWithGuard(jsonl); // must NOT throw "wrong length"
+    const replayedResolved = replayed.getResolved();
+    replayed.dispose();
+    rp.remove();
+
+    expect(replayedResolved).toEqual(liveResolved);
+  });
+
   it("setCursor clamps an out-of-range offset to the doc length", async () => {
     const basePath = "Notes/q.md";
     const siblingPath = "Notes/q.conflict-from-Phone-2026-06-03T10-30-00Z.md";
