@@ -35,7 +35,7 @@ import type ConflictStore from "../sync2/conflict-store";
 import { renderConflictsList } from "./conflicts-list";
 import { isMarkdownPath } from "./conflict-merge-all";
 import { DiffPaneOwner, resolvedFromView } from "./diff-pane-owner";
-import { mountDiffPaneV2 } from "./diff-pane-v2";
+import { type DiffViewConfig, mountDiffPaneV2 } from "./diff-pane-v2";
 import {
   DEFAULT_DIFF_EDIT_VIEW_STATE,
   DiffEditSubTab,
@@ -53,7 +53,6 @@ import { reopenAction } from "./reopen-action";
 import { ResumeRecoveryModal, SaveToAltModal } from "./recovery-dialog";
 import { assessHistoryV2, replayHistoryV2, scanHistoryV2 } from "./history-replay-v2";
 import { readCursor } from "./cursor-store";
-import type { ResolveOpts } from "./diff-resolve";
 import type Logger from "../logger";
 import { atomicWriteFile } from "../sync2/atomic-write";
 import {
@@ -438,12 +437,14 @@ export class DiffEditView extends ItemView {
         ),
       );
 
-      // Join header context for the in-editor diff-group buttons + hotkeys
-      // (resolveOpts; wired through the owner into the V2 pane). label = the
-      // remote device, date = the conflict timestamp.
-      const resolveOpts: ResolveOpts = {
-        label: entry.deviceLabel,
+      // View config threaded through the owner into the V2 pane: device labels
+      // (top/bottom markers), join date, and isMarkdown (Join-button gate). The
+      // owner derives the resolve ResolveOpts {label: remoteLabel, date} from it.
+      const config: DiffViewConfig = {
+        localLabel: this.deps.localDeviceLabel?.() ?? "local",
+        remoteLabel: entry.deviceLabel,
         date: entry.isoTimestamp,
+        isMarkdown: isMarkdownPath(entry.basePath),
       };
 
       // Clear any prior dir, open a fresh session, and mount the owner from the
@@ -464,7 +465,7 @@ export class DiffEditView extends ItemView {
           body,
           ours,
           theirs,
-          resolveOpts,
+          config,
           0, // fresh history.jsonl seq
           this.deps.logger,
         );
@@ -486,7 +487,7 @@ export class DiffEditView extends ItemView {
           body,
           sess.base,
           sess.sibling,
-          resolveOpts,
+          config,
           scanHistoryV2(sess.jsonl).blocks.length,
           this.deps.logger,
         );
@@ -580,7 +581,7 @@ export class DiffEditView extends ItemView {
               body,
               fresh.base,
               fresh.sibling,
-              resolveOpts,
+              config,
               0,
               this.deps.logger,
             );

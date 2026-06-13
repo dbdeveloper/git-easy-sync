@@ -178,14 +178,40 @@ export function resolveCurrentGroup(
   return applyResolve(view, group, choice, opts, "keyboard"); // §2.2.9 hotkey → keep the caret
 }
 
-// Default hotkeys for the current group (configurable; Prec.highest so they win
-// over defaultKeymap). Mod = Ctrl/Cmd.
+// Which ver-block side the caret sits in (1/2), or null if not inside a ver range.
+// Drives the §1.9 context-sensitive apply/remove ("this block" = the caret's side).
+function caretVer(view: EditorView): 1 | 2 | null {
+  const head = view.state.selection.main.head;
+  for (const r of readStructure(view.state)) {
+    if (head >= r.from && head <= r.to) return r.ver;
+  }
+  return null;
+}
+
+// §1.9 "apply this block" — keep the side the caret is in (ver1→keep1, ver2→keep2).
+function resolveApplyCurrent(view: EditorView, opts: ResolveOpts): boolean {
+  const ver = caretVer(view);
+  return ver === null ? false : resolveCurrentGroup(view, ver === 1 ? "keep1" : "keep2", opts);
+}
+// §1.9 "remove this block" — drop the side the caret is in (ver1→keep2, ver2→keep1).
+function resolveRemoveCurrent(view: EditorView, opts: ResolveOpts): boolean {
+  const ver = caretVer(view);
+  return ver === null ? false : resolveCurrentGroup(view, ver === 1 ? "keep2" : "keep1", opts);
+}
+
+// §1.9 hotkeys — active only when the caret is in a ver-block (else they fall
+// through to defaultKeymap). LITERAL `Ctrl` on every platform (NOT `Mod`/Cmd):
+// §1.9 deliberately uses Ctrl on Mac too (Cmd+Backspace is OS-reserved). Prec.
+// highest so they win over defaultKeymap. apply/remove are context-sensitive on
+// the caret's side (resolveApply/RemoveCurrent).
 export function diffResolveKeymap(opts: ResolveOpts = {}): Extension {
   return Prec.highest(
     keymap.of([
-      { key: "Mod-Enter", run: (v) => resolveCurrentGroup(v, "keep2", opts) }, // apply theirs
-      { key: "Mod-Shift-Enter", run: (v) => resolveCurrentGroup(v, "keep1", opts) }, // keep ours
-      { key: "Mod-Alt-Enter", run: (v) => resolveCurrentGroup(v, "both", opts) },
+      { key: "Ctrl-Enter", run: (v) => resolveApplyCurrent(v, opts) }, // apply this block
+      { key: "Ctrl-Backspace", run: (v) => resolveRemoveCurrent(v, opts) }, // remove this block
+      { key: "Ctrl-Shift-Enter", run: (v) => resolveCurrentGroup(v, "both", opts) },
+      { key: "Ctrl-Shift-Backspace", run: (v) => resolveCurrentGroup(v, "neither", opts) },
+      { key: "Ctrl-Shift-.", run: (v) => resolveCurrentGroup(v, "join", opts) }, // md only (no-op if non-md group)
     ]),
   );
 }

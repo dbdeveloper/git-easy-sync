@@ -18,6 +18,7 @@
 import {
   EditorSelection,
   EditorState,
+  Facet,
   Prec,
   StateField,
   Transaction,
@@ -44,7 +45,8 @@ import {
 } from "./diff-structure";
 import { type MarkerKind, markerSpecs, verLineDecisions } from "./diff-decorations";
 import { autoNewlineFilter, externalGuardFilter } from "./diff-edits";
-import { selectionLegalizeFilter } from "./diff-selection";
+import { groupsOf, selectionLegalizeFilter } from "./diff-selection";
+import { computeWordDiff } from "./word-level-diff";
 import { diffLineNumbers } from "./diff-line-numbers";
 import { type ResolveChoice, type ResolveOpts, diffResolveKeymap, resolveClickHandler } from "./diff-resolve";
 import { type HistorySink, type ReplayFlag, historyFeedListener } from "./history-feed";
@@ -57,10 +59,11 @@ import type { CursorActivity } from "./cursor-timer";
 export interface DiffPaneV2Hooks {
   sink: HistorySink;
   flag: ReplayFlag; // SAME instance the owner passes to replayWithGuard
-  // P6.3 — join deviceLabel/date threaded into the in-editor diff-group buttons
-  // (resolveClickHandler) and the resolve hotkeys (diffResolveKeymap) so a "Join"
-  // produces the `> Changes from <label> at <date>` header. Undefined → defaults.
-  resolveOpts?: ResolveOpts;
+  // P6.3 — view config threaded into the marker decorations (device labels +
+  // Join-button visibility) AND derived into ResolveOpts {label: remoteLabel,
+  // date} for the in-editor buttons + resolve hotkeys (so a "Join" produces the
+  // `> Changes from <label> at <date>` header). Undefined → DEFAULT_VIEW_CONFIG.
+  config?: DiffViewConfig;
   // P6.3 — cursor-cadence tap (§2.9). historyFeedListener does NOT poke the
   // cursor timer (it only records edits), so a SEPARATE listener calls this on
   // every transaction: docChanged → "typing", pure caret move → "nav". The owner
@@ -68,55 +71,143 @@ export interface DiffPaneV2Hooks {
   onActivity?: (activity: CursorActivity) => void;
 }
 
-// ── markers ────────────────────────────────────────────────────────────────
-const MARKER_GLYPH: Record<MarkerKind, string> = {
-  open: "≪",
-  mid: "==",
-  close: "≫",
+// View-level config the marker decorations need (and from which ResolveOpts is
+// derived). localLabel = ver1/ours device (top marker), remoteLabel = ver2/theirs
+// device (bottom marker + Join header/tooltip), date = Join header date,
+// isMarkdown gates the Join button (a blockquote join would corrupt non-markdown).
+export interface DiffViewConfig {
+  localLabel: string;
+  remoteLabel: string;
+  date: string;
+  isMarkdown: boolean;
+}
+
+export const DEFAULT_VIEW_CONFIG: DiffViewConfig = {
+  localLabel: "local",
+  remoteLabel: "remote",
+  date: "",
+  isMarkdown: true,
 };
 
-// Resolution buttons per marker row (§1.9 / TODO #6.3). `↓`/`↑` hint which side
-// the action acts on. Each maps to a ResolveChoice handled by resolveClickHandler.
-const MARKER_BUTTONS: Record<MarkerKind, { label: string; choice: ResolveChoice }[]> = {
+// Facet carrying the config into buildDecorations (a StateField update only gets
+// `state`, so the config must live IN state). Constant per view — seeded once in
+// createDiffPaneState; combine takes the seeded value (or the default).
+export const diffViewConfigFacet = Facet.define<DiffViewConfig, DiffViewConfig>({
+  combine: (values) => values[0] ?? DEFAULT_VIEW_CONFIG,
+});
+
+// ── markers (§1 visual layer, ported) ────────────────────────────────────────
+// REUSE the §1 markers.ts rendering: top/middle/bottom CSS classes, the 5-ASCII
+// glyph (<<<<< / ===== / >>>>>; the Unicode ≪/==/≫ are reserved for the clipboard
+// format §2.2.7), the `.diff2-marker-buttons` wrapper, and the
+// `diff2-btn diff2-marker-btn diff2-marker-btn-<choice>` button classes — so the
+// polished styles.css applies unchanged. Internal MarkerKind stays open/mid/close
+// (the §2.2.2 spec); only the emitted class maps to top/middle/bottom.
+const MARKER_CLASS: Record<MarkerKind, string> = { open: "top", mid: "middle", close: "bottom" };
+const MARKER_GLYPH: Record<MarkerKind, string> = {
+  open: "<<<<<",
+  mid: "=====",
+  close: ">>>>>",
+};
+
+const IS_MAC =
+  typeof navigator !== "undefined" &&
+  /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+
+// "Ctrl-Shift-Enter" → "⌃⇧Enter" (mac, LITERAL Ctrl per §1.9) / "Ctrl+Shift+Enter"
+// (other). For the button tooltips (the keyboard affordance, §1.9).
+function fmtHotkey(spec: string): string {
+  return spec.replace("Ctrl", IS_MAC ? "⌃" : "Ctrl").replace("Shift", IS_MAC ? "⇧" : "Shift").replace(/-/g, IS_MAC ? "" : "+");
+}
+
+// Short button label + descriptive tooltip + the §1.9 hotkey (PER BUTTON, not per
+// choice: apply/remove are context-sensitive, so [Keep ↓] and [Apply ↑] share
+// Ctrl+Enter = "apply this block"). `desc` undefined → built from the remote label
+// at render time (Join only).
+interface BtnSpec {
+  label: string;
+  choice: ResolveChoice;
+  hotkey: string; // §1.9 CM6 key spec (matches diffResolveKeymap)
+  desc?: string;
+}
+const MARKER_BUTTONS: Record<MarkerKind, BtnSpec[]> = {
   open: [
-    { label: "Keep ↓", choice: "keep1" }, // keep ver1 (ours)
-    { label: "Remove ↓", choice: "keep2" }, // drop ver1 → keep ver2
+    { label: "Keep ↓", choice: "keep1", hotkey: "Ctrl-Enter", desc: "Keep this local change" },
+    { label: "Remove ↓", choice: "keep2", hotkey: "Ctrl-Backspace", desc: "Remove this local change" },
   ],
   mid: [
-    { label: "Apply Both ↓↑", choice: "both" },
-    { label: "Remove Both ↓↑", choice: "neither" },
-    { label: "Join", choice: "join" },
+    { label: "Apply ↓↑", choice: "both", hotkey: "Ctrl-Shift-Enter", desc: "Apply both local and remote changes" },
+    { label: "Remove ↓↑", choice: "neither", hotkey: "Ctrl-Shift-Backspace", desc: "Remove both local and remote changes" },
+    { label: "Join ↓↓", choice: "join", hotkey: "Ctrl-Shift-." }, // desc built from remoteLabel
   ],
   close: [
-    { label: "Apply ↑", choice: "keep2" }, // keep ver2 (theirs)
-    { label: "Remove ↑", choice: "keep1" }, // drop ver2 → keep ver1
+    { label: "Apply ↑", choice: "keep2", hotkey: "Ctrl-Enter", desc: "Apply this remote change" },
+    { label: "Remove ↑", choice: "keep1", hotkey: "Ctrl-Backspace", desc: "Remove this remote change" },
   ],
 };
 
 class MarkerWidget extends WidgetType {
+  // Duck-type tag read by diff-line-numbers.ts's gutter widgetMarker for the #3
+  // marker-row gutter tint, WITHOUT importing this class (which would cycle).
+  readonly diff2MarkerKind: MarkerKind;
   constructor(
     readonly kind: MarkerKind,
     readonly group: number,
+    readonly config: DiffViewConfig,
   ) {
     super();
+    this.diff2MarkerKind = kind;
   }
   eq(other: MarkerWidget): boolean {
-    return other.kind === this.kind && other.group === this.group;
+    return (
+      other.kind === this.kind &&
+      other.group === this.group &&
+      other.config.localLabel === this.config.localLabel &&
+      other.config.remoteLabel === this.config.remoteLabel &&
+      other.config.isMarkdown === this.config.isMarkdown
+    );
   }
   toDOM(): HTMLElement {
     const el = document.createElement("div");
-    el.className = `diff2-marker diff2-marker-${this.kind}`;
+    el.className = `diff2-marker diff2-marker-${MARKER_CLASS[this.kind]}`;
+
     const glyph = document.createElement("span");
     glyph.className = "diff2-marker-glyph";
     glyph.textContent = MARKER_GLYPH[this.kind];
     el.appendChild(glyph);
+
+    const buttons = document.createElement("span");
+    buttons.className = "diff2-marker-buttons";
     for (const b of MARKER_BUTTONS[this.kind]) {
+      // Join is markdown-only (a blockquote join corrupts non-markdown files).
+      if (b.choice === "join" && !this.config.isMarkdown) continue;
       const btn = document.createElement("button");
-      btn.className = "diff2-marker-btn";
+      btn.className = `diff2-btn diff2-marker-btn diff2-marker-btn-${b.choice}`;
       btn.textContent = b.label;
+      const desc =
+        b.choice === "join"
+          ? `Keep local changes and join changes from "${this.config.remoteLabel}"`
+          : (b.desc ?? "");
+      btn.title = `${desc} (${fmtHotkey(b.hotkey)})`;
       btn.setAttribute("data-diff2-resolve", b.choice);
       btn.setAttribute("data-diff2-group", String(this.group));
-      el.appendChild(btn);
+      buttons.appendChild(btn);
+    }
+    el.appendChild(buttons);
+
+    // Device label on top/bottom only (R7.2): top = local (ver1), bottom = remote
+    // (ver2); the middle separator stays unlabeled.
+    const label =
+      this.kind === "open"
+        ? this.config.localLabel
+        : this.kind === "close"
+          ? this.config.remoteLabel
+          : "";
+    if (label) {
+      const lab = document.createElement("span");
+      lab.className = "diff2-marker-label";
+      lab.textContent = `(${label})`;
+      el.appendChild(lab);
     }
     return el;
   }
@@ -125,28 +216,66 @@ class MarkerWidget extends WidgetType {
   }
 }
 
+// §1.6.a.1 — a ghost `↵` after a ver line's content marking its real newline
+// (line-wrap is always on, so this disambiguates a hard break from a soft wrap).
+// Ported from §1 markers/decorations as a WIDGET (the §1 visual layer the user
+// asked to reuse): the class `diff2-newline-glyph` is tinted to the side colour by
+// styles.css. A line CLASS won't render it (no ::after) — it must be a widget.
+class NewlineGlyphWidget extends WidgetType {
+  eq(): boolean {
+    return true; // identical instances → CM6 reuses the DOM
+  }
+  toDOM(): HTMLElement {
+    const el = document.createElement("span");
+    el.className = "diff2-newline-glyph";
+    el.textContent = "↵";
+    return el;
+  }
+}
+const newlineGlyph = new NewlineGlyphWidget();
+// §R7.4 / §1.11 — changed word fragments inside a ver line get the STRONGER side
+// tint (.diff2-word-changed), so they stand out from the subtle line tint.
+const wordMark = Decoration.mark({ class: "diff2-word-changed" });
+
 // ── decorations ──────────────────────────────────────────────────────────────
-// Build the CM6 DecorationSet from the pure §2.2.8/§2.2.2 decisions. Markers are
-// block widgets (side from markerSpecs); ver lines get a colour class +
-// `diff2-collapsed` (height:0) + `diff2-eol-glyph` (CSS renders the `↵`).
+// Build the CM6 DecorationSet (§1 visual layer ported): block-widget markers, ver
+// line colour bands (diff2-line-ours/theirs) + `diff2-collapsed` (height:0 bare
+// terminals) + the `↵` newline widget, and word-level diff marks per group.
 export function buildDecorations(state: EditorState): DecorationSet {
   const ranges = readStructure(state);
   const caret = state.selection.main.head;
+  const config = state.facet(diffViewConfigFacet);
   const all = [];
   for (const m of markerSpecs(state.doc, ranges)) {
     all.push(
       Decoration.widget({
-        widget: new MarkerWidget(m.kind, m.group),
+        widget: new MarkerWidget(m.kind, m.group, config),
         block: true,
         side: m.side,
       }).range(m.pos),
     );
   }
   for (const d of verLineDecisions(state.doc, ranges, caret)) {
-    const cls = [d.ver === 1 ? "diff2-v1" : "diff2-v2"];
+    // §1.11 ver-block colour band (reuses styles.css .diff2-line-ours/theirs);
+    // diff2-collapsed gives the bare terminal `\n` line height:0.
+    const cls = [d.ver === 1 ? "diff2-line-ours" : "diff2-line-theirs"];
     if (d.collapsed) cls.push("diff2-collapsed");
-    if (d.glyph) cls.push("diff2-eol-glyph");
     all.push(Decoration.line({ class: cls.join(" ") }).range(d.from));
+    // §1.6.a.1 ↵ at the end of the line's CONTENT (before the real `\n`).
+    if (d.glyph) {
+      all.push(Decoration.widget({ widget: newlineGlyph, side: 1 }).range(state.doc.line(d.line).to));
+    }
+  }
+  // §R7.4 word-level diff per group — overlay the changed fragments on each side.
+  for (const g of groupsOf(ranges)) {
+    const v1 = ranges.find((r) => r.group === g.group && r.ver === 1);
+    const v2 = ranges.find((r) => r.group === g.group && r.ver === 2);
+    if (!v1 || !v2) continue;
+    const ours = state.doc.sliceString(v1.from, v1.to - 1); // content (drop terminal \n)
+    const theirs = state.doc.sliceString(v2.from, v2.to - 1);
+    const wd = computeWordDiff(ours, theirs);
+    for (const s of wd.oursSpans) all.push(wordMark.range(v1.from + s.start, v1.from + s.end));
+    for (const s of wd.theirsSpans) all.push(wordMark.range(v2.from + s.start, v2.from + s.end));
   }
   return Decoration.set(all, true);
 }
@@ -217,9 +346,14 @@ function cursorCadenceListener(onActivity: (activity: CursorActivity) => void): 
 // is seeded via `.init()` from the model's ranges (no post-create dispatch).
 export function createDiffPaneState(base: string, sibling: string, hooks?: DiffPaneV2Hooks): EditorState {
   const m = buildModel(base, sibling);
+  const config = hooks?.config ?? DEFAULT_VIEW_CONFIG;
+  // Derive the resolve-domain opts (join header) from the view config — ONE source
+  // of truth for the remote label + date.
+  const resolveOpts: ResolveOpts = { label: config.remoteLabel, date: config.date };
   return EditorState.create({
     doc: m.doc,
     extensions: [
+      diffViewConfigFacet.of(config), // marker decorations read this (device labels, Join gate)
       diffLineNumbers, // §2.2.10 per-side −/+ gutter (replaces lineNumbers())
       history(),
       structureField.init(() => toRangeSet(m.ranges)),
@@ -231,8 +365,8 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       externalGuardFilter, // §2.2.5(1) — changeFilter (runs before transactionFilters)
       autoNewlineFilter, // §2.2.4(2) — transactionFilter (appends normalization)
       selectionLegalizeFilter, // §2.2.4(5)/§2.2.6 — transactionFilter (legalize selection)
-      resolveClickHandler(hooks?.resolveOpts), // §2.2.9 marker-button clicks (join deviceLabel/date)
-      diffResolveKeymap(hooks?.resolveOpts), // §1.9 hotkeys — resolve current group (Mod-Enter etc.)
+      resolveClickHandler(resolveOpts), // §2.2.9 marker-button clicks (join deviceLabel/date)
+      diffResolveKeymap(resolveOpts), // §1.9 hotkeys — resolve current group (Mod-Enter etc.)
       diffNavKeymap,
       keymap.of([...historyKeymap, ...defaultKeymap]),
       EditorView.lineWrapping,

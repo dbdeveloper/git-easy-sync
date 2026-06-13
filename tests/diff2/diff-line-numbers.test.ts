@@ -1,30 +1,50 @@
-// Phase 3 — V2 per-side gutter numbering (§2.2.10 "sibling-wins").
-// Pure computeLineLabels across the numbering matrix.
+// V2 per-side gutter numbering (§1.10 / §2.2.10 "sibling-wins").
+//
+// ONE through-counter advanced by normal+ver2; ver1 numbered in PARALLEL from the
+// line above (through + offset), NOT the base file's own line number (that was the
+// bug — see the §1.10 example case below). The label text carries NO sign; the
+// −/+ side glyph is a separate gutter element. `getDiffLineNumber` is the §2.2.10
+// fast per-line formula; the property test pins it EQUAL to the full walk.
 
 import { describe, expect, it } from "vitest";
 import { Text } from "@codemirror/state";
 import { buildModel } from "../../src/diff2/diff-model";
-import { computeLineLabels } from "../../src/diff2/diff-line-numbers";
+import { computeLineLabels, getDiffLineNumber } from "../../src/diff2/diff-line-numbers";
+import type { VerRange } from "../../src/diff2/diff-model";
 
-function labels(base: string, sibling: string) {
+function model(base: string, sibling: string): { doc: Text; ranges: VerRange[] } {
   const m = buildModel(base, sibling);
-  return computeLineLabels(Text.of(m.doc.split("\n")), m.ranges);
+  return { doc: Text.of(m.doc.split("\n")), ranges: m.ranges };
+}
+function labels(base: string, sibling: string) {
+  const { doc, ranges } = model(base, sibling);
+  return computeLineLabels(doc, ranges);
 }
 
-describe("diff-line-numbers — computeLineLabels (§2.2.10 sibling-wins)", () => {
-  it("ver1 → '-ours', ver2 → '+theirs', normal → theirs; bare terminals get NO number", () => {
-    // base "a\nL\nc\n" (a,L,c) vs sibling "a\nR1\nR2\nc\n" (a,R1,R2,c)
-    // doc "a\nL\n\nR1\nR2\n\nc\n":
-    //   1 "a" normal | 2 "L" ver1 | 3 "" ver1-term | 4 "R1" ver2 | 5 "R2" ver2 |
-    //   6 "" ver2-term | 7 "c" normal | 8 "" trailing normal
+describe("diff-line-numbers — §1.10/§2.2.10 sibling-wins", () => {
+  it("ver1 numbered in parallel (text, side); bare terminals get NO number", () => {
+    // base "a\nL\nc\n" vs sibling "a\nR1\nR2\nc\n"
+    //   1 a normal | 2 L ver1 | 3 "" ver1-term(bare) | 4 R1 ver2 | 5 R2 ver2 |
+    //   6 "" ver2-term(bare) | 7 c normal
     const l = labels("a\nL\nc\n", "a\nR1\nR2\nc\n");
-    expect(l.get(1)).toEqual({ text: "1", side: "normal" }); // a → sibling line 1
-    expect(l.get(2)).toEqual({ text: "-2", side: "ver1" }); // L → base line 2 (deletion)
+    expect(l.get(1)).toEqual({ text: "1", side: "normal" });
+    expect(l.get(2)).toEqual({ text: "2", side: "ver1" }); // L: through(1)+1
     expect(l.has(3)).toBe(false); // bare terminal
-    expect(l.get(4)).toEqual({ text: "+2", side: "ver2" }); // R1 → sibling line 2
-    expect(l.get(5)).toEqual({ text: "+3", side: "ver2" }); // R2 → sibling line 3
-    expect(l.has(6)).toBe(false); // bare terminal
-    expect(l.get(7)).toEqual({ text: "4", side: "normal" }); // c → sibling line 4 (sibling-wins)
+    expect(l.get(4)).toEqual({ text: "2", side: "ver2" }); // R1: through→2 (dup w/ L by design, ± glyph distinguishes)
+    expect(l.get(5)).toEqual({ text: "3", side: "ver2" });
+    expect(l.has(6)).toBe(false);
+    expect(l.get(7)).toEqual({ text: "4", side: "normal" });
+  });
+
+  it("§1.10 example — a LATER ver1 block numbers PARALLEL (6), not its base line (4)", () => {
+    // base = a b c d e ; sibling = a P Q R c S e. The d (ver1) line must read 6
+    // (continuing from c=5), NOT 4 (its base-file line) — the bug this fixes.
+    const { doc, ranges } = model("a\nb\nc\nd\ne\n", "a\nP\nQ\nR\nc\nS\ne\n");
+    const l = computeLineLabels(doc, ranges);
+    // find the line whose content is "d"
+    let dLine = -1;
+    for (let n = 1; n <= doc.lines; n++) if (doc.line(n).text === "d") dLine = n;
+    expect(l.get(dLine)).toEqual({ text: "6", side: "ver1" });
   });
 
   it("identical inputs (no diff): plain 1..n normal numbering", () => {
@@ -35,21 +55,41 @@ describe("diff-line-numbers — computeLineLabels (§2.2.10 sibling-wins)", () =
   });
 
   it("delete-vs-modify (empty ver1): the empty ver-block line gets no number", () => {
-    // base "a\nb\n" vs sibling "a\nX\nb\n" ⇒ doc "a\n\nX\n\nb\n"
-    //   1 "a" normal | 2 "" empty ver1 (bare) | 3 "X" ver2 | 4 "" ver2-term | 5 "b" normal
     const l = labels("a\nb\n", "a\nX\nb\n");
     expect(l.get(1)).toEqual({ text: "1", side: "normal" });
-    expect(l.has(2)).toBe(false); // empty ver1 → no number
-    expect(l.get(3)).toEqual({ text: "+2", side: "ver2" });
-    expect(l.has(4)).toBe(false);
-    expect(l.get(5)).toEqual({ text: "3", side: "normal" });
+    expect(l.has(2)).toBe(false); // empty ver1 → bare → no number
+    expect(l.get(3)).toEqual({ text: "2", side: "ver2" });
   });
 
-  it("EOL-less last group: the EOL-less content line IS numbered (it's real content)", () => {
-    // base "a\nL" vs "a\nR" ⇒ doc "a\nL\nR\n": 1 "a" normal | 2 "L" ver1 (EOL-less) | 3 "R" ver2 (EOL-less)
+  it("EOL-less last group: the EOL-less content line IS numbered (no bare terminal)", () => {
     const l = labels("a\nL", "a\nR");
     expect(l.get(1)).toEqual({ text: "1", side: "normal" });
-    expect(l.get(2)).toEqual({ text: "-2", side: "ver1" }); // EOL-less but real content
-    expect(l.get(3)).toEqual({ text: "+2", side: "ver2" });
+    expect(l.get(2)).toEqual({ text: "2", side: "ver1" });
+    expect(l.get(3)).toEqual({ text: "2", side: "ver2" });
+  });
+
+  // The §2.2.10 fast per-line formula MUST equal the §1.10 full walk for EVERY line
+  // across a range of shapes (the "verify the formula" requirement). A divergence
+  // (e.g. the spec's buggy "−1 per block" or a missed bare terminal) fails here.
+  it("getDiffLineNumber === computeLineLabels for every line (property)", () => {
+    const cases: [string, string][] = [
+      ["a\nL\nc\n", "a\nR1\nR2\nc\n"],
+      ["a\nb\nc\nd\ne\n", "a\nP\nQ\nR\nc\nS\ne\n"],
+      ["a\nb\n", "a\nX\nb\n"], // empty ver1
+      ["a\nX\nb\n", "a\nb\n"], // empty ver2
+      ["a\nL", "a\nR"], // EOL-less last group
+      ["x\ny\nz\n", "x\ny\nz\n"], // no diff
+      ["1\n2\n3\n4\n5\n6\n7\n8\n", "1\nA\n3\nB\nC\n6\n7\nD\n"], // multiple groups
+      ["only\n", "only\n"],
+      ["", "added\n"], // one side empty
+      ["L1\nL2\nL3\n", "R1\n"], // big delete + small add
+    ];
+    for (const [base, sibling] of cases) {
+      const { doc, ranges } = model(base, sibling);
+      const walk = computeLineLabels(doc, ranges);
+      for (let n = 1; n <= doc.lines; n++) {
+        expect(getDiffLineNumber(doc, ranges, n)).toEqual(walk.get(n) ?? null);
+      }
+    }
   });
 });

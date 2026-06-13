@@ -80,7 +80,7 @@ describe("DiffPaneOwner (P6.3 view-swap core)", () => {
       container,
       "a\nMINE\nc\n",
       "a\nTHEIRS\nc\n",
-      {},
+      { localLabel: "local", remoteLabel: "Phone", date: "", isMarkdown: true },
       0,
     );
     expect(owner.applyResolveAll("keep1")).toBe(true); // keep ours both sides
@@ -116,7 +116,7 @@ describe("DiffPaneOwner (P6.3 view-swap core)", () => {
       container,
       "a\nMINE\nc\n",
       "a\nTHEIRS\nc\n",
-      {},
+      { localLabel: "local", remoteLabel: "Phone", date: "", isMarkdown: true },
       0,
     );
     const resolved = owner.getResolved();
@@ -144,7 +144,7 @@ describe("DiffPaneOwner (P6.3 view-swap core)", () => {
     await startSession(fx.vault, conflictId, basePath, siblingPath);
 
     // Live session: resolve, drain the feed to disk, capture the result.
-    const live = new DiffPaneOwner(fx.vault, conflictId, container, base, sibling, {}, 0);
+    const live = new DiffPaneOwner(fx.vault, conflictId, container, base, sibling, { localLabel: "local", remoteLabel: "Phone", date: "", isMarkdown: true }, 0);
     live.applyResolveAll("keep2"); // apply theirs
     const liveResolved = live.getResolved();
     await live.drainHistory();
@@ -162,7 +162,7 @@ describe("DiffPaneOwner (P6.3 view-swap core)", () => {
       replayParent,
       base,
       sibling,
-      {},
+      { localLabel: "local", remoteLabel: "Phone", date: "", isMarkdown: true },
       scanHistoryV2(jsonl).blocks.length,
     );
     replayed.replayWithGuard(jsonl);
@@ -186,7 +186,7 @@ describe("DiffPaneOwner (P6.3 view-swap core)", () => {
     const conflictId = autosaveIdForEntry(entry);
     await startSession(fx.vault, conflictId, basePath, siblingPath);
 
-    const owner = new DiffPaneOwner(fx.vault, conflictId, container, "a\nb\n", "a\nb\n", {}, 0);
+    const owner = new DiffPaneOwner(fx.vault, conflictId, container, "a\nb\n", "a\nb\n", { localLabel: "local", remoteLabel: "Phone", date: "", isMarkdown: true }, 0);
     const len = owner.getView().state.doc.length;
     owner.setCursor(9999, 9999);
     expect(owner.getView().state.selection.main.head).toBe(len);

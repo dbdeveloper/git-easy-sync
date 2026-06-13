@@ -22,7 +22,7 @@ import { EditorView } from "@codemirror/view";
 import type { Vault } from "obsidian";
 import { splitModel } from "./diff-model";
 import { readStructure } from "./diff-structure";
-import { mountDiffPaneV2 } from "./diff-pane-v2";
+import { type DiffViewConfig, mountDiffPaneV2 } from "./diff-pane-v2";
 import { HistoryWriterV2 } from "./history-log-v2";
 import { ReplayFlag, replayWithGuard } from "./history-feed";
 import { applyResolveAll, type ResolveChoice, type ResolveOpts } from "./diff-resolve";
@@ -47,25 +47,29 @@ export class DiffPaneOwner {
   private readonly writer: HistoryWriterV2;
   private readonly cursorScheduler: CursorScheduler;
   private cursorFlushing = false;
+  // Bulk resolve-all (interim toolbar) reuses the view config's join header.
+  private readonly resolveOpts: ResolveOpts;
 
   // `startSeq` continues a resumed history.jsonl's seq (scanHistoryV2(jsonl).
-  // blocks.length); 0 for a fresh session. `resolveOpts` = join deviceLabel/date.
+  // blocks.length); 0 for a fresh session. `config` = device labels + join date +
+  // isMarkdown (drives marker decorations + the derived ResolveOpts).
   constructor(
     private readonly vault: Vault,
     private readonly conflictId: string,
     parent: HTMLElement,
     base: string,
     sibling: string,
-    resolveOpts: ResolveOpts,
+    config: DiffViewConfig,
     startSeq: number,
     private readonly logger?: Logger,
   ) {
+    this.resolveOpts = { label: config.remoteLabel, date: config.date };
     this.writer = new HistoryWriterV2(vault, conflictId, startSeq);
     this.cursorScheduler = new CursorScheduler(() => this.flushCursor());
     this.view = mountDiffPaneV2(parent, base, sibling, {
       sink: this.writer,
       flag: this.flag,
-      resolveOpts,
+      config,
       onActivity: (a) => {
         // Skip cadence scheduling during a replay (its re-dispatches are doc
         // changes too); live typing/nav still schedules.

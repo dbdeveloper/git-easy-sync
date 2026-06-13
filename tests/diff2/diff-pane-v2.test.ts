@@ -43,22 +43,34 @@ describe("diff-pane-v2 — decorations field assembly", () => {
   const state = createDiffPaneState("a\nL1\nb\n", "a\nR1\nb\n");
 
   it("emits open/mid/close marker widgets for the group", () => {
-    const widgets = readDecos(state).filter((d) => d.isWidget);
+    // filter to the MARKER widgets (kind set); the ↵ newline widgets have no kind.
+    const widgets = readDecos(state).filter((d) => d.isWidget && d.kind);
     expect(widgets.map((w) => w.kind).sort()).toEqual(["close", "mid", "open"]);
   });
 
-  it("ver content lines get colour + glyph; terminal lines get collapse, no glyph", () => {
-    const lines = readDecos(state).filter((d) => !d.isWidget && d.cls);
+  it("ver content lines get the side colour band; bare terminal lines collapse", () => {
+    const lines = readDecos(state).filter((d) => !d.isWidget && d.cls?.startsWith("diff2-line-"));
     const byFrom = Object.fromEntries(lines.map((l) => [l.from, l.cls]));
     // offsets: L1 line.from=2, ver1 terminal line.from=5, R1 line.from=6, ver2 terminal line.from=9
-    expect(byFrom[2]).toContain("diff2-v1");
-    expect(byFrom[2]).toContain("diff2-eol-glyph");
+    expect(byFrom[2]).toContain("diff2-line-ours");
     expect(byFrom[2]).not.toContain("diff2-collapsed");
-    expect(byFrom[5]).toContain("diff2-v1");
+    expect(byFrom[5]).toContain("diff2-line-ours");
     expect(byFrom[5]).toContain("diff2-collapsed");
-    expect(byFrom[5]).not.toContain("diff2-eol-glyph");
-    expect(byFrom[6]).toContain("diff2-v2");
+    expect(byFrom[6]).toContain("diff2-line-theirs");
     expect(byFrom[9]).toContain("diff2-collapsed");
+  });
+
+  it("a ↵ newline widget sits at the end of each ver CONTENT line (not the terminal)", () => {
+    // §1.6.a.1 — ↵ widgets are non-marker widgets (no kind). For "a\nL1\n\nR1\n\nb\n"
+    // they sit at the content-line ends (L1 end=4, R1 end=8), NOT the bare terminals.
+    const glyphs = readDecos(state).filter((d) => d.isWidget && !d.kind).map((d) => d.from);
+    expect(glyphs.sort((a, b) => a - b)).toEqual([4, 8]);
+  });
+
+  it("word-level diff marks the changed fragments on each side", () => {
+    const s = createDiffPaneState("a\nhello world\nc\n", "a\nhello mars\nc\n");
+    const marks = readDecos(s).filter((d) => !d.isWidget && d.cls === "diff2-word-changed");
+    expect(marks.length).toBeGreaterThanOrEqual(2); // "world" (ours) + "mars" (theirs)
   });
 
   it("focusing an empty ver-block (caret on it) un-collapses that line", () => {
@@ -81,9 +93,10 @@ describe("diff-pane-v2 — mounts without error (happy-dom)", () => {
     try {
       expect(view.state.doc.toString()).toBe("a\nL1\n\nR1\n\nb\n");
       expect(view.dom.querySelectorAll(".diff2-marker").length).toBe(3);
-      expect(view.dom.querySelectorAll(".cm-line.diff2-v1").length).toBeGreaterThanOrEqual(1);
-      expect(view.dom.querySelectorAll(".cm-line.diff2-v2").length).toBeGreaterThanOrEqual(1);
+      expect(view.dom.querySelectorAll(".cm-line.diff2-line-ours").length).toBeGreaterThanOrEqual(1);
+      expect(view.dom.querySelectorAll(".cm-line.diff2-line-theirs").length).toBeGreaterThanOrEqual(1);
       expect(view.dom.querySelectorAll(".cm-line.diff2-collapsed").length).toBeGreaterThanOrEqual(2);
+      expect(view.dom.querySelectorAll(".diff2-newline-glyph").length).toBeGreaterThanOrEqual(2); // ↵ on L1, R1
     } finally {
       view.destroy();
       parent.remove();

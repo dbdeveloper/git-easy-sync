@@ -15,7 +15,7 @@
 // (O(lines) per change, O(1) per line lookup) rather than the per-line on-the-fly
 // formula — same result; the formula is a future optimisation for huge docs.
 
-import { StateField, type Extension, type Text } from "@codemirror/state";
+import { type EditorState, type Extension, type Text } from "@codemirror/state";
 import { gutter, GutterMarker } from "@codemirror/view";
 import type { VerRange } from "./diff-model";
 import { fromRangeSet, structureField } from "./diff-structure";
@@ -40,67 +40,172 @@ export function computeLineLabels(doc: Text, ranges: VerRange[]): Map<number, Li
       role.set(n, { ver: r.ver, bareTerminal });
     }
   }
+  // §1.10 / §2.2.10 "sibling-wins": ONE through-counter advanced by normal + ver2
+  // (the sibling sequence); a ver1 (local-only) line is numbered in PARALLEL,
+  // continuing from the line above (through + offset) WITHOUT advancing through.
+  // (My earlier base-file `ours` counter was a divergence — §1.10 numbers ver1 as
+  // through+offset = CM6-line# − ver1-lines-above, NOT the base file's own #.) The
+  // text carries NO sign here; the −/+ side glyph is rendered by the gutter marker.
   const out = new Map<number, LineLabel>();
-  let ours = 0; // base (ver1 side) running line number
-  let theirs = 0; // sibling (ver2 side) running line number
+  let through = 0; // last normal/ver2 number emitted
+  let ver1Offset = 0; // parallel position within the current ver1 run
   for (let n = 1; n <= doc.lines; n++) {
     const r = role.get(n);
-    if (!r) {
-      // normal line — present in both files; sibling-wins ⇒ show the theirs number.
-      ours += 1;
-      theirs += 1;
-      out.set(n, { text: String(theirs), side: "normal" });
-    } else if (r.bareTerminal) {
-      // hidden terminal — no number, no counter change.
-    } else if (r.ver === 1) {
-      ours += 1;
-      out.set(n, { text: `-${ours}`, side: "ver1" }); // ASCII '-' prefix (deletion side)
+    if (r?.bareTerminal) continue; // hidden terminal — no number, counters unchanged
+    if (r?.ver === 1) {
+      ver1Offset += 1;
+      out.set(n, { text: String(through + ver1Offset), side: "ver1" });
     } else {
-      theirs += 1;
-      out.set(n, { text: `+${theirs}`, side: "ver2" });
+      // normal or ver2 → advance the through-counter; end any ver1 run.
+      through += 1;
+      ver1Offset = 0;
+      out.set(n, { text: String(through), side: r?.ver === 2 ? "ver2" : "normal" });
     }
   }
   return out;
 }
 
-// Cached labels — recomputed on a doc or structure change.
-export const lineLabelsField = StateField.define<Map<number, LineLabel>>({
-  create: (state) => computeLineLabels(state.doc, fromRangeSet(state.field(structureField))),
-  update(value, tr) {
-    if (!tr.docChanged && tr.startState.field(structureField) === tr.state.field(structureField)) {
-      return value;
-    }
-    return computeLineLabels(tr.state.doc, fromRangeSet(tr.state.field(structureField)));
-  },
-});
+// ── §2.2.10 per-line formula (the "almost-pure" fast lookup) ─────────────────
+// getDiffLineNumber(doc, ranges, cm6) → the diff line number + side for ONE CM6
+// line, WITHOUT walking from line 1 (§2.2.10: the gutter computes each visible
+// line directly). Depends only on (doc, RangeSet) — same scheme as the §1.10
+// full walk, proven equal by a property test (formula === computeLineLabels).
+//
+// Block geometry per range (terminal-inside): a non-empty block's lines are all
+// numbered (the terminal `\n` ends the last CONTENT line); an EMPTY ver block is
+// a single bare line (no number). Detect bare via the terminal line being empty
+// (covers the empty-block AND trailing-blank-content edge the size-1 test missed).
+interface BlockGeom {
+  ver: 1 | 2;
+  firstLine: number;
+  termLine: number;
+  bare: boolean; // terminal line is empty → that one line carries no number
+  numbered: number; // numbered (content) lines = span − (bare ? 1 : 0)
+}
+function blockGeoms(doc: Text, ranges: VerRange[]): BlockGeom[] {
+  return ranges.map((r) => {
+    const firstLine = doc.lineAt(r.from).number;
+    const termLine = doc.lineAt(r.to - 1).number;
+    const bare = doc.line(termLine).length === 0;
+    return { ver: r.ver, firstLine, termLine, bare, numbered: termLine - firstLine + 1 - (bare ? 1 : 0) };
+  });
+}
 
+// Pure core over precomputed block geometry — the gutter caches `blocks` per
+// structure (below) so a 25k-line file does NOT rebuild them per visible line.
+// Returns null for a bare-terminal line (no number) — same as the walk skipping it.
+function diffLineNumberFromBlocks(blocks: BlockGeom[], cm6: number): LineLabel | null {
+  const own = blocks.find((b) => cm6 >= b.firstLine && cm6 <= b.termLine);
+  if (own && own.bare && cm6 === own.termLine) return null; // bare terminal → no number
+  // Bare lines strictly above (both sides) — they consume a CM6 line but no number.
+  const bareAbove = blocks.filter((b) => b.bare && b.termLine < cm6).length;
+  if (own && own.ver === 1) {
+    // ver1: parallel from the line above ⇒ subtract only ver1 numbered lines in
+    // ver1 blocks STRICTLY ABOVE this block (this block's own lines excluded).
+    const ver1Prior = blocks
+      .filter((b) => b.ver === 1 && b.termLine < own.firstLine)
+      .reduce((s, b) => s + b.numbered, 0);
+    return { text: String(cm6 - ver1Prior - bareAbove), side: "ver1" };
+  }
+  // normal or ver2: the through number ⇒ subtract ALL ver1 numbered lines above
+  // (cm6 is not in a ver1 block, so ver1 blocks are wholly above or below).
+  const ver1Above = blocks
+    .filter((b) => b.ver === 1 && b.termLine < cm6)
+    .reduce((s, b) => s + b.numbered, 0);
+  const side: LineSide = own ? "ver2" : "normal";
+  return { text: String(cm6 - ver1Above - bareAbove), side };
+}
+
+// The "almost-pure" §2.2.10 lookup the user named — getDiffLineNumber(cm6) over a
+// RangeSet. Pure (rebuilds block geometry each call), so the property test can pin
+// it EQUAL to the §1.10 full walk (computeLineLabels). The gutter uses the cached
+// path below; this is the canonical/tested definition.
+export function getDiffLineNumber(doc: Text, ranges: VerRange[], cm6: number): LineLabel | null {
+  return diffLineNumberFromBlocks(blockGeoms(doc, ranges), cm6);
+}
+
+// Gutter cache: block geometry keyed by the structure RangeSet (stable per state),
+// so a 25k-line file computes the geometry ONCE per structure change, not once per
+// visible gutter line. The viewport renders ~tens of lines → O(viewport × #ranges).
+const blockCache = new WeakMap<object, BlockGeom[]>();
+function cachedBlocks(state: EditorState): BlockGeom[] {
+  const set = state.field(structureField) as unknown as object;
+  let blocks = blockCache.get(set);
+  if (!blocks) {
+    blocks = blockGeoms(state.doc, fromRangeSet(state.field(structureField)));
+    blockCache.set(set, blocks);
+  }
+  return blocks;
+}
+
+// Tint the whole gutter CELL to the line's side colour (elementClass → the
+// .cm-gutterElement), and render the number + a `−`/`+` side glyph (§6.5, TODO #18
+// keep colours + ± while standardising alignment). Reuses the §1 styles.css.
 class LineLabelMarker extends GutterMarker {
-  constructor(readonly label: LineLabel) {
+  constructor(
+    readonly text: string,
+    readonly side: LineSide,
+  ) {
     super();
+    this.elementClass =
+      side === "ver1" ? "diff2-gutter-ours" : side === "ver2" ? "diff2-gutter-theirs" : "";
   }
   eq(other: LineLabelMarker): boolean {
-    return other.label.text === this.label.text && other.label.side === this.label.side;
+    return other.text === this.text && other.side === this.side;
   }
   toDOM(): Node {
-    const span = document.createElement("span");
-    span.className = `diff2-gutter diff2-gutter-${this.label.side}`;
-    span.textContent = this.label.text;
-    return span;
+    const cell = document.createElement("span");
+    cell.className = "diff2-gutter-cell";
+    const num = cell.appendChild(document.createElement("span"));
+    num.className = "diff2-gutter-num";
+    num.textContent = this.text;
+    const glyph = this.side === "ver1" ? "−" : this.side === "ver2" ? "+" : "";
+    if (glyph) {
+      const g = cell.appendChild(document.createElement("span"));
+      g.className = "diff2-gutter-glyph";
+      g.textContent = glyph;
+    }
+    return cell;
   }
 }
 
-// The per-side gutter. Right-aligned by CSS (`.diff2-gutter`); side classes carry
-// the ver1/ver2 colours. Replaces the default lineNumbers().
+// #3 — tint the gutter cell beside a marker block-widget the same side band
+// (<<<<<=ours, >>>>>=theirs, =====-split). Duck-typed on `diff2MarkerKind` so this
+// module needn't import the MarkerWidget class (which would cycle with diff-pane-v2).
+class MarkerGutterMarker extends GutterMarker {
+  constructor(readonly kind: "open" | "mid" | "close") {
+    super();
+    this.elementClass =
+      kind === "open"
+        ? "diff2-gutter-ours-marker"
+        : kind === "close"
+          ? "diff2-gutter-theirs-marker"
+          : "diff2-gutter-split-marker";
+  }
+  eq(other: MarkerGutterMarker): boolean {
+    return other.kind === this.kind;
+  }
+  toDOM(): Node {
+    return document.createTextNode("");
+  }
+}
+
+// The per-side gutter. Each line computed directly via getDiffLineNumber (§2.2.10),
+// not a full re-walk. Right-aligned + coloured by styles.css. Replaces lineNumbers().
 export const diffLineNumbersGutter: Extension = gutter({
-  class: "diff2-line-numbers",
+  class: "diff2-line-number-gutter",
   lineMarker(view, line) {
-    const n = view.state.doc.lineAt(line.from).number;
-    const label = view.state.field(lineLabelsField).get(n);
-    return label ? new LineLabelMarker(label) : null;
+    const cm6 = view.state.doc.lineAt(line.from).number;
+    const label = diffLineNumberFromBlocks(cachedBlocks(view.state), cm6);
+    return label ? new LineLabelMarker(label.text, label.side) : null;
+  },
+  widgetMarker(_view, widget) {
+    const kind = (widget as { diff2MarkerKind?: "open" | "mid" | "close" }).diff2MarkerKind;
+    return kind ? new MarkerGutterMarker(kind) : null;
   },
   lineMarkerChange: (update) =>
     update.docChanged ||
-    update.startState.field(lineLabelsField) !== update.state.field(lineLabelsField),
+    update.startState.field(structureField) !== update.state.field(structureField),
 });
 
-export const diffLineNumbers: Extension = [lineLabelsField, diffLineNumbersGutter];
+export const diffLineNumbers: Extension = diffLineNumbersGutter;

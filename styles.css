@@ -330,6 +330,18 @@
     /* No tint — keep common lines on the editor's default background. */
 }
 
+/* V2 §2.2.8 — the bare terminal `\n` line of a ver-block (and an unfocused empty
+ * ver-block) collapses to zero height: it is an internal structural newline, not
+ * real content. CM6's heightmap honours this; native moveVertically skips it.
+ * (V2-specific — there was no §1 equivalent, so this rule is NEW, not ported.) */
+.cm-line.diff2-collapsed {
+    height: 0;
+    min-height: 0;
+    padding: 0;
+    line-height: 0;
+    overflow: hidden;
+}
+
 /* §6.5/§6.7 — sibling-wins gutter (line-numbers.ts). Each cell carries a
  * number plus a side glyph (− ours / + theirs), and the CELL is tinted to the
  * line's side colour (matching the line background) so the whole gutter column

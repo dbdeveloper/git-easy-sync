@@ -88,7 +88,7 @@ describe("DiffEditView V2 glue (P6.3 decisions)", () => {
     expect(assessHistoryV2((await readResumeSession(fx.vault, conflictId)).jsonl).empty).toBe(true);
 
     // One recorded resolution → no longer empty → the modal WOULD show.
-    const owner = new DiffPaneOwner(fx.vault, conflictId, container, base, sibling, {}, 0);
+    const owner = new DiffPaneOwner(fx.vault, conflictId, container, base, sibling, { localLabel: "local", remoteLabel: "Phone", date: "", isMarkdown: true }, 0);
     owner.applyResolveAll("keep1");
     await owner.drainHistory();
     owner.dispose();
@@ -100,7 +100,7 @@ describe("DiffEditView V2 glue (P6.3 decisions)", () => {
     const sibling = "a\nTHEIRS\nc\n";
     const { basePath, siblingPath, conflictId, meta } = await setup(base, sibling);
 
-    const owner = new DiffPaneOwner(fx.vault, conflictId, container, base, sibling, {}, 0);
+    const owner = new DiffPaneOwner(fx.vault, conflictId, container, base, sibling, { localLabel: "local", remoteLabel: "Phone", date: "", isMarkdown: true }, 0);
     const view = owner.getView();
     // Type a char, then undo it → feed records edit + undo → net 0.
     view.dispatch({ changes: { from: 0, insert: "x" }, userEvent: "input.type" });
@@ -126,7 +126,7 @@ describe("DiffEditView V2 glue (P6.3 decisions)", () => {
     const sibling = "a\nTHEIRS\nc\n";
     const { basePath, conflictId, meta } = await setup(base, sibling);
 
-    const owner = new DiffPaneOwner(fx.vault, conflictId, container, base, sibling, {}, 0);
+    const owner = new DiffPaneOwner(fx.vault, conflictId, container, base, sibling, { localLabel: "local", remoteLabel: "Phone", date: "", isMarkdown: true }, 0);
     owner.applyResolveAll("keep1"); // converge on ours
     await owner.drainHistory();
 
