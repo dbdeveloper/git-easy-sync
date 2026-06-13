@@ -33,7 +33,7 @@ import {
   cursorSlotPath,
   readMeta,
 } from "./autosave-store";
-import { assessHistory } from "./history-replay";
+import { assessHistoryV2 } from "./history-replay-v2";
 
 export type SweepDecision =
   | { action: "keep" }
@@ -71,7 +71,7 @@ export async function classifySweep(
   // (it would only ever reopen as a "0 edits saved" resume). `empty` excludes a
   // corrupt-first-block log (that one is kept: there WAS user activity → §3.5
   // corrupt-recovery modal). Cheap single read.
-  if (assessHistory(await a.read(p(conflictId, "history.jsonl"))).empty) {
+  if (assessHistoryV2(await a.read(p(conflictId, "history.jsonl"))).empty) {
     return { action: "sweep", reason: "empty-history" };
   }
   // cond 3 — §2.9 ping-pong: sweep only when NEITHER slot exists (a live

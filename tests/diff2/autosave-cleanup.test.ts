@@ -11,7 +11,7 @@ import { Vault as MockVault } from "../../mock-obsidian";
 import type { Vault } from "obsidian";
 import { autosaveDir, startSession } from "../../src/diff2/autosave-store";
 import { classifySweep, sweepAll } from "../../src/diff2/autosave-cleanup";
-import { serializeHistoryBlock } from "../../src/diff2/history-log";
+import { buildEditBlock, serializeBlock } from "../../src/diff2/history-log-v2";
 
 const NOW = "2026-06-02T12:00:00.000Z";
 const enc = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
@@ -24,12 +24,13 @@ function fixture() {
 
 const file = (id: string, name: string) => `${autosaveDir(id)}/${name}`;
 
-// Append one valid (checksummed) history record so the session is NOT empty —
+// Append one valid (checksummed) V2 history record so the session is NOT empty —
 // the §4.1 zero-edit invariant (cond 2b) sweeps a 0-record session, so a "keep"
-// case must have recorded at least one edit. The change/structure payload only
-// has to round-trip through assessHistory's parse+checksum (not a real replay).
+// case must have recorded at least one edit. The change payload only has to
+// round-trip through assessHistoryV2's parse+checksum (not a real replay);
+// newGroup=true (delta 1) gives a net edit count of 1.
 async function recordOne(vault: Vault, id: string) {
-  const block = serializeHistoryBlock(1, NOW, [10], []);
+  const block = serializeBlock(buildEditBlock(1, NOW, [10], [], 1));
   await vault.adapter.append(file(id, "history.jsonl"), block + "\n");
 }
 

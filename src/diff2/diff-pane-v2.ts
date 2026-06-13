@@ -46,16 +46,26 @@ import { type MarkerKind, markerSpecs, verLineDecisions } from "./diff-decoratio
 import { autoNewlineFilter, externalGuardFilter } from "./diff-edits";
 import { selectionLegalizeFilter } from "./diff-selection";
 import { diffLineNumbers } from "./diff-line-numbers";
-import { type ResolveChoice, diffResolveKeymap, resolveClickHandler } from "./diff-resolve";
+import { type ResolveChoice, type ResolveOpts, diffResolveKeymap, resolveClickHandler } from "./diff-resolve";
 import { type HistorySink, type ReplayFlag, historyFeedListener } from "./history-feed";
+import type { CursorActivity } from "./cursor-timer";
 
-// §0.5.6 step-2 — OPTIONAL persistence wiring. When the owner (Phase-6 DiffEditView)
+// §0.5.6 step-2 — OPTIONAL persistence wiring. When the owner (Phase-6 DiffPaneOwner)
 // supplies a sink + the SHARED ReplayFlag, a historyFeedListener is appended so
 // every live transaction is fed to history.jsonl. Omitted in pure-CM6 unit tests,
 // so the render/nav/resolution spine stays testable without a vault.
 export interface DiffPaneV2Hooks {
   sink: HistorySink;
   flag: ReplayFlag; // SAME instance the owner passes to replayWithGuard
+  // P6.3 — join deviceLabel/date threaded into the in-editor diff-group buttons
+  // (resolveClickHandler) and the resolve hotkeys (diffResolveKeymap) so a "Join"
+  // produces the `> Changes from <label> at <date>` header. Undefined → defaults.
+  resolveOpts?: ResolveOpts;
+  // P6.3 — cursor-cadence tap (§2.9). historyFeedListener does NOT poke the
+  // cursor timer (it only records edits), so a SEPARATE listener calls this on
+  // every transaction: docChanged → "typing", pure caret move → "nav". The owner
+  // gates it on !flag.replaying so a replay's re-dispatches don't schedule flushes.
+  onActivity?: (activity: CursorActivity) => void;
 }
 
 // ── markers ────────────────────────────────────────────────────────────────
@@ -188,6 +198,20 @@ export const cursorRestoreListener: Extension = EditorView.updateListener.of((u)
   }
 });
 
+// ── cursor cadence (§2.9) ─────────────────────────────────────────────────────
+// A thin updateListener that maps each transaction to a cursor-flush cadence: a
+// doc change is "typing", a pure selection move is "nav" (the historyFeedListener
+// records edits but never pokes the cursor timer — P6.3 gotcha). The owner gates
+// the callback on !flag.replaying so a replay's re-dispatches schedule nothing.
+function cursorCadenceListener(onActivity: (activity: CursorActivity) => void): Extension {
+  return EditorView.updateListener.of((u) => {
+    for (const tr of u.transactions) {
+      if (tr.docChanged) onActivity("typing");
+      else if (tr.selection) onActivity("nav");
+    }
+  });
+}
+
 // ── assembly ─────────────────────────────────────────────────────────────────
 // Build the initial EditorState for a (base, sibling) pair. The structure field
 // is seeded via `.init()` from the model's ranges (no post-create dispatch).
@@ -207,13 +231,15 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       externalGuardFilter, // §2.2.5(1) — changeFilter (runs before transactionFilters)
       autoNewlineFilter, // §2.2.4(2) — transactionFilter (appends normalization)
       selectionLegalizeFilter, // §2.2.4(5)/§2.2.6 — transactionFilter (legalize selection)
-      resolveClickHandler(), // §2.2.9 marker-button clicks (deviceLabel/date wired in Phase 6)
-      diffResolveKeymap(), // §1.9 hotkeys — resolve current group (Mod-Enter etc.)
+      resolveClickHandler(hooks?.resolveOpts), // §2.2.9 marker-button clicks (join deviceLabel/date)
+      diffResolveKeymap(hooks?.resolveOpts), // §1.9 hotkeys — resolve current group (Mod-Enter etc.)
       diffNavKeymap,
       keymap.of([...historyKeymap, ...defaultKeymap]),
       EditorView.lineWrapping,
       // §0.5.6 step-2 — live history feed (optional; off in pure-CM6 unit tests).
       ...(hooks ? [historyFeedListener(hooks.sink, hooks.flag)] : []),
+      // P6.3 — cursor-cadence tap (§2.9), separate from the history feed.
+      ...(hooks?.onActivity ? [cursorCadenceListener(hooks.onActivity)] : []),
     ],
   });
 }

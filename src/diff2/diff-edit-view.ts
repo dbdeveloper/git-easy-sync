@@ -34,7 +34,8 @@ import type { ConflictCounter } from "../sync2/conflict-counter";
 import type ConflictStore from "../sync2/conflict-store";
 import { renderConflictsList } from "./conflicts-list";
 import { isMarkdownPath } from "./conflict-merge-all";
-import { DiffPane } from "./diff-pane";
+import { DiffPaneOwner, resolvedFromView } from "./diff-pane-owner";
+import { mountDiffPaneV2 } from "./diff-pane-v2";
 import {
   DEFAULT_DIFF_EDIT_VIEW_STATE,
   DiffEditSubTab,
@@ -50,11 +51,9 @@ import {
 } from "./autosave-store";
 import { reopenAction } from "./reopen-action";
 import { ResumeRecoveryModal, SaveToAltModal } from "./recovery-dialog";
-import { assessHistory, scanHistory } from "./history-replay";
-import { persistCursor, readCursor } from "./cursor-store";
-import { CursorScheduler } from "./cursor-timer";
-import { HistoryWriter } from "./history-log";
-import type { Segment } from "./editor-model";
+import { assessHistoryV2, replayHistoryV2, scanHistoryV2 } from "./history-replay-v2";
+import { readCursor } from "./cursor-store";
+import type { ResolveOpts } from "./diff-resolve";
 import type Logger from "../logger";
 import { atomicWriteFile } from "../sync2/atomic-write";
 import {
@@ -64,7 +63,6 @@ import {
   type ResolvedSides,
   type ToctouStatus,
 } from "./exit-commit";
-import { findSentinelCollision } from "./joined-doc";
 import {
   autosaveIdForEntry,
   findAllConflicts,
@@ -117,26 +115,20 @@ export class DiffEditView extends ItemView {
   // only while THIS view is the active leaf (so ESC still works in other tabs).
   private escScope: Scope | null = null;
   private escScopePushed = false;
-  // Active DiffPane lives only while detail-mode is shown. Replaced
-  // on every detail-open; destroyed when leaving detail-mode or on
-  // view close.
-  private activeDiffPane: DiffPane | null = null;
-  // Autosave session bound to the active DiffPane: the conflict's autosave id
-  // + the meta startSession wrote. Set at mount, consumed by the `[←]`
-  // commit7Step, cleared on dispose. Null when no detail editor is open.
-  private activeSession: { conflictId: string; meta: AutosaveMeta } | null =
-    null;
-  // W2 — the history feed for the active DiffPane. Reassigned on every mount
-  // (its `record` is what the DiffPane's onRecord calls); drained at the `[←]`
-  // commit (Step 1) so the last edits land before the dir is removed.
-  private activeWriter: HistoryWriter | null = null;
-  // W3 — cursor-flush throttle for the active session (§2.9). Reassigned on
-  // every mount; its pending timer is cancelled at the TOP of exitDetailView
-  // (before any commit await) so a fired timer can't persistCursor into a dir
-  // the commit is staging/removing. `cursorFlushing` drops an overlapping flush
-  // (best-effort signal — skip, don't queue).
-  private cursorScheduler: CursorScheduler | null = null;
-  private cursorFlushing = false;
+  // Active V2 DiffPaneOwner lives only while detail-mode is shown. Replaced on
+  // every detail-open; disposed when leaving detail-mode or on view close. The
+  // owner holds the EditorView + the shared ReplayFlag + the HistoryWriterV2 sink
+  // + the cursor scheduler (§0.5 / P6.3) — the §1 DiffPane is gone.
+  private owner: DiffPaneOwner | null = null;
+  // Autosave session bound to the active owner: the conflict's autosave id + the
+  // meta startSession wrote + whether this mount REPLAYED prior edits. Set at
+  // mount, consumed by the `[←]` commit7Step, cleared on dispose. Null when no
+  // detail editor is open. `hadPriorEdits` gates the §4.1 abandon-wipe: a FRESH
+  // session abandoned with zero net edits is wiped; a resumed one is kept for
+  // crash recovery (its prior edits aren't in the owner's in-memory writer).
+  private activeSession:
+    | { conflictId: string; meta: AutosaveMeta; hadPriorEdits: boolean }
+    | null = null;
   // Step-0 (§5.0) — re-entrancy guard for the `[←]` commit. Set true on entry to
   // exitDetailView, reset in its finally. A second click while a commit (or its
   // §5.0.e modal) is in flight is rejected — two concurrent commit7Step runs on
@@ -215,7 +207,7 @@ export class DiffEditView extends ItemView {
         // (e.g. user clicked another markdown tab, then back). Obsidian
         // re-focuses a MarkdownView's editor on activation but does nothing for
         // our custom ItemView, so the caret would vanish until a manual click.
-        if (leaf === this.leaf) this.activeDiffPane?.focus();
+        if (leaf === this.leaf) this.owner?.focus();
       }),
     );
     this.syncEscScope(this.app.workspace.activeLeaf ?? null);
@@ -249,28 +241,26 @@ export class DiffEditView extends ItemView {
       this.escScopePushed = false;
     }
     this.escScope = null;
-    this.disposeActiveDiffPane();
+    this.disposeOwner();
   }
 
-  private disposeActiveDiffPane(): void {
-    // W3 — cancel + drop the cursor timer first (a pending flush must not write
-    // into a dir that's about to be torn down / re-mounted).
-    this.cursorScheduler?.stop();
-    this.cursorScheduler = null;
-    if (this.activeDiffPane) {
-      this.activeDiffPane.destroy();
-      this.activeDiffPane = null;
-    }
-    // §4.1 zero-edit invariant: a session ABANDONED (sub-tab switch / view
-    // close, i.e. the "інший механізм" exit) with ZERO recorded edits has no
-    // recovery value → wipe its dir (fire-and-forget; a failure is caught by the
-    // onload sweep). A session WITH edits is LEFT untouched so a crash mid-edit
-    // stays recoverable. The committed/discarded `[←]` path already nulled
-    // activeSession before render(), so this only fires on a genuine abandon.
-    // (The counter-guard in onOpen is what makes a live session here mean a real
-    // abandon — render() no longer fires spuriously in detail mode.)
+  private disposeOwner(): void {
     const session = this.activeSession;
-    if (session && (this.activeWriter?.liveBlockCount() ?? 0) === 0) {
+    // §4.1 net-edit signal — read BEFORE dispose (owner.dispose stops the cursor
+    // timer + destroys the view). For a FRESH session this in-memory net count is
+    // authoritative; a resumed session is handled by `hadPriorEdits` below.
+    const netEdits = this.owner?.inMemoryNetEdits() ?? 0;
+    this.owner?.dispose();
+    this.owner = null;
+    // §4.1 zero-edit invariant: a session ABANDONED (sub-tab switch / view close,
+    // the "інший механізм" exit) with no recovery value → wipe its dir (fire-and-
+    // forget; the onload sweep is the backstop). A FRESH session is worthless iff
+    // it recorded zero net edits; a RESUMED session (hadPriorEdits) always carries
+    // prior on-disk edits a crash should keep, so it is NEVER wiped here. The
+    // committed/discarded `[←]` path nulls activeSession before render(), so this
+    // only fires on a genuine abandon (the onOpen counter-guard prevents a
+    // spurious detail-mode re-render).
+    if (session && !session.hadPriorEdits && netEdits === 0) {
       void this.deps.vault.adapter
         .rmdir(autosaveDir(session.conflictId), true)
         .catch(() => {
@@ -278,17 +268,16 @@ export class DiffEditView extends ItemView {
         });
     }
     this.activeSession = null;
-    this.activeWriter = null;
   }
 
   // ── render dispatch ───────────────────────────────────────────────
 
   private render(): void {
-    // Dispose any active DiffPane before tearing down its parent DOM —
+    // Dispose any active owner before tearing down its parent DOM —
     // CM6 EditorView.destroy() unhooks its own event listeners + DOM
     // children. If we just empty() the parent without destroy(), we
     // leak the listeners.
-    this.disposeActiveDiffPane();
+    this.disposeOwner();
 
     const container = this.contentEl;
     container.empty();
@@ -366,15 +355,18 @@ export class DiffEditView extends ItemView {
         onBack: () => {
           void this.exitDetailView(entry);
         },
+        // Interim toolbar (the redesign is its own session — see
+        // [[project-diff2-toolbar-redesign]]); resolve-all routes to the V2 owner.
+        // ours→keep1 (keep ver1), theirs→keep2 (keep ver2), join→join.
         onKeepAllLocal: () => {
-          this.activeDiffPane?.resolveAll("ours");
+          this.owner?.applyResolveAll("keep1");
         },
         onApplyAllRemote: () => {
-          this.activeDiffPane?.resolveAll("theirs");
+          this.owner?.applyResolveAll("keep2");
         },
         onJoinAll: isMd
           ? () => {
-              this.activeDiffPane?.resolveAll("join");
+              this.owner?.applyResolveAll("join");
             }
           : undefined,
       },
@@ -419,25 +411,9 @@ export class DiffEditView extends ItemView {
         return;
       }
 
-      // §1.3 fail-closed: a \0/\1 sentinel in either side is
-      // incompatible with the internal joined-doc model. Don't open the
-      // DiffPane; point the user at an alternative.
-      const collision = findSentinelCollision(ours, theirs);
-      if (collision) {
-        new Notice(
-          "This file contains a control character (SOH/NUL) incompatible " +
-            "with the internal diff editor. Open it in your external diff " +
-            "tool or the default Obsidian editor.",
-        );
-        body.createEl("p", {
-          cls: "diff2-detail-error",
-          text:
-            `Cannot open diff: ${collision.side} contains a ` +
-            `${collision.char === "VER_SEPARATOR" ? "SOH (U+0001)" : "NUL (U+0000)"} ` +
-            "control character (§1.3 fail-closed).",
-        });
-        return;
-      }
+      // (§1.3 sentinel collision check removed — the V2 diff-model has no
+      // `\0`/`\1` sentinels, so any byte is ordinary text; classifyReopen's
+      // defensive `sentinel` branch is now unreachable.)
 
       // Autosave session lifecycle (DIFF-EDITOR.md §3.1 / §3.2 / §3.2.a). An
       // in-flight commit (done.json) is NEVER touched here — onload recoverCommit
@@ -462,55 +438,17 @@ export class DiffEditView extends ItemView {
         ),
       );
 
-      const opts = {
-        oursLabel: this.deps.localDeviceLabel?.() ?? "local",
-        theirsLabel: entry.deviceLabel,
-        isMarkdown: isMarkdownPath(entry.basePath),
-        joinContext: {
-          remoteDeviceLabel: entry.deviceLabel,
-          timestamp: entry.isoTimestamp,
-        },
-        // W2 — the live history feed. onRecord fires only while the mounted pane
-        // has recording enabled (post-mount/replay) and routes to whichever
-        // writer the current mount path attached. Append errors are swallowed
-        // inside HistoryWriter, never reaching CM6. W3 — an edit also pokes the
-        // cursor timer on the typing cadence.
-        onRecord: (change: unknown, structure: Segment[]) => {
-          this.activeWriter?.record(change, structure, new Date().toISOString());
-          this.cursorScheduler?.schedule("typing");
-        },
-        // TODO §5 — a CM6 undo drops the last history.jsonl block (so the log
-        // mirrors the editor's undo depth; the net count feeds §4.1.a exit-wipe).
-        onUndo: () => {
-          this.activeWriter?.truncateLastBlock();
-          this.cursorScheduler?.schedule("typing");
-        },
-        // W3 — a pure caret move pokes the cursor timer on the nav cadence. The
-        // flush re-reads the LIVE selection, so we ignore the passed position.
-        onSelectionChange: () => {
-          this.cursorScheduler?.schedule("nav");
-        },
+      // Join header context for the in-editor diff-group buttons + hotkeys
+      // (resolveOpts; wired through the owner into the V2 pane). label = the
+      // remote device, date = the conflict timestamp.
+      const resolveOpts: ResolveOpts = {
+        label: entry.deviceLabel,
+        date: entry.isoTimestamp,
       };
 
-      // Bind a fresh HistoryWriter + cursor scheduler to a just-mounted pane and
-      // turn recording on (the owner calls this AFTER any replay/setCursor, so
-      // only live edits record / poke the timer). startSeq continues a resumed
-      // history.jsonl's seq.
-      const attachWriter = (pane: DiffPane, startSeq: number): void => {
-        this.activeWriter = new HistoryWriter(
-          this.deps.vault,
-          conflictId,
-          startSeq,
-        );
-        this.cursorScheduler = new CursorScheduler(() =>
-          this.flushCursor(conflictId),
-        );
-        pane.enableRecording();
-      };
-
-      // Clear any prior dir, open a fresh session, and mount from the CURRENT
-      // vault bytes. Used by fresh / discard-fresh and the resume / §3.2.a
-      // "Start over" choices.
+      // Clear any prior dir, open a fresh session, and mount the owner from the
+      // CURRENT vault bytes. Used by fresh / discard-fresh and the "Start over"
+      // choices. A fresh session has no prior edits → hadPriorEdits:false.
       const startFreshAndMount = async (): Promise<void> => {
         if (await adapter.exists(dir)) await adapter.rmdir(dir, true);
         const meta = await startSession(
@@ -519,31 +457,46 @@ export class DiffEditView extends ItemView {
           entry.basePath,
           entry.siblingPath,
         );
-        this.activeSession = { conflictId, meta };
-        const pane = new DiffPane(body, ours, theirs, opts);
-        this.activeDiffPane = pane;
-        attachWriter(pane, 0); // fresh history.jsonl
+        this.activeSession = { conflictId, meta, hadPriorEdits: false };
+        this.owner = new DiffPaneOwner(
+          this.deps.vault,
+          conflictId,
+          body,
+          ours,
+          theirs,
+          resolveOpts,
+          0, // fresh history.jsonl seq
+          this.deps.logger,
+        );
       };
 
-      // Non-lossy mount: rebuild from the session-start SNAPSHOTS, replay the
-      // recorded history, restore the cursor. KEEPS the dir and REUSES the
-      // session — never calls startSession (which would overwrite the snapshots
-      // / history being replayed). Shared by resume "Continue" (§3.2) and the
-      // §3.2.a restore. Recording resumes the existing seq (KEEP dir).
+      // Non-lossy mount: rebuild the owner from the session-start SNAPSHOTS,
+      // replay the recorded history under the shared ReplayFlag, restore the
+      // cursor. KEEPS the dir and REUSES the session (never startSession, which
+      // would overwrite the snapshots / history being replayed). Continues the
+      // history.jsonl seq. hadPriorEdits:true — its prior on-disk edits are real
+      // recovery value, so it is never abandon-wiped.
       const mountReplayed = async (
         sess: ResumeSession,
         meta: AutosaveMeta,
-      ): Promise<DiffPane> => {
-        const pane = new DiffPane(body, sess.base, sess.sibling, opts);
-        pane.replayFrom(sess.jsonl);
+      ): Promise<void> => {
+        const owner = new DiffPaneOwner(
+          this.deps.vault,
+          conflictId,
+          body,
+          sess.base,
+          sess.sibling,
+          resolveOpts,
+          scanHistoryV2(sess.jsonl).blocks.length,
+          this.deps.logger,
+        );
+        owner.replayWithGuard(sess.jsonl);
         const cursor = await readCursor(this.deps.vault, conflictId);
         if (cursor) {
-          pane.setCursor(cursor.anchor, cursor.head, cursor.scrollTop);
+          owner.setCursor(cursor.anchor, cursor.head, cursor.scrollTop);
         }
-        this.activeSession = { conflictId, meta };
-        this.activeDiffPane = pane;
-        attachWriter(pane, scanHistory(sess.jsonl).blocks.length);
-        return pane;
+        this.activeSession = { conflictId, meta, hadPriorEdits: true };
+        this.owner = owner;
       };
 
       try {
@@ -561,7 +514,7 @@ export class DiffEditView extends ItemView {
             // though one side changed in the vault. Skip the modal and start
             // fresh from the CURRENT vault (which reflects that one-side change);
             // there is no user work to carry onto the unchanged side.
-            if (assessHistory(sess.jsonl).empty) {
+            if (assessHistoryV2(sess.jsonl).empty) {
               await startFreshAndMount();
               break;
             }
@@ -569,7 +522,7 @@ export class DiffEditView extends ItemView {
               basePath: entry.basePath,
               siblingPath: entry.siblingPath,
               startedAtIso: action.meta.createdAt,
-              editCount: scanHistory(sess.jsonl).blocks.length,
+              editCount: assessHistoryV2(sess.jsonl).edits,
               baseChanged: action.changedSide === "base",
               siblingChanged: action.changedSide === "sibling",
               nowMs: Date.now(),
@@ -593,19 +546,11 @@ export class DiffEditView extends ItemView {
               await startFreshAndMount();
               break;
             }
-            // "Continue": replay (in a DETACHED pane) to extract the user's
+            // "Continue": replay (in a DETACHED V2 view) to extract the user's
             // resolved content, write the restored content of the UNCHANGED side
             // onto the vault (the changed side keeps its new content), then
             // recreate the session. Symmetric — file1/file2, no privilege.
-            const tmp = new DiffPane(
-              document.createElement("div"),
-              sess.base,
-              sess.sibling,
-              opts,
-            );
-            tmp.replayFrom(sess.jsonl);
-            const resolved = tmp.getResolved();
-            tmp.destroy();
+            const resolved = extractResolved(sess.base, sess.sibling, sess.jsonl);
             const writePath =
               action.changedSide === "base"
                 ? entry.siblingPath
@@ -624,11 +569,21 @@ export class DiffEditView extends ItemView {
               entry.basePath,
               entry.siblingPath,
             );
-            this.activeSession = { conflictId, meta };
+            // A brand-new session mounted from the just-written snapshots — no
+            // replay into the live view → hadPriorEdits:false (the restored work
+            // is already durable in the unchanged-side file).
+            this.activeSession = { conflictId, meta, hadPriorEdits: false };
             const fresh = await readResumeSession(this.deps.vault, conflictId);
-            const recreated = new DiffPane(body, fresh.base, fresh.sibling, opts);
-            this.activeDiffPane = recreated;
-            attachWriter(recreated, 0);
+            this.owner = new DiffPaneOwner(
+              this.deps.vault,
+              conflictId,
+              body,
+              fresh.base,
+              fresh.sibling,
+              resolveOpts,
+              0,
+              this.deps.logger,
+            );
             break;
           }
           case "resume": {
@@ -644,7 +599,7 @@ export class DiffEditView extends ItemView {
             // AND no corruption; a corrupt-first-block session is a DIFFERENT
             // §3.5 row (it would still surface a modal) so it's intentionally
             // excluded here.
-            if (assessHistory(sess.jsonl).empty) {
+            if (assessHistoryV2(sess.jsonl).empty) {
               await startFreshAndMount();
               break;
             }
@@ -652,7 +607,7 @@ export class DiffEditView extends ItemView {
               basePath: entry.basePath,
               siblingPath: entry.siblingPath,
               startedAtIso: action.meta.createdAt,
-              editCount: scanHistory(sess.jsonl).blocks.length,
+              editCount: assessHistoryV2(sess.jsonl).edits,
               nowMs: Date.now(),
             }).prompt();
 
@@ -685,9 +640,9 @@ export class DiffEditView extends ItemView {
         }
         // TODO §6.1 — focus the freshly-mounted editor so the caret shows and
         // Ctrl/Cmd+Z works without a click. Cancel paths returned early; every
-        // mount path set activeDiffPane. Idempotent on the resume-with-cursor
-        // path (setCursor already focused).
-        this.activeDiffPane?.focus();
+        // mount path set the owner. Idempotent on the resume-with-cursor path
+        // (setCursor already focused).
+        this.owner?.focus();
       } catch (err) {
         body.createEl("p", {
           cls: "diff2-detail-error",
@@ -728,33 +683,35 @@ export class DiffEditView extends ItemView {
     // W3 — cancel any pending cursor flush BEFORE the first commit await (the
     // commit rmdir's the dir; a timer firing mid-commit would persistCursor into
     // a dir being staged/removed). This runs only on the non-re-entrant path
-    // (the guard above already returned for a second click); we stop() (not
-    // null) so a failed commit that stays in the editor keeps autosaving.
-    this.cursorScheduler?.stop();
+    // (the guard above already returned for a second click); stop() (not dispose)
+    // so a failed commit that stays in the editor keeps autosaving.
+    this.owner?.stopCursorTimer();
 
     try {
-      const pane = this.activeDiffPane;
+      const owner = this.owner;
       const session = this.activeSession;
-      if (!pane || !session) {
+      if (!owner || !session) {
         this.viewState = { mode: "list", tab: "conflicts" };
         this.render();
         return;
       }
 
       try {
-        // W2 Step 1 (§5.0) — flush queued history before the commit. commit7Step
-        // Step 7 removes the dir on success; drain() awaits the serialized chain.
-        await this.activeWriter?.drain();
-        // §4.1 zero-edit invariant — currentSeq() is the TOTAL record count
-        // (continues a resumed session's seq), so 0 means "this session never
-        // recorded an edit" → commitOrDiscardExit wipes the dir without touching
-        // the input files (and without the safeRename swap).
-        const recordCount = this.activeWriter?.liveBlockCount() ?? 0;
-        // getResolved() runs the commit-boundary fail-closed checks (tiling
-        // assertion) and applies the empty→"\n" guard to BOTH sides — its bytes
-        // are exactly what commit7Step hashes into done.json. Keep it INSIDE the
-        // try so a thrown corruption guard means "save failed, stay in editor".
-        const resolved = pane.getResolved();
+        // Step 1 (§5.0) — flush queued history before the commit. commit7Step
+        // Step 7 removes the dir on success; drainHistory awaits the serialized
+        // append chain.
+        await owner.drainHistory();
+        // §4.1 zero-edit invariant — the NET trustworthy edit count over the FULL
+        // history.jsonl (prior + this session): 0 ⇒ "no recovery value AND nothing
+        // to commit" → commitOrDiscardExit wipes the dir without touching the input
+        // files. Read from disk (not the owner's in-memory writer) because a
+        // resumed session's prior edits live on disk, and a new undo can pop into
+        // a replayed edit, so in-memory + prior is not additive (§0.5.4).
+        const jsonl = await readHistoryJsonl(this.deps.vault, session.conflictId);
+        const recordCount = assessHistoryV2(jsonl).edits;
+        // getResolved() = splitModel + empty→"\n" guard on BOTH sides — its bytes
+        // are EXACTLY what commit7Step hashes into done.json.
+        const resolved = owner.getResolved();
         // §5.0 exit decision (discard-if-empty / commit / TOCTOU). TOCTOU
         // (§5.0 Step 1.5): a sync may have rewritten base/sibling under us.
         const outcome = await commitOrDiscardExit(
@@ -789,10 +746,10 @@ export class DiffEditView extends ItemView {
         return;
       }
 
-      // Success — Step-8: return to list (render disposes the DiffPane, whose
-      // view.destroy() clears its CM6 history).
+      // Success — Step-8: return to list. Null activeSession FIRST so render()'s
+      // disposeOwner sees no session and skips the abandon-wipe (the commit
+      // already removed the dir); disposeOwner destroys the owner's CM6 view.
       this.activeSession = null;
-      this.activeWriter = null;
       this.viewState = { mode: "list", tab: "conflicts" };
       this.render();
     } finally {
@@ -809,7 +766,7 @@ export class DiffEditView extends ItemView {
   // "Failed to save" and keeps the user in the editor.
   private async resolveToctouExit(
     entry: ConflictEntry,
-    session: { conflictId: string; meta: AutosaveMeta },
+    session: { conflictId: string; meta: AutosaveMeta; hadPriorEdits: boolean },
     resolved: ResolvedSides,
     toctou: Extract<ToctouStatus, { kind: "mismatch" }>,
   ): Promise<boolean> {
@@ -867,28 +824,37 @@ export class DiffEditView extends ItemView {
     );
     return true;
   }
+}
 
-  // W3 — the cursor scheduler's flush thunk (§2.9). Re-reads the LIVE selection
-  // from the active pane and ping-pong-persists it. Fire-and-forget: errors are
-  // logged, never propagated (cursor is a best-effort UX signal). `cursorFlushing`
-  // drops an overlapping flush rather than queueing it.
-  private flushCursor(conflictId: string): void {
-    if (this.cursorFlushing) return;
-    const pane = this.activeDiffPane;
-    if (!pane) return;
-    const view = pane.getView();
-    const sel = view.state.selection.main;
-    this.cursorFlushing = true;
-    void persistCursor(this.deps.vault, conflictId, {
-      anchor: sel.anchor,
-      head: sel.head,
-      scrollTop: view.scrollDOM.scrollTop,
-    })
-      .catch((e) =>
-        this.deps.logger?.warn("diff2 cursor flush failed", { err: String(e) }),
-      )
-      .finally(() => {
-        this.cursorFlushing = false;
-      });
+// §3.2.a "Continue" — replay a saved history.jsonl into a DETACHED V2 view to
+// extract the user's resolved sides (no live feed/guard needed: a hookless
+// mountDiffPaneV2 has no recording listener, so replayHistoryV2 runs directly).
+// resolvedFromView applies the SAME splitModel + empty→"\n" guard the live commit
+// uses. The div is appended to the document so CM6 history (undo/redo replay) has
+// a real layout to work against.
+function extractResolved(
+  base: string,
+  sibling: string,
+  jsonl: string,
+): ResolvedSides {
+  const parent = document.createElement("div");
+  document.body.appendChild(parent);
+  const view = mountDiffPaneV2(parent, base, sibling);
+  try {
+    replayHistoryV2(view, jsonl);
+    return resolvedFromView(view);
+  } finally {
+    view.destroy();
+    parent.remove();
   }
+}
+
+// The session's history.jsonl as a string ("" if absent). Used by the [←] exit to
+// compute the NET trustworthy edit count (§4.1) over prior + this-session blocks.
+async function readHistoryJsonl(
+  vault: Vault,
+  conflictId: string,
+): Promise<string> {
+  const p = `${autosaveDir(conflictId)}/history.jsonl`;
+  return (await vault.adapter.exists(p)) ? vault.adapter.read(p) : "";
 }
