@@ -13,8 +13,9 @@
 // Pure decision functions (unit-tested) + thin CM6 filter wrappers.
 
 import { ChangeSet, EditorState, type ChangeDesc, type Text } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
 import type { VerRange } from "./diff-model";
-import { fromRangeSet, setStructure, structureField } from "./diff-structure";
+import { fromRangeSet, readStructure, setStructure, structureField } from "./diff-structure";
 
 // §2.2.4(2): inserts needed to restore a missing content-trailing \n, one per
 // affected ver-block. Positions are in the post-edit doc (insert before the
@@ -95,3 +96,49 @@ export const externalGuardFilter = EditorState.changeFilter.of((tr) => {
     tr.changes,
   );
 });
+
+// ── §2.2.4(6,7) + §2.2.5 boundary Backspace/Delete (keymap commands) ─────────
+//
+// The changeFilters above DROP a boundary deletion's changes, but the default
+// deleteCharBackward/Forward still applies its SELECTION move — so the caret
+// slides onto the hidden (height:0) terminal line (bug-17). The spec wants the
+// keystroke IGNORED "as if at the document boundary" — i.e. fully consumed, caret
+// unmoved. So these commands sit ABOVE defaultKeymap (Prec.high) and return true
+// (consume, NO transaction) when the keystroke is at a protected boundary; else
+// false → the default delete runs. Empty-selection only — a real selection delete
+// falls through to defaultKeymap (legalize + the changeFilters guard it).
+
+const terminalsOf = (ranges: VerRange[]): Set<number> => new Set(ranges.map((r) => r.to - 1));
+const fromsOf = (ranges: VerRange[]): Set<number> => new Set(ranges.map((r) => r.from));
+// The `\n` directly before a diff-group (ver1.from-1) — separates a normal line
+// from the group; deleting it merges them (§2.2.5.1).
+function separatorsOf(doc: Text, ranges: VerRange[]): Set<number> {
+  const out = new Set<number>();
+  for (const r of ranges) {
+    if (r.ver !== 1) continue;
+    const sep = r.from - 1;
+    if (sep >= 0 && doc.sliceString(sep, sep + 1) === "\n") out.add(sep);
+  }
+  return out;
+}
+
+// Backspace deletes [pos-1, pos). No-op when pos is a group/ver-block start
+// (§2.2.4.6 — pos-1 is then a separator or the previous block's terminal) OR
+// pos-1 is a terminal `\n` (§2.2.5.2 — Backspace just after a ver-block).
+export function diffBackspace(view: EditorView): boolean {
+  const sel = view.state.selection.main;
+  if (!sel.empty) return false;
+  const ranges = readStructure(view.state);
+  const pos = sel.head;
+  return fromsOf(ranges).has(pos) || terminalsOf(ranges).has(pos - 1);
+}
+
+// Delete deletes [pos, pos+1). No-op when pos is a terminal `\n` (§2.2.4.7) or a
+// group-leading separator (§2.2.5.1).
+export function diffDelete(view: EditorView): boolean {
+  const sel = view.state.selection.main;
+  if (!sel.empty) return false;
+  const ranges = readStructure(view.state);
+  const pos = sel.head;
+  return terminalsOf(ranges).has(pos) || separatorsOf(view.state.doc, ranges).has(pos);
+}

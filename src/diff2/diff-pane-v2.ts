@@ -45,7 +45,7 @@ import {
   toRangeSet,
 } from "./diff-structure";
 import { type MarkerKind, markerSpecs, verLineDecisions } from "./diff-decorations";
-import { autoNewlineFilter, externalGuardFilter } from "./diff-edits";
+import { autoNewlineFilter, diffBackspace, diffDelete, externalGuardFilter } from "./diff-edits";
 import { groupsOf, selectionLegalizeFilter } from "./diff-selection";
 import { computeWordDiff } from "./word-level-diff";
 import { diffLineNumbers } from "./diff-line-numbers";
@@ -368,6 +368,14 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       selectionLegalizeFilter, // §2.2.4(5)/§2.2.6 — transactionFilter (legalize selection)
       resolveClickHandler(resolveOpts), // §2.2.9 marker-button clicks (join deviceLabel/date)
       diffResolveKeymap(resolveOpts), // §1.9 hotkeys — resolve current group (Mod-Enter etc.)
+      // §2.2.4(6,7)/§2.2.5 — boundary Backspace/Delete consumed (caret stays put);
+      // Prec.high so it beats defaultKeymap's deleteChar*. Returns false off-boundary.
+      Prec.high(
+        keymap.of([
+          { key: "Backspace", run: diffBackspace },
+          { key: "Delete", run: diffDelete },
+        ]),
+      ),
       diffNavKeymap,
       keymap.of([...historyKeymap, ...defaultKeymap]),
       // §1.11 / TODO §6.9 — draw the selection ourselves so its background extends
