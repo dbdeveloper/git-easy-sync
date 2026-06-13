@@ -82,6 +82,11 @@ describe("diff-pane-v2 — decorations field assembly", () => {
     expect(line2.cls).not.toContain("diff2-collapsed");
     const line2unfocused = readDecos(s0).find((d) => !d.isWidget && d.from === emptyFrom)!;
     expect(line2unfocused.cls).toContain("diff2-collapsed");
+    // bug-18 (§2.2.8): caret at the ver2 boundary (== empty ver1.to) must NOT keep
+    // ver1 expanded — focus is EXACT (caret === range.from), not `<= to`.
+    const atVer2 = s0.update({ selection: { anchor: 3 } }).state; // ver2.from
+    const ver1AtVer2 = readDecos(atVer2).find((d) => !d.isWidget && d.from === emptyFrom)!;
+    expect(ver1AtVer2.cls).toContain("diff2-collapsed");
   });
 });
 

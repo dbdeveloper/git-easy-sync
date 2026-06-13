@@ -51,7 +51,13 @@ export function verLineDecisions(doc: Text, ranges: VerRange[], caret: number): 
       const bareTerminal = isTerminal && line.length === 0;
       let collapsed = false;
       if (bareTerminal) {
-        collapsed = empty ? !(caret >= r.from && caret <= r.to) : true;
+        // §2.2.8(2): a focused EMPTY ver-block expands. "Focused" = caret EXACTLY at
+        // range.from (the block's single caret slot). NOT `caret <= range.to`: an
+        // empty ver1's `to` equals the adjacent ver2's `from` (shared boundary), so
+        // `<= to` wrongly kept ver1 expanded when the caret moved into ver2 (bug-18:
+        // ver1 didn't collapse / re-opened when caret was in ver2). Spec §2.2.8
+        // pseudocode: `cursor.position == range.from`.
+        collapsed = empty ? caret !== r.from : true;
       }
       out.push({
         line: n,

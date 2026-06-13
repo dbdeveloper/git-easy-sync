@@ -103,6 +103,18 @@ describe("§2.2.4 empty ↔ non-empty ver-block transitions", () => {
     expect(v.state.doc.sliceString(nv1.from, nv1.to)).toBe("\n");
   });
 
+  it("bug-18: typing at the empty-ver1 / ver2 boundary grows VER2, not ver1 (no overlap)", () => {
+    const v = mount("a\nb\n", "a\nX\nb\n"); // ver1 [2,3) empty, ver2 [3,6)
+    const v2from = readStructure(v.state).find((r) => r.ver === 2)!.from; // == ver1.to (boundary)
+    v.dispatch({ changes: { from: v2from, insert: "Z" }, selection: { anchor: v2from + 1 }, userEvent: "input.type" });
+    const ranges = readStructure(v.state);
+    const nv1 = ranges.find((r) => r.ver === 1)!;
+    const nv2 = ranges.find((r) => r.ver === 2)!;
+    expect(nv1.to - nv1.from).toBe(1); // ver1 still EMPTY (did not absorb "Z")
+    expect(nv1.to).toBeLessThanOrEqual(nv2.from); // no overlap
+    expect(v.state.doc.sliceString(nv2.from, nv2.to)).toContain("Z"); // "Z" is in ver2
+  });
+
   it("Backspacing the content down to empty lands on '\\n' (not stuck at '\\n\\n')", () => {
     const v = mount("a\nX\nb\n", "a\nb\n"); // ver1 non-empty "X\n\n", ver2 empty
     const v1 = readStructure(v.state).find((r) => r.ver === 1)!; // content "X\n"

@@ -24,13 +24,19 @@ import {
 import { invertedEffects } from "@codemirror/commands";
 import type { VerRange } from "./diff-model";
 
-// Inclusive RangeValue: `startSide = -1` (from leans left) + `endSide = 1` (to
-// leans right) ⇒ an insert at either edge grows the range (CM6 reads these in
-// RangeSet.map). 1a proved a generic StateField<RangeSet> grows the empty
-// ver-block `[19,20)`→`[19,22)` over typed text this way — no DecorationSet needed.
+// RangeValue sides (CM6 reads these in RangeSet.map):
+//   startSide = -1  → an insert AT `from` grows the range (so typing into an empty
+//                     ver-block at its single caret slot grows it; 1a-validated).
+//   endSide   = -1  → an insert AT `to` does NOT grow the range. `to` is the SHARED
+//                     boundary with the next block (empty ver1.to == ver2.from), and
+//                     it sits AFTER the block's terminal `\n` — never a caret slot of
+//                     THIS block. endSide=1 (the old value) made BOTH ver1 and ver2
+//                     claim an insert at the boundary → overlapping ranges, text
+//                     landing in ver1 (bug-18b). Interior inserts (incl. the auto-\n
+//                     at to-1) are strictly < to, so they still grow regardless.
 export class VerRangeValue extends RangeValue {
   startSide = -1;
-  endSide = 1;
+  endSide = -1;
   point = false;
   constructor(
     readonly ver: 1 | 2,
