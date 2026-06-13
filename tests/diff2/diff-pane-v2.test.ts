@@ -128,6 +128,21 @@ describe("diff-pane-v2 — mounts without error (happy-dom)", () => {
     }
   });
 
+  it("a real mousedown on a marker button RESOLVES the group (bug: buttons didn't fire)", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = mountDiffPaneV2(parent, "a\nL\nc\n", "a\nR\nc\n");
+    try {
+      const apply = view.dom.querySelector<HTMLElement>('[data-diff2-resolve="keep2"]')!;
+      apply.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      expect(view.state.doc.toString()).toBe("a\nR\nc\n"); // resolved to ver2 (theirs)
+      expect(readStructure(view.state)).toEqual([]);
+    } finally {
+      view.destroy();
+      parent.remove();
+    }
+  });
+
   it("resolveCurrentGroup resolves the group the caret is in (§1.9 hotkey)", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);

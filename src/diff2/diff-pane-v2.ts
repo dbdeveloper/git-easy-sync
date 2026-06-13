@@ -49,7 +49,7 @@ import { autoNewlineFilter, diffBackspace, diffDelete, externalGuardFilter } fro
 import { groupsOf, selectionLegalizeFilter } from "./diff-selection";
 import { computeWordDiff } from "./word-level-diff";
 import { diffLineNumbers } from "./diff-line-numbers";
-import { type ResolveChoice, type ResolveOpts, diffResolveKeymap, resolveClickHandler } from "./diff-resolve";
+import { type ResolveChoice, type ResolveOpts, applyResolve, diffResolveKeymap } from "./diff-resolve";
 import { type HistorySink, type ReplayFlag, historyFeedListener } from "./history-feed";
 import type { CursorActivity } from "./cursor-timer";
 
@@ -168,7 +168,11 @@ class MarkerWidget extends WidgetType {
       other.config.isMarkdown === this.config.isMarkdown
     );
   }
-  toDOM(): HTMLElement {
+  // CM6 passes the live EditorView to a widget's toDOM — we use it to wire DIRECT
+  // button listeners (the §1 pattern). The earlier domEventHandlers mousedown-
+  // delegation did NOT fire for block-widget buttons (bug: buttons didn't resolve);
+  // a direct addEventListener + stopPropagation is reliable. "Don't reinvent §1".
+  toDOM(view: EditorView): HTMLElement {
     const el = document.createElement("div");
     el.className = `diff2-marker diff2-marker-${MARKER_CLASS[this.kind]}`;
 
@@ -177,6 +181,7 @@ class MarkerWidget extends WidgetType {
     glyph.textContent = MARKER_GLYPH[this.kind];
     el.appendChild(glyph);
 
+    const resolveOpts = { label: this.config.remoteLabel, date: this.config.date };
     const buttons = document.createElement("span");
     buttons.className = "diff2-marker-buttons";
     for (const b of MARKER_BUTTONS[this.kind]) {
@@ -192,6 +197,14 @@ class MarkerWidget extends WidgetType {
       btn.title = `${desc} (${fmtHotkey(b.hotkey)})`;
       btn.setAttribute("data-diff2-resolve", b.choice);
       btn.setAttribute("data-diff2-group", String(this.group));
+      // §2.2.9 — pointer resolve (caret synthesized at ver1.from). mousedown (not
+      // click) so CM6 doesn't move the selection first; stopPropagation keeps the
+      // event out of CM6's own handling, preventDefault avoids focus loss.
+      btn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        applyResolve(view, this.group, b.choice, resolveOpts, "pointer");
+      });
       buttons.appendChild(btn);
     }
     el.appendChild(buttons);
@@ -214,6 +227,11 @@ class MarkerWidget extends WidgetType {
   }
   get estimatedHeight(): number {
     return 18;
+  }
+  // R7.8 — the marker is NOT a doc line; keep its events out of CM6's own editing/
+  // selection handling (our direct button listeners do the work).
+  ignoreEvent(): boolean {
+    return true;
   }
 }
 
@@ -366,8 +384,10 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       externalGuardFilter, // §2.2.5(1) — changeFilter (runs before transactionFilters)
       autoNewlineFilter, // §2.2.4(2) — transactionFilter (appends normalization)
       selectionLegalizeFilter, // §2.2.4(5)/§2.2.6 — transactionFilter (legalize selection)
-      resolveClickHandler(resolveOpts), // §2.2.9 marker-button clicks (join deviceLabel/date)
-      diffResolveKeymap(resolveOpts), // §1.9 hotkeys — resolve current group (Mod-Enter etc.)
+      // §2.2.9 marker-button clicks are wired as DIRECT listeners in MarkerWidget.
+      // toDOM (the §1 pattern) — the old domEventHandlers delegation didn't fire
+      // for block-widget buttons (bug: buttons didn't resolve).
+      diffResolveKeymap(resolveOpts), // §1.9 hotkeys — resolve current group (Ctrl-Enter etc.)
       // §2.2.4(6,7)/§2.2.5 — boundary Backspace/Delete consumed (caret stays put);
       // Prec.high so it beats defaultKeymap's deleteChar*. Returns false off-boundary.
       Prec.high(
