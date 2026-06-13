@@ -28,6 +28,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import {
   Decoration,
   type DecorationSet,
+  drawSelection,
   EditorView,
   keymap,
   WidgetType,
@@ -369,6 +370,10 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       diffResolveKeymap(resolveOpts), // §1.9 hotkeys — resolve current group (Mod-Enter etc.)
       diffNavKeymap,
       keymap.of([...historyKeymap, ...defaultKeymap]),
+      // §1.11 / TODO §6.9 — draw the selection ourselves so its background extends
+      // to the END of the line, INCLUDING the trailing `↵` glyph widget (native
+      // browser selection stops at the text content and leaves the ↵ outside).
+      drawSelection(),
       EditorView.lineWrapping,
       // §0.5.6 step-2 — live history feed (optional; off in pure-CM6 unit tests).
       ...(hooks ? [historyFeedListener(hooks.sink, hooks.flag)] : []),
