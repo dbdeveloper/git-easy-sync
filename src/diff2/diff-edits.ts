@@ -14,6 +14,7 @@
 
 import { ChangeSet, EditorState, type ChangeDesc, type Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import { deleteCharForward } from "@codemirror/commands";
 import type { VerRange } from "./diff-model";
 import { fromRangeSet, readStructure, setStructure, structureField } from "./diff-structure";
 import { replayDispatch } from "./history-log-v2";
@@ -134,11 +135,26 @@ function separatorsOf(doc: Text, ranges: VerRange[]): Set<number> {
 // Backspace deletes [pos-1, pos). No-op when pos is a group/ver-block start
 // (§2.2.4.6 — pos-1 is then a separator or the previous block's terminal) OR
 // pos-1 is a terminal `\n` (§2.2.5.2 — Backspace just after a ver-block).
+//
+// EXCEPTION: at the START of a single-blank-line ver-block ("|\n\n"), Backspace
+// acts like Delete — it removes the content `\n` so the block collapses to the
+// EMPTY form "\n" ("|\n"). Without this, Backspace there is a plain no-op (the
+// char before is a protected separator/terminal), so the user could clear a
+// blank line with Delete but not Backspace. deleteCharForward removes [pos,pos+1)
+// = the content \n (NOT the terminal at pos+1), and the auto-\n filter leaves the
+// now-empty block alone (to-from <= 1).
 export function diffBackspace(view: EditorView): boolean {
   const sel = view.state.selection.main;
   if (!sel.empty) return false;
   const ranges = readStructure(view.state);
   const pos = sel.head;
+  const blankBlock = ranges.find(
+    (r) => r.from === pos && r.to - r.from === 2 && view.state.doc.sliceString(r.from, r.from + 1) === "\n",
+  );
+  if (blankBlock) {
+    deleteCharForward(view); // "|\n\n" → "|\n" (empty ver-block)
+    return true;
+  }
   return fromsOf(ranges).has(pos) || terminalsOf(ranges).has(pos - 1);
 }
 

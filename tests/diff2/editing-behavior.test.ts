@@ -236,4 +236,27 @@ describe("§2.2.12 last-group EOL-less editing (Delete removes the trailing \\n)
     press(v, "Delete"); // caret now before the terminal \n → §2.2.4.7 blocks it
     expect(v.state.doc.toString()).toBe(before); // unchanged
   });
+
+  it("[Backspace] at the START of a blank single-line block '|\\n\\n' acts like Delete → empty '|\\n'", () => {
+    // last group ver2 = a blank line "\n\n" (sibling added a blank line after "x").
+    const v = mount("x\n", "x\n\n");
+    const v2 = readStructure(v.state).find((r) => r.ver === 2)!;
+    expect(v.state.doc.sliceString(v2.from, v2.to)).toBe("\n\n"); // blank content line + terminal
+    at(v, v2.from); // "|\n\n"
+    press(v, "Backspace");
+    const after = readStructure(v.state).find((r) => r.ver === 2)!;
+    expect(after.to - after.from).toBe(1); // → "\n" (empty ver-block)
+    expect(v.state.doc.sliceString(after.from, after.to)).toBe("\n");
+    expect(v.state.selection.main.head).toBe(after.from); // caret stays on the (now empty) block
+  });
+
+  it("[Backspace] blank-line→empty also works for a NON-last group (mirrors Delete)", () => {
+    const v = mount("a\nb\n", "a\n\nb\n"); // group0 ver2 = blank line "\n\n", "b" follows
+    const v2 = readStructure(v.state).find((r) => r.ver === 2)!;
+    expect(v.state.doc.sliceString(v2.from, v2.to)).toBe("\n\n");
+    at(v, v2.from);
+    press(v, "Backspace");
+    const after = readStructure(v.state).find((r) => r.ver === 2)!;
+    expect(after.to - after.from).toBe(1); // empty
+  });
 });
