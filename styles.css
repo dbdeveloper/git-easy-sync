@@ -402,14 +402,34 @@
  * dark-red/green in the dark theme, while the number/glyph colour (--text-error
  * / --color-green) stays a saturated, readable shade on either. */
 .diff2-gutter-cell {
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
+    /* a digit-ish of left breathing room so the numbers don't jam against the left
+     * edge of the ver-row colour band (the band stays full-bleed; only the content
+     * is inset). */
+    padding-left: 0.6em;
+    font-size: 0.85em; /* a touch smaller than the text (markdown gutter style) */
 }
+/* normal-line numbers: faint + plain, like Obsidian's own gutter. The ours/theirs
+ * rules below override the colour for diff lines (they carry the side tint). */
+.cm-gutterElement.diff2-gutter-normal {
+    color: var(--text-faint);
+}
+/* +/− glyph: a FIXED-width column (always present, empty for normal) so it never
+ * shifts the number. */
 .diff2-gutter-glyph {
-    font-weight: bold;
+    flex: 0 0 auto;
     width: 0.7em;
     text-align: center;
+    font-weight: bold;
+}
+/* the NUMBER takes the rest and right-aligns against the text — so numbers form one
+ * clean right column across normal AND diff rows (markdown-style), independent of
+ * the +/− glyph. */
+.diff2-gutter-num {
+    flex: 1 1 auto;
+    text-align: right;
 }
 /* §6.7 — gutter cell tinted to the side colour (-bg), with a SATURATED number +
  * glyph (-fg) so they stay readable on the tint (a same-colour fg/bg was the
@@ -431,6 +451,26 @@
     border-right: none;
 }
 
+/* Editor font: a bare CM6 EditorView does NOT inherit Obsidian's editor theme, so
+ * font family/size/line-height must be set here (same reason as the caret below).
+ * MONOSPACE family (a diff with ASCII markers + a line-number gutter reads better
+ * fixed-width) at the Settings → Appearance "Text" SIZE + line height, so the
+ * editor tracks the user's Appearance settings. Applied to BOTH the content and the
+ * gutter so the line numbers stay aligned. Markers (.diff2-marker) set their own
+ * font and are unaffected. */
+.diff2-edit-view-root .cm-content,
+.diff2-edit-view-root .cm-gutters {
+    font-family: var(--font-monospace);
+    font-size: var(--font-text-size); /* tracks Settings → Appearance "Text" size */
+    /* A monospace face renders visually LARGER than the proportional text font at
+     * the same px (bigger x-height), so plain var(--font-text-size) looked bigger
+     * than a markdown source-mode editor. font-size-adjust normalizes the x-height
+     * to a TARGET ratio (~ the proportional text font's), so the editor visually
+     * matches markdown REGARDLESS of which monospace font is configured. Tune
+     * 0.45–0.55 to taste. (Chromium ≥ 127; older → ignored, falls back to full px.) */
+    font-size-adjust: 0.5;
+    line-height: var(--line-height-normal);
+}
 /* The text caret — our bare CM6 EditorView doesn't inherit Obsidian's editor
  * caret colour, so it defaulted to black and went invisible on the dark theme.
  * --text-normal is theme-aware (black on light, white on dark). Covers both the

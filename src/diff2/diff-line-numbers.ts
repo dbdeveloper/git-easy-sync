@@ -148,7 +148,11 @@ class LineLabelMarker extends GutterMarker {
   ) {
     super();
     this.elementClass =
-      side === "ver1" ? "diff2-gutter-ours" : side === "ver2" ? "diff2-gutter-theirs" : "";
+      side === "ver1"
+        ? "diff2-gutter-ours"
+        : side === "ver2"
+          ? "diff2-gutter-theirs"
+          : "diff2-gutter-normal"; // faint, like Obsidian's own line numbers
   }
   eq(other: LineLabelMarker): boolean {
     return other.text === this.text && other.side === this.side;
@@ -156,15 +160,15 @@ class LineLabelMarker extends GutterMarker {
   toDOM(): Node {
     const cell = document.createElement("span");
     cell.className = "diff2-gutter-cell";
+    // NUMBER first (right-aligned in its own column → numbers form one clean right
+    // column across every row), then the +/− glyph in a fixed-width slot AFTER it
+    // (always present, empty for normal) so the glyph never shifts the number.
     const num = cell.appendChild(document.createElement("span"));
     num.className = "diff2-gutter-num";
     num.textContent = this.text;
-    const glyph = this.side === "ver1" ? "−" : this.side === "ver2" ? "+" : "";
-    if (glyph) {
-      const g = cell.appendChild(document.createElement("span"));
-      g.className = "diff2-gutter-glyph";
-      g.textContent = glyph;
-    }
+    const g = cell.appendChild(document.createElement("span"));
+    g.className = "diff2-gutter-glyph";
+    g.textContent = this.side === "ver1" ? "−" : this.side === "ver2" ? "+" : "";
     return cell;
   }
 }
