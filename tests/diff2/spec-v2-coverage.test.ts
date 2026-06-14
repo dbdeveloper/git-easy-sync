@@ -432,3 +432,28 @@ describe("§2.2.7 — diff-group clipboard format (NOT BUILT — Tier-2 gap)", (
   it.todo("(6) an empty content line encodes as exactly `- ↵`/`+ ↵`");
   it.todo("(1) text selected within ONE ver-block copies as plain text (no terminal \\n)");
 });
+
+// bug-24 regression — EDITING the LAST diff-group's ver2 down to an EOL-less last
+// line, and applying it. Was broken pre-9ea3f83 (endSide=1): Delete couldn't remove
+// the content \n (auto-\n / boundary fought it) and apply dropped the trailing blank.
+describe("§2.2.12 bug-24 — last-group ver2 EOL-less editing", () => {
+  const setup = () => mount("z\n", "z\nL6\n\n"); // ver1 empty; ver2 "L6\n\n" (L6 + blank), last group
+  it("apply ver2 (keep2) on the last group preserves the trailing blank line", () => {
+    const v = setup();
+    const g = Math.max(...readStructure(v.state).map((r) => r.group));
+    applyResolve(v, g, "keep2");
+    const sp = splitModel(v.state.doc.toString(), readStructure(v.state));
+    expect(sp.sibling).toBe("z\nL6\n\n"); // blank line kept (NOT "z\nL6\n")
+  });
+  it("two Deletes turn 'L6'+blank into an EOL-less 'L6' (final ↵ removable)", () => {
+    const v = setup();
+    const after = v.state.doc.toString().indexOf("L6") + 2; // caret after "L6"
+    v.dispatch({ selection: { anchor: after } });
+    press(v, "Delete"); // removes the blank line
+    press(v, "Delete"); // removes the content \n → EOL-less
+    const ver2 = readStructure(v.state).filter((r) => r.ver === 2).pop()!;
+    expect(v.state.doc.toString().slice(ver2.from, ver2.to - 1)).toBe("L6"); // content EOL-less
+    const sp = splitModel(v.state.doc.toString(), readStructure(v.state));
+    expect(sp.sibling.endsWith("L6")).toBe(true); // no trailing \n
+  });
+});
