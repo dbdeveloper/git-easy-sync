@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { EditorView } from "@codemirror/view";
 import { mountDiffPaneV2 } from "../../src/diff2/diff-pane-v2";
-import { readStructure } from "../../src/diff2/diff-structure";
+import { caretOffTerminal, readStructure } from "../../src/diff2/diff-structure";
 
 const parents: HTMLElement[] = [];
 function mount(base: string, sibling: string): EditorView {
@@ -78,6 +78,37 @@ describe("§2.2.4/§2.2.5 boundary protection (real keymap commands)", () => {
     at(v, 8); // start of "c" (== ver2.to)
     press(v, "Backspace");
     expect(v.state.doc.toString()).toBe(before);
+  });
+
+  // conflict C: "a\nX\nc\n" vs "a\nY\nc\n" ⇒ doc "a\nX\n\nY\n\nc\n":
+  //   ver1 "X\n\n" [2,5) (X@2, content-\n@3, terminal-\n@4); ver2 "Y\n\n" [5,8).
+  //   pos 4 = the HIDDEN terminal line of ver1.
+  it("bug-21: [Right] from end-of-content steps OVER the hidden terminal to the next block (§2.2.4.9b)", () => {
+    const v = mount("a\nX\nc\n", "a\nY\nc\n");
+    at(v, 3); // after "X", before the content \n (where the ↵ glyph renders)
+    press(v, "ArrowRight");
+    expect(v.state.selection.main.head).toBe(5); // skipped pos 4 (terminal) → ver2.from
+  });
+
+  it("bug-21 mirror: [Left] from the next block steps back to end-of-content, not the terminal", () => {
+    const v = mount("a\nX\nc\n", "a\nY\nc\n");
+    at(v, 5); // ver2.from
+    press(v, "ArrowLeft");
+    expect(v.state.selection.main.head).toBe(3); // skipped pos 4 (terminal) → end of "X"
+  });
+
+  it("bug-20: a caret forced onto the hidden terminal line is nudged off (§2.2.4.9 invariant)", () => {
+    const v = mount("a\nX\nc\n", "a\nY\nc\n");
+    v.dispatch({ selection: { anchor: 4 } }); // 4 = hidden terminal line of ver1
+    expect(v.state.selection.main.head).toBe(3); // backstop nudged it to end of "X"
+  });
+
+  it("bug-20: Enter at end of ver content leaves the caret on a VISIBLE line", () => {
+    const v = mount("a\nX\nc\n", "a\nY\nc\n");
+    at(v, 3);
+    press(v, "Enter");
+    const head = v.state.selection.main.head;
+    expect(caretOffTerminal(v.state.doc, readStructure(v.state), head)).toBe(head); // not on a terminal
   });
 });
 

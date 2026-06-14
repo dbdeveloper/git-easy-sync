@@ -35,8 +35,10 @@ import {
 } from "@codemirror/view";
 import { buildModel } from "./diff-model";
 import {
+  caretOffTerminal,
   cursorHistory,
   cursorVertTarget,
+  horizontalSkip,
   readStructure,
   resolveCaret,
   structureField,
@@ -317,12 +319,42 @@ function vertical(view: EditorView, forward: boolean): boolean {
   return true;
 }
 
+// §2.2.4(9b/9f) — plain Left/Right step OVER a non-empty ver-block's hidden
+// terminal `\n` line (the caret must never rest there). Move one char natively,
+// then skip. Plain caret only; Shift+Left/Right (selection) falls through.
+function horizontal(view: EditorView, forward: boolean): boolean {
+  const cur = view.state.selection.main;
+  if (!cur.empty) return false; // collapse/extend selection → default
+  const native = view.moveByChar(cur, forward);
+  const target = horizontalSkip(view.state.doc, readStructure(view.state), native.head, forward);
+  view.dispatch({ selection: EditorSelection.cursor(target), scrollIntoView: true });
+  return true;
+}
+
 export const diffNavKeymap: Extension = Prec.highest(
   keymap.of([
     { key: "ArrowDown", run: (v) => vertical(v, true) },
     { key: "ArrowUp", run: (v) => vertical(v, false) },
+    { key: "ArrowRight", run: (v) => horizontal(v, true) },
+    { key: "ArrowLeft", run: (v) => horizontal(v, false) },
   ]),
 );
+
+// §2.2.4(9) caret invariant backstop — after ANY update, if the (collapsed) caret
+// landed on a non-empty ver-block's hidden terminal line, nudge it off (Enter,
+// mouse, programmatic — anything the directional nav above didn't catch). Selection-
+// only follow-up, not in history; re-entrancy is safe (the nudged position is no
+// longer a terminal, so the next update is a no-op) — same pattern as
+// cursorRestoreListener.
+export const caretOffTerminalListener: Extension = EditorView.updateListener.of((u) => {
+  if (!u.selectionSet && !u.docChanged) return;
+  const sel = u.state.selection.main;
+  if (!sel.empty) return;
+  const target = caretOffTerminal(u.state.doc, readStructure(u.state), sel.head);
+  if (target !== sel.head) {
+    u.view.dispatch({ selection: { anchor: target }, annotations: Transaction.addToHistory.of(false) });
+  }
+});
 
 // ── §2.2.9 explicit resolution-caret restore ─────────────────────────────────
 // `resolveCaret` rides the forward resolution and (via cursorHistory) every undo/
@@ -379,6 +411,7 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       structureHistory, // version the structure field across undo/redo (resolution)
       cursorHistory, // §2.2.9 carry the resolveCaret marker across undo/redo
       cursorRestoreListener, // §2.2.9 apply before/after caret on undo/redo
+      caretOffTerminalListener, // §2.2.4(9) caret never rests on a hidden terminal line
       decorationsField,
       terminalProtectionFilter,
       externalGuardFilter, // §2.2.5(1) — changeFilter (runs before transactionFilters)

@@ -20,6 +20,7 @@ import {
   StateEffect,
   StateField,
   type ChangeDesc,
+  type Text,
 } from "@codemirror/state";
 import { invertedEffects } from "@codemirror/commands";
 import type { VerRange } from "./diff-model";
@@ -176,4 +177,37 @@ export function cursorVertTarget(
   }
   const skipped = empties.filter((f) => f < curHead && f > nativeHead).sort((a, b) => b - a);
   return skipped.length ? skipped[0] : nativeHead;
+}
+
+// §2.2.4(9b/9f) — Left/Right must STEP OVER a non-empty ver-block's hidden terminal
+// `\n` line (the height:0 line at `to-1` that exists when the content ends with a
+// `\n`). forward → `to` (next block/normal); backward → `to-2` (end of the block's
+// last visible content line). Empty blocks (to-from===1) are exempt — their single
+// line IS the caret slot (it expands on focus). Returns `pos` unchanged otherwise.
+export function horizontalSkip(
+  doc: Text,
+  ranges: VerRange[],
+  pos: number,
+  forward: boolean,
+): number {
+  for (const r of ranges) {
+    if (r.to - r.from <= 1) continue; // empty block — caret slot, not a hidden terminal
+    if (pos === r.to - 1 && doc.sliceString(r.to - 2, r.to - 1) === "\n") {
+      return forward ? r.to : r.to - 2;
+    }
+  }
+  return pos;
+}
+
+// Universal caret invariant (backstop for bug-20/21 across ANY vector — Enter,
+// mouse, programmatic): a caret must never rest on a non-empty ver-block's hidden
+// terminal line (position `to-1` when the content ends with `\n`). Nudge it BACK to
+// the end of the last visible content line (`to-2`). Directional nav (horizontalSkip)
+// handles Left/Right forward-skip BEFORE this fires, so this only catches residuals.
+export function caretOffTerminal(doc: Text, ranges: VerRange[], pos: number): number {
+  for (const r of ranges) {
+    if (r.to - r.from <= 1) continue;
+    if (pos === r.to - 1 && doc.sliceString(r.to - 2, r.to - 1) === "\n") return r.to - 2;
+  }
+  return pos;
 }
