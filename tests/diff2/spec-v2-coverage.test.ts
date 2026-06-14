@@ -14,8 +14,11 @@ import { Text } from "@codemirror/state";
 import { EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { buildModel, splitModel, type VerRange } from "../../src/diff2/diff-model";
-import { mountDiffPaneV2 } from "../../src/diff2/diff-pane-v2";
+import { buildDecorations, mountDiffPaneV2 } from "../../src/diff2/diff-pane-v2";
 import { caretOffTerminal, readStructure } from "../../src/diff2/diff-structure";
+import { applyResolve } from "../../src/diff2/diff-resolve";
+import { groupsOf } from "../../src/diff2/diff-selection";
+import { computeLineLabels, getDiffLineNumber } from "../../src/diff2/diff-line-numbers";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 interface Group {
@@ -250,4 +253,182 @@ describe("§2.2.5 — external protection of diff-blocks", () => {
     press(v, "Backspace");
     expect(v.state.doc.toString()).toBe(before);
   });
+});
+
+describe("§2.2.6 — selecting whole ver-blocks / diff-groups", () => {
+  // C1 group span = [ver1.from=2, ver2.to=8); doc length 10.
+  it("(1) Ctrl+A / select-all keeps the WHOLE document (groups fully contained)", () => {
+    const v = mount("a\nL\nc\n", "a\nR\nc\n");
+    v.dispatch({ selection: EditorSelection.range(0, v.state.doc.length) });
+    const s = v.state.selection.main;
+    expect(s.from).toBe(0);
+    expect(s.to).toBe(v.state.doc.length);
+  });
+  it("(2) a selection from a normal line into a group expands to cover the WHOLE group", () => {
+    const v = mount("a\nL\nc\n", "a\nR\nc\n");
+    const g = groupsOf(readStructure(v.state))[0]; // {from:2,to:8}
+    v.dispatch({ selection: EditorSelection.range(0, 3) }); // 0 in "a", 3 inside ver1
+    const s = v.state.selection.main;
+    expect(s.from).toBe(0);
+    expect(s.to).toBe(g.to); // group fully included
+  });
+  it("(3,4) a selection crossing from ver1 into ver2 (or out of the group) selects the WHOLE group", () => {
+    const v = mount("a\nL\nc\n", "a\nR\nc\n");
+    const g = groupsOf(readStructure(v.state))[0];
+    v.dispatch({ selection: EditorSelection.range(3, 6) }); // 3 in ver1, 6 in ver2
+    const s = v.state.selection.main;
+    expect(s.from).toBe(g.from);
+    expect(s.to).toBe(g.to);
+  });
+});
+
+// reader for line-class decorations (collapse / ver colour)
+function lineClasses(v: EditorView): Map<number, string> {
+  const out = new Map<number, string>();
+  const set = buildDecorations(v.state);
+  const it = set.iter();
+  while (it.value) {
+    const spec = it.value.spec as { class?: string; widget?: unknown };
+    if (spec.class && !spec.widget) out.set(it.from, spec.class);
+    it.next();
+  }
+  return out;
+}
+
+describe("§2.2.8 — empty ver-block & ↵ glyph rendering", () => {
+  it("(1) an UNFOCUSED empty ver-block is collapsed (height:0)", () => {
+    const v = mount("a\nb\n", "a\nX\nb\n"); // ver1 empty [2,3)
+    v.dispatch({ selection: { anchor: 0 } }); // caret away
+    expect(lineClasses(v).get(2)).toContain("diff2-collapsed");
+  });
+  it("(2) a FOCUSED empty ver-block (caret on it) is NOT collapsed", () => {
+    const v = mount("a\nb\n", "a\nX\nb\n");
+    v.dispatch({ selection: { anchor: 2 } }); // caret on the empty ver1.from
+    expect(lineClasses(v).get(2) ?? "").not.toContain("diff2-collapsed");
+  });
+  it("(4) a non-empty ver-block's bare terminal line is ALWAYS collapsed", () => {
+    const v = mount("a\nL\nc\n", "a\nR\nc\n"); // ver1 "L\n\n": terminal line @4
+    expect(lineClasses(v).get(4)).toContain("diff2-collapsed");
+  });
+  it("(3) the ↵ glyph never renders on the terminal line; renders on a content line", () => {
+    const v = mount("a\nL\nc\n", "a\nR\nc\n");
+    const glyphPos: number[] = []; // ↵ widget positions (non-marker widgets)
+    const set = buildDecorations(v.state);
+    const it = set.iter();
+    while (it.value) {
+      const spec = it.value.spec as { widget?: { diff2MarkerKind?: unknown } };
+      if (spec.widget && !spec.widget.diff2MarkerKind) glyphPos.push(it.from);
+      it.next();
+    }
+    expect(glyphPos).toContain(3); // end of "L" content line
+    expect(glyphPos).not.toContain(4); // never on the terminal line
+  });
+});
+
+describe("§2.2.9 — conflict resolution (region-replace)", () => {
+  const setup = () => mount("a\nL\nc\n", "a\nR\nc\n"); // ver1 "L\n", ver2 "R\n"
+  it("keep1 → ver1 content; structure dropped; result is plain text", () => {
+    const v = setup();
+    applyResolve(v, 0, "keep1");
+    expect(v.state.doc.toString()).toBe("a\nL\nc\n");
+    expect(readStructure(v.state)).toEqual([]);
+  });
+  it("keep2 → ver2 content", () => {
+    const v = setup();
+    applyResolve(v, 0, "keep2");
+    expect(v.state.doc.toString()).toBe("a\nR\nc\n");
+    expect(readStructure(v.state)).toEqual([]);
+  });
+  it("both → ver1 then ver2", () => {
+    const v = setup();
+    applyResolve(v, 0, "both");
+    expect(v.state.doc.toString()).toBe("a\nL\nR\nc\n");
+  });
+  it("neither → group removed entirely", () => {
+    const v = setup();
+    applyResolve(v, 0, "neither");
+    expect(v.state.doc.toString()).toBe("a\nc\n");
+    expect(readStructure(v.state)).toEqual([]);
+  });
+  it("join (markdown) → ver1 + a '> '-quoted ver2 callout", () => {
+    const v = setup();
+    applyResolve(v, 0, "join", { label: "Phone", date: "2026-06-03" });
+    expect(v.state.doc.toString()).toContain("L\n"); // ver1 kept
+    expect(v.state.doc.toString()).toContain("> "); // quoted remote
+    expect(readStructure(v.state)).toEqual([]);
+  });
+});
+
+describe("§2.2.10 — sibling-wins line numbering", () => {
+  it("normal+ver2 share a through-counter; ver1 is numbered in PARALLEL from the line above", () => {
+    // base a b c d e ; sibling a P Q R c S e. The d (ver1) line reads 6 (continuing
+    // from c=5), NOT its base line 4 (the §1.10 parallel rule, bug this verifies).
+    const m = buildModel("a\nb\nc\nd\ne\n", "a\nP\nQ\nR\nc\nS\ne\n");
+    const doc = Text.of(m.doc.split("\n"));
+    const labels = computeLineLabels(doc, m.ranges);
+    let dLine = -1;
+    for (let n = 1; n <= doc.lines; n++) if (doc.line(n).text === "d") dLine = n;
+    expect(labels.get(dLine)).toEqual({ text: "6", side: "ver1" });
+  });
+  it("getDiffLineNumber (fast per-line formula) === computeLineLabels for every line", () => {
+    for (const [base, sibling] of FIXTURES) {
+      const m = buildModel(base, sibling);
+      const doc = Text.of(m.doc.split("\n"));
+      const walk = computeLineLabels(doc, m.ranges);
+      for (let n = 1; n <= doc.lines; n++) {
+        expect(getDiffLineNumber(doc, m.ranges, n)).toEqual(walk.get(n) ?? null);
+      }
+    }
+  });
+});
+
+describe("§2.2.11 — split (diff-document → ver1/ver2 files)", () => {
+  it("ver1 content → base, ver2 content → sibling, normal → both, terminals dropped", () => {
+    // doc with a resolved edit: type into ver1, then split must reflect it.
+    const m = buildModel("a\nL\nc\n", "a\nR\nc\n");
+    // hand-edit: replace ver1 content "L\n" with "L2\n" (simulate an edit) by
+    // rebuilding the (doc, ranges) the model would hold — easiest via splitModel of
+    // the original (identity) since §2.1 already pins build∘split; here we assert the
+    // RULE: a ver1 line goes only to base, a ver2 line only to sibling.
+    const sp = splitModel(m.doc, m.ranges);
+    expect(sp.base).toBe("a\nL\nc\n"); // "L" (ver1) in base, "R" (ver2) absent
+    expect(sp.sibling).toBe("a\nR\nc\n"); // "R" (ver2) in sibling, "L" absent
+  });
+});
+
+describe("§2.2.12 — zero-size docs & EOL-less last line (added later; resolved)", () => {
+  it("deleted-vs-existing: '' vs 'data\\n' → ONE group, empty ver1 + full ver2; round-trips", () => {
+    const m = buildModel("", "line 1\nline 2\n");
+    const gs = groups(m.ranges);
+    expect(gs).toHaveLength(1);
+    expect(gs[0].v1.to - gs[0].v1.from).toBe(1); // ver1 empty (deletion)
+    expect(content(m.doc, gs[0].v2)).toBe("line 1\nline 2\n"); // ver2 = whole file
+    expect(splitModel(m.doc, m.ranges)).toEqual({ base: "", sibling: "line 1\nline 2\n" });
+  });
+  it("an EOL-less last line is preserved byte-exact (no phantom trailing \\n added)", () => {
+    const m = buildModel("a\nL", "a\nR"); // both last lines EOL-less
+    const sp = splitModel(m.doc, m.ranges);
+    expect(sp.base).toBe("a\nL"); // NOT "a\nL\n"
+    expect(sp.sibling).toBe("a\nR");
+  });
+  it("editing the EOL-less last ver-block does NOT force a trailing \\n (auto-\\n exempts it)", () => {
+    // last group ends the doc; appending to ver1 content keeps it EOL-less on split.
+    const v = mount("a\nL", "a\nR"); // ver1 "L" (EOL-less last group)
+    const v1 = verOf(v, 1);
+    v.dispatch({ changes: { from: v1.to - 1, insert: "X" }, userEvent: "input.type" }); // append to content
+    const sp = splitModel(v.state.doc.toString(), readStructure(v.state));
+    expect(sp.base.endsWith("\n")).toBe(false); // still EOL-less
+  });
+});
+
+// §2.2.7 — clipboard copy/cut/paste of a diff-group as the ```github-easy-sync```
+// (≪/==/≫ + `- `/`+ ` + ↵) format. NOT BUILT YET (Tier-2). Documented as the spec
+// gap; flip these to real tests when the clipboard subsystem lands.
+describe("§2.2.7 — diff-group clipboard format (NOT BUILT — Tier-2 gap)", () => {
+  it.todo("(2) a selected diff-group copies to ```github-easy-sync``` with ≪/==/≫ + `- `/`+ ` + ↵");
+  it.todo("(3a) pasting that block onto a normal line converts it BACK into a diff-group");
+  it.todo("(3b) pasting it inside a ver-block (or another editor) inserts as-is");
+  it.todo("(4/5) malformed block (any 4a–4f rule fails) pastes as-is, no conversion");
+  it.todo("(6) an empty content line encodes as exactly `- ↵`/`+ ↵`");
+  it.todo("(1) text selected within ONE ver-block copies as plain text (no terminal \\n)");
 });
