@@ -32,6 +32,12 @@ const type = (v: EditorView, pos: number, s: string) =>
 // guards) runs — calling deleteCharBackward directly would bypass the keymap.
 const press = (v: EditorView, key: string) =>
   v.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+// REAL Ctrl(+Shift) keydown — exercises the §1.9 resolution keymap (diffResolveKeymap),
+// which routes through the private caretVer/currentGroupAt (caret → ver-block side).
+const pressCtrl = (v: EditorView, key: string, shift = false) =>
+  v.contentDOM.dispatchEvent(
+    new KeyboardEvent("keydown", { key, ctrlKey: true, shiftKey: shift, bubbles: true, cancelable: true }),
+  );
 
 // conflict A: base "a\nL\nc\n" vs sibling "a\nR\nc\n"
 //   doc "a\nL\n\nR\n\nc\n": a0 \n1 L2 \n3 \n4 R5 \n6 \n7 c8 \n9
@@ -258,5 +264,56 @@ describe("§2.2.12 last-group EOL-less editing (Delete removes the trailing \\n)
     press(v, "Backspace");
     const after = readStructure(v.state).find((r) => r.ver === 2)!;
     expect(after.to - after.from).toBe(1); // empty
+  });
+});
+
+// §1.9 — resolution hotkeys must target the ver-block the caret is ACTUALLY in.
+// Both bugs were the inclusive `head <= r.to` boundary check (ranges are half-open
+// [from,to)); the fix is `head < r.to`. Driven through the REAL keymap so the
+// private caretVer/currentGroupAt are exercised as the user hits them.
+describe("§1.9 resolution hotkeys — caret→ver-block boundary (half-open)", () => {
+  it("Ctrl+Enter on the NORMAL line right after a group does NOT resolve it (head === ver2.to)", () => {
+    const v = mount("a\nL1\nb\nL2\nc\n", "a\nR1\nb\nR2\nc\n");
+    const g0v2 = readStructure(v.state).find((r) => r.group === 0 && r.ver === 2)!;
+    at(v, g0v2.to); // start of the normal line directly after group 0
+    pressCtrl(v, "Enter"); // §1.9 "apply this block" — but the caret is NOT in a block
+    // THE BUG: this used to RESOLVE group 0 (head === ver2.to matched ver2). The fix
+    // leaves every group intact. (resolveApplyCurrent returns false → the key falls
+    // through to defaultKeymap, which may insert a plain newline — benign, undoable;
+    // no conflict is destroyed, which is what mattered.)
+    const ranges = readStructure(v.state);
+    expect(ranges).toHaveLength(4); // both groups intact (2 ranges each)
+    expect(ranges.filter((r) => r.group === 0)).toHaveLength(2); // group 0 NOT resolved
+  });
+
+  it("Ctrl+Backspace at ver2.from removes VER2 (keep1), not ver1 (shared boundary ver2.from === ver1.to)", () => {
+    const v = mount("a\nL1\nb\nL2\nc\n", "a\nR1\nb\nR2\nc\n");
+    const g1v1 = readStructure(v.state).find((r) => r.group === 1 && r.ver === 1)!;
+    const g1v2 = readStructure(v.state).find((r) => r.group === 1 && r.ver === 2)!;
+    expect(g1v2.from).toBe(g1v1.to); // the ambiguous shared boundary
+    at(v, g1v2.from); // caret exactly there — old code matched ver1 first
+    pressCtrl(v, "Backspace"); // §1.9 "remove this block" → caret in ver2 ⇒ keep1
+    expect(readStructure(v.state).find((r) => r.group === 1)).toBeUndefined(); // group 1 resolved
+    expect(v.state.doc.toString()).toContain("L2"); // ver1 kept
+    expect(v.state.doc.toString()).not.toContain("R2"); // ver2 removed
+  });
+
+  it("Ctrl+Enter INSIDE a ver-block still resolves it (caret < to, not a regression)", () => {
+    const v = mount("a\nL1\nb\nL2\nc\n", "a\nR1\nb\nR2\nc\n");
+    const g0v1 = readStructure(v.state).find((r) => r.group === 0 && r.ver === 1)!;
+    at(v, g0v1.from); // inside ver1 of group 0
+    pressCtrl(v, "Enter"); // apply this block → keep1
+    expect(readStructure(v.state).find((r) => r.group === 0)).toBeUndefined();
+    expect(v.state.doc.toString()).toContain("L1"); // ver1 kept
+  });
+
+  it("Ctrl+Backspace on a NORMAL line is a no-op (consumed; no deleteGroupBackward jump)", () => {
+    const v = mount("a\nL1\nb\nL2\nc\n", "a\nR1\nb\nR2\nc\n");
+    const bPos = v.state.doc.toString().indexOf("b") + 1; // end of the normal "b" line (between groups)
+    at(v, bPos);
+    const beforeDoc = v.state.doc.toString();
+    pressCtrl(v, "Backspace"); // off-block → CONSUMED, not deleteGroupBackward
+    expect(v.state.doc.toString()).toBe(beforeDoc); // "b" NOT word-deleted
+    expect(v.state.selection.main.head).toBe(bPos); // caret did NOT jump
   });
 });

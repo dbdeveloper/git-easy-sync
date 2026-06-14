@@ -159,10 +159,14 @@ export function resolveClickHandler(opts: ResolveOpts = {}): Extension {
 }
 
 // ── keyboard hotkeys (§1.9) ──────────────────────────────────────────────────
-// The group whose span [ver1.from, ver2.to] contains the caret, else null.
+// The group whose span [ver1.from, ver2.to) contains the caret, else null.
+// HALF-OPEN: `g.to` is the position AFTER the group (the next normal line's start
+// / the trailing EOF line). A caret AT `g.to` is on that next line, NOT in the
+// group — so `caret < g.to`, NOT `<= g.to`. The inclusive form made a caret on the
+// normal line directly after a group resolve that group (boundary shifted down).
 export function currentGroupAt(ranges: VerRange[], caret: number): number | null {
   for (const g of groupsOf(ranges)) {
-    if (caret >= g.from && caret <= g.to) return g.group;
+    if (caret >= g.from && caret < g.to) return g.group;
   }
   return null;
 }
@@ -180,10 +184,15 @@ export function resolveCurrentGroup(
 
 // Which ver-block side the caret sits in (1/2), or null if not inside a ver range.
 // Drives the §1.9 context-sensitive apply/remove ("this block" = the caret's side).
+// HALF-OPEN `[from, to)` — a caret AT `r.to` is at the START of the NEXT range/line,
+// NOT in this one, so `head < r.to`, NOT `<= r.to`. The inclusive form misfired at
+// BOTH boundaries: (a) a caret on the normal line after a group (head === ver2.to)
+// matched that ver2; (b) a caret at ver2.from (=== ver1.to) matched ver1 first
+// (loop order) — Ctrl+Delete then hit the wrong side.
 function caretVer(view: EditorView): 1 | 2 | null {
   const head = view.state.selection.main.head;
   for (const r of readStructure(view.state)) {
-    if (head >= r.from && head <= r.to) return r.ver;
+    if (head >= r.from && head < r.to) return r.ver;
   }
   return null;
 }
@@ -199,19 +208,38 @@ function resolveRemoveCurrent(view: EditorView, opts: ResolveOpts): boolean {
   return ver === null ? false : resolveCurrentGroup(view, ver === 1 ? "keep2" : "keep1", opts);
 }
 
-// §1.9 hotkeys — active only when the caret is in a ver-block (else they fall
-// through to defaultKeymap). LITERAL `Ctrl` on every platform (NOT `Mod`/Cmd):
-// §1.9 deliberately uses Ctrl on Mac too (Cmd+Backspace is OS-reserved). Prec.
-// highest so they win over defaultKeymap. apply/remove are context-sensitive on
-// the caret's side (resolveApply/RemoveCurrent).
+// §1.9 hotkeys. LITERAL `Ctrl` on every platform (NOT `Mod`/Cmd): §1.9 deliberately
+// uses Ctrl on Mac too (Cmd+Backspace is OS-reserved). Prec.highest so they win over
+// defaultKeymap. apply/remove are context-sensitive on the caret's side.
+//
+// Fall-through policy OUTSIDE a conflict block (caret on a normal line):
+//   - the BACKSPACE combos CONSUME the key (return true) → hard no-op. Otherwise
+//     they fell through to defaultKeymap's Ctrl-Backspace = deleteGroupBackward,
+//     which deletes a word / jumps the caret on a normal line (unwanted for a
+//     resolution shortcut).
+//   - the ENTER / join combos still fall through (return false when no block), so
+//     e.g. Ctrl+Enter keeps its normal-line behaviour (user-confirmed OK).
 export function diffResolveKeymap(opts: ResolveOpts = {}): Extension {
   return Prec.highest(
     keymap.of([
-      { key: "Ctrl-Enter", run: (v) => resolveApplyCurrent(v, opts) }, // apply this block
-      { key: "Ctrl-Backspace", run: (v) => resolveRemoveCurrent(v, opts) }, // remove this block
+      { key: "Ctrl-Enter", run: (v) => resolveApplyCurrent(v, opts) }, // apply this block (falls through off-block)
       { key: "Ctrl-Shift-Enter", run: (v) => resolveCurrentGroup(v, "both", opts) },
-      { key: "Ctrl-Shift-Backspace", run: (v) => resolveCurrentGroup(v, "neither", opts) },
       { key: "Ctrl-Shift-.", run: (v) => resolveCurrentGroup(v, "join", opts) }, // md only (no-op if non-md group)
+      // remove this block — CONSUME even off-block (no deleteGroupBackward fall-through)
+      {
+        key: "Ctrl-Backspace",
+        run: (v) => {
+          resolveRemoveCurrent(v, opts);
+          return true;
+        },
+      },
+      {
+        key: "Ctrl-Shift-Backspace",
+        run: (v) => {
+          resolveCurrentGroup(v, "neither", opts);
+          return true;
+        },
+      },
     ]),
   );
 }

@@ -7,6 +7,7 @@ import { redo, undo } from "@codemirror/commands";
 import { buildModel, splitModel } from "../../src/diff2/diff-model";
 import { readStructure } from "../../src/diff2/diff-structure";
 import { currentGroupAt, resolveAll, resolveGroup } from "../../src/diff2/diff-resolve";
+import { groupsOf } from "../../src/diff2/diff-selection";
 import { createDiffPaneState } from "../../src/diff2/diff-pane-v2";
 
 // one group: base "a\nL\nc\n" vs "a\nR\nc\n" ⇒ doc "a\nL\n\nR\n\nc\n"
@@ -88,6 +89,16 @@ describe("diff-resolve — currentGroupAt (§1.9 hotkey target)", () => {
   it("returns null when the caret is in normal space", () => {
     expect(currentGroupAt(ranges, 0)).toBeNull(); // "a"
     expect(currentGroupAt(ranges, 11)).toBeNull(); // "b" between the groups
+  });
+  it("HALF-OPEN [from,to): a caret AT g.to (the next line) is NOT in the group", () => {
+    // bug: `<= g.to` made a caret on the normal line directly after a group resolve
+    // THAT group (boundary shifted down). g0=[2,10), g1=[12,20).
+    const g0 = groupsOf(ranges).find((g) => g.group === 0)!;
+    const g1 = groupsOf(ranges).find((g) => g.group === 1)!;
+    expect(currentGroupAt(ranges, g0.from)).toBe(0); // start IS inside
+    expect(currentGroupAt(ranges, g0.to)).toBeNull(); // === next normal line start → OUT
+    expect(currentGroupAt(ranges, g0.to - 1)).toBe(0); // last position still IN
+    expect(currentGroupAt(ranges, g1.to)).toBeNull();
   });
 });
 
