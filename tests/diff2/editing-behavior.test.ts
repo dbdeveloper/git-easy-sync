@@ -115,6 +115,24 @@ describe("§2.2.4 empty ↔ non-empty ver-block transitions", () => {
     expect(v.state.doc.sliceString(nv2.from, nv2.to)).toContain("Z"); // "Z" is in ver2
   });
 
+  it("bug-19: delete blank ver2 → empty, then Enter grows VER2 (not ver1) — no ↵↵", () => {
+    // group0: ver1 [2,3) empty, ver2 [3,5) a blank line. Delete the blank → ver2
+    // empty too; both empty + adjacent (the worst boundary). Enter must grow ver2.
+    const v = mount("a\nb\n", "a\n\nb\n");
+    v.dispatch({ selection: { anchor: 3 } }); // ver2.from (start of the blank line)
+    press(v, "Delete"); // ver2 → empty [3,4)
+    let r = readStructure(v.state);
+    expect(r.find((x) => x.ver === 2)!.to - r.find((x) => x.ver === 2)!.from).toBe(1); // ver2 empty
+    const caret = v.state.selection.main.head;
+    v.dispatch({ changes: { from: caret, insert: "\n" }, selection: { anchor: caret + 1 }, userEvent: "input" });
+    r = readStructure(v.state);
+    const v1 = r.find((x) => x.ver === 1)!;
+    const v2 = r.find((x) => x.ver === 2)!;
+    expect(v1.to - v1.from).toBe(1); // ver1 still empty — did NOT absorb the Enter
+    expect(v2.to - v2.from).toBe(2); // ver2 grew to a blank line
+    expect(v1.to).toBeLessThanOrEqual(v2.from); // no overlap
+  });
+
   it("Backspacing the content down to empty lands on '\\n' (not stuck at '\\n\\n')", () => {
     const v = mount("a\nX\nb\n", "a\nb\n"); // ver1 non-empty "X\n\n", ver2 empty
     const v1 = readStructure(v.state).find((r) => r.ver === 1)!; // content "X\n"
