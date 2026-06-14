@@ -83,9 +83,11 @@ export interface MarkerSpec {
 }
 
 // Block-widget marker anchors (§2.2.2 layout). `side:-1` anchors the widget to a
-// line START so it renders ABOVE that line — this is the TODO #1 fix (the old
-// `side:1` bottom marker stole the next line's Decoration.line). The close marker
-// uses `side:1` ONLY when the group ends the document (no following line).
+// line START so it renders ABOVE that line — the TODO #1 fix (the old `side:1`
+// bottom marker stole the next line's Decoration.line). ALL THREE markers use
+// side:-1, including the close marker: buildModel always ends ver2 with a terminal
+// `\n`, so the doc always has a trailing final line AFTER v2.to — `>>>>>` must sit
+// ABOVE it (bug-22: side:1 wrongly rendered `>>>>>` BELOW the trailing empty line).
 export function markerSpecs(doc: Text, ranges: VerRange[]): MarkerSpec[] {
   const byGroup: Record<number, Partial<Record<1 | 2, VerRange>>> = {};
   for (const r of ranges) (byGroup[r.group] ??= {})[r.ver] = r;
@@ -98,10 +100,10 @@ export function markerSpecs(doc: Text, ranges: VerRange[]): MarkerSpec[] {
     if (!v1 || !v2) continue; // a group always has both; defensive
     out.push({ pos: doc.lineAt(v1.from).from, side: -1, kind: "open", group: g });
     out.push({ pos: doc.lineAt(v2.from).from, side: -1, kind: "mid", group: g });
-    const anchor = v2.to; // start of the next normal line (or doc end)
+    const anchor = v2.to; // start of the line AFTER ver2 (a normal line or the trailing final line)
     out.push({
       pos: doc.lineAt(anchor).from,
-      side: anchor < doc.length ? -1 : 1,
+      side: -1, // ABOVE that line — the trailing final line stays below `>>>>>` (bug-22)
       kind: "close",
       group: g,
     });

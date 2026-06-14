@@ -89,13 +89,15 @@ describe("diff-decorations — markerSpecs (§2.2.2)", () => {
     expect(specs.find((s) => s.kind === "mid")!.pos).toBe(m.text.lineAt(v2.from).from);
   });
 
-  it("close marker uses side:1 only when the group ends the document", () => {
+  it("bug-22: close marker is side:-1 even when the group ends the doc (trailing final line stays below >>>>>)", () => {
     const m = model("a\nL\n", "a\nR\n"); // trailing diff: group is the last thing
     const specs = markerSpecs(m.text, m.ranges);
     const close = specs.find((s) => s.kind === "close")!;
     const v2 = m.ranges.find((r) => r.ver === 2)!;
-    expect(v2.to).toBe(m.text.length); // group really ends the doc
-    expect(close.side).toBe(1);
+    expect(v2.to).toBe(m.text.length); // group really ends the doc (ver2.to === docLen)
+    // there is STILL a trailing final line at v2.to; the marker anchors ABOVE it.
+    expect(close.pos).toBe(m.text.lineAt(v2.to).from);
+    expect(close.side).toBe(-1);
   });
 
   it("multi-group: one open/mid/close triple per group, in order", () => {
