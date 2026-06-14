@@ -33,7 +33,7 @@ import {
   keymap,
   WidgetType,
 } from "@codemirror/view";
-import { buildModel } from "./diff-model";
+import { buildModel, type VerRange } from "./diff-model";
 import {
   caretOffTerminal,
   cursorHistory,
@@ -54,6 +54,7 @@ import { diffLineNumbers } from "./diff-line-numbers";
 import { type ResolveChoice, type ResolveOpts, applyResolve, diffResolveKeymap } from "./diff-resolve";
 import { type HistorySink, type ReplayFlag, historyFeedListener } from "./history-feed";
 import type { CursorActivity } from "./cursor-timer";
+import type Logger from "../logger";
 
 // §0.5.6 step-2 — OPTIONAL persistence wiring. When the owner (Phase-6 DiffPaneOwner)
 // supplies a sink + the SHARED ReplayFlag, a historyFeedListener is appended so
@@ -72,6 +73,56 @@ export interface DiffPaneV2Hooks {
   // every transaction: docChanged → "typing", pure caret move → "nav". The owner
   // gates it on !flag.replaying so a replay's re-dispatches don't schedule flushes.
   onActivity?: (activity: CursorActivity) => void;
+  // TEMP diagnostic (bug: last-group EOL-less [Delete] reported broken in Obsidian
+  // but works in happy-dom + real Chromium). When set, a keydown handler logs the
+  // last diff-group's ver1/ver2 content + caret before & after EVERY keystroke.
+  logger?: Logger;
+}
+
+// TEMP diagnostic — last diff-group ver1/ver2 snapshot for the keydown logger.
+function lastGroupSnapshot(state: EditorState): string {
+  const ranges = readStructure(state);
+  if (ranges.length === 0) return "no-ranges";
+  const head = state.selection.main.head;
+  const lg = Math.max(...ranges.map((r) => r.group));
+  const v1 = ranges.find((r) => r.group === lg && r.ver === 1);
+  const v2 = ranges.find((r) => r.group === lg && r.ver === 2);
+  // Where is the caret RELATIVE to a block? terminal = head===to-1 (the protected
+  // \n the caret must never rest on); content-end = head===to-2 (just before it,
+  // where Delete should strip the trailing \n); inside / from / outside otherwise.
+  const where = (r?: VerRange): string => {
+    if (!r) return "-";
+    if (head < r.from || head > r.to) return "outside";
+    if (head === r.to - 1) return "ON-TERMINAL"; // Delete blocked here
+    if (head === r.to - 2) return "content-end"; // Delete strips trailing \n here
+    if (head === r.from) return "from";
+    return `inside(+${head - r.from})`;
+  };
+  const desc = (r?: VerRange) =>
+    r ? `[${r.from},${r.to})=${JSON.stringify(state.doc.sliceString(r.from, r.to))} caret:${where(r)}` : "none";
+  const ln = state.doc.lineAt(head);
+  return `head=${head} (line ${ln.number} "${ln.text}") g=${lg} | v1=${desc(v1)} | v2=${desc(v2)}`;
+}
+
+// TEMP diagnostic — keydown handler that logs the last group around every key.
+function diffDebugKeyListener(logger: Logger): Extension {
+  return EditorView.domEventHandlers({
+    keydown: (e, view) => {
+      const key = e.key;
+      // ignore pure modifier presses
+      if (key === "Shift" || key === "Control" || key === "Alt" || key === "Meta") return false;
+      logger.info("diff2-key BEFORE", { key, snap: lastGroupSnapshot(view.state) });
+      // log the resulting state after CM6 processes the key
+      setTimeout(() => {
+        try {
+          logger.info("diff2-key AFTER ", { key, snap: lastGroupSnapshot(view.state) });
+        } catch {
+          /* view may be torn down */
+        }
+      }, 0);
+      return false; // never consume — diagnostic only
+    },
+  });
 }
 
 // View-level config the marker decorations need (and from which ResolveOpts is
@@ -440,6 +491,8 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       ...(hooks ? [historyFeedListener(hooks.sink, hooks.flag)] : []),
       // P6.3 — cursor-cadence tap (§2.9), separate from the history feed.
       ...(hooks?.onActivity ? [cursorCadenceListener(hooks.onActivity)] : []),
+      // TEMP diagnostic keydown logger (bug: last-group EOL-less Delete).
+      ...(hooks?.logger ? [diffDebugKeyListener(hooks.logger)] : []),
     ],
   });
 }

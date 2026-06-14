@@ -75,6 +75,7 @@ export class DiffPaneOwner {
         // changes too); live typing/nav still schedules.
         if (!this.flag.replaying) this.cursorScheduler.schedule(a);
       },
+      logger: this.logger, // TEMP diagnostic keydown logger (last-group EOL-less Delete)
     });
   }
 
