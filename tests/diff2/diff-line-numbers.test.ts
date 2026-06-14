@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { Text } from "@codemirror/state";
 import { buildModel } from "../../src/diff2/diff-model";
-import { computeLineLabels, getDiffLineNumber } from "../../src/diff2/diff-line-numbers";
+import { computeLineLabels, getDiffLineNumber, gutterCell } from "../../src/diff2/diff-line-numbers";
 import type { VerRange } from "../../src/diff2/diff-model";
 
 function model(base: string, sibling: string): { doc: Text; ranges: VerRange[] } {
@@ -91,5 +91,26 @@ describe("diff-line-numbers — §1.10/§2.2.10 sibling-wins", () => {
         expect(getDiffLineNumber(doc, ranges, n)).toEqual(walk.get(n) ?? null);
       }
     }
+  });
+});
+
+describe("diff-line-numbers — gutterCell (bare-terminal ver-blocks carry the side tint)", () => {
+  it("EMPTY ver-block: no number but the block's side, so a focused/expanded block is tinted (not white)", () => {
+    // base "a\nb\n" vs "a\nX\nb\n" ⇒ doc "a\n\nX\n\nb\n": line2 = the EMPTY ver1 bare
+    // terminal, line4 = ver2's hidden terminal.
+    const { doc, ranges } = model("a\nb\n", "a\nX\nb\n");
+    expect(getDiffLineNumber(doc, ranges, 2)).toBeNull(); // walk: bare terminal → no number
+    expect(gutterCell(doc, ranges, 2)).toEqual({ text: "", side: "ver1" }); // …but tinted ours
+    expect(gutterCell(doc, ranges, 4)).toEqual({ text: "", side: "ver2" });
+  });
+
+  it("numbered + normal lines unchanged (gutterCell === getDiffLineNumber there)", () => {
+    const { doc, ranges } = model("a\nL\nc\n", "a\nR\nc\n");
+    expect(gutterCell(doc, ranges, 1)).toEqual({ text: "1", side: "normal" });
+    expect(gutterCell(doc, ranges, 2)).toEqual({ text: "2", side: "ver1" }); // "L"
+    // doc "a\nL\n\nR\n\nc\n": line3 = ver1 terminal, line5 = ver2 terminal (line6 = "c")
+    expect(gutterCell(doc, ranges, 3)).toEqual({ text: "", side: "ver1" });
+    expect(gutterCell(doc, ranges, 5)).toEqual({ text: "", side: "ver2" });
+    expect(gutterCell(doc, ranges, 6)).toEqual({ text: "3", side: "normal" }); // "c"
   });
 });

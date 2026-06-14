@@ -124,6 +124,22 @@ export function getDiffLineNumber(doc: Text, ranges: VerRange[], cm6: number): L
   return diffLineNumberFromBlocks(blockGeoms(doc, ranges), cm6);
 }
 
+// The gutter cell for one CM6 line: the numbered label, OR — for a ver-block's
+// bare-terminal line (an empty ver-block, or a non-empty block's hidden terminal)
+// — an EMPTY-text label carrying the block's SIDE, so the cell still gets the
+// ours/theirs tint. Without this a FOCUSED (expanded) empty ver-block showed a
+// WHITE gutter cell (getDiffLineNumber returns null for bare terminals → no
+// marker). Numbering is unchanged (empty text consumes no number). Pure → tested.
+function gutterCellFromBlocks(blocks: BlockGeom[], cm6: number): LineLabel | null {
+  const label = diffLineNumberFromBlocks(blocks, cm6);
+  if (label) return label;
+  const bare = blocks.find((b) => b.bare && b.termLine === cm6);
+  return bare ? { text: "", side: bare.ver === 1 ? "ver1" : "ver2" } : null;
+}
+export function gutterCell(doc: Text, ranges: VerRange[], cm6: number): LineLabel | null {
+  return gutterCellFromBlocks(blockGeoms(doc, ranges), cm6);
+}
+
 // Gutter cache: block geometry keyed by the structure RangeSet (stable per state),
 // so a 25k-line file computes the geometry ONCE per structure change, not once per
 // visible gutter line. The viewport renders ~tens of lines → O(viewport × #ranges).
@@ -168,7 +184,10 @@ class LineLabelMarker extends GutterMarker {
     num.textContent = this.text;
     const g = cell.appendChild(document.createElement("span"));
     g.className = "diff2-gutter-glyph";
-    g.textContent = this.side === "ver1" ? "−" : this.side === "ver2" ? "+" : "";
+    // No number (text === "") ⇒ a bare-terminal ver-block (e.g. an empty block):
+    // keep the side TINT (elementClass) but show NO −/+ glyph — there's no line.
+    g.textContent =
+      this.text === "" ? "" : this.side === "ver1" ? "−" : this.side === "ver2" ? "+" : "";
     return cell;
   }
 }
@@ -200,7 +219,7 @@ export const diffLineNumbersGutter: Extension = gutter({
   class: "diff2-line-number-gutter",
   lineMarker(view, line) {
     const cm6 = view.state.doc.lineAt(line.from).number;
-    const label = diffLineNumberFromBlocks(cachedBlocks(view.state), cm6);
+    const label = gutterCellFromBlocks(cachedBlocks(view.state), cm6);
     return label ? new LineLabelMarker(label.text, label.side) : null;
   },
   widgetMarker(_view, widget) {
