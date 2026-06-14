@@ -63,14 +63,14 @@ export function renderConflictsToolbar(
   // full device-scoped description stays on hover (title).
   const keepBtn = middle.createEl("button", {
     cls: "diff2-btn diff2-btn-keep-local",
-    text: "Keep all RED changes",
+    text: "Keep all",
   });
   keepBtn.title = `Keep all local (${labels.localLabel}) changes`;
   keepBtn.addEventListener("click", () => callbacks.onKeepAllLocal());
 
   const applyBtn = middle.createEl("button", {
     cls: "diff2-btn diff2-btn-apply-remote",
-    text: "Apply all GREEN changes",
+    text: "Apply all",
   });
   applyBtn.title = `Apply all remote (${labels.remoteLabel}) changes`;
   applyBtn.addEventListener("click", () => callbacks.onApplyAllRemote());
@@ -78,7 +78,7 @@ export function renderConflictsToolbar(
   if (callbacks.onJoinAll) {
     const joinBtn = middle.createEl("button", {
       cls: "diff2-btn diff2-btn-join-all",
-      text: "Join all changes",
+      text: "> Join all",
     });
     joinBtn.addEventListener("click", () => callbacks.onJoinAll!());
   }
