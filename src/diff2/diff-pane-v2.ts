@@ -104,15 +104,17 @@ function lastGroupSnapshot(state: EditorState): string {
   return `head=${head} (line ${ln.number} "${ln.text}") g=${lg} | v1=${desc(v1)} | v2=${desc(v2)}`;
 }
 
-// TEMP diagnostic — keydown handler that logs the last group around every key.
+// TEMP diagnostic — keydown OBSERVER that logs the last group around every key.
+// Observers (not handlers) fire for EVERY event regardless of whether a keymap
+// consumes it — so Backspace/Delete/Enter (eaten by the higher-prec keymaps) are
+// captured too, unlike a plain domEventHandler.
 function diffDebugKeyListener(logger: Logger): Extension {
-  return EditorView.domEventHandlers({
+  return EditorView.domEventObservers({
     keydown: (e, view) => {
       const key = e.key;
-      // ignore pure modifier presses
-      if (key === "Shift" || key === "Control" || key === "Alt" || key === "Meta") return false;
+      if (key === "Shift" || key === "Control" || key === "Alt" || key === "Meta") return;
       logger.info("diff2-key BEFORE", { key, snap: lastGroupSnapshot(view.state) });
-      // log the resulting state after CM6 processes the key
+      // log the resulting state after CM6 processes the key (post keymap + filters)
       setTimeout(() => {
         try {
           logger.info("diff2-key AFTER ", { key, snap: lastGroupSnapshot(view.state) });
@@ -120,7 +122,6 @@ function diffDebugKeyListener(logger: Logger): Extension {
           /* view may be torn down */
         }
       }, 0);
-      return false; // never consume — diagnostic only
     },
   });
 }
