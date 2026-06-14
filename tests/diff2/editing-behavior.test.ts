@@ -11,6 +11,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { EditorView } from "@codemirror/view";
 import { mountDiffPaneV2 } from "../../src/diff2/diff-pane-v2";
 import { caretOffTerminal, readStructure } from "../../src/diff2/diff-structure";
+import { verLineDecisions } from "../../src/diff2/diff-decorations";
+import { splitModel } from "../../src/diff2/diff-model";
 
 const parents: HTMLElement[] = [];
 function mount(base: string, sibling: string): EditorView {
@@ -177,5 +179,61 @@ describe("§2.2.4 empty ↔ non-empty ver-block transitions", () => {
     cur = readStructure(v.state).find((r) => r.ver === 1)!;
     expect(cur.to - cur.from).toBe(1); // empty "\n"
     expect(v.state.doc.sliceString(cur.from, cur.to)).toBe("\n");
+  });
+});
+
+// §2.2.12 — the LAST diff-group (the one ENDING the document) may have an EOL-less
+// last line on EITHER side. The user's simple glyph rule: a ver-block stored as
+// "X\n\n" (content "X\n") shows `↵` on "X"; stored as "X\n" (content "X", EOL-less)
+// shows NO `↵`. Pressing [Delete] at the end of that last content line removes its
+// trailing `\n` (the autoNewlineInserts exemption keeps it removed), the glyph
+// disappears, and on resolve the file's last line has no trailing `\n`.
+describe("§2.2.12 last-group EOL-less editing (Delete removes the trailing \\n)", () => {
+  // The single content line of the last group's ver-block, by side.
+  const lastLine = (v: EditorView, ver: 1 | 2) => {
+    const ranges = readStructure(v.state);
+    const lg = Math.max(...ranges.map((r) => r.group));
+    const r = ranges.find((x) => x.group === lg && x.ver === ver)!;
+    return { r, line: v.state.doc.lineAt(r.from) };
+  };
+  const glyphOf = (v: EditorView, ver: 1 | 2, lineNo: number) =>
+    verLineDecisions(v.state.doc, readStructure(v.state), v.state.selection.main.head)
+      .find((d) => d.ver === ver && d.line === lineNo)!.glyph;
+
+  it("ver2 of the last group: stored 'test\\n\\n' shows ↵; after [Delete] → 'test\\n' (no ↵) → sibling EOL-less", () => {
+    const v = mount("x\n", "x\ntest\n"); // last group ver2 content "test\n" ⇒ stored "test\n\n"
+    const { r, line } = lastLine(v, 2);
+    expect(glyphOf(v, 2, line.number)).toBe(true); // "X\n\n" → ↵
+    expect(splitModel(v.state.doc.toString(), readStructure(v.state)).sibling).toBe("x\ntest\n");
+    at(v, line.to); // caret at end of "test", before its content \n
+    press(v, "Delete");
+    const after = lastLine(v, 2);
+    expect(v.state.doc.sliceString(after.r.from, after.r.to)).toBe("test\n"); // content "test" (EOL-less) + terminal
+    expect(glyphOf(v, 2, after.line.number)).toBe(false); // "X\n" → no ↵
+    expect(splitModel(v.state.doc.toString(), readStructure(v.state)).sibling).toBe("x\ntest"); // EOL-less
+  });
+
+  it("ver1 of the last group: [Delete] on its last line → EOL-less base, glyph gone (ver2 untouched)", () => {
+    const v = mount("x\nline1\n", "x\nline2\n"); // last group ver1 "line1\n", ver2 "line2\n"
+    const { line } = lastLine(v, 1);
+    expect(glyphOf(v, 1, line.number)).toBe(true);
+    at(v, line.to); // end of "line1"
+    press(v, "Delete");
+    const after = lastLine(v, 1);
+    expect(v.state.doc.sliceString(after.r.from, after.r.to)).toBe("line1\n"); // content "line1" (EOL-less) + terminal
+    expect(glyphOf(v, 1, after.line.number)).toBe(false); // EOL-less → no ↵
+    const sp = splitModel(v.state.doc.toString(), readStructure(v.state));
+    expect(sp.base).toBe("x\nline1"); // ours tail EOL-less
+    expect(sp.sibling).toBe("x\nline2\n"); // theirs untouched (still \n-terminated)
+  });
+
+  it("[Delete] AGAIN (now at the terminal) is blocked — the ver-block keeps its bare terminal", () => {
+    const v = mount("x\n", "x\ntest\n");
+    const { line } = lastLine(v, 2);
+    at(v, line.to);
+    press(v, "Delete"); // → "test\n" EOL-less
+    const before = v.state.doc.toString();
+    press(v, "Delete"); // caret now before the terminal \n → §2.2.4.7 blocks it
+    expect(v.state.doc.toString()).toBe(before); // unchanged
   });
 });
