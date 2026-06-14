@@ -311,17 +311,23 @@ describe("§2.2.8 — empty ver-block & ↵ glyph rendering", () => {
     expect(lineClasses(v).get(4)).toContain("diff2-collapsed");
   });
   it("(3) the ↵ glyph never renders on the terminal line; renders on a content line", () => {
+    // §1.6.a.1 — the ↵ is a CSS `::after` on the line decoration class
+    // .diff2-glyph-line (NOT a widget — bug-25/26). doc "a\nL\n\nR\n\nc\n":
+    // "L" content line.from=2, ver1 terminal line.from=4.
     const v = mount("a\nL\nc\n", "a\nR\nc\n");
-    const glyphPos: number[] = []; // ↵ widget positions (non-marker widgets)
+    const glyphLineFroms: number[] = [];
+    let widgetGlyphs = 0;
     const set = buildDecorations(v.state);
     const it = set.iter();
     while (it.value) {
-      const spec = it.value.spec as { widget?: { diff2MarkerKind?: unknown } };
-      if (spec.widget && !spec.widget.diff2MarkerKind) glyphPos.push(it.from);
+      const spec = it.value.spec as { class?: string; widget?: { diff2MarkerKind?: unknown } };
+      if (!spec.widget && spec.class?.includes("diff2-glyph-line")) glyphLineFroms.push(it.from);
+      if (spec.widget && !spec.widget.diff2MarkerKind) widgetGlyphs++;
       it.next();
     }
-    expect(glyphPos).toContain(3); // end of "L" content line
-    expect(glyphPos).not.toContain(4); // never on the terminal line
+    expect(glyphLineFroms).toContain(2); // "L" content line
+    expect(glyphLineFroms).not.toContain(4); // never on the terminal line
+    expect(widgetGlyphs).toBe(0); // GUARD: no widget glyph (replaced by the line class)
   });
 });
 

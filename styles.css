@@ -324,13 +324,35 @@
 }
 
 /* §1.6.a.1: ghost ↵ marking each real newline (line-wrap is always on, so
- * this disambiguates a hard break from a soft wrap). Faint, non-interactive. */
-.diff2-newline-glyph {
+ * this disambiguates a hard break from a soft wrap). Faint, non-interactive.
+ * Rendered as a `::after` on the ver LINE decoration (.diff2-glyph-line), NOT a
+ * widget: a widget at line.to went STALE when a [Delete] made the line EOL-less
+ * without changing its text (CM6 reused the line DOM). A line-decoration class is
+ * part of CM6 per-line dirty tracking (like .diff2-collapsed), so it updates. */
+.diff2-glyph-line::after {
+    content: "↵";
     color: var(--text-faint);
     opacity: 0.5;
     margin-left: 2px;
-    user-select: none;
     pointer-events: none;
+}
+/* bug-25: on an EMPTY line CM6 inserts a `<br>` filler (needed for caret
+ * placement); a normal `::after` would wrap onto a 2nd visual row AFTER it. Don't
+ * hide the `<br>` (that breaks the caret) — instead take the ↵ out of flow and
+ * pin it to the line start so it sits ON the same (empty) row, with the caret
+ * still landing before it. A non-empty line has no `<br>`, so :has(br) leaves it
+ * inline. */
+.diff2-glyph-line:has(br) {
+    position: relative;
+}
+.diff2-glyph-line:has(br)::after {
+    /* Out of flow so the `<br>` line break doesn't push the ↵ to a 2nd row;
+     * `top:0` pins it to the (single) row. NO `left` — keep the static horizontal
+     * position (the content start, i.e. just after the caret), so it reads "|↵"
+     * not "↵" under the caret. `margin-left:2px` (from the base rule) keeps the
+     * small gap after the caret. */
+    position: absolute;
+    top: 0;
 }
 
 /* §1.8.a: temporary 1-line container shown while an empty ver-block is
@@ -436,11 +458,11 @@
     );
 }
 /* §6.7 — ↵ inside ver-blocks tinted to the side colour (matches the gutter). */
-.diff2-line-ours .diff2-newline-glyph {
+.diff2-line-ours.diff2-glyph-line::after {
     color: var(--diff2-ours-fg);
     opacity: 0.85;
 }
-.diff2-line-theirs .diff2-newline-glyph {
+.diff2-line-theirs.diff2-glyph-line::after {
     color: var(--diff2-theirs-fg);
     opacity: 0.85;
 }

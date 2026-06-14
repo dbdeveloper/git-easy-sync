@@ -60,11 +60,16 @@ describe("diff-pane-v2 — decorations field assembly", () => {
     expect(byFrom[9]).toContain("diff2-collapsed");
   });
 
-  it("a ↵ newline widget sits at the end of each ver CONTENT line (not the terminal)", () => {
-    // §1.6.a.1 — ↵ widgets are non-marker widgets (no kind). For "a\nL1\n\nR1\n\nb\n"
-    // they sit at the content-line ends (L1 end=4, R1 end=8), NOT the bare terminals.
-    const glyphs = readDecos(state).filter((d) => d.isWidget && !d.kind).map((d) => d.from);
-    expect(glyphs.sort((a, b) => a - b)).toEqual([4, 8]);
+  it("the ↵ glyph is a LINE class (.diff2-glyph-line) on each ver CONTENT line, not the terminal", () => {
+    // §1.6.a.1 — the ↵ is a CSS `::after` on the line decoration (NOT a widget —
+    // bug-25/26). For "a\nL1\n\nR1\n\nb\n" the glyph-line class sits on the content
+    // lines (L1 line.from=2, R1 line.from=6), NOT the bare terminal lines (5, 9).
+    const glyphLines = readDecos(state)
+      .filter((d) => !d.isWidget && d.cls?.includes("diff2-glyph-line"))
+      .map((d) => d.from);
+    expect(glyphLines.sort((a, b) => a - b)).toEqual([2, 6]);
+    // and NO widget glyph at all
+    expect(readDecos(state).filter((d) => d.isWidget && !d.kind)).toHaveLength(0);
   });
 
   it("word-level diff marks the changed fragments on each side", () => {
@@ -101,7 +106,13 @@ describe("diff-pane-v2 — mounts without error (happy-dom)", () => {
       expect(view.dom.querySelectorAll(".cm-line.diff2-line-ours").length).toBeGreaterThanOrEqual(1);
       expect(view.dom.querySelectorAll(".cm-line.diff2-line-theirs").length).toBeGreaterThanOrEqual(1);
       expect(view.dom.querySelectorAll(".cm-line.diff2-collapsed").length).toBeGreaterThanOrEqual(2);
-      expect(view.dom.querySelectorAll(".diff2-newline-glyph").length).toBeGreaterThanOrEqual(2); // ↵ on L1, R1
+      // §1.6.a.1 ↵ is a CSS `::after` on the LINE class .diff2-glyph-line (NOT a
+      // widget — bug-25/26: a widget at line.to went stale on the EOL-less Delete).
+      expect(view.dom.querySelectorAll(".cm-line.diff2-glyph-line").length).toBeGreaterThanOrEqual(2); // ↵ on L1, R1
+      // GUARD: the V2 view must emit NO widget glyph (regression tripwire — the
+      // widget is what we replaced; ::after can't be verified in happy-dom layout,
+      // so the device/Chromium gate covers the actual one-row render + caret).
+      expect(view.dom.querySelectorAll(".diff2-newline-glyph").length).toBe(0);
     } finally {
       view.destroy();
       parent.remove();

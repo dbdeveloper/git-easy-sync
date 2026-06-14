@@ -33,7 +33,7 @@ import {
   keymap,
   WidgetType,
 } from "@codemirror/view";
-import { buildModel, type VerRange } from "./diff-model";
+import { buildModel } from "./diff-model";
 import {
   caretOffTerminal,
   cursorHistory,
@@ -54,7 +54,6 @@ import { diffLineNumbers } from "./diff-line-numbers";
 import { type ResolveChoice, type ResolveOpts, applyResolve, diffResolveKeymap } from "./diff-resolve";
 import { type HistorySink, type ReplayFlag, historyFeedListener } from "./history-feed";
 import type { CursorActivity } from "./cursor-timer";
-import type Logger from "../logger";
 
 // §0.5.6 step-2 — OPTIONAL persistence wiring. When the owner (Phase-6 DiffPaneOwner)
 // supplies a sink + the SHARED ReplayFlag, a historyFeedListener is appended so
@@ -73,57 +72,6 @@ export interface DiffPaneV2Hooks {
   // every transaction: docChanged → "typing", pure caret move → "nav". The owner
   // gates it on !flag.replaying so a replay's re-dispatches don't schedule flushes.
   onActivity?: (activity: CursorActivity) => void;
-  // TEMP diagnostic (bug: last-group EOL-less [Delete] reported broken in Obsidian
-  // but works in happy-dom + real Chromium). When set, a keydown handler logs the
-  // last diff-group's ver1/ver2 content + caret before & after EVERY keystroke.
-  logger?: Logger;
-}
-
-// TEMP diagnostic — last diff-group ver1/ver2 snapshot for the keydown logger.
-function lastGroupSnapshot(state: EditorState): string {
-  const ranges = readStructure(state);
-  if (ranges.length === 0) return "no-ranges";
-  const head = state.selection.main.head;
-  const lg = Math.max(...ranges.map((r) => r.group));
-  const v1 = ranges.find((r) => r.group === lg && r.ver === 1);
-  const v2 = ranges.find((r) => r.group === lg && r.ver === 2);
-  // Where is the caret RELATIVE to a block? terminal = head===to-1 (the protected
-  // \n the caret must never rest on); content-end = head===to-2 (just before it,
-  // where Delete should strip the trailing \n); inside / from / outside otherwise.
-  const where = (r?: VerRange): string => {
-    if (!r) return "-";
-    if (head < r.from || head > r.to) return "outside";
-    if (head === r.to - 1) return "ON-TERMINAL"; // Delete blocked here
-    if (head === r.to - 2) return "content-end"; // Delete strips trailing \n here
-    if (head === r.from) return "from";
-    return `inside(+${head - r.from})`;
-  };
-  const desc = (r?: VerRange) =>
-    r ? `[${r.from},${r.to})=${JSON.stringify(state.doc.sliceString(r.from, r.to))} caret:${where(r)}` : "none";
-  const ln = state.doc.lineAt(head);
-  return `head=${head} (line ${ln.number} "${ln.text}") g=${lg} | v1=${desc(v1)} | v2=${desc(v2)}`;
-}
-
-// TEMP diagnostic — keydown OBSERVER that logs the last group around every key.
-// Observers (not handlers) fire for EVERY event regardless of whether a keymap
-// consumes it — so Backspace/Delete/Enter (eaten by the higher-prec keymaps) are
-// captured too, unlike a plain domEventHandler.
-function diffDebugKeyListener(logger: Logger): Extension {
-  return EditorView.domEventObservers({
-    keydown: (e, view) => {
-      const key = e.key;
-      if (key === "Shift" || key === "Control" || key === "Alt" || key === "Meta") return;
-      logger.info("diff2-key BEFORE", { key, snap: lastGroupSnapshot(view.state) });
-      // log the resulting state after CM6 processes the key (post keymap + filters)
-      setTimeout(() => {
-        try {
-          logger.info("diff2-key AFTER ", { key, snap: lastGroupSnapshot(view.state) });
-        } catch {
-          /* view may be torn down */
-        }
-      }, 0);
-    },
-  });
 }
 
 // View-level config the marker decorations need (and from which ResolveOpts is
@@ -289,23 +237,13 @@ class MarkerWidget extends WidgetType {
   }
 }
 
-// §1.6.a.1 — a ghost `↵` after a ver line's content marking its real newline
-// (line-wrap is always on, so this disambiguates a hard break from a soft wrap).
-// Ported from §1 markers/decorations as a WIDGET (the §1 visual layer the user
-// asked to reuse): the class `diff2-newline-glyph` is tinted to the side colour by
-// styles.css. A line CLASS won't render it (no ::after) — it must be a widget.
-class NewlineGlyphWidget extends WidgetType {
-  eq(): boolean {
-    return true; // identical instances → CM6 reuses the DOM
-  }
-  toDOM(): HTMLElement {
-    const el = document.createElement("span");
-    el.className = "diff2-newline-glyph";
-    el.textContent = "↵";
-    return el;
-  }
-}
-const newlineGlyph = new NewlineGlyphWidget();
+// §1.6.a.1 — the ghost `↵` marking a ver line's real newline is rendered via a
+// CSS `::after` on the line decoration (styles.css .diff2-glyph-line), NOT a
+// widget. A widget at line.to went stale on the EOL-less [Delete] (the line text
+// was unchanged so CM6 reused the line DOM and never removed it). The line class
+// is part of CM6 per-line dirty tracking, so it toggles reliably. On EMPTY lines
+// CM6 inserts a `<br>` that would push the pseudo to a 2nd row — styles.css hides
+// that `<br>` on .diff2-glyph-line so the ↵ stays inline (bug-25).
 // §R7.4 / §1.11 — changed word fragments inside a ver line get the STRONGER side
 // tint (.diff2-word-changed), so they stand out from the subtle line tint.
 const wordMark = Decoration.mark({ class: "diff2-word-changed" });
@@ -333,11 +271,17 @@ export function buildDecorations(state: EditorState): DecorationSet {
     // diff2-collapsed gives the bare terminal `\n` line height:0.
     const cls = [d.ver === 1 ? "diff2-line-ours" : "diff2-line-theirs"];
     if (d.collapsed) cls.push("diff2-collapsed");
+    // §1.6.a.1 ↵ marking the line's real newline. HYBRID rendering:
+    //   - line WITH text → CSS `::after` on the line class `diff2-glyph-line`. A
+    //     line-decoration class is part of CM6 per-line dirty tracking, so it is
+    //     added/removed reliably — fixes the EOL-less [Delete] staleness where a
+    //     widget at line.to lingered (the line's text was unchanged).
+    //   - EMPTY line → a WIDGET. On an empty line CM6 inserts a `<br>`, so a CSS
+    //     `::after` wraps onto a 2nd visual row (bug-25); a widget draws inline.
+    //     As soon as the line gets text it switches to the `::after` branch (the
+    //     text change re-renders the line, dropping the widget).
+    if (d.glyph) cls.push("diff2-glyph-line");
     all.push(Decoration.line({ class: cls.join(" ") }).range(d.from));
-    // §1.6.a.1 ↵ at the end of the line's CONTENT (before the real `\n`).
-    if (d.glyph) {
-      all.push(Decoration.widget({ widget: newlineGlyph, side: 1 }).range(state.doc.line(d.line).to));
-    }
   }
   // §R7.4 word-level diff per group — overlay the changed fragments on each side.
   for (const g of groupsOf(ranges)) {
@@ -492,8 +436,6 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       ...(hooks ? [historyFeedListener(hooks.sink, hooks.flag)] : []),
       // P6.3 — cursor-cadence tap (§2.9), separate from the history feed.
       ...(hooks?.onActivity ? [cursorCadenceListener(hooks.onActivity)] : []),
-      // TEMP diagnostic keydown logger (bug: last-group EOL-less Delete).
-      ...(hooks?.logger ? [diffDebugKeyListener(hooks.logger)] : []),
     ],
   });
 }
