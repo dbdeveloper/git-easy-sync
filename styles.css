@@ -482,6 +482,18 @@
 .diff2-edit-view-root .cm-cursor-primary {
     border-left-color: var(--text-normal);
 }
+/* Selection: the bare CM6 view doesn't inherit Obsidian's editor theme, so
+ * drawSelection() used CM6's DEFAULT (light) selection background — in dark mode
+ * that's a light band under white text → unreadable (bug-27). Use Obsidian's
+ * theme-aware --text-selection (a translucent accent that works in BOTH themes,
+ * keeping the text readable — no need to flip the text colour). Both selectors
+ * out-specify CM6's `.cm-selectionBackground` / `.cm-focused .cm-selectionBackground`. */
+.diff2-edit-view-root .cm-selectionBackground,
+.diff2-edit-view-root .cm-focused .cm-selectionBackground {
+    /* !important — CM6 injects its drawSelection StyleModule into <head> AFTER this
+     * stylesheet with equal specificity, so it would otherwise win. */
+    background-color: var(--text-selection) !important;
+}
 /* Marker-row gutter cells (#3) — SAME tint as the lines, so the gutter is one
  * continuous ours/theirs band across the whole group. */
 .cm-gutterElement.diff2-gutter-ours-marker {
