@@ -141,7 +141,7 @@ const MARKER_BUTTONS: Record<MarkerKind, BtnSpec[]> = {
   mid: [
     { label: "Apply ↓↑", choice: "both", hotkey: "Ctrl-Shift-Enter", desc: "Apply both local and remote changes" },
     { label: "Remove ↓↑", choice: "neither", hotkey: "Ctrl-Shift-Backspace", desc: "Remove both local and remote changes" },
-    { label: "Join ↓↓", choice: "join", hotkey: "Ctrl-Shift-." }, // desc built from remoteLabel
+    { label: "> Join ↓", choice: "join", hotkey: "Ctrl-Shift-." }, // desc built from remoteLabel
   ],
   close: [
     { label: "Apply ↑", choice: "keep2", hotkey: "Ctrl-Enter", desc: "Apply this remote change" },
