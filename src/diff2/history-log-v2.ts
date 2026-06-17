@@ -49,6 +49,19 @@ export function fnv1a32(input: string): string {
 
 // ── block format (§0.5.2) ────────────────────────────────────────────
 
+// The main selection {anchor:a, head:h} BEFORE and AFTER an ordinary edit. Recorded
+// so replay reconstructs CM6's per-step undo/redo selections IDENTICALLY to the live
+// editor — otherwise replay only re-dispatches `change` and CM6 MAPS whatever
+// selection it holds, so undo/redo of typing/paste/delete lands the caret wrong in a
+// recovered doc (the wander bug, user report 2026-06-17). `before` is essential: a
+// pure cursor/selection move between edits is NOT a recorded block, so it can't be
+// inferred from the edit chain (e.g. select a range then type over it). RESOLUTIONS
+// do NOT carry `sel` — their caret rides `caret`/resolveCaret (ONE mechanism/block).
+export interface SelPair {
+  before: { a: number; h: number };
+  after: { a: number; h: number };
+}
+
 export interface EditBlock {
   kind: "edit";
   seq: number; // monotonic from 1 (diagnostics; replay is position-ordered)
@@ -56,7 +69,8 @@ export interface EditBlock {
   change: unknown; // ChangeSet.toJSON() — only the changed bytes
   newGroup: boolean; // undoDepth-delta > 0 (approach B group boundary)
   structure?: VerRange[]; // resolution only — the REMAINING groups
-  caret?: { before: number; after: number }; // resolution only
+  caret?: { before: number; after: number }; // resolution only (resolveCaret)
+  sel?: SelPair; // ordinary edit only — before/after selection for faithful u/r replay
   sum: string;
 }
 
@@ -84,21 +98,25 @@ function checksumPayload(b: HistoryBlockV2): string {
       newGroup: b.newGroup,
       structure: b.structure,
       caret: b.caret,
+      sel: b.sel,
     });
   }
   return JSON.stringify({ kind: b.kind });
 }
 
 // Pure: build an edit block. The EDGE supplies `change` (ChangeSet.toJSON()), the
-// tx `effects`, and the `undoDepthDelta` it measured around the dispatch. Pulls
-// `structure`/`caret` from a resolution's `setStructure`/`resolveCaret` effects;
-// typing carries neither. `newGroup = delta > 0`.
+// tx `effects`, the `undoDepthDelta` it measured around the dispatch, and (for an
+// ORDINARY edit) the `sel` before/after selection. Pulls `structure`/`caret` from a
+// resolution's `setStructure`/`resolveCaret` effects. A RESOLUTION (has resolveCaret)
+// records `caret`, NOT `sel` — one caret mechanism per block; an ordinary edit
+// records `sel`. `newGroup = delta > 0`.
 export function buildEditBlock(
   seq: number,
   at: string,
   change: unknown,
   effects: readonly StateEffect<unknown>[],
   undoDepthDelta: number,
+  sel?: SelPair,
 ): EditBlock {
   const block: EditBlock = {
     kind: "edit",
@@ -112,6 +130,7 @@ export function buildEditBlock(
     if (e.is(setStructure)) block.structure = fromRangeSet(e.value);
     if (e.is(resolveCaret)) block.caret = e.value;
   }
+  if (!block.caret && sel) block.sel = sel; // ordinary edit only (resolutions use caret)
   block.sum = fnv1a32(checksumPayload(block));
   return block;
 }
@@ -240,9 +259,10 @@ export class HistoryWriterV2 {
     effects: readonly StateEffect<unknown>[],
     undoDepthDelta: number,
     at: string,
+    sel?: SelPair,
   ): void {
     this.seq += 1;
-    this.enqueue(buildEditBlock(this.seq, at, change, effects, undoDepthDelta));
+    this.enqueue(buildEditBlock(this.seq, at, change, effects, undoDepthDelta, sel));
   }
 
   recordCommand(kind: "undo" | "redo", at: string, undoneBytes = 0): void {

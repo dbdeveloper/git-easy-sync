@@ -21,7 +21,7 @@
 // history machinery, so a headless `{state, dispatch}` target is NOT used here.
 
 import { isolateHistory, redo, undo } from "@codemirror/commands";
-import { ChangeSet, Transaction } from "@codemirror/state";
+import { ChangeSet, EditorSelection, Transaction } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { resolveCaret, setStructure, toRangeSet } from "./diff-structure";
 import { parseBlock, replayDispatch, verifyBlock } from "./history-log-v2";
@@ -112,12 +112,30 @@ export function replayHistoryV2(view: EditorView, jsonl: string): ReplayResultV2
     const effects = [];
     if (b.structure) effects.push(setStructure.of(toRangeSet(b.structure)));
     if (b.caret) effects.push(resolveCaret.of(b.caret));
+    // §0.5.x cursor fidelity — an ORDINARY edit carries `sel` (before/after selection)
+    // so the reconstructed CM6 history has the SAME per-step undo/redo selections as
+    // live (the wander fix). The BEFORE is restored ONLY at a group boundary
+    // (newGroup) — that's where CM6 captures a group's startSelection (the undo
+    // target); it's set as a NO-HISTORY tx so it doesn't create its own undo step. A
+    // coalescing edit just rides the AFTER. RESOLUTIONS keep `caret`/resolveCaret
+    // (no `sel`); legacy blocks without `sel` fall back to today's map-only behavior.
+    if (b.sel && b.newGroup) {
+      view.dispatch({
+        selection: EditorSelection.range(b.sel.before.a, b.sel.before.h),
+        annotations: Transaction.addToHistory.of(false),
+      });
+    }
     const annotations = b.newGroup
       ? [Transaction.userEvent.of("input.type"), isolateHistory.of("before"), replayDispatch.of(true)]
       : [Transaction.userEvent.of("input.type"), replayDispatch.of(true)];
     // `change` is stored as ChangeSet.toJSON() (what the Phase-6 updateListener
     // reads from `tr.changes`); reconstruct the ChangeSet before re-dispatch.
-    view.dispatch({ changes: ChangeSet.fromJSON(b.change), effects, annotations });
+    view.dispatch({
+      changes: ChangeSet.fromJSON(b.change),
+      ...(b.sel ? { selection: EditorSelection.range(b.sel.after.a, b.sel.after.h) } : {}),
+      effects,
+      annotations,
+    });
   }
   return { replayed: blocks.length, stoppedAtCorrupt };
 }

@@ -23,6 +23,7 @@ import { undoDepth } from "@codemirror/commands";
 import type { Extension, StateEffect } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { replayDispatch } from "./history-log-v2";
+import type { SelPair } from "./history-log-v2";
 import { replayHistoryV2 } from "./history-replay-v2";
 import type { ReplayResultV2 } from "./history-replay-v2";
 
@@ -58,6 +59,7 @@ export interface HistorySink {
     effects: readonly StateEffect<unknown>[],
     undoDepthDelta: number,
     at: string,
+    sel?: SelPair, // ordinary edit's before/after selection (faithful u/r replay)
   ): void;
   recordCommand(kind: "undo" | "redo", at: string): void;
 }
@@ -91,7 +93,16 @@ export function historyFeedListener(
         // Trap 1: per-tx delta. +1 ⇒ this tx started a new undo group, 0 ⇒ it
         // coalesced into the current one (approach B, §0.5.4).
         const delta = undoDepth(tr.state) - undoDepth(tr.startState);
-        sink.recordEdit(tr.changes.toJSON(), tr.effects, delta, at);
+        // before/after main selection — replay reconstructs CM6's per-step undo/redo
+        // selections from these (the wander fix). buildEditBlock drops `sel` for a
+        // resolution (it carries `caret` instead).
+        const bs = tr.startState.selection.main;
+        const as = tr.state.selection.main;
+        const sel: SelPair = {
+          before: { a: bs.anchor, h: bs.head },
+          after: { a: as.anchor, h: as.head },
+        };
+        sink.recordEdit(tr.changes.toJSON(), tr.effects, delta, at, sel);
       } else {
         sink.recordCommand(action, at);
       }
