@@ -21,6 +21,7 @@ import {
   Facet,
   Prec,
   StateField,
+  type Text,
   Transaction,
   type Extension,
 } from "@codemirror/state";
@@ -33,7 +34,7 @@ import {
   keymap,
   WidgetType,
 } from "@codemirror/view";
-import { buildModel } from "./diff-model";
+import { buildModel, type VerRange } from "./diff-model";
 import {
   caretOffTerminal,
   cursorHistory,
@@ -149,6 +150,24 @@ const MARKER_BUTTONS: Record<MarkerKind, BtnSpec[]> = {
   ],
 };
 
+// Caret target for clicking a marker glyph (§2.2.4.9 mouse/tap entry into a block —
+// the only way to reach an EMPTY ver-block, which is collapsed/height:0 and not
+// directly clickable). open(<<<<<) → ver1's FIRST line, col 0 (as [down] from the
+// normal line above); close(>>>>>) → ver2's LAST content line, col 0 (as [up] from
+// the line below). An EMPTY block → its single caret slot (`from`), which focus
+// expands. Returns null if the group/side is absent. Pure → unit-tested.
+export function verBlockCaretTarget(
+  doc: Text,
+  ranges: VerRange[],
+  group: number,
+  ver: 1 | 2,
+): number | null {
+  const r = ranges.find((x) => x.group === group && x.ver === ver);
+  if (!r) return null;
+  if (ver === 1) return r.from; // first line col 0 (empty → the caret slot)
+  return r.to - r.from <= 1 ? r.from : doc.lineAt(r.to - 2).from; // ver2 last content line col 0
+}
+
 class MarkerWidget extends WidgetType {
   // Duck-type tag read by diff-line-numbers.ts's gutter widgetMarker for the #3
   // marker-row gutter tint, WITHOUT importing this class (which would cycle).
@@ -181,6 +200,25 @@ class MarkerWidget extends WidgetType {
     const glyph = document.createElement("span");
     glyph.className = "diff2-marker-glyph";
     glyph.textContent = MARKER_GLYPH[this.kind];
+    // Click/tap the <<<<< / >>>>> glyph → move the caret INTO the block — the only
+    // way to reach an EMPTY ver-block (collapsed/height:0, not directly clickable).
+    // open → ver1, close → ver2; the === separator is not a target. mousedown (not
+    // click) + preventDefault/stopPropagation, matching the resolve buttons (so CM6
+    // doesn't move the selection first and focus is kept). Touch taps emulate
+    // mousedown, so this covers tap too.
+    if (this.kind === "open" || this.kind === "close") {
+      const ver: 1 | 2 = this.kind === "open" ? 1 : 2;
+      glyph.classList.add("diff2-marker-glyph-clickable");
+      glyph.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const target = verBlockCaretTarget(view.state.doc, readStructure(view.state), this.group, ver);
+        if (target !== null) {
+          view.dispatch({ selection: { anchor: target }, scrollIntoView: true });
+          view.focus();
+        }
+      });
+    }
     el.appendChild(glyph);
 
     const resolveOpts = { label: this.config.remoteLabel, date: this.config.date };

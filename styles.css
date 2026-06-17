@@ -322,6 +322,11 @@
     cursor: pointer;
     text-decoration: underline dotted;
 }
+/* §2.2.4.9 (V2): the <<<<< / >>>>> glyph is always a click/tap target that drops the
+ * caret into ver1 / ver2 (the only way to reach an EMPTY, collapsed ver-block). */
+.diff2-marker-glyph-clickable {
+    cursor: pointer;
+}
 
 /* §1.6.a.1: ghost ↵ marking each real newline (line-wrap is always on, so
  * this disambiguates a hard break from a soft wrap). Faint, non-interactive.
