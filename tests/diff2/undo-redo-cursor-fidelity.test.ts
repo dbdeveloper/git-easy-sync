@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { isolateHistory, redo, undo } from "@codemirror/commands";
 import type { EditorView } from "@codemirror/view";
 import { mountDiffPaneV2 } from "../../src/diff2/diff-pane-v2";
+import { readStructure } from "../../src/diff2/diff-structure";
 import {
   buildCommandBlock,
   buildEditBlock,
@@ -152,6 +153,41 @@ describe("undo/redo cursor fidelity — replay reproduces live selections", () =
     undo(replayed); replaySels.push(sel(replayed));
     undo(replayed); replaySels.push(sel(replayed));
     redo(replayed); replaySels.push(sel(replayed));
+    redo(replayed); replaySels.push(sel(replayed));
+
+    expect(replaySels).toEqual(liveSels);
+  });
+
+  it("ordinary edit INSIDE a ver-block (legalize + caretOffTerminal in the path): live === replayed", () => {
+    // base ≠ sibling ⇒ a real diff-group; we edit the ver2 content "RRRR". This edit
+    // flows through selectionLegalizeFilter + caretOffTerminalListener (the diff
+    // editor's core path) — the seam the all-normal cases don't exercise.
+    const sink = arraySink();
+    const flag = new ReplayFlag();
+    const live = mount("a\nLLLL\nc\n", "a\nRRRR\nc\n", sink, flag);
+    const v2 = readStructure(live.state).find((r) => r.ver === 2)!; // "RRRR" content
+    // select "RR" (cols 1..3 of RRRR) — a pure in-block selection (NOT recorded) …
+    live.dispatch({ selection: { anchor: v2.from + 1, head: v2.from + 3 } });
+    // … then type over it (an ordinary edit; auto-\n/legalize filters run live).
+    live.dispatch({
+      changes: { from: v2.from + 1, to: v2.from + 3, insert: "X" },
+      selection: { anchor: v2.from + 2 },
+      userEvent: "input.type",
+      annotations: isolateHistory.of("before"),
+    });
+
+    const jsonl = sink.blocks.map(serializeBlock).join("\n");
+    const liveSels: { a: number; h: number }[] = [];
+    undo(live); liveSels.push(sel(live)); // → before = the in-block selection
+    redo(live); liveSels.push(sel(live)); // → after
+
+    const flag2 = new ReplayFlag();
+    const replayed = mount("a\nLLLL\nc\n", "a\nRRRR\nc\n", arraySink(), flag2);
+    replayWithGuard(replayed, jsonl, flag2);
+    expect(replayed.state.doc.toString()).toBe(live.state.doc.toString());
+    expect(readStructure(replayed.state)).toEqual(readStructure(live.state)); // structure intact
+    const replaySels: { a: number; h: number }[] = [];
+    undo(replayed); replaySels.push(sel(replayed));
     redo(replayed); replaySels.push(sel(replayed));
 
     expect(replaySels).toEqual(liveSels);
