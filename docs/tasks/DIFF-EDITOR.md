@@ -133,12 +133,18 @@ selection-only `addToHistory:false` dispatch'ем (re-entrancy валідова�
 #### §0.5.2 Формат блоку — мінімальна дельта, append-only command-log
 `history.jsonl` = NDJSON, по рядку на операцію. **Блок = мінімальна ДЕЛЬТА, НІКОЛИ весь документ** (відновити
 3 символи → у блоці 3 символи):
-- `{kind:"edit", seq, at, change, structure?, caret?, sum}` — `change`=ChangeSpec (лише змінені байти).
+- `{kind:"edit", seq, at, change, structure?, caret?, sel?, sum}` — `change`=ChangeSpec (лише змінені байти).
   `structure` (VerRange[] = **решта груп**, не doc) + `caret:{before,after}` присутні **ЛИШЕ для резолюції**
-  (та `setStructure`/`resolveCaret` несе транзакція). Typing/free-edit → лише `change` (структура мапиться).
+  (та `setStructure`/`resolveCaret` несе транзакція). `sel:{before:{a,h}, after:{a,h}}` (виділення ДО/ПІСЛЯ
+  правки) присутнє **ЛИШЕ для звичайної правки** (НЕ резолюції — одне курсор-механізм/блок) — потрібне, щоб
+  replay відтворив CM6-селекшни undo/redo точно, як у живому редакторі (інакше курсор «блукає» у відновленому
+  doc на typing/paste/delete; `before` необхідний, бо чисті рухи курсора між правками НЕ записуються). Typing/
+  free-edit → `change` + `sel`; резолюція → `change` + `structure` + `caret`.
 - `{kind:"undo", seq, at, sum}` / `{kind:"redo", ...}` — нуль тексту.
-- Writer-правило: з `tr.effects` зчитати `setStructure`→`structure`, `resolveCaret`→`caret`; `tr.isUserEvent
-  ("undo"/"redo")`→{kind}; пропускати non-docChanged + `replayDispatch`.
+- Writer-правило: з `tr.effects` зчитати `setStructure`→`structure`, `resolveCaret`→`caret`; для НЕ-резолюції
+  записати `sel` (`tr.startState`/`tr.state` головне виділення); `tr.isUserEvent("undo"/"redo")`→{kind};
+  пропускати non-docChanged + `replayDispatch`. **Replay** ставить `sel.before` (no-history, ЛИШЕ на newGroup) +
+  `change` + `sel.after`; `caret` лишається на `resolveCaret`; legacy-блоки без `sel` → старий map-only fallback.
 
 #### §0.5.3 Replay — RE-RUN COMMANDS
 edit→`dispatch({changes:change, effects:[setStructure(structure)?, resolveCaret(caret)?], annotations:
