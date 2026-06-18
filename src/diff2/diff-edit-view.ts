@@ -751,10 +751,9 @@ export class DiffEditView extends ItemView {
           );
           if (!proceed) return;
         } else if (outcome.kind === "committed") {
-          const suffix = outcome.result.siblingRemoved
-            ? " (redundant sibling cleaned)"
-            : "";
-          new Notice(`Saved ${outcome.result.basePath}${suffix}`);
+          const { basePath, baseDeleted } = outcome.result;
+          const prefix = baseDeleted ? "Deleted" : "Saved";
+          new Notice(`${prefix} ${basePath}`);
         }
         // outcome.kind === "discarded": §4.1 silent wipe — no Notice, no write.
       } catch (err) {

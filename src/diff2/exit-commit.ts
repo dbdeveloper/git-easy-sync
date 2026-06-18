@@ -189,6 +189,10 @@ export interface Commit7Result {
   // Step 6.5 fired: the resolved sides were byte-identical AND we committed
   // onto the real conflict sibling, so the now-redundant sibling was removed.
   siblingRemoved: boolean;
+  // The base was DELETED (empty resolution of a delete-vs-modify, or a confirmed
+  // case-4 delete) rather than written — so the caller can say "Deleted" not
+  // "Saved".
+  baseDeleted: boolean;
 }
 
 // Assumes the caller already ran classifyToctou (this does NOT re-check) and,
@@ -290,6 +294,7 @@ export async function commit7Step(
     expectedBaseSha,
     expectedSiblingSha,
     siblingRemoved,
+    baseDeleted: deleteBase,
   };
 }
 
@@ -368,18 +373,23 @@ export function isHadContentEmptied(
 //     "mismatch" → "toctou" (the caller resolves it via the §5.0.e modal — that
 //     path is view-coupled and stays in the view).
 //
+// The user's answer to the empty-delete modal (case 4): remove the file, keep it
+// as an empty file (a benign 1-byte "\n" — a true 0-byte file would be resurrected
+// by SYNC2 §2.9), or go back to editing.
+export type EmptyResolveChoice = "delete" | "keep" | "cancel";
+
 // confirmEmptyDelete: invoked ONLY on the ok-commit path when the resolution
 // empties a had-content base (case 4) — i.e. AFTER the TOCTOU check, so the
-// delete modal never shows for a commit that won't happen. Returns false ⇒
-// "cancelled" (stay in editor); true ⇒ commit with confirmedDelete. Absent ⇒
-// case 4 falls back to the benign "\n" stub.
+// modal never shows for a commit that won't happen. "cancel" ⇒ "cancelled" (stay
+// in editor); "delete" ⇒ commit with confirmedDelete (file removed); "keep" ⇒
+// commit the benign "\n" stub. Absent ⇒ case 4 falls back to "keep".
 export async function commitOrDiscardExit(
   vault: Vault,
   conflictId: string,
   meta: AutosaveMeta,
   resolved: ResolvedSides,
   recordCount: number,
-  confirmEmptyDelete?: () => Promise<boolean>,
+  confirmEmptyDelete?: () => Promise<EmptyResolveChoice>,
 ): Promise<ExitOutcome> {
   if (recordCount === 0) {
     const dir = autosaveDir(conflictId);
@@ -393,8 +403,9 @@ export async function commitOrDiscardExit(
 
   let confirmedDelete = false;
   if (confirmEmptyDelete && isHadContentEmptied(resolved, meta)) {
-    confirmedDelete = await confirmEmptyDelete();
-    if (!confirmedDelete) return { kind: "cancelled" };
+    const choice = await confirmEmptyDelete();
+    if (choice === "cancel") return { kind: "cancelled" };
+    confirmedDelete = choice === "delete"; // "keep" → false → "\n" stub
   }
   const result = await commit7Step(vault, conflictId, meta, resolved, {
     confirmedDelete,

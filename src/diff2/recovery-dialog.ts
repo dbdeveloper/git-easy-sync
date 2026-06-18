@@ -27,12 +27,16 @@ export type SaveAltChoice =
   | { choice: "discard" }
   | { choice: "cancel" };
 
-// Row-3 / case-4 — the user emptied a base file that HAD content. Emptying it
-// means deletion; confirm before removing the file. "Cancel" returns to the
-// editor so they can put content back. (Keeping it as a genuine empty file is
-// deferred — it needs the sync engine's snapshot metadata, not diff2's.)
+// Row-3 / case-4 — the user emptied a base file that HAD content. Three ways out:
+//   - Delete file  → remove it (resolving to empty = deletion).
+//   - Keep empty   → keep it as an empty file. Stored as a 1-byte "\n", NOT a
+//     true 0-byte file: a 0-byte file would be resurrected by the sync engine's
+//     zero-byte guard (SYNC2 §2.9), so "\n" is the agreed benign compromise.
+//   - Cancel       → return to the editor (put content back).
+export type EmptyDeleteChoice = "delete" | "keep" | "cancel";
+
 export class EmptyDeleteModal extends Modal {
-  private confirmed = false;
+  private choice: EmptyDeleteChoice = "cancel";
 
   constructor(
     app: App,
@@ -41,18 +45,20 @@ export class EmptyDeleteModal extends Modal {
     super(app);
   }
 
-  prompt(): Promise<boolean> {
+  prompt(): Promise<EmptyDeleteChoice> {
     return new Promise((resolve) => {
-      this.onClose = () => resolve(this.confirmed);
+      this.onClose = () => resolve(this.choice);
       const c = this.contentEl;
-      this.titleEl.setText("Delete the file?");
+      this.titleEl.setText("File is empty");
       c.empty();
 
       c.createEl("p").setText(
-        `You emptied "${this.basePath}". Resolving a file to empty deletes it.`,
+        `You emptied "${this.basePath}". Delete the file, or keep it as an ` +
+          "empty file?",
       );
-      c.createEl("p").setText(
-        "Delete the file, or cancel and put content back to keep it.",
+      c.createEl("p", { cls: "diff2-recovery-footnote" }).setText(
+        "An empty file is stored with a single newline (a true 0-byte file " +
+          "would be restored on the next sync).",
       );
 
       const row = c.createDiv({ cls: "modal-button-container" });
@@ -61,12 +67,17 @@ export class EmptyDeleteModal extends Modal {
         cls: "mod-warning",
       });
       del.addEventListener("click", () => {
-        this.confirmed = true;
+        this.choice = "delete";
         this.close();
       });
-      const cancel = row.createEl("button", { text: "Cancel", cls: "mod-cta" });
+      const keep = row.createEl("button", { text: "Keep empty", cls: "mod-cta" });
+      keep.addEventListener("click", () => {
+        this.choice = "keep";
+        this.close();
+      });
+      const cancel = row.createEl("button", { text: "Cancel" });
       cancel.addEventListener("click", () => {
-        this.confirmed = false;
+        this.choice = "cancel";
         this.close();
       });
 

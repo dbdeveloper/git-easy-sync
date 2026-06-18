@@ -355,7 +355,7 @@ describe("commitOrDiscardExit — §4.1 zero-edit invariant + §5.0 exit decisio
     expect(await fx.vault.adapter.exists(autosaveDir(ID))).toBe(true);
   });
 
-  it("case 4 empty had-content base + confirm DELETE → committed, base+sibling gone", async () => {
+  it("case 4 empty had-content base + DELETE → committed, base+sibling gone", async () => {
     const meta = await seedConflict(fx.vault, "had content\n", "remote\n");
     const outcome = await commitOrDiscardExit(
       fx.vault,
@@ -363,14 +363,15 @@ describe("commitOrDiscardExit — §4.1 zero-edit invariant + §5.0 exit decisio
       meta,
       { base: "", sibling: "" },
       2,
-      async () => true, // user confirms delete
+      async () => "delete",
     );
     expect(outcome.kind).toBe("committed");
+    if (outcome.kind === "committed") expect(outcome.result.baseDeleted).toBe(true);
     expect(await fx.vault.adapter.exists(BASE)).toBe(false);
     expect(await fx.vault.adapter.exists(SIB)).toBe(false);
   });
 
-  it("case 4 empty had-content base + DECLINE → cancelled, nothing touched, dir kept", async () => {
+  it("case 4 empty had-content base + KEEP → committed, base \"\\n\", sibling gone", async () => {
     const meta = await seedConflict(fx.vault, "had content\n", "remote\n");
     const outcome = await commitOrDiscardExit(
       fx.vault,
@@ -378,7 +379,23 @@ describe("commitOrDiscardExit — §4.1 zero-edit invariant + §5.0 exit decisio
       meta,
       { base: "", sibling: "" },
       2,
-      async () => false, // user cancels
+      async () => "keep",
+    );
+    expect(outcome.kind).toBe("committed");
+    if (outcome.kind === "committed") expect(outcome.result.baseDeleted).toBe(false);
+    expect(await fx.vault.adapter.read(BASE)).toBe("\n"); // benign 1-byte stub
+    expect(await fx.vault.adapter.exists(SIB)).toBe(false); // step 6.5
+  });
+
+  it("case 4 empty had-content base + CANCEL → cancelled, nothing touched, dir kept", async () => {
+    const meta = await seedConflict(fx.vault, "had content\n", "remote\n");
+    const outcome = await commitOrDiscardExit(
+      fx.vault,
+      ID,
+      meta,
+      { base: "", sibling: "" },
+      2,
+      async () => "cancel",
     );
     expect(outcome).toEqual({ kind: "cancelled" });
     expect(await fx.vault.adapter.read(BASE)).toBe("had content\n");
@@ -400,7 +417,7 @@ describe("commitOrDiscardExit — §4.1 zero-edit invariant + §5.0 exit decisio
       2,
       async () => {
         asked = true;
-        return true;
+        return "delete";
       },
     );
     expect(asked).toBe(false); // never prompted
@@ -422,7 +439,7 @@ describe("commitOrDiscardExit — §4.1 zero-edit invariant + §5.0 exit decisio
       2,
       async () => {
         asked = true;
-        return true;
+        return "delete";
       },
     );
     expect(asked).toBe(false); // never prompted
