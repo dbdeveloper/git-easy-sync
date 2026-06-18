@@ -59,6 +59,7 @@ import {
   commitOrDiscardExit,
   commitToAlt,
   commitUnchangedSide,
+  guardEmpty,
   type ResolvedSides,
   type ToctouStatus,
 } from "./exit-commit";
@@ -556,8 +557,13 @@ export class DiffEditView extends ItemView {
               action.changedSide === "base"
                 ? entry.siblingPath
                 : entry.basePath;
-            const writeStr =
-              action.changedSide === "base" ? resolved.sibling : resolved.base;
+            // guardEmpty: this is a single direct write (not commit7Step), so an
+            // emptied unchanged side must stay a benign 1-byte "\n", never a
+            // 0-byte file the next sync would resurrect (SYNC2 §2.9). Same rule
+            // as the §5.0.e commitUnchangedSide path.
+            const writeStr = guardEmpty(
+              action.changedSide === "base" ? resolved.sibling : resolved.base,
+            );
             await atomicWriteFile(
               this.deps.vault,
               writePath,
@@ -710,8 +716,9 @@ export class DiffEditView extends ItemView {
         // a replayed edit, so in-memory + prior is not additive (§0.5.4).
         const jsonl = await readHistoryJsonl(this.deps.vault, session.conflictId);
         const recordCount = assessHistoryV2(jsonl).edits;
-        // getResolved() = splitModel + empty→"\n" guard on BOTH sides — its bytes
-        // are EXACTLY what commit7Step hashes into done.json.
+        // getResolved() = raw splitModel sides ("" for empty); commit7Step's
+        // baseCommitAction applies the empty-base semantics (delete / 0-byte /
+        // "\n") and hashes EXACTLY those bytes into done.json.
         const resolved = owner.getResolved();
         // §5.0 exit decision (discard-if-empty / commit / TOCTOU). TOCTOU
         // (§5.0 Step 1.5): a sync may have rewritten base/sibling under us.
@@ -830,9 +837,10 @@ export class DiffEditView extends ItemView {
 // §3.2.a "Continue" — replay a saved history.jsonl into a DETACHED V2 view to
 // extract the user's resolved sides (no live feed/guard needed: a hookless
 // mountDiffPaneV2 has no recording listener, so replayHistoryV2 runs directly).
-// resolvedFromView applies the SAME splitModel + empty→"\n" guard the live commit
-// uses. The div is appended to the document so CM6 history (undo/redo replay) has
-// a real layout to work against.
+// resolvedFromView returns RAW sides ("" for empty); the §3.2.a caller applies
+// guardEmpty before its single direct write (it does NOT go through commit7Step).
+// The div is appended to the document so CM6 history (undo/redo replay) has a
+// real layout to work against.
 function extractResolved(
   base: string,
   sibling: string,

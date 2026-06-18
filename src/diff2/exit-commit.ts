@@ -375,9 +375,12 @@ export async function commitUnchangedSide(
   return { writtenPath };
 }
 
-// §5.0.e empty→"\n" guard (the resolvedFromView guard moved into commit7Step;
-// the single-write alt paths keep it locally — see commitUnchangedSide).
-const guardEmpty = (s: string): string => (s === "" ? "\n" : s);
+// empty→"\n" guard for SINGLE-write resolved-content paths (the resolvedFromView
+// guard moved into commit7Step's baseCommitAction; paths that write one resolved
+// side directly — commitUnchangedSide, commitToAlt, and the §3.2.a reopen
+// restore-unchanged-side write — keep it locally so an emptied side stays a
+// benign 1-byte file rather than a §2.9-resurrectable 0-byte one).
+export const guardEmpty = (s: string): string => (s === "" ? "\n" : s);
 
 // Thrown by commitToAlt when the chosen name (or its derived sibling) already
 // exists. FAIL-CLOSED: the §5.0.e editbox prefill IS meta.basePath, so an
