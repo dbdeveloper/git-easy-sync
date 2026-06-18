@@ -338,14 +338,19 @@ export type ExitOutcome =
   // nothing committed, dir intact, caller stays in the editor.
   | { kind: "cancelled" };
 
-// case-4 predicate: the resolved base is empty AND it had real content at session
-// start (so emptying it means deletion, not a genuine empty file). Pure.
+// case-4 predicate: BOTH sides resolve empty AND the base had real content at
+// session start — i.e. the whole file is being emptied, which means deletion
+// (not a genuine empty file). BOTH-empty is required: a partial resolution that
+// empties only the base but keeps sibling content is an ordinary edit, NOT a
+// deletion — deleting the base there would leave a sibling-without-base that the
+// detector re-lists as a fresh conflict (a confusing loop). Pure.
 export function isHadContentEmptied(
   resolved: ResolvedSides,
   meta: AutosaveMeta,
 ): boolean {
   return (
     resolved.base === "" &&
+    resolved.sibling === "" &&
     meta.baseExistedAtStart &&
     meta.baseShaAtStart !== GIT_EMPTY_BLOB_SHA
   );

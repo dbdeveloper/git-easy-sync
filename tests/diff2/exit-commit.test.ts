@@ -386,6 +386,29 @@ describe("commitOrDiscardExit — §4.1 zero-edit invariant + §5.0 exit decisio
     expect(await fx.vault.adapter.exists(autosaveDir(ID))).toBe(true);
   });
 
+  it("PARTIAL (base emptied, sibling KEPT) does NOT prompt — ordinary edit, not a delete", async () => {
+    // Emptying only the base while the sibling keeps content is NOT a deletion
+    // (deleting base would orphan the sibling → a re-listed conflict). No modal;
+    // base falls back to the benign "\n", sibling keeps its content.
+    const meta = await seedConflict(fx.vault, "had content\n", "remote\n");
+    let asked = false;
+    const outcome = await commitOrDiscardExit(
+      fx.vault,
+      ID,
+      meta,
+      { base: "", sibling: "kept\n" },
+      2,
+      async () => {
+        asked = true;
+        return true;
+      },
+    );
+    expect(asked).toBe(false); // never prompted
+    expect(outcome.kind).toBe("committed");
+    expect(await fx.vault.adapter.read(BASE)).toBe("\n"); // benign stub, NOT deleted
+    expect(await fx.vault.adapter.read(SIB)).toBe("kept\n"); // sibling intact
+  });
+
   it("case 1 (absent base) does NOT trigger the empty-delete modal", async () => {
     // delete-vs-modify: base absent → silent delete, no confirmation.
     await fx.vault.adapter.writeBinary(SIB, enc("remote\n"));
