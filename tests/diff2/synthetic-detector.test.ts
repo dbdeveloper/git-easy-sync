@@ -15,7 +15,7 @@ import {
 
 // Phase 1 — Conflicts list detection module.
 // Tests the pure detection logic: tracked vs synthetic categorisation,
-// orphan-sibling skip, multi-sibling grouping, ordering.
+// absent-base listing (delete-vs-modify), multi-sibling grouping, ordering.
 
 const CONFIG_DIR = ".obsidian";
 const SELF_PLUGIN_ID = "github-easy-sync";
@@ -128,23 +128,25 @@ describe("findAllConflicts", () => {
     expect(entries[0].basePath).toBe("note.md");
   });
 
-  it("skips orphan siblings (no base file in vault)", () => {
-    // Orphan sibling: file matches the *.conflict-from-* pattern but
-    // its derived base path is absent in vault. R3.3 edge case: not
-    // listed (nothing to diff against).
+  it("LISTS an absent-base sibling as a synthetic delete-vs-modify conflict (2026-06-18)", () => {
+    // A sibling whose base file is absent is a delete-vs-modify conflict (base
+    // deleted, sibling holds the other side) — now LISTED (reverses the old R3.3
+    // rule-3 "orphan without base → skip") so it's resolvable via the panel; the
+    // diff editor renders the ours side empty (mountDiffPane reads "" for an absent
+    // base). Applies to synthetic (no record) AND tracked (R2.5) alike.
     const sibPath = siblingPathFor("missing.md", "Phone", Date.UTC(2026, 4, 26));
     writeFile(fx.root, sibPath, "orphan");
 
     const { entries, byBasePath } = findAllConflicts(fx.vault as unknown as import("obsidian").Vault, fx.store);
-    expect(entries).toEqual([]);
-    expect(byBasePath.size).toBe(0);
+    expect(entries.map((e) => `${e.basePath}:${e.kind}`)).toEqual(["missing.md:synthetic"]);
+    expect(byBasePath.size).toBe(1);
   });
 
-  it("returns mixed tracked + synthetic + skipped-orphan in one pass", async () => {
+  it("returns mixed tracked + synthetic + absent-base-orphan in one pass", async () => {
     // Set up three siblings:
     //   1. tracked   — base+sibling+record
     //   2. synthetic — base+sibling without record
-    //   3. orphan    — sibling without base
+    //   3. orphan    — sibling without base → now LISTED as synthetic (2026-06-18)
     // Plus a regular non-sibling file (must be ignored).
     writeFile(fx.root, "regular.md", "ignore me");
 
@@ -181,10 +183,11 @@ describe("findAllConflicts", () => {
 
     const { entries, byBasePath } = findAllConflicts(fx.vault as unknown as import("obsidian").Vault, fx.store);
     expect(entries.map((e) => `${e.basePath}:${e.kind}`).sort()).toEqual([
+      "orphan.md:synthetic", // absent base → now listed (was skipped)
       "synthetic.md:synthetic",
       "tracked.md:tracked",
     ]);
-    expect(byBasePath.size).toBe(2);
+    expect(byBasePath.size).toBe(3);
   });
 
   it("groups multi-sibling-per-path into one bucket each", async () => {

@@ -85,23 +85,18 @@ export function findAllConflicts(
   const entries: ConflictEntry[] = [];
   const files = vault.getFiles();
 
-  // Pre-index existing file paths in O(N) so the per-sibling orphan
-  // check is O(1). vault.getFiles() returns files only (no folders),
-  // which is exactly what we want — siblings' base paths must
-  // resolve to real files.
-  const filePaths = new Set<string>(files.map((f) => f.path));
-
   for (const file of files) {
     const parsed = parseSiblingFilename(file.path);
     if (!parsed) continue; // not a sibling
 
-    // Orphan-sibling check — skip when base file is absent. R3.3 edge
-    // case: a sibling without base has nothing to diff against; we
-    // simply don't list it. (TrashStore's load() does separate
-    // orphan-cleanup for `.conflicts/<id>/` records without sibling;
-    // this is the inverse — sibling without record/base.)
-    if (!filePaths.has(parsed.basePath)) continue;
-
+    // NOTE (2026-06-18): an ABSENT base is NO LONGER skipped. A sibling whose base
+    // file is missing is a delete-vs-modify conflict (base deleted, sibling holds
+    // the other side) — both TRACKED (R2.5) and SYNTHETIC. It is LISTED so the user
+    // can resolve it via the panel (delete the sibling → deletion wins; or keep its
+    // content). This reverses the old R3.3-rule-3 "orphan sibling without base has
+    // nothing to diff against — skip it"; the diff editor renders the ours side
+    // empty (mountDiffPane reads "" when basePath is absent). Genuine leftover
+    // siblings now surface too, by design — the user clears them from the panel.
     const record = conflictStore.getBySibling(file.path);
     entries.push({
       basePath: parsed.basePath,
