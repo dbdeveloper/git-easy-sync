@@ -93,9 +93,12 @@
    `resolvedFromView` повертає сирі `""`): base відсутній на старті (delete-vs-modify) → **DELETE** (файл
    лишається відсутнім, без stub; recoverCommit виводить delete з `expectedBaseSha===SHA("") &&
    !baseExistedAtStart`); base був справжнім 0-байтовим → пишемо 0 байт (SYNC2 §2.9 пропускає при
-   snapshot.size===0); base мав контент і його вичистили → `"\n"` (row-3 delete-модалка ВІДКЛАДЕНА; нешкідливий
-   1-байт, НЕ воскресимий §2.9). Обидві порожні сторони комітяться однаково (`emptyRepBytes`) → step 6.5 прибирає
-   sibling. §5.0.e single-write шляхи лишають локальний empty→`"\n"` guard.
+   snapshot.size===0); base мав контент і його вичистили (row-3 / case-4) → `EmptyDeleteModal` «видалити файл?»:
+   підтвердив → **видалення** (`commit7Step opts.confirmedDelete` → `done.deleteBase` authoritative, бо meta не
+   відрізняє case-4-delete від справжнього 0-байт; recoverCommit читає `done.deleteBase`), скасував → лишається в
+   редакторі (`commitOrDiscardExit` → `cancelled`); без модалки fallback = `"\n"` (нешкідливий 1-байт, НЕ
+   воскресимий §2.9). Модалка викликається лише на ok-commit шляху (після TOCTOU). Обидві порожні сторони комітяться
+   однаково → step 6.5 прибирає sibling. §5.0.e + §3.2.a single-write шляхи лишають локальний `guardEmpty`.
 
 ### §0.4 Gate-спайки на «drop structure» — ⚠️ ЧАСТКОВО SUPERSEDED §0.5 (2026-06-13)
 
