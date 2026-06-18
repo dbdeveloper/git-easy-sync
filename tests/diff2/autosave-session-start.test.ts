@@ -64,6 +64,25 @@ describe("startSession — §2.5.a", () => {
     );
   });
 
+  it("records baseExistedAtStart:true when base is present", async () => {
+    const meta = await startSession(fx.vault, id, "base.md", "sibling.md", NOW);
+    expect(meta.baseExistedAtStart).toBe(true);
+  });
+
+  it("ABSENT base → no throw, 0-byte snapshot, baseExistedAtStart:false (2026-06-18)", async () => {
+    // delete-vs-modify: base deleted locally, sibling holds the remote side.
+    // startSession must not ENOENT on readBinary(absent base) — it reads "" and
+    // records baseExistedAtStart:false (the discriminator SHA("") can't carry).
+    await fx.vault.adapter.remove("base.md");
+    const meta = await startSession(fx.vault, "del-vs-mod", "base.md", "sibling.md", NOW);
+    expect(meta.baseExistedAtStart).toBe(false);
+    expect(meta.baseShaAtStart).toBe(await calculateGitBlobSHA(enc("")));
+    const baseSnap = await fx.vault.adapter.readBinary(`${autosaveDir("del-vs-mod")}/base.snapshot`);
+    expect(baseSnap.byteLength).toBe(0);
+    // Reopen the absent-base session unchanged → resume (joined fingerprint repro).
+    expect((await classifyReopen(fx.vault, "del-vs-mod", "base.md", "sibling.md")).kind).toBe("resume");
+  });
+
   it("snapshots are byte-exact copies and meta SHAs match them", async () => {
     const meta = await startSession(fx.vault, id, "base.md", "sibling.md", NOW);
     const dir = autosaveDir(id);
@@ -170,12 +189,23 @@ describe("classifyReopen — §3.1 detection (joinedDocSha gate)", () => {
     if (status.kind === "corrupt") expect(status.reason).toBe("snapshot-integrity");
   });
 
-  it("input file removed since start → corrupt (input-missing)", async () => {
+  it("SIBLING removed since start → corrupt (input-missing)", async () => {
     await startSession(fx.vault, id, "base.md", "sibling.md", NOW);
-    await fx.vault.adapter.remove("base.md");
+    await fx.vault.adapter.remove("sibling.md");
     const status = await reopen();
     expect(status.kind).toBe("corrupt");
     if (status.kind === "corrupt") expect(status.reason).toBe("input-missing");
+  });
+
+  it("BASE removed since start → vault-changed, NOT corrupt (2026-06-18)", async () => {
+    // An absent base is a legit delete-vs-modify input now (the base file was
+    // deleted on this device, the sibling holds the remote side). classifyReopen
+    // reads it as 0 bytes — so the base SHA shifts away from baseShaAtStart and
+    // the joined fingerprint changes → vault-changed (W4 symmetric recovery),
+    // not corrupt→fresh. Was "input-missing" before the absent-base fix.
+    await startSession(fx.vault, id, "base.md", "sibling.md", NOW);
+    await fx.vault.adapter.remove("base.md");
+    expect((await reopen()).kind).toBe("vault-changed");
   });
 
   it("corrupt meta.json → fresh (readMeta degrades to null)", async () => {

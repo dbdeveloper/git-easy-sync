@@ -141,6 +141,14 @@ export interface AutosaveMeta {
   // DIRECTLY (no version tracking). Drives the replay-validity gate in
   // classifyReopen; orthogonal to the input SHAs (which drive the dialog).
   joinedDocSha: string;
+  // Whether basePath physically existed at session start. An absent base is a
+  // legit conflict input (delete-vs-modify: local deleted, remote modified — the
+  // sibling holds the other side). baseShaAtStart cannot encode this: an absent
+  // base and a present-but-0-byte base both hash to SHA("") (e69de29…). This
+  // flag is the discriminator the empty-resolution commit needs — absent base +
+  // resolved-empty ⇒ deletion; present-0-byte base + resolved-empty ⇒ keep the
+  // 0-byte file. DIFF2 R3.3 (2026-06-18).
+  baseExistedAtStart: boolean;
 }
 
 const utf8 = (s: string): ArrayBuffer =>
@@ -181,7 +189,13 @@ export async function startSession(
   nowIso: string = new Date().toISOString(),
 ): Promise<AutosaveMeta> {
   // Steps 2–5.5 — read inputs ONCE, derive every fingerprint from those bytes.
-  const baseBytes = await vault.adapter.readBinary(basePath);
+  // An ABSENT base is a legit delete-vs-modify input — read it as 0 bytes rather
+  // than letting readBinary throw ENOENT (the bug that broke opening an absent-
+  // base conflict). baseExistedAtStart records the distinction SHA("") can't.
+  const baseExistedAtStart = await vault.adapter.exists(basePath);
+  const baseBytes = baseExistedAtStart
+    ? await vault.adapter.readBinary(basePath)
+    : (new ArrayBuffer(0) as ArrayBuffer);
   const siblingBytes = await vault.adapter.readBinary(siblingPath);
   const baseShaAtStart = await calculateGitBlobSHA(baseBytes);
   const siblingShaAtStart = await calculateGitBlobSHA(siblingBytes);
@@ -219,6 +233,7 @@ export async function startSession(
     baseShaAtStart,
     siblingShaAtStart,
     joinedDocSha,
+    baseExistedAtStart,
   };
   await atomicWriteFile(vault, metaPath(conflictId), utf8(JSON.stringify(meta))); // step 10 — COMMIT POINT
   return meta;
@@ -295,10 +310,15 @@ export async function classifyReopen(
   }
 
   // Current vault inputs — may be gone (interleaved sync deleted a side).
+  // An absent BASE is a legit delete-vs-modify input (read as 0 bytes, matching
+  // startSession); only an absent SIBLING is genuine input-loss. This lets an
+  // absent-base session resume cleanly instead of falling to corrupt→fresh.
   let baseBytes: ArrayBuffer;
   let siblingBytes: ArrayBuffer;
   try {
-    baseBytes = await vault.adapter.readBinary(basePath);
+    baseBytes = (await vault.adapter.exists(basePath))
+      ? await vault.adapter.readBinary(basePath)
+      : (new ArrayBuffer(0) as ArrayBuffer);
     siblingBytes = await vault.adapter.readBinary(siblingPath);
   } catch {
     return { kind: "corrupt", reason: "input-missing" };
