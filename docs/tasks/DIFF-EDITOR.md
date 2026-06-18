@@ -89,8 +89,13 @@
 3. **Undo-after-replay oracle:** `replay → undo == live undo` для **doc + структури** (точно); для **курсора** —
    лише resolution-кроки (resolveCaret); typing-курсор native (рішення §0.5). Фінал з `cursor.json`.
    ✅ `v2-mixed-recovery-spike` (2026-06-13).
-4. **0-byte guard:** порожня сторона від split не пише рівно 0 байт у vault (SYNC2 §2.9) — лишається на межі
-   commit (representation-independent).
+4. **0-byte guard:** порожня сторона тепер вирішується в `commit7Step.baseCommitAction` (R3.3, 2026-06-18 —
+   `resolvedFromView` повертає сирі `""`): base відсутній на старті (delete-vs-modify) → **DELETE** (файл
+   лишається відсутнім, без stub; recoverCommit виводить delete з `expectedBaseSha===SHA("") &&
+   !baseExistedAtStart`); base був справжнім 0-байтовим → пишемо 0 байт (SYNC2 §2.9 пропускає при
+   snapshot.size===0); base мав контент і його вичистили → `"\n"` (row-3 delete-модалка ВІДКЛАДЕНА; нешкідливий
+   1-байт, НЕ воскресимий §2.9). Обидві порожні сторони комітяться однаково (`emptyRepBytes`) → step 6.5 прибирає
+   sibling. §5.0.e single-write шляхи лишають локальний empty→`"\n"` guard.
 
 ### §0.4 Gate-спайки на «drop structure» — ⚠️ ЧАСТКОВО SUPERSEDED §0.5 (2026-06-13)
 
