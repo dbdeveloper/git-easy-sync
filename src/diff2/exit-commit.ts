@@ -83,11 +83,17 @@ export async function classifyToctou(
   vault: Vault,
   meta: AutosaveMeta,
 ): Promise<ToctouStatus> {
+  // Read each side defensively: an ABSENT file hashes as SHA("") rather than
+  // letting readBinary throw ENOENT (bug-29 — the exit mirror of the startSession
+  // fix). For a delete-vs-modify session the base is legitimately absent and
+  // hashes to baseShaAtStart=SHA("") ⇒ baseChanged=false (no TOCTOU). A file that
+  // HAD content but is now gone hashes to SHA("")≠its start SHA ⇒ changed ⇒ the
+  // §5.0.e mismatch path, which is the correct response to an out-of-band delete.
   const currentBaseSha = await calculateGitBlobSHA(
-    await vault.adapter.readBinary(meta.basePath),
+    await readOrEmpty(vault, meta.basePath),
   );
   const currentSiblingSha = await calculateGitBlobSHA(
-    await vault.adapter.readBinary(meta.siblingPath),
+    await readOrEmpty(vault, meta.siblingPath),
   );
   const baseChanged = currentBaseSha !== meta.baseShaAtStart;
   const siblingChanged = currentSiblingSha !== meta.siblingShaAtStart;
@@ -552,4 +558,12 @@ async function readDoneJson(vault: Vault, autosaveId: string): Promise<DoneJson 
 
 async function removeIfExists(vault: Vault, path: string): Promise<void> {
   if (await vault.adapter.exists(path)) await vault.adapter.remove(path);
+}
+
+// Read a file's bytes, or 0 bytes if it does not exist — so an absent conflict
+// side (delete-vs-modify base) hashes to SHA("") instead of throwing ENOENT.
+async function readOrEmpty(vault: Vault, path: string): Promise<ArrayBuffer> {
+  return (await vault.adapter.exists(path))
+    ? vault.adapter.readBinary(path)
+    : (new ArrayBuffer(0) as ArrayBuffer);
 }

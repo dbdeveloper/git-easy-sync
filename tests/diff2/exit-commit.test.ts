@@ -191,6 +191,32 @@ describe("classifyToctou — §5.0 Step 1.5 detection", () => {
       expect(st.currentBaseSha).toBe(await calculateGitBlobSHA(enc("b-pulled\n")));
     }
   });
+
+  it("ABSENT base (delete-vs-modify) → ok, not an ENOENT crash (bug-29, 2026-06-18)", async () => {
+    // base deleted locally, sibling holds the remote side. classifyToctou must
+    // read the absent base as SHA("")=baseShaAtStart ⇒ no TOCTOU, not throw.
+    await fx.vault.adapter.writeBinary(SIB, enc("remote\n"));
+    const meta = await startSession(fx.vault, ID, BASE, SIB, NOW);
+    expect(meta.baseExistedAtStart).toBe(false);
+    expect((await classifyToctou(fx.vault, meta)).kind).toBe("ok");
+  });
+
+  it("absent-base resolve-to-CONTENT → creates base, removes sibling (bug-29)", async () => {
+    await fx.vault.adapter.writeBinary(SIB, enc("remote\n"));
+    const meta = await startSession(fx.vault, ID, BASE, SIB, NOW);
+    // Resolving the group to theirs makes both sides agree on the remote bytes.
+    const res = await commit7Step(
+      fx.vault,
+      ID,
+      meta,
+      { base: "remote\n", sibling: "remote\n" },
+      { now: NOW },
+    );
+    expect(res.siblingRemoved).toBe(true);
+    expect(await fx.vault.adapter.exists(BASE)).toBe(true);
+    expect(Buffer.from(await fx.vault.adapter.readBinary(BASE)).toString()).toBe("remote\n");
+    expect(await fx.vault.adapter.exists(SIB)).toBe(false);
+  });
 });
 
 describe("commitOrDiscardExit — §4.1 zero-edit invariant + §5.0 exit decision", () => {
