@@ -316,6 +316,109 @@ function matrixSuite(label: string, BASE: string, SIB: string): void {
   });
 }
 
+// ── delete-base recovery (bug-29 / R3.3 2026-06-18) ──────────────────
+//
+// An empty-resolved base that was ABSENT at session start (delete-vs-modify
+// resolved to the deleted side) commits as a DELETE: commit7Step stages NO base
+// tmp and removes the base target (a no-op when already absent); recoverCommit
+// INFERS the delete from meta (expectedBaseSha===SHA("") && !baseExistedAtStart)
+// and treats the base's committed end-state as ABSENT. Crash states are
+// hand-crafted exactly as for the write matrix, then recoverCommit must converge
+// to base-absent + sibling-absent (6.5 unifies the two empty sides).
+describe("recoverCommit — delete-base (absent base, resolve-to-empty)", () => {
+  const BASE = "Notes/del.md";
+  const SIB = "Notes/del.conflict-from-Phone-X.md";
+  const EMPTY_SHA = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+
+  let fx: ReturnType<typeof fixture>;
+  beforeEach(() => (fx = fixture()));
+  afterEach(() => fs.rmSync(fx.root, { recursive: true, force: true }));
+
+  // Start an ABSENT-base session (base never written) → baseExistedAtStart=false,
+  // baseShaAtStart=SHA(""). done.json records both expected SHAs = SHA("").
+  async function craftDelete(sib: Slot) {
+    await fx.vault.adapter.writeBinary(SIB, enc(OLD_SIB)); // sibling has content
+    const meta = await startSession(fx.vault, "del", BASE, SIB, NOW);
+    expect(meta.baseExistedAtStart).toBe(false);
+    await fx.vault.adapter.write(
+      `${autosaveDir("del")}/done.json`,
+      JSON.stringify({
+        v: 1,
+        writtenAt: NOW,
+        expectedBaseSha: EMPTY_SHA,
+        expectedSiblingSha: EMPTY_SHA,
+      }),
+    );
+    // base stays absent throughout (delete side stages nothing). Place sibling.
+    await fx.vault.adapter.remove(SIB);
+    // sibling's "new" bytes for this commit are 0 bytes (the shared empty rep).
+    await placeSideRaw(fx.vault, SIB, sib, OLD_SIB, "");
+  }
+
+  it("crash after done.json, sibling staged (0-byte tmp) → rolls forward to BOTH absent", async () => {
+    await craftDelete({ final: "old", tmp: "tmpNew", bak: false });
+    const res = await recoverCommit(fx.vault, "del");
+    expect(res).toEqual({ kind: "rolled-forward", siblingRemoved: true });
+    expect(await fx.vault.adapter.exists(BASE)).toBe(false);
+    expect(await fx.vault.adapter.exists(SIB)).toBe(false);
+    expect(await fx.vault.adapter.exists(autosaveDir("del"))).toBe(false);
+  });
+
+  it("crash after sibling promoted (0-byte) before 6.5 → rolls forward to BOTH absent", async () => {
+    await craftDelete({ final: "new", tmp: "tmpNew", bak: false });
+    const res = await recoverCommit(fx.vault, "del");
+    expect(res).toEqual({ kind: "rolled-forward", siblingRemoved: true });
+    expect(await fx.vault.adapter.exists(BASE)).toBe(false);
+    expect(await fx.vault.adapter.exists(SIB)).toBe(false);
+  });
+
+  it("crash before sibling staged (no tmp) → rolls back, sibling content intact, session kept", async () => {
+    await craftDelete({ final: "old", tmp: "absent", bak: false });
+    const res = await recoverCommit(fx.vault, "del");
+    expect(res).toEqual({ kind: "rolled-back" });
+    expect(await fx.vault.adapter.exists(BASE)).toBe(false); // never created
+    expect(await fx.vault.adapter.read(SIB)).toBe(OLD_SIB); // restored
+    expect(await fx.vault.adapter.exists(`${autosaveDir("del")}/meta.json`)).toBe(true);
+  });
+
+  it("defensive: base present as a stray 0-byte file → delete completes it", async () => {
+    await craftDelete({ final: "new", tmp: "absent", bak: false });
+    await fx.vault.adapter.writeBinary(BASE, enc("")); // stray 0-byte base
+    const res = await recoverCommit(fx.vault, "del");
+    expect(res).toEqual({ kind: "rolled-forward", siblingRemoved: true });
+    expect(await fx.vault.adapter.exists(BASE)).toBe(false); // removed
+  });
+
+  it("real commit7Step (absent base, both empty) → base absent, sibling removed", async () => {
+    await fx.vault.adapter.writeBinary(SIB, enc(OLD_SIB));
+    const meta = await startSession(fx.vault, "del", BASE, SIB, NOW);
+    const res = await commit7Step(fx.vault, "del", meta, { base: "", sibling: "" }, { now: NOW });
+    expect(res.siblingRemoved).toBe(true);
+    expect(await fx.vault.adapter.exists(BASE)).toBe(false);
+    expect(await fx.vault.adapter.exists(SIB)).toBe(false);
+    expect(await fx.vault.adapter.exists(autosaveDir("del"))).toBe(false);
+  });
+});
+
+// Like placeSide but with an explicit newBytes string (the delete-base commit's
+// sibling "new" version is 0 bytes, not NEW_SIB).
+async function placeSideRaw(
+  vault: Vault,
+  finalPath: string,
+  slot: Slot,
+  oldBytes: string,
+  newBytes: string,
+) {
+  if (slot.final === "old") await vault.adapter.writeBinary(finalPath, enc(oldBytes));
+  else if (slot.final === "new") await vault.adapter.writeBinary(finalPath, enc(newBytes));
+  else if (slot.final === "foreign") await vault.adapter.writeBinary(finalPath, enc(FOREIGN));
+  if (slot.tmp === "tmpNew")
+    await vault.adapter.writeBinary(stagingPathFor(finalPath, "tmp"), enc(newBytes));
+  else if (slot.tmp === "tmpTorn")
+    await vault.adapter.writeBinary(stagingPathFor(finalPath, "tmp"), enc(TORN));
+  if (slot.bak) await vault.adapter.writeBinary(stagingPathFor(finalPath, "bak"), enc(oldBytes));
+}
+
 matrixSuite("vault", "Notes/doc.md", "Notes/doc.conflict-from-Phone-X.md");
 matrixSuite(
   "dot-dir",

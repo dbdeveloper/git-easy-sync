@@ -31,13 +31,16 @@ import { clampCursor, persistCursor } from "./cursor-store";
 import type { ResolvedSides } from "./exit-commit";
 import type Logger from "../logger";
 
-// splitModel + the §5.0 empty→"\n" guard (SYNC2 §2.9 zero-byte-restore: a 0-byte
-// write would trip the restore guard, so an emptied side commits as "\n", the
-// canonical minimal non-empty file). Shared by owner.getResolved() AND the
-// detached §3.2.a extraction, so done.json hashes EXACTLY the bytes we commit.
+// RAW resolved sides ("" for an empty side). The empty-base semantics — delete
+// vs write-0-byte vs the deferred "\n" guard — now live in commit7Step's
+// baseCommitAction (it has the AutosaveMeta the decision needs: baseExistedAtStart
+// + baseShaAtStart). Pushing the guard down to the commit means an empty
+// delete-vs-modify resolution can DELETE the base instead of materialising a
+// stub. The §5.0.e single-write paths (commitUnchangedSide/commitToAlt) keep
+// their own empty→"\n" guard since they do not route through commit7Step.
 export function resolvedFromView(view: EditorView): ResolvedSides {
   const { base, sibling } = splitModel(view.state.doc.toString(), readStructure(view.state));
-  return { base: base === "" ? "\n" : base, sibling: sibling === "" ? "\n" : sibling };
+  return { base, sibling };
 }
 
 export class DiffPaneOwner {

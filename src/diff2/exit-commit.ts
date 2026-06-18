@@ -47,8 +47,44 @@ import { autosaveDir, readMeta, type AutosaveMeta } from "./autosave-store";
 const utf8 = (s: string): ArrayBuffer =>
   new TextEncoder().encode(s).buffer as ArrayBuffer;
 
+// git-blob SHA of zero bytes — the well-known empty blob. Both commit and
+// recovery use it to recognise an empty-resolved base. (Verified === a live
+// calculateGitBlobSHA("") in exit-commit.test.ts so a library change can't
+// silently drift it.)
+export const GIT_EMPTY_BLOB_SHA = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+
 const donePath = (autosaveId: string): string =>
   `${autosaveDir(autosaveId)}/done.json`;
+
+// What bytes does an EMPTY resolved side commit as? (R3.3, 2026-06-18.) SHA("")
+// alone can't tell "delete" from "keep a genuine empty file", so the base's
+// session-start state decides — and the SAME representation is applied to BOTH
+// sides so two empty sides hash identically and Step 6.5 can unify them:
+//   - base absent at start (delete-vs-modify)  → 0 bytes (and baseCommitAction
+//     also flags DELETE so the base file is never materialised)
+//   - base existed as a genuine 0-byte file    → 0 bytes (SYNC2 §2.9 lets a
+//     0-byte file through when snapshot.size===0, so it sticks)
+//   - base existed WITH content, user emptied  → "\n" (row-3 deferred modal):
+//     a benign 1-byte file, NOT a §2.9-resurrectable 0-byte one.
+function emptyRepBytes(meta: AutosaveMeta): ArrayBuffer {
+  if (!meta.baseExistedAtStart) return utf8("");
+  if (meta.baseShaAtStart === GIT_EMPTY_BLOB_SHA) return utf8("");
+  return utf8("\n"); // case 4 — deferred modal
+}
+
+// Empty-base commit decision. A non-empty base writes its bytes verbatim. An
+// empty base: DELETE iff it was absent at session start (delete-vs-modify
+// resolved to the deleted side) — the file stays gone, never a 0-byte stub;
+// recoverCommit infers the same intent from (expectedBaseSha===SHA("") &&
+// !baseExistedAtStart), so done.json needs no extra field. Otherwise write the
+// shared empty representation (0 bytes / "\n").
+export function baseCommitAction(
+  resolvedBase: string,
+  meta: AutosaveMeta,
+): { delete: boolean; bytes: ArrayBuffer } {
+  if (resolvedBase !== "") return { delete: false, bytes: utf8(resolvedBase) };
+  return { delete: !meta.baseExistedAtStart, bytes: emptyRepBytes(meta) };
+}
 
 // done.json — commit barrier with pre-computed expected SHAs (§5.0).
 // Present ⇒ "commit in progress, roll forward via recovery". Absent ⇒
@@ -137,10 +173,12 @@ export interface Commit7Result {
 }
 
 // Assumes the caller already ran classifyToctou (this does NOT re-check) and,
-// for a mismatch, resolved it via the §5.0.e modal. `resolved` MUST be the
-// exact bytes to commit (DiffPane.getResolved() output, with its empty→"\n"
-// guard already applied) — done.json hashes the same buffers we stage, so a
-// pre-guard buffer here would make every recovery SHA-match fail.
+// for a mismatch, resolved it via the §5.0.e modal. `resolved` carries the RAW
+// resolved sides ("" for an empty side); commit7Step applies the empty-base
+// semantics itself (baseCommitAction) using meta — so done.json hashes exactly
+// the buffers we stage/write, keeping every recovery SHA-match valid. An empty
+// base whose session-start state means "delete" (delete-vs-modify) is NOT
+// written: the file stays absent and recovery infers the same from meta.
 export async function commit7Step(
   vault: Vault,
   autosaveId: string,
@@ -152,8 +190,16 @@ export async function commit7Step(
   const targetBase = opts.targetBasePath ?? meta.basePath;
   const targetSibling = opts.targetSiblingPath ?? meta.siblingPath;
 
-  const baseBytes = utf8(resolved.base);
-  const siblingBytes = utf8(resolved.sibling);
+  const baseAction = baseCommitAction(resolved.base, meta);
+  const deleteBase = baseAction.delete;
+  const baseBytes = baseAction.bytes;
+  // The sibling never deletes (Step 6.5 removes it when it converges with base);
+  // an empty sibling uses the SAME empty representation as the base so two empty
+  // sides hash identically and 6.5 unifies them.
+  const siblingBytes =
+    resolved.sibling === "" ? emptyRepBytes(meta) : utf8(resolved.sibling);
+  // expectedBaseSha is the empty-blob SHA for a delete — it keeps Step 6.5's
+  // equality check working and lets recovery recognise the delete via meta.
   const expectedBaseSha = await calculateGitBlobSHA(baseBytes);
   const expectedSiblingSha = await calculateGitBlobSHA(siblingBytes);
 
@@ -164,10 +210,12 @@ export async function commit7Step(
   const baseTmp = stagingPathFor(targetBase, "tmp");
   const siblingTmp = stagingPathFor(targetSibling, "tmp");
 
-  // Step 3 — stage both new versions in .sync-tmp. Parallel: distinct paths.
-  // These are the clean source of truth recovery rolls forward from.
+  // Step 3 — stage new versions in .sync-tmp. A delete-base stages nothing (its
+  // committed end-state is "absent", there is no roll-forward source to stage).
   await Promise.all([
-    vault.adapter.writeBinary(baseTmp, baseBytes),
+    deleteBase
+      ? Promise.resolve()
+      : vault.adapter.writeBinary(baseTmp, baseBytes),
     vault.adapter.writeBinary(siblingTmp, siblingBytes),
   ]);
 
@@ -177,8 +225,10 @@ export async function commit7Step(
   // is reached the moment the first modifyBinary lands; before that, originals
   // are intact and recovery rolls back. SEQUENTIAL by design (base then
   // sibling) so recovery reasons over one linear sequence — DIFF-EDITOR.md
-  // §5.0.b. Do not Promise.all.
-  await promoteInPlace(vault, baseTmp, targetBase, baseBytes);
+  // §5.0.b. Do not Promise.all. A delete-base removes the target instead of
+  // promoting (no-op when it is already absent — the delete-vs-modify case).
+  if (deleteBase) await removeIfExists(vault, targetBase);
+  else await promoteInPlace(vault, baseTmp, targetBase, baseBytes);
   await promoteInPlace(vault, siblingTmp, targetSibling, siblingBytes);
 
   // Step 5 — drop the staging tmps. modify-in-place leaves the tmp behind; a
@@ -317,10 +367,17 @@ export async function commitUnchangedSide(
     changedSide === "base" ? meta.siblingPath : meta.basePath;
   const writeStr =
     changedSide === "base" ? resolved.sibling : resolved.base;
-  await atomicWriteFile(vault, writtenPath, utf8(writeStr));
+  // §5.0.e is a single write (no commit7Step delete machinery, no recoverCommit
+  // roll-forward) — keep the empty→"\n" guard so an emptied side stays a benign
+  // 1-byte file rather than a §2.9-resurrectable 0-byte one.
+  await atomicWriteFile(vault, writtenPath, utf8(guardEmpty(writeStr)));
   await vault.adapter.rmdir(autosaveDir(autosaveId), true);
   return { writtenPath };
 }
+
+// §5.0.e empty→"\n" guard (the resolvedFromView guard moved into commit7Step;
+// the single-write alt paths keep it locally — see commitUnchangedSide).
+const guardEmpty = (s: string): string => (s === "" ? "\n" : s);
 
 // Thrown by commitToAlt when the chosen name (or its derived sibling) already
 // exists. FAIL-CLOSED: the §5.0.e editbox prefill IS meta.basePath, so an
@@ -352,8 +409,9 @@ export async function commitToAlt(
   // it touches the adapter (CLAUDE.md path rule; mobile pastes stray slashes).
   // The modal normalizes too, so its collision pre-check and this write agree.
   const target = normalizePath(newBasePath);
-  // String equality ⟺ byte equality ⟺ SHA equality (utf8 is injective here);
-  // both sides already carry getResolved()'s empty→"\n" guard.
+  // String equality ⟺ byte equality ⟺ SHA equality (utf8 is injective here).
+  // Compare RAW (both empty ⟹ converged); each write applies the empty→"\n"
+  // guard below (§5.0.e single-write paths keep it locally).
   const converged = resolved.base === resolved.sibling;
 
   // Fail-closed: resolve + check BOTH targets BEFORE any write — never overwrite
@@ -371,9 +429,9 @@ export async function commitToAlt(
   }
 
   // base FIRST — a crash leaves the named file, not an orphan sibling.
-  await atomicWriteFile(vault, target, utf8(resolved.base));
+  await atomicWriteFile(vault, target, utf8(guardEmpty(resolved.base)));
   if (siblingPath) {
-    await atomicWriteFile(vault, siblingPath, utf8(resolved.sibling));
+    await atomicWriteFile(vault, siblingPath, utf8(guardEmpty(resolved.sibling)));
   }
   await vault.adapter.rmdir(autosaveDir(autosaveId), true);
   return { basePath: target, siblingPath };
@@ -422,7 +480,23 @@ export async function recoverCommit(
     return { kind: "fallback", reason: "meta-missing" };
   }
 
-  const base = await classifySide(vault, meta.basePath, meta.baseShaAtStart, done.expectedBaseSha);
+  // Infer a delete-base commit from meta (no done.json field needed): the
+  // committed base is empty AND the base was absent at session start ⇒ the
+  // resolution was a deletion (delete-vs-modify resolved to the deleted side),
+  // so the base's committed end-state is ABSENT, not a 0-byte file. A genuine
+  // empty file (baseExistedAtStart) keeps expectedBaseSha===SHA("") too but is a
+  // real 0-byte write, NOT a delete — baseExistedAtStart is the discriminator.
+  // Mirror of baseCommitAction in commit7Step.
+  const deleteBase =
+    done.expectedBaseSha === GIT_EMPTY_BLOB_SHA && !meta.baseExistedAtStart;
+
+  const base = await classifySide(
+    vault,
+    meta.basePath,
+    meta.baseShaAtStart,
+    done.expectedBaseSha,
+    deleteBase,
+  );
   const sibling = await classifySide(
     vault,
     meta.siblingPath,
@@ -451,12 +525,17 @@ export async function recoverCommit(
     return { kind: "fallback", reason: "external-modification" };
   }
 
-  const baseHasNew = base.final === "new" || base.tmp === "tmpNew";
+  // For a delete-base, any non-foreign final is a roll-FORWARD state: "new" =
+  // already absent (committed), "old" = present-but-recoverable (finish by
+  // removing). The foreign case already bailed above. The dispatch still gates
+  // on the sibling, so a not-yet-committed sibling rolls the pair back safely.
+  const baseHasNew =
+    deleteBase || base.final === "new" || base.tmp === "tmpNew";
   const siblingHasNew = sibling.final === "new" || sibling.tmp === "tmpNew";
 
   if (baseHasNew && siblingHasNew) {
     // ROLL FORWARD (rows D–K): a committed version of each side exists.
-    await rollForwardSide(vault, base);
+    await rollForwardSide(vault, base, deleteBase);
     await rollForwardSide(vault, sibling);
     // Step 6.5 — proactive sibling cleanup if both sides committed identical.
     let siblingRemoved = false;
@@ -492,7 +571,21 @@ export async function recoverCommit(
 
 // Bring one side to its committed end-state from any forward (D–K) disk state.
 // Idempotent and crash-safe — re-running after a crash mid-recovery converges.
-async function rollForwardSide(vault: Vault, s: SideState): Promise<void> {
+// deleteIntent: the committed end-state is ABSENT (an empty-resolved base that
+// was absent at session start). classifySide already mapped absent→"new" for it;
+// any present final is a not-yet-completed delete (final="old") which we finish
+// by removing. There is no tmp to roll forward from (a delete stages nothing).
+async function rollForwardSide(
+  vault: Vault,
+  s: SideState,
+  deleteIntent = false,
+): Promise<void> {
+  if (deleteIntent) {
+    if (s.final !== "new") await removeIfExists(vault, s.finalPath); // finish the delete
+    await removeIfExists(vault, s.tmpPath); // defensive (none staged)
+    await removeIfExists(vault, s.bakPath);
+    return;
+  }
   if (s.final !== "new") {
     // hasNew && final≠new ⇒ tmp is tmpNew. safeRename removes the (old/absent)
     // final then promotes the tmp — mobile-safe.
@@ -526,14 +619,27 @@ async function classifySide(
   finalPath: string,
   oldSha: string,
   newSha: string,
+  expectedAbsent = false,
 ): Promise<SideState> {
   const tmpPath = stagingPathFor(finalPath, "tmp");
   const bakPath = stagingPathFor(finalPath, "bak");
 
-  let final: FinalState = "absent";
+  // expectedAbsent (delete-base): the committed end-state is "file absent".
+  //   absent  → "new" (committed — the delete is done)
+  //   present & start-bytes → "old" (delete not yet completed; roll forward removes it)
+  //   present & other       → "foreign" (external write; never clobber → fallback)
+  let final: FinalState = expectedAbsent ? "new" : "absent";
   if (await vault.adapter.exists(finalPath)) {
     const sha = await calculateGitBlobSHA(await vault.adapter.readBinary(finalPath));
-    final = sha === newSha ? "new" : sha === oldSha ? "old" : "foreign";
+    final = expectedAbsent
+      ? sha === oldSha
+        ? "old"
+        : "foreign"
+      : sha === newSha
+        ? "new"
+        : sha === oldSha
+          ? "old"
+          : "foreign";
   }
 
   let tmp: TmpState = "absent";

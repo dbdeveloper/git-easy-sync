@@ -21,6 +21,7 @@ import {
   classifyToctou,
   commit7Step,
   commitOrDiscardExit,
+  GIT_EMPTY_BLOB_SHA,
   recoverCommit,
   type DoneJson,
 } from "../../src/diff2/exit-commit";
@@ -30,6 +31,10 @@ const ID = "tracked-commit";
 const BASE = "Notes/meeting.md";
 const SIB = "Notes/meeting.conflict-from-Phone-X.md";
 const enc = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
+
+it("GIT_EMPTY_BLOB_SHA equals a live calculateGitBlobSHA of 0 bytes", async () => {
+  expect(GIT_EMPTY_BLOB_SHA).toBe(await calculateGitBlobSHA(enc("")));
+});
 
 function fixture() {
   const root = path.join(os.tmpdir(), `exit-commit-${crypto.randomBytes(4).toString("hex")}`);
@@ -80,6 +85,52 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
         expect(await fx.vault.adapter.exists(p)).toBe(false);
       }
       expect(await fx.vault.adapter.exists(autosaveDir(ID))).toBe(false);
+    });
+
+    it("bug-29: absent-base + resolve-to-EMPTY → base stays ABSENT, sibling removed", async () => {
+      // delete-vs-modify resolved to the deleted side: both sides go empty.
+      // End state: base file NEVER materialized (it was absent at start), sibling
+      // removed (step 6.5, both SHA("")) → the conflict and the file are gone.
+      await fx.vault.adapter.writeBinary(SIB, enc("remote\n"));
+      const meta = await startSession(fx.vault, ID, BASE, SIB, NOW);
+      expect(meta.baseExistedAtStart).toBe(false);
+
+      await commit7Step(fx.vault, ID, meta, { base: "", sibling: "" }, { now: NOW });
+
+      expect(await fx.vault.adapter.exists(BASE)).toBe(false);
+      expect(await fx.vault.adapter.exists(SIB)).toBe(false);
+      expect(await fx.vault.adapter.exists(autosaveDir(ID))).toBe(false);
+    });
+
+    it("genuine empty file (existed 0-byte) + resolve-to-EMPTY → writes 0 bytes", async () => {
+      // case 3: base existed as a real 0-byte file → keep it as 0 bytes (NOT
+      // deleted; §2.9 lets a 0-byte file through when snapshot.size===0).
+      await fx.vault.adapter.writeBinary(BASE, enc(""));
+      await fx.vault.adapter.writeBinary(SIB, enc("remote\n"));
+      const meta = await startSession(fx.vault, ID, BASE, SIB, NOW);
+      expect(meta.baseExistedAtStart).toBe(true);
+
+      await commit7Step(fx.vault, ID, meta, { base: "", sibling: "" }, { now: NOW });
+
+      expect(await fx.vault.adapter.exists(BASE)).toBe(true);
+      expect((await fx.vault.adapter.readBinary(BASE)).byteLength).toBe(0);
+      expect(await fx.vault.adapter.exists(SIB)).toBe(false); // step 6.5
+    });
+
+    it("had-content base emptied + resolve-to-EMPTY → benign 1-byte (deferred modal)", async () => {
+      // case 4: base had content, user emptied it. Until the row-3 delete modal
+      // lands, write "\n" (1 byte) — NOT a 0-byte file the next sync would
+      // resurrect from snapshot.size>0.
+      await fx.vault.adapter.writeBinary(BASE, enc("had content\n"));
+      await fx.vault.adapter.writeBinary(SIB, enc("remote\n"));
+      const meta = await startSession(fx.vault, ID, BASE, SIB, NOW);
+
+      await commit7Step(fx.vault, ID, meta, { base: "", sibling: "" }, { now: NOW });
+
+      // Both sides commit "\n" (shared empty rep) → equal → step 6.5 removes the
+      // sibling; the conflict is gone, base left as benign 1-byte junk.
+      expect(await fx.vault.adapter.read(BASE)).toBe("\n");
+      expect(await fx.vault.adapter.exists(SIB)).toBe(false);
     });
 
     it("identical resolved sides → step 6.5 removes the redundant sibling", async () => {
