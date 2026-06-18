@@ -50,7 +50,11 @@ import {
   type ResumeSession,
 } from "./autosave-store";
 import { reopenAction } from "./reopen-action";
-import { ResumeRecoveryModal, SaveToAltModal } from "./recovery-dialog";
+import {
+  EmptyDeleteModal,
+  ResumeRecoveryModal,
+  SaveToAltModal,
+} from "./recovery-dialog";
 import { assessHistoryV2, replayHistoryV2, scanHistoryV2 } from "./history-replay-v2";
 import { readCursor } from "./cursor-store";
 import type Logger from "../logger";
@@ -728,7 +732,14 @@ export class DiffEditView extends ItemView {
           session.meta,
           resolved,
           recordCount,
+          // case-4: confirm before deleting a had-content base the user emptied.
+          // Invoked only on the ok-commit path (after the TOCTOU check).
+          () => new EmptyDeleteModal(this.app, entry.basePath).prompt(),
         );
+        if (outcome.kind === "cancelled") {
+          // User declined the delete → stay in the editor with their (empty) edit.
+          return;
+        }
         if (outcome.kind === "toctou") {
           // §5.0.e symmetric resolution. Returns false when the user cancels (or
           // the view moved on during the modal) → stay in the editor.

@@ -27,6 +27,54 @@ export type SaveAltChoice =
   | { choice: "discard" }
   | { choice: "cancel" };
 
+// Row-3 / case-4 — the user emptied a base file that HAD content. Emptying it
+// means deletion; confirm before removing the file. "Cancel" returns to the
+// editor so they can put content back. (Keeping it as a genuine empty file is
+// deferred — it needs the sync engine's snapshot metadata, not diff2's.)
+export class EmptyDeleteModal extends Modal {
+  private confirmed = false;
+
+  constructor(
+    app: App,
+    private readonly basePath: string,
+  ) {
+    super(app);
+  }
+
+  prompt(): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.onClose = () => resolve(this.confirmed);
+      const c = this.contentEl;
+      this.titleEl.setText("Delete the file?");
+      c.empty();
+
+      c.createEl("p").setText(
+        `You emptied "${this.basePath}". Resolving a file to empty deletes it.`,
+      );
+      c.createEl("p").setText(
+        "Delete the file, or cancel and put content back to keep it.",
+      );
+
+      const row = c.createDiv({ cls: "modal-button-container" });
+      const del = row.createEl("button", {
+        text: "Delete file",
+        cls: "mod-warning",
+      });
+      del.addEventListener("click", () => {
+        this.confirmed = true;
+        this.close();
+      });
+      const cancel = row.createEl("button", { text: "Cancel", cls: "mod-cta" });
+      cancel.addEventListener("click", () => {
+        this.confirmed = false;
+        this.close();
+      });
+
+      this.open();
+    });
+  }
+}
+
 export interface ResumeInfo {
   basePath: string;
   siblingPath: string;

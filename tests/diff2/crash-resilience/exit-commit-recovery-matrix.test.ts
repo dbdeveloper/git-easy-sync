@@ -398,6 +398,104 @@ describe("recoverCommit — delete-base (absent base, resolve-to-empty)", () => 
     expect(await fx.vault.adapter.exists(SIB)).toBe(false);
     expect(await fx.vault.adapter.exists(autosaveDir("del"))).toBe(false);
   });
+
+  // ── case 4: HAD-CONTENT base emptied + confirmed delete ────────────────
+  // meta.baseExistedAtStart=TRUE, so recovery cannot infer the delete from meta;
+  // done.json carries deleteBase:true (authoritative). Recovery must converge to
+  // base-absent + sibling-absent. Base started WITH content (baseShaAtStart≠SHA"").
+  async function craftCase4(baseFinal: FinalSlot, sib: Slot) {
+    await fx.vault.adapter.writeBinary(BASE, enc(OLD_BASE)); // base HAD content
+    await fx.vault.adapter.writeBinary(SIB, enc(OLD_SIB));
+    const meta = await startSession(fx.vault, "c4", BASE, SIB, NOW);
+    expect(meta.baseExistedAtStart).toBe(true);
+    await fx.vault.adapter.write(
+      `${autosaveDir("c4")}/done.json`,
+      JSON.stringify({
+        v: 1,
+        writtenAt: NOW,
+        expectedBaseSha: EMPTY_SHA,
+        expectedSiblingSha: EMPTY_SHA,
+        deleteBase: true,
+      }),
+    );
+    await fx.vault.adapter.remove(BASE);
+    await fx.vault.adapter.remove(SIB);
+    // base may be present-old (not yet deleted) or absent (deleted).
+    if (baseFinal === "old") await fx.vault.adapter.writeBinary(BASE, enc(OLD_BASE));
+    await placeSideRaw(fx.vault, SIB, sib, OLD_SIB, "");
+  }
+
+  it("case 4: crash before base deleted (base old, sibling staged) → forward to BOTH absent", async () => {
+    await craftCase4("old", { final: "old", tmp: "tmpNew", bak: false });
+    const res = await recoverCommit(fx.vault, "c4");
+    expect(res).toEqual({ kind: "rolled-forward", siblingRemoved: true });
+    expect(await fx.vault.adapter.exists(BASE)).toBe(false);
+    expect(await fx.vault.adapter.exists(SIB)).toBe(false);
+  });
+
+  it("case 4: crash after base deleted, sibling promoted → forward to BOTH absent", async () => {
+    await craftCase4("absent", { final: "new", tmp: "tmpNew", bak: false });
+    const res = await recoverCommit(fx.vault, "c4");
+    expect(res).toEqual({ kind: "rolled-forward", siblingRemoved: true });
+    expect(await fx.vault.adapter.exists(BASE)).toBe(false);
+    expect(await fx.vault.adapter.exists(SIB)).toBe(false);
+  });
+
+  it("real commit7Step case 4 (confirmedDelete) → base + sibling gone", async () => {
+    await fx.vault.adapter.writeBinary(BASE, enc(OLD_BASE));
+    await fx.vault.adapter.writeBinary(SIB, enc(OLD_SIB));
+    const meta = await startSession(fx.vault, "c4", BASE, SIB, NOW);
+    const res = await commit7Step(
+      fx.vault,
+      "c4",
+      meta,
+      { base: "", sibling: "" },
+      { now: NOW, confirmedDelete: true },
+    );
+    expect(res.siblingRemoved).toBe(true);
+    expect(await fx.vault.adapter.exists(BASE)).toBe(false);
+    expect(await fx.vault.adapter.exists(SIB)).toBe(false);
+  });
+
+  it("END-TO-END case 4: real commit7Step crashes after base delete → recover completes", async () => {
+    // Proves commit7Step records done.deleteBase: the base is deleted, then we
+    // crash on the sibling promote. meta.baseExistedAtStart=true, so ONLY a
+    // persisted deleteBase lets recovery converge (meta-inference would give
+    // false → treat base-absent as a not-committed write → wrong).
+    await fx.vault.adapter.writeBinary(BASE, enc(OLD_BASE));
+    await fx.vault.adapter.writeBinary(SIB, enc(OLD_SIB));
+    const meta = await startSession(fx.vault, "c4", BASE, SIB, NOW);
+
+    const origGet = Object.getOwnPropertyDescriptor(
+      Object.getPrototypeOf(fx.vault),
+      "adapter",
+    )!.get!;
+    Object.defineProperty(fx.vault, "adapter", {
+      configurable: true,
+      get() {
+        const real = origGet.call(this) as {
+          rename: (s: string, d: string) => Promise<void>;
+        };
+        const rn = real.rename;
+        real.rename = async (s: string, d: string) => {
+          if (d === SIB) throw new Error("crash sibling promote");
+          return rn(s, d);
+        };
+        return real;
+      },
+    });
+    await expect(
+      commit7Step(fx.vault, "c4", meta, { base: "", sibling: "" }, { now: NOW, confirmedDelete: true }),
+    ).rejects.toThrow(/crash sibling/);
+    Object.defineProperty(fx.vault, "adapter", { configurable: true, get: origGet });
+
+    // base already deleted by the crash; recovery must NOT resurrect it.
+    expect(await fx.vault.adapter.exists(BASE)).toBe(false);
+    const res = await recoverCommit(fx.vault, "c4");
+    expect(res).toEqual({ kind: "rolled-forward", siblingRemoved: true });
+    expect(await fx.vault.adapter.exists(BASE)).toBe(false);
+    expect(await fx.vault.adapter.exists(SIB)).toBe(false);
+  });
 });
 
 // Like placeSide but with an explicit newBytes string (the delete-base commit's

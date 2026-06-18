@@ -133,6 +133,25 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
       expect(await fx.vault.adapter.exists(SIB)).toBe(false);
     });
 
+    it("case 4 with confirmedDelete → base DELETED, sibling removed", async () => {
+      // (done.deleteBase is recorded too — proven end-to-end by the crash+recover
+      // test in exit-commit-recovery-matrix; meta can't infer case-4 delete.)
+      await fx.vault.adapter.writeBinary(BASE, enc("had content\n"));
+      await fx.vault.adapter.writeBinary(SIB, enc("remote\n"));
+      const meta = await startSession(fx.vault, ID, BASE, SIB, NOW);
+
+      await commit7Step(
+        fx.vault,
+        ID,
+        meta,
+        { base: "", sibling: "" },
+        { now: NOW, confirmedDelete: true },
+      );
+
+      expect(await fx.vault.adapter.exists(BASE)).toBe(false); // deleted
+      expect(await fx.vault.adapter.exists(SIB)).toBe(false); // step 6.5
+    });
+
     it("identical resolved sides → step 6.5 removes the redundant sibling", async () => {
       const meta = await seedConflict(fx.vault, "OLD base\n", "OLD sibling\n");
       const res = await commit7Step(
@@ -334,6 +353,59 @@ describe("commitOrDiscardExit — §4.1 zero-edit invariant + §5.0 exit decisio
     }
     // The view owns the §5.0.e modal → dir is NOT torn down here.
     expect(await fx.vault.adapter.exists(autosaveDir(ID))).toBe(true);
+  });
+
+  it("case 4 empty had-content base + confirm DELETE → committed, base+sibling gone", async () => {
+    const meta = await seedConflict(fx.vault, "had content\n", "remote\n");
+    const outcome = await commitOrDiscardExit(
+      fx.vault,
+      ID,
+      meta,
+      { base: "", sibling: "" },
+      2,
+      async () => true, // user confirms delete
+    );
+    expect(outcome.kind).toBe("committed");
+    expect(await fx.vault.adapter.exists(BASE)).toBe(false);
+    expect(await fx.vault.adapter.exists(SIB)).toBe(false);
+  });
+
+  it("case 4 empty had-content base + DECLINE → cancelled, nothing touched, dir kept", async () => {
+    const meta = await seedConflict(fx.vault, "had content\n", "remote\n");
+    const outcome = await commitOrDiscardExit(
+      fx.vault,
+      ID,
+      meta,
+      { base: "", sibling: "" },
+      2,
+      async () => false, // user cancels
+    );
+    expect(outcome).toEqual({ kind: "cancelled" });
+    expect(await fx.vault.adapter.read(BASE)).toBe("had content\n");
+    expect(await fx.vault.adapter.read(SIB)).toBe("remote\n");
+    expect(await fx.vault.adapter.exists(autosaveDir(ID))).toBe(true);
+  });
+
+  it("case 1 (absent base) does NOT trigger the empty-delete modal", async () => {
+    // delete-vs-modify: base absent → silent delete, no confirmation.
+    await fx.vault.adapter.writeBinary(SIB, enc("remote\n"));
+    const meta = await startSession(fx.vault, ID, BASE, SIB, NOW);
+    let asked = false;
+    const outcome = await commitOrDiscardExit(
+      fx.vault,
+      ID,
+      meta,
+      { base: "", sibling: "" },
+      2,
+      async () => {
+        asked = true;
+        return true;
+      },
+    );
+    expect(asked).toBe(false); // never prompted
+    expect(outcome.kind).toBe("committed");
+    expect(await fx.vault.adapter.exists(BASE)).toBe(false);
+    expect(await fx.vault.adapter.exists(SIB)).toBe(false);
   });
 });
 

@@ -64,26 +64,35 @@ const donePath = (autosaveId: string): string =>
 //     also flags DELETE so the base file is never materialised)
 //   - base existed as a genuine 0-byte file    → 0 bytes (SYNC2 §2.9 lets a
 //     0-byte file through when snapshot.size===0, so it sticks)
-//   - base existed WITH content, user emptied  → "\n" (row-3 deferred modal):
-//     a benign 1-byte file, NOT a §2.9-resurrectable 0-byte one.
-function emptyRepBytes(meta: AutosaveMeta): ArrayBuffer {
+//   - base existed WITH content, user emptied it → row-3 case: DELETE iff the
+//     user confirmed via the empty-delete modal (confirmedDelete); otherwise
+//     "\n" (a benign 1-byte file, NOT a §2.9-resurrectable 0-byte one).
+function emptyRepBytes(meta: AutosaveMeta, confirmedDelete = false): ArrayBuffer {
   if (!meta.baseExistedAtStart) return utf8("");
   if (meta.baseShaAtStart === GIT_EMPTY_BLOB_SHA) return utf8("");
-  return utf8("\n"); // case 4 — deferred modal
+  return confirmedDelete ? utf8("") : utf8("\n"); // case 4 — modal-gated
 }
 
 // Empty-base commit decision. A non-empty base writes its bytes verbatim. An
-// empty base: DELETE iff it was absent at session start (delete-vs-modify
-// resolved to the deleted side) — the file stays gone, never a 0-byte stub;
-// recoverCommit infers the same intent from (expectedBaseSha===SHA("") &&
-// !baseExistedAtStart), so done.json needs no extra field. Otherwise write the
-// shared empty representation (0 bytes / "\n").
+// empty base DELETEs when:
+//   - absent at session start (delete-vs-modify resolved to the deleted side) —
+//     recoverCommit re-derives this from (expectedBaseSha===SHA("") &&
+//     !baseExistedAtStart); OR
+//   - it had content and the user CONFIRMED deletion in the empty-delete modal
+//     (case 4) — meta can't tell case-4-delete from a genuine 0-byte file, so
+//     commit7Step records deleteBase in done.json for recovery (authoritative).
+// A delete writes 0 bytes (the file is then removed); otherwise the shared empty
+// representation (0 bytes / "\n").
 export function baseCommitAction(
   resolvedBase: string,
   meta: AutosaveMeta,
+  confirmedDelete = false,
 ): { delete: boolean; bytes: ArrayBuffer } {
   if (resolvedBase !== "") return { delete: false, bytes: utf8(resolvedBase) };
-  return { delete: !meta.baseExistedAtStart, bytes: emptyRepBytes(meta) };
+  const del =
+    !meta.baseExistedAtStart ||
+    (confirmedDelete && meta.baseShaAtStart !== GIT_EMPTY_BLOB_SHA);
+  return { delete: del, bytes: emptyRepBytes(meta, confirmedDelete) };
 }
 
 // done.json — commit barrier with pre-computed expected SHAs (§5.0).
@@ -94,6 +103,12 @@ export interface DoneJson {
   writtenAt: string;
   expectedBaseSha: string;
   expectedSiblingSha: string;
+  // Committed base end-state is ABSENT (delete). Written ONLY when true. Lets
+  // recoverCommit complete a had-content-base deletion (case 4) it could not
+  // otherwise infer from meta (expectedBaseSha===SHA("") matches a genuine 0-byte
+  // file too). A delete-vs-modify (case 1) sets it too but recovery would infer
+  // that one anyway.
+  deleteBase?: boolean;
 }
 
 // ── Step 1.5 — TOCTOU detection (§5.0 Step 1.5) ──────────────────────
@@ -160,6 +175,10 @@ export interface Commit7Options {
   targetBasePath?: string;
   targetSiblingPath?: string;
   now?: string; // injectable for deterministic tests
+  // The user confirmed deletion of a had-content base they emptied (case 4 /
+  // empty-delete modal). Promotes the "\n" benign-stub default to a real delete.
+  // Ignored unless the resolved base is empty AND it had content at start.
+  confirmedDelete?: boolean;
 }
 
 export interface Commit7Result {
@@ -190,21 +209,34 @@ export async function commit7Step(
   const targetBase = opts.targetBasePath ?? meta.basePath;
   const targetSibling = opts.targetSiblingPath ?? meta.siblingPath;
 
-  const baseAction = baseCommitAction(resolved.base, meta);
+  const baseAction = baseCommitAction(resolved.base, meta, opts.confirmedDelete);
   const deleteBase = baseAction.delete;
   const baseBytes = baseAction.bytes;
   // The sibling never deletes (Step 6.5 removes it when it converges with base);
-  // an empty sibling uses the SAME empty representation as the base so two empty
-  // sides hash identically and 6.5 unifies them.
+  // an empty sibling uses the SAME empty representation as the base (= baseAction
+  // .bytes when the base is also empty) so two empty sides hash identically and
+  // 6.5 unifies them — incl. the case-4 delete, where both become 0 bytes.
   const siblingBytes =
-    resolved.sibling === "" ? emptyRepBytes(meta) : utf8(resolved.sibling);
+    resolved.sibling === ""
+      ? resolved.base === ""
+        ? baseAction.bytes
+        : emptyRepBytes(meta, opts.confirmedDelete)
+      : utf8(resolved.sibling);
   // expectedBaseSha is the empty-blob SHA for a delete — it keeps Step 6.5's
   // equality check working and lets recovery recognise the delete via meta.
   const expectedBaseSha = await calculateGitBlobSHA(baseBytes);
   const expectedSiblingSha = await calculateGitBlobSHA(siblingBytes);
 
   // Step 2 — write done.json (commit barrier) BEFORE any file write, atomic.
-  const done: DoneJson = { v: 1, writtenAt: now, expectedBaseSha, expectedSiblingSha };
+  // Record deleteBase so recovery can complete a case-4 deletion it can't infer
+  // from meta (omitted when false to keep the barrier minimal).
+  const done: DoneJson = {
+    v: 1,
+    writtenAt: now,
+    expectedBaseSha,
+    expectedSiblingSha,
+    ...(deleteBase ? { deleteBase: true } : {}),
+  };
   await atomicWriteFile(vault, donePath(autosaveId), utf8(JSON.stringify(done)));
 
   const baseTmp = stagingPathFor(targetBase, "tmp");
@@ -301,7 +333,23 @@ export type ExitOutcome =
   // recordCount > 0, vault unchanged → the 7-step pair-atomic commit ran.
   | { kind: "committed"; result: Commit7Result }
   // recordCount > 0, vault changed under the session → caller runs the §5.0.e modal.
-  | { kind: "toctou"; toctou: Extract<ToctouStatus, { kind: "mismatch" }> };
+  | { kind: "toctou"; toctou: Extract<ToctouStatus, { kind: "mismatch" }> }
+  // case-4: the user emptied a had-content base and DECLINED the delete modal →
+  // nothing committed, dir intact, caller stays in the editor.
+  | { kind: "cancelled" };
+
+// case-4 predicate: the resolved base is empty AND it had real content at session
+// start (so emptying it means deletion, not a genuine empty file). Pure.
+export function isHadContentEmptied(
+  resolved: ResolvedSides,
+  meta: AutosaveMeta,
+): boolean {
+  return (
+    resolved.base === "" &&
+    meta.baseExistedAtStart &&
+    meta.baseShaAtStart !== GIT_EMPTY_BLOB_SHA
+  );
+}
 
 // The `[← back]` exit decision, extracted from the view so the END STATE is
 // unit-testable (the view glue is not). Encodes the §4.1 zero-edit invariant:
@@ -314,12 +362,19 @@ export type ExitOutcome =
 //   recordCount  >  0 → classifyToctou; "ok" → commit7Step → "committed";
 //     "mismatch" → "toctou" (the caller resolves it via the §5.0.e modal — that
 //     path is view-coupled and stays in the view).
+//
+// confirmEmptyDelete: invoked ONLY on the ok-commit path when the resolution
+// empties a had-content base (case 4) — i.e. AFTER the TOCTOU check, so the
+// delete modal never shows for a commit that won't happen. Returns false ⇒
+// "cancelled" (stay in editor); true ⇒ commit with confirmedDelete. Absent ⇒
+// case 4 falls back to the benign "\n" stub.
 export async function commitOrDiscardExit(
   vault: Vault,
   conflictId: string,
   meta: AutosaveMeta,
   resolved: ResolvedSides,
   recordCount: number,
+  confirmEmptyDelete?: () => Promise<boolean>,
 ): Promise<ExitOutcome> {
   if (recordCount === 0) {
     const dir = autosaveDir(conflictId);
@@ -330,7 +385,15 @@ export async function commitOrDiscardExit(
   }
   const toctou = await classifyToctou(vault, meta);
   if (toctou.kind === "mismatch") return { kind: "toctou", toctou };
-  const result = await commit7Step(vault, conflictId, meta, resolved);
+
+  let confirmedDelete = false;
+  if (confirmEmptyDelete && isHadContentEmptied(resolved, meta)) {
+    confirmedDelete = await confirmEmptyDelete();
+    if (!confirmedDelete) return { kind: "cancelled" };
+  }
+  const result = await commit7Step(vault, conflictId, meta, resolved, {
+    confirmedDelete,
+  });
   return { kind: "committed", result };
 }
 
@@ -483,15 +546,15 @@ export async function recoverCommit(
     return { kind: "fallback", reason: "meta-missing" };
   }
 
-  // Infer a delete-base commit from meta (no done.json field needed): the
-  // committed base is empty AND the base was absent at session start ⇒ the
-  // resolution was a deletion (delete-vs-modify resolved to the deleted side),
-  // so the base's committed end-state is ABSENT, not a 0-byte file. A genuine
-  // empty file (baseExistedAtStart) keeps expectedBaseSha===SHA("") too but is a
-  // real 0-byte write, NOT a delete — baseExistedAtStart is the discriminator.
-  // Mirror of baseCommitAction in commit7Step.
+  // Is the committed base end-state ABSENT (a delete)? done.deleteBase is
+  // authoritative (commit7Step records it for case-4 had-content deletions meta
+  // can't otherwise distinguish from a genuine 0-byte file). Fallback for a
+  // done.json without the field (delete-vs-modify written before the field
+  // existed): infer from meta — empty committed base + absent at start. Mirror of
+  // baseCommitAction.
   const deleteBase =
-    done.expectedBaseSha === GIT_EMPTY_BLOB_SHA && !meta.baseExistedAtStart;
+    done.deleteBase ??
+    (done.expectedBaseSha === GIT_EMPTY_BLOB_SHA && !meta.baseExistedAtStart);
 
   const base = await classifySide(
     vault,
