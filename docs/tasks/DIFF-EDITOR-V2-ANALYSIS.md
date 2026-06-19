@@ -89,9 +89,9 @@ OFF (§2.2.4(10)) + group-atomic selection (§2.2.6, `diff-selection.ts`) + term
 
 | контекст × операція | детермінована реакція |
 |---|---|
-| in-line edit у **ver-block** (ми в Range) | re-diff цієї групи (2.2.13) |
+| in-line edit у **ver-block** (ми в Range) | універсальний recompute `splitModel→buildModel` (2.2.13: split/shrink/vanish) |
 | in-line edit у **normal-string**, не межа груп | plain, без структурної реакції |
-| Delete/Backspace/Ctrl+Y прибирає ОСТАННІЙ роздільник між групами | merge-check → merge → re-diff (2.2.5 п.3, 2.2.12) |
+| Delete/Backspace/Ctrl+Y прибирає роздільник між групами | **той самий** універсальний recompute → merge «випадає» сам (gate §5: splitModel конкатенує сусідні групи, buildModel re-diff-ить; 2.2.5 п.3, 2.2.12, 1210) |
 | Copy/Cut: selection в одному ver-block | plain text без term-`\n` (2.2.7 п.1) |
 | Copy/Cut: selection охоплює diff-group (group-atomic) | serialize у fenced plain-text-representation (2.2.7 п.2) |
 | Paste у **normal-string** | parse (fenced-block → group, інакше plain) → merge-check → cascade (2.2.7 п.3a/4/5; 2.2.12 cases 3&4) |
@@ -99,10 +99,10 @@ OFF (§2.2.4(10)) + group-atomic selection (§2.2.6, `diff-selection.ts`) + term
 | Resolution (кнопки/hotkeys) | region-replace scenario-2 (вже реалізовано) |
 
 **Predetermined optimal order** (живий live-filter, раз): (1) визначити контекст із `tr.changes` + структури в
-точці правки; (2) обчислити реакцію (можливо каскад merge-check→merge→re-diff→fixpoint) як ЧИСТУ функцію;
-(3) емітнути ОДИН composed-spec `{changes, setStructure, selection}`. Далі — §2: записуємо `(text, structure)`,
-undo/redo+replay застосовують. **Уся «складність» — це таблиця вище в одному фільтрі; персистентність/undo —
-вже існуючий механізм.**
+точці правки; (2) обчислити реакцію — **ОДИН універсальний recompute** `splitModel(newDoc, mapped) → buildModel`
+(gate §5 довів, що він покриває split/vanish/merge разом) як ЧИСТУ функцію; (3) емітнути ОДИН composed-spec
+`{changes, setStructure, selection}`. Далі — §2: записуємо `(text, structure)`, undo/redo+replay застосовують.
+**Уся «складність» — це таблиця вище в одному фільтрі; персистентність/undo — вже існуючий механізм.**
 
 ---
 
@@ -110,14 +110,14 @@ undo/redo+replay застосовують. **Уся «складність» —
 
 ```
                 ┌─────────────────────────────────────────────┐
-                │  GATE-СПАЙК (структурний replay + undo/redo)  │  ← блокує все
+                │  GATE-СПАЙК ✅ ПРОЙДЕНО (§5)                   │
                 └───────────────────┬─────────────────────────┘
                                     │
-                 ┌──────────────────▼───────────────────┐
-                 │  re-diff рушій (edit-location-driven) │  = ядро 2.2.13
-                 │  recompute(affected-set → diff2)      │
-                 └───┬───────────────┬──────────────┬────┘
-        auto-resolve │      full 2.2.13              │  2.2.12 merge (concat→re-diff)
+                 ┌──────────────────▼─────────────────────────┐
+                 │  УНІВЕРСАЛЬНИЙ recompute (edit-location-driven) │  = ядро
+                 │  splitModel(newDoc, mapped) → buildModel        │  (split/vanish/merge — РАЗОМ)
+                 └───┬───────────────┬──────────────┬────────────┘
+        auto-resolve │      full 2.2.13              │  2.2.12 merge (= той самий recompute)
         (ver1==ver2) │  (split/shrink)               │  + 2.2.5 п.3 trigger (cases 1&2)
                      ▼               ▼               ▼
                                                 clipboard PASTE (2.2.7) ──► merge cases 3&4
@@ -142,7 +142,30 @@ undo/redo+replay застосовують. **Уся «складність» —
 
 ---
 
-## 5. Gate-спайк (ОБОВ'ЯЗКОВО перед кодом)
+## 5. Gate-спайк — ✅ ПРОЙДЕНО (2026-06-20)
+
+**`tests/diff2/spikes/v2-restructure-replay-spike.test.ts` — 4/4 PASS, tsc-clean.** Несуча модель валідована:
+
+1. **Augment-in-filter ПРАЦЮЄ = одна undo-одиниця.** Реальна правка (1-символьний edit / delete роздільника) →
+   `transactionFilter` повертає `{changes: ширші-за-user, effects:[setStructure]}` → CM6 робить це ОДНІЄЮ
+   транзакцією (`undoDepth` +1; один `undo()` відкочує і текст, і структуру через `structureHistory`/invertedEffects;
+   `redo` відновлює). **Тобто follow-up-dispatch+coalesce fallback НЕ потрібен** — §2/§2.1 підтверджено.
+2. **Replay застосовує ЗАПИСАНЕ** `(change, structure)` → `dispatch(change + setStructure)` → doc+RangeSet
+   байт-ідентичні живому; **diff2 на replay НЕ ганяється** (механізм резолюції `EditBlock.structure?`, узагальнено).
+3. **⭐ Універсальний recompute `splitModel(newDoc, mapped) → buildModel` покриває split / vanish / merge ОДНІЄЮ
+   функцією** — merge-специфічна гілка НЕ потрібна. Мій початковий страх «splitModel злипає рядки при merge» був
+   ХИБНИЙ: у terminal-inside моделі кожен ver-block несе власний `\n`, тож при видаленні normal-роздільника
+   splitModel конкатенує сусідні групи зі збереженням меж (`"a\n"+"c\n"="a\nc\n"`), а buildModel re-diff-ить
+   конкатенацію (саме семантика 2.2.12.2 + 1210). → **merge «випадає» з re-diff (2.2.13); це НЕ окремий transform.**
+4. Покрито: SPLIT (1 група→2, count↑), VANISH/auto-resolve (1→0), MERGE (2→1, delete-роздільника), та
+   interleave split→vanish + multi-step replay.
+
+**Наслідок для §2.1 / §3 (спрощення):** структурна реакція — ОДИН універсальний recompute, а не dispatch
+merge-vs-re-diff. (Спайк re-diff-ить весь doc для простоти; продакшн скоупить до ураженого регіону — перф, §6.)
+
+---
+
+### Опис гейту (для повноти — що саме доводилось)
 
 Ціль — найскладніший interleave структурних мутацій + undo/redo + replay. Два сценарії:
 
