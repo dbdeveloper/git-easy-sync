@@ -32,7 +32,8 @@ paste/edit  ─►  merge-check (суміжні групи?) ─► merge (conca
 
 - результат 2.2.12.2 (сира конкатенація ver1s+ver2s) — ПРОМІЖНИЙ стан; фінальний вигляд = re-diffed;
 - paste завжди проганяється через merge-check (бо може зробити групи суміжними), той — через merge, той — через
-  re-diff. **Кожна ланка — детермінована реакція; на replay весь каскад re-run-иться з ОДНОГО plain-edit.**
+  re-diff. **Каскад обчислюється РІВНО ОДИН РАЗ — наживо (в `transactionFilter`); його результат (текст +
+  структура) записується, а undo/redo і replay його ЗАСТОСОВУЮТЬ, НЕ переганяючи каскад знову (див. §2).**
 
 **Наслідок:** 2.2.13 (re-diff) — спільний фінальний крок каскаду; 2.2.12 (merge) — середня ланка; paste (2.2.7) —
 вхід. → **2.2.13 = фундамент, 2.2.12 = його споживач, paste = вхід каскаду.**
@@ -43,28 +44,42 @@ library-drift уже ловиться `joinedDocSha`-gate). Тобто «re-diff
 
 ---
 
-## 2. Архітектурне рішення (з /advisor 2026-06-20)
+## 2. Архітектурне рішення: «текст + прикріплені Ranges» (з /advisor + спостереження користувача)
 
-**Recompute = реакція на ЛОКАЦІЮ правки (`tr.changes`), а НЕ глобальний чистий `normalizeStructure(doc)`.**
-Чиста функція doc→structure не відрізнить щойно-злиту групу (concat, без re-diff) від відредагованої (треба
-re-diff). Дискримінатор — де приземлилась правка:
+**Спостереження користувача (точне й спрощувальне): на рівні UNDO/REDO/replay усе зводиться до «звичайна
+текстова зміна + правильно прикріплені наші Ranges».** Хоч би яким складним був каскад, його РЕЗУЛЬТАТ — це
+(а) `ChangeSet` (текст) і (б) новий `RangeSet` (структура diff-groups, без якої groups не працюють). Тому
+**каскад обчислюється РІВНО ОДИН РАЗ — наживо**, а undo/redo і replay лише ЗАСТОСОВУЮТЬ записаний результат.
 
-- правка **всередині ver-block** → re-diff цієї групи (2.2.13: split / shrink-after / shrink-before / vanish);
-- правка **усуває роздільник** між групами (Delete єдиного `\n`, Ctrl+Y, paste, що робить групи суміжними) →
-  affected-set = суміжні групи → **concat → re-diff** (2.2.12, per 1210).
+**Каскад = чисте обчислення в `transactionFilter` (live, один раз).** Фільтр перехоплює тригерну правку, читає
+її ЛОКАЦІЮ (`tr.changes`: in-block → re-diff цієї групи; усунення роздільника/paste → merge-check суміжних),
+проганяє каскад (merge-check → concat → re-diff → fixpoint) як ЧИСТУ функцію і ПЕРЕПИСУЄ транзакцію в один
+composed-spec: `{changes, effects:[setStructure(finalRangeSet)], selection}`. Одна користувацька дія = одна
+транзакція = одна undo-одиниця. **Дискримінатор локації потрібен лише ТУТ (live), на replay — ні.** (Це той самий
+патерн filter-rewrite, що вже працює для резолюції scenario-2.)
 
-Уніфікація: «affected-set → зібрати ver1-контент + ver2-контент → `diff2()` → re-tile». Для in-block правки
-affected-set = {ця група}; для merge = {суміжні групи}. **Один re-diff рушій, різний affected-set.**
+**UNDO/REDO (наживо) = нативний CM6 + invertedEffects, БЕЗ повтору каскаду.** CM6 інвертує `ChangeSet` (текст);
+`structureHistory = invertedEffects.of(...)` версіонує `RangeSet` (структуру) — обидва стани (до/після) вже в
+history. Один Ctrl+Z відновлює і текст, і Ranges. Це **буквально** «звичайний text + наші Ranges» (вже доведено
+fuzz 60/60 для резолюції).
 
-**Replay-безпека (стратегія, спільна для 2.2.7 / 2.2.12 / 2.2.13 — вони всі це кажуть):** у `history.jsonl`
-пишемо ТІЛЬКИ plain-edit команди (ChangeSet); recompute — детермінована **реакція** на `tr.changes`, не окремий
-записаний структурний дельта-блок. Replay re-dispatch-ить ті самі зміни → та сама локація → той самий recompute
-→ структура відтворюється безкоштовно. (Це той самий принцип, що вже працює для резолюції: scenario-2 пише
-plain-text region-replace, а структура деривується фільтром на replay.)
+**Replay (recovery) = застосувати ЗАПИСАНЕ, БЕЗ повтору каскаду й diff2.** Блок `history.jsonl` несе
+`{change, structure?}` — `structure` лише коли tr мала `setStructure` (структурні оп: резолюція / merge / re-diff /
+paste); звичайний набір → без `structure` (RangeSet авто-map-иться). Replay = `dispatch(change + (structure ?
+setStructure(structure) : []))`. **Це ВЖЕ так працює для резолюції** (`history-log-v2` `EditBlock.structure?`);
+каскадні оп просто роблять те саме.
 
-**Auto-resolve (ver1==ver2 → зникнення групи) = ВИРОДЖЕНИЙ re-diff:** якщо `diff2()` ураженої групи дає 0
-diff-рядків → група дропається, лишаються normal lines без термінального `\n`. Окремої машинерії не треба — це
-найдешевший зріз 2.2.13.
+→ **Каскадна складність живе ВИКЛЮЧНО в live-filter (рахується раз). Undo/redo і replay — тупе застосування
+записаних `(text, structure)`. Це ПРИБИРАЄ ризик «replay мусить відтворити каскад/diff2 байт-точно» (diff2 на
+replay не ганяється взагалі).**
+
+> **Корекція мого попереднього чернеткового §2:** я писав «replay re-run-ить каскад / структура деривується на
+> replay» — це НЕправильно ускладнювало. Правильно (за спостереженням користувача + існуючим механізмом
+> резолюції): записуємо структуру в блок і ЗАСТОСОВУЄМО її на replay; diff2 проганяється лише наживо, раз.
+
+**Auto-resolve (ver1==ver2 → зникнення групи) = вироджений re-diff** усередині live-filter: 0 diff-рядків →
+група дропається (structure без неї), лишаються normal lines без термінального `\n`. Записується як
+`(change, structure-без-групи)`; undo/replay застосовують. Найдешевший зріз 2.2.13, окремої машинерії не треба.
 
 ---
 
@@ -91,8 +106,8 @@ diff-рядків → група дропається, лишаються normal
 
 ## 4. Послідовність (tightest-constraint-first)
 
-1. **GATE-СПАЙК** (mandated 2.2.12/2.2.13) — §5 нижче. Якщо провалиться, модель «plain-edit-log + детермінований
-   recompute» змінюється → блокує все.
+1. **GATE-СПАЙК** (mandated 2.2.12/2.2.13) — §5 нижче. Якщо провалиться, модель «live-filter рахує каскад раз →
+   записує (text, structure) → undo/redo+replay застосовують» змінюється → блокує все.
 2. **Auto-resolve (ver1==ver2 → vanish)** — заявлена кінцева мета користувача + найдешевший вироджений re-diff.
    Будує мінімальний edit-location-driven recompute scaffolding. ** Shipped first.**
 3. **Повний 2.2.13** (split / shrink-after / shrink-before) на тому ж scaffolding — 5 сценаріїв.
@@ -113,13 +128,16 @@ A. type-to-split групу → undo → redo → merge двох груп → un
 B. paste-diff-group-між-двома-групами → КАСКАД (merge-check → merge → re-diff) → undo → redo
 ```
 
-Довести (на ЖИВОМУ view І на replay-into-fresh view, у lockstep):
-- **doc + RangeSet + курсор** відтворюються байт-точно на кожному кроці replay;
-- **undo/redo** відновлюють і doc, і структуру (split назад у одну групу; merge назад у дві);
-- **undo-гранулярність:** ВЕСЬ каскад (`edit → merge → re-diff`) колапсує в ОДИН undo-крок (а не 2–3 — інакше
-  Ctrl+Z відкочує каскад поетапно). Це pass/fail гейту;
-- **каскад детермінований і термінує** (re-diff не тригерить нескінченний merge-check — після re-diff структура
-  стабільна; довести фікс-пойнт за 1 прохід).
+Довести:
+- **live-filter = ОДНА транзакція:** тригерна правка + увесь каскад (concat/re-diff/split/vanish) виходять одним
+  composed-spec з `setStructure(finalRangeSet)`;
+- **undo-гранулярність:** ВЕСЬ каскад колапсує в ОДИН undo-крок (нативний CM6 інвертує текст + invertedEffects
+  відновлює структуру) — а не 2–3. Це pass/fail гейту;
+- **undo/redo** відновлюють і doc, і структуру (split назад у одну групу; merge назад у дві) БЕЗ повтору diff2;
+- **replay застосовує ЗАПИСАНЕ:** блок `(change, structure)` → `dispatch(change + setStructure(structure))` →
+  doc + RangeSet байт-ідентичні живому (diff2 НЕ ганяється на replay);
+- **каскад (live) термінує** — re-diff після merge не тригерить нескінченний merge-check; структура
+  стабілізується за 1 прохід (фікс-пойнт). Це властивість LIVE-обчислення, не replay.
 
 Інструмент: vitest (модель-рівень) + при потребі real-Chromium harness для геометрії (як 1a/1b). Файли:
 `tests/diff2/spikes/v2-restructure-replay-spike.test.ts`.
@@ -131,15 +149,17 @@ B. paste-diff-group-між-двома-групами → КАСКАД (merge-che
 - **2.2.13 ламає інваріант «вільна правка лише map-ить RangeSet; структуру ставить тільки резолюція».** Тепер
   багато правок ре-структурують → це впливає на history-feed (що пишемо), на фільтри, на replay. Записати як
   ЗМІНУ МОДЕЛІ, не add-on.
-- **Recompute-реакція має ПРОПУСКАТИ транзакції, що вже несуть структурні ефекти** (резолюції, replay) — інакше
-  подвійна обробка. Патерн уже є: `terminalProtectionFilter`/`externalGuardFilter` пропускають `setStructure`-tr.
-  Переви́користати.
+- **Live-filter має ПРОПУСКАТИ транзакції, що вже несуть структурні ефекти** (резолюції, replay-dispatch,
+  власний composed-spec) — інакше подвійна обробка / рекурсія. Патерн уже є:
+  `terminalProtectionFilter`/`externalGuardFilter` пропускають `setStructure`-tr. Переви́користати.
 - **Undo-гранулярність** (увесь каскад = 1 undo unit) — pass/fail гейту (§5).
-- **Каскад має термінувати й бути ідемпотентним** — re-diff після merge не повинен знову тригерити merge-check у
-  нескінченність; структура стабілізується за 1 прохід (фікс-пойнт). Довести у гейті.
-- **Перф:** re-diff на кожну keystroke-у-групі + каскад на paste. Групи малі → ймовірно ОК; watch-item, не блокер
-  (можливий debounce).
+- **Каскад (LIVE) має термінувати** — re-diff після merge не повинен знову тригерити merge-check у нескінченність;
+  фікс-пойнт за 1 прохід. Це властивість live-обчислення (replay його НЕ переганяє, тож на replay ризику нема).
+- **Перф:** каскад на кожну структурну правку/paste — наживо, раз (НЕ на replay). Групи малі → ймовірно ОК;
+  watch-item, не блокер (можливий debounce).
 - **Merge cases 3&4 залежать від PASTE** — не плутати порядок (paste перед merge-3&4).
+- **(Знято) «replay мусить відтворити diff2 байт-точно»** — більше НЕ ризик: replay застосовує записану структуру,
+  diff2 на replay не ганяється.
 
 ---
 
@@ -150,11 +170,13 @@ B. paste-diff-group-між-двома-групами → КАСКАД (merge-che
   БЕЗ OS-clipboard), undo=1 крок, invertedEffects версіонує структуру, replay детермінований
   (spike `v2-resolution-paste-spike`, 3/3). **Clipboard PASTE 2.2.7 і structural recompute йдуть тим самим
   патерном.**
-- **Replay = re-dispatch plain edits** (command-log `history-log-v2`/`history-replay-v2`, вже shipped). Нові фічі
-  НЕ зберігають структуру в логу — деривують її recompute-реакцією. Узгоджено з §0.5 DIFF-EDITOR.md.
+- **`history-log-v2 EditBlock.structure?` + invertedEffects — ВЖЕ роблять «текст + Ranges».** Резолюція вже
+  записує `structure` у блок і застосовує її на replay (`dispatch(change + setStructure(structure))`), а
+  invertedEffects (`structureHistory`) дає undo/redo. **Каскадні оп (merge/re-diff/paste) — той самий механізм,
+  лише складніший `structure`-результат.** Нічого нового в персистентному шарі.
 - **Selection §2.2.6** (group-atomic legalization) вже є в `diff-selection.ts` (`legalizeSelection`/`groupsOf`/
   `selectionLegalizeFilter`) — фундамент для clipboard COPY.
-- **`diff2()`/`buildModel`** детермінований; library-drift ловить `joinedDocSha`-gate — тому re-diff на replay
-  відтворює ту саму структуру, що й наживо.
+- **`diff2()`/`buildModel`** детермінований — але потрібен лише НАЖИВО (раз, у live-filter). На replay структура
+  береться з блоку, тож replay від diff2-детермінізму НЕ залежить (зайвий клас ризиків знято).
 - **OS-clipboard для diff-group COPY/PASTE — потрібен** (на відміну від резолюції): копіюємо/вставляємо plain
   unicode-текст у fenced-форматі §2.2.7; парсер-фільтр конвертує назад у normal-region (all-or-nothing escape).
