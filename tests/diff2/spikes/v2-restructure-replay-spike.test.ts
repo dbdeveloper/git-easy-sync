@@ -145,6 +145,31 @@ const redoTo = (s: EditorState): EditorState => {
 };
 
 describe("GATE — real edit augmented in-filter is ONE undo unit + replay applies recorded structure", () => {
+  it("PLAIN in-ver edit (no restructure) → filter returns tr unchanged, NOT a whole-doc replace", () => {
+    // The common case: typing inside a ver-block that STAYS one group. sameModel
+    // must return true → no setStructure, the recorded change is the small insert
+    // (not a whole-doc replace), structure auto-maps, caret/history stay sane.
+    const BASE = "a\nb\nc\n";
+    const SIB = "x\ny\nz\n"; // 1 group, all lines differ
+    const s0 = freshState(BASE, SIB);
+
+    // insert "Q" before ver1's middle line — still all 3 lines differ → 1 group.
+    const { state: s1, entry } = applyAndCapture(s0, { changes: { from: 2, insert: "Q" } });
+
+    expect(entry.structure, "no restructure → no setStructure recorded").toBeUndefined();
+    expect(groupCount(s1)).toBe(1); // still one group (structure auto-mapped)
+    // the recorded change is the 1-char insert, NOT a whole-doc replace
+    const changeJson = entry.change as { sections: number[] };
+    expect(JSON.stringify(changeJson).length, "recorded change is small (not whole-doc)").toBeLessThan(40);
+    // terminal-inside: each ver-block carries its own terminal \n (ver1 region
+    // "a\nb\nc\n" + "\n", ver2 "x\ny\nz\n" + "\n").
+    expect(s1.doc.toString()).toBe("a\nQb\nc\n\nx\ny\nz\n\n");
+    expect(undoDepth(s1)).toBe(1);
+
+    expect(docStruct(undoTo(s1))).toEqual(docStruct(s0));
+    expect(docStruct(replay(BASE, SIB, [entry]))).toEqual(docStruct(s1));
+  });
+
   it("SPLIT: in-ver edit makes a middle line equal → 1 group becomes 2 (count UP)", () => {
     const BASE = "a\nb\nc\n";
     const SIB = "x\ny\nz\n"; // all differ → 1 group
