@@ -81,6 +81,29 @@ replay не ганяється взагалі).**
 група дропається (structure без неї), лишаються normal lines без термінального `\n`. Записується як
 `(change, structure-без-групи)`; undo/replay застосовують. Найдешевший зріз 2.2.13, окремої машинерії не треба.
 
+### 2.1 Детермінований context-dispatch (чому модель проста)
+
+**Ключ:** ми НЕ змішуємо редагування ver-block і normal-string. Цей інваріант **вже забезпечений**: multi-cursor
+OFF (§2.2.4(10)) + group-atomic selection (§2.2.6, `diff-selection.ts`) + terminal/separator guards (§2.2.4–2.2.5).
+⇒ **кожна транзакція має ОДНОЗНАЧНИЙ контекст** (де приземлилась правка) → реакція = чистий dispatch:
+
+| контекст × операція | детермінована реакція |
+|---|---|
+| in-line edit у **ver-block** (ми в Range) | re-diff цієї групи (2.2.13) |
+| in-line edit у **normal-string**, не межа груп | plain, без структурної реакції |
+| Delete/Backspace/Ctrl+Y прибирає ОСТАННІЙ роздільник між групами | merge-check → merge → re-diff (2.2.5 п.3, 2.2.12) |
+| Copy/Cut: selection в одному ver-block | plain text без term-`\n` (2.2.7 п.1) |
+| Copy/Cut: selection охоплює diff-group (group-atomic) | serialize у fenced plain-text-representation (2.2.7 п.2) |
+| Paste у **normal-string** | parse (fenced-block → group, інакше plain) → merge-check → cascade (2.2.7 п.3a/4/5; 2.2.12 cases 3&4) |
+| Paste у **ver-block** | as-is, auto term-`\n` якщо треба → re-diff групи (2.2.7 п.3b) |
+| Resolution (кнопки/hotkeys) | region-replace scenario-2 (вже реалізовано) |
+
+**Predetermined optimal order** (живий live-filter, раз): (1) визначити контекст із `tr.changes` + структури в
+точці правки; (2) обчислити реакцію (можливо каскад merge-check→merge→re-diff→fixpoint) як ЧИСТУ функцію;
+(3) емітнути ОДИН composed-spec `{changes, setStructure, selection}`. Далі — §2: записуємо `(text, structure)`,
+undo/redo+replay застосовують. **Уся «складність» — це таблиця вище в одному фільтрі; персистентність/undo —
+вже існуючий механізм.**
+
 ---
 
 ## 3. Граф залежностей
