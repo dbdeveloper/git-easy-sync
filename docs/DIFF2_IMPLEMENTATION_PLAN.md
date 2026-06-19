@@ -1484,6 +1484,13 @@ patch).
   вирішує через semver-comparison (§7 dispatch table, `isAtomicPluginFile`). Знову — record не
   створюється, у diff2 list не з'являється.
 
+> **Forward (V2 interaction roadmap, user-authored у [`docs/tasks/DIFF-EDITOR-V2.md`]):**
+> наступні треки — (1) selection (багато usecases), (2) delete/replace/cut/copy → clipboard +
+> paste from clipboard (багато usecases), (3) **динамічна зміна конфігурації diff-group**
+> (ver1/ver2 blocks) під час редагування аж до **авто-resolve коли результат робить
+> `ver1 == ver2`** (нова, in-editor форма R4 auto-resolve, поверх вже-shipped exit-time R7.11).
+> Специфікації цих проблем пише користувач у DIFF-EDITOR-V2.md; цей пункт — лише покажчик.
+
 ### R5. Видалення артефактів каскадно
 
 **Уже реалізовано в PSEUDO-MERGE-MODE.** При видаленні чи перейменуванні sibling-файлів —

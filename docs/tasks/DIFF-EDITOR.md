@@ -2529,9 +2529,14 @@ recovery **deterministic**: на reopen знаємо точно, який ста
   "v": 1,
   "writtenAt": "2026-05-29T14:45:00.000Z",
   "expectedBaseSha": "<git-blob-sha hex>",
-  "expectedSiblingSha": "<git-blob-sha hex>"
+  "expectedSiblingSha": "<git-blob-sha hex>",
+  "deleteBase": true
 }
 ```
+
+`deleteBase` (опційне, пишеться лише коли `true`) — committed end-state base =
+ABSENT (видалення). Дивись §5.0.g: потрібне для case-4 (had-content emptied),
+бо meta не відрізняє його від справжнього 0-байт.
 
 Пишеться atomic temp+rename, БЕЗПОСЕРЕДНЬО перед staging files. Її наявність
 сигналізує "commit-in-progress, roll-forward via recovery". Її відсутність →
@@ -2857,6 +2862,48 @@ background, CM6 буфер у пам'яті переживає, coalesce-flush +
 **`workspace.on('quit')` / `app.on('quit')`** — НЕ wire як alias до tab-close.
 Це б тихо стирало autosave при кожному звичайному Cmd+Q, ламаючи саме той
 сценарій (clean shutdown ≈ crash з погляду DiffPane).
+
+---
+
+### §5.0.g Empty-base resolution semantics (R3.3, 2026-06-18..19) — DONE, shipped
+
+Коли resolved base = `""`, що лягає на диск визначає `commit7Step.baseCommitAction`
+(а НЕ `resolvedFromView`, який тепер повертає **сирі** `""`). Дискримінатор —
+**стан base на старті сесії** (`AutosaveMeta.baseExistedAtStart` + `baseShaAtStart`;
+`SHA("")` сам по собі не розрізняє «відсутній» від «присутній-0-байт»):
+
+| випадок (base при відкритті) | resolved base | результат |
+|---|---|---|
+| **відсутній** (delete-vs-modify) | `""` | **DELETE** — файл лишається відсутнім, без stub |
+| **0-байтовий** (справжній порожній) | `""` | записати **0 байт** (SYNC2 §2.9 пропускає при snapshot.size===0) |
+| **з контентом**, вичищено (case-4) | `""` (обидві сторони!) | **`EmptyDeleteModal`** 3-way → Delete / Keep("\n") / Cancel |
+| будь-який | непорожній | записати байти |
+
+- **`EmptyResolveChoice` = "delete" | "keep" | "cancel".** `commitOrDiscardExit`
+  приймає `confirmEmptyDelete` callback, що викликається **лише** на ok-commit
+  шляху (після TOCTOU) коли `isHadContentEmptied` (= обидві сторони порожні +
+  base мав контент). `cancel`→`{kind:"cancelled"}` (лишитись у редакторі);
+  `delete`→`commit7Step({confirmedDelete:true})`; `keep`→звичайний commit
+  (`"\n"` fallback). **Both-empty gate** обовʼязковий: partial (base порожній,
+  sibling з контентом) НЕ показує модалку (видалення осиротило б sibling →
+  re-listed конфлікт), трактується як звичайний edit → `"\n"`.
+- **`done.json.deleteBase?: boolean`** (authoritative) — пишеться commit7Step,
+  бо meta не відрізняє підтверджений case-4-delete від справжнього 0-байт.
+  `recoverCommit` читає `done.deleteBase` (fallback на meta-inference
+  `expectedBaseSha===SHA("") && !baseExistedAtStart` для delete-vs-modify).
+  `classifySide(expectedAbsent)` мапить absent→committed; `rollForwardSide(delete)`
+  довершує видалення; `baseHasNew = deleteBase || …` (sibling гейтить пару →
+  безпечний rollback). Обидві порожні сторони комітяться SAME `emptyRepBytes` →
+  step 6.5 прибирає sibling.
+- **`Commit7Result.baseDeleted`** → `[← back]` Notice каже «Deleted <path>» (а не
+  «Saved», bug-30) + суфікс « (conflict file removed)» при step-6.5.
+- **§5.0.e + §3.2.a single-write шляхи** (`commitUnchangedSide`/`commitToAlt`/
+  reopen restore) лишають локальний `guardEmpty` (empty→`"\n"`) — вони не йдуть
+  через commit7Step.
+- **Keep-empty = `"\n"` (1 байт), НЕ справжній 0-байт** — це узгоджений компроміс.
+  Справжній 0-байт потребував би §2.9 carve-out + одноразового «intentional-empty»
+  сигналу в движку (відхилено). Звичайне вичищення нотатки до 0 поза diff-editor
+  досі ловиться §2.9 (немає сигналу наміру).
 
 ---
 
