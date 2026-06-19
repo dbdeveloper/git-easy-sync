@@ -199,11 +199,15 @@ B. paste-diff-group-між-двома-групами → КАСКАД (merge-che
   власний composed-spec) — інакше подвійна обробка / рекурсія. Патерн уже є:
   `terminalProtectionFilter`/`externalGuardFilter` пропускають `setStructure`-tr. Переви́користати.
 - **Undo-гранулярність** (увесь каскад = 1 undo unit) — ✅ доведено гейтом (§5).
-- **⭐ Caret-story для structural ops — ВІДСУТНЯ, обов'язкове рішення для кроку 2 (НЕ perf).** `resolveCaret`
-  покриває ЛИШЕ резолюцію. Recompute через whole-doc replace мапить selection/scroll **втратно** → каретка може
-  стрибати на межу заміни при КОЖНІЙ реструктуризації (split/merge/vanish). Користувач історично саме на це
-  чутливий ([[project-diff-editor-rewrite-decision]]). → визначити caret-правило для split/merge/vanish (ймовірно
-  той самий `resolveCaret`-патерн «явні дані») ПЕРЕД кодом кроку 2.
+- **⭐ Caret-story для structural ops — РІШЕННЯ УХВАЛЕНО (користувач 2026-06-20): той самий `resolveCaret`
+  explicit-before/after патерн, що й резолюція (1:1).** Recompute через whole-doc replace мапить курсор втратно →
+  тому каретка йде ЯВНИМИ ДАНИМИ: `resolveCaret.of({before,after})` на composed-spec, `cursorHistory`
+  (invertedEffects) розносить на undo/redo, `cursorRestoreListener` застосовує (before-undo/after-redo), у
+  `history.jsonl` блок несе `caret:{before,after}`, replay re-emit-ить. Механізм переноситься без змін (доведений
+  fuzz 60/60, mixed-recovery). **Plain-edit (без реструктуризації) → курсор НАТИВНИЙ CM6** (як typing), resolveCaret
+  не потрібен. **ЄДИНА нова робота кроку 2** — обчислити правильну `after`-позицію per-scenario: VANISH → у normal-
+  текст розв'язку; SPLIT → у відповідну під-групу / новий normal-line; MERGE → у точку злиття. (Користувач історично
+  чутливий саме до цього — [[project-diff-editor-rewrite-decision]].)
 - **⭐ Scope до ураженого регіону — це КОРЕКТНІСТЬ+caret, не лише perf.** Універсальний recompute гейту re-diff-ить
   ВЕСЬ doc; 2.2.13 каже re-diff *цієї групи*. З normal-line якорями між групами результати зазвичай збігаються, АЛЕ
   merge свідомо прибирає якір. **Перевірити (не припускати), що правка в одній групі не зсуває tiling далекої
