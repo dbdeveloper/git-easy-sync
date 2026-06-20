@@ -180,12 +180,15 @@ diff-library drift може зсунути межі при тих самих б�
   undo/redo) → recovered doc+структура+undoDepth==live, resolution-undo→group+`before`, burst→1 крок.
   Net-глибина = (#edit − #undo + #redo) переграних. **Усі persistence-gate'и закриті → продакшн розблоковано.**
 
-#### §0.5.5 «Карусель» — compaction (✅ reopen-тригер DONE 2026-06-20; threshold-тригер = next)
+#### §0.5.5 «Карусель» — compaction (✅ DONE 2026-06-20 — reopen + threshold тригери)
 > **СТАН 2026-06-20 (bug-31/32):** metric-фікс (лічильник рахує `newGroup` = жива undo-depth, `2472ed8`) +
 > conservative `compactHistoryV2` (pure, lockstep-доведено на реальному 428→68 лозі) + seq-in-checksum/`reseal`
 > (`e76e225`) + atomic-swap `rewriteHistoryAtomic`/`recoverHistoryRewrite` + reopen-тригер `compactSessionLog`
-> (перед Resume-модалкою; onload marker-recovery) (`b11bf3a`/`383f588`). **Threshold-тригер (mid-edit
-> `shouldCompact`) — наступний інкремент** (каркас `accrueStats`/`shouldCompact` уже є; той самий `compact()`).
+> (перед Resume-модалкою; onload marker-recovery) (`b11bf3a`/`383f588`). **Threshold-тригер DONE (`fbc2436`):**
+> пороги {100 undo / 200KB cancelled}; `cancelledBytes` був dead-wired (feed не передавав `undoneBytes`) → feed
+> тепер міряє повний span undo (deleted+inserted); writer запускає injected `compactRunner` НА своєму tail після
+> flush (mutually-exclusive з appends → race-free), reset seq+stats; `drain()` чекає на compaction (exit-commit
+> читає recordCount після). Boundary [compacted prefix]++[appends] replay-доведено через undo/redo-прохід.
 
 Append-only лог росте; periodic compaction його стискає (видаляє скасовані undo/redo-послідовності), зберігаючи
 net-стан.

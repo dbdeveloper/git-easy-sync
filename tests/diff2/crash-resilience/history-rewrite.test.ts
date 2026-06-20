@@ -174,6 +174,9 @@ describe("HistoryWriterV2 threshold-trigger fires + resets", () => {
     // 201 recorded → compacted to a handful (100 dead pairs removed).
     expect(onDisk.blocks.length).toBeLessThan(10);
     expect(onDisk.stoppedAtCorrupt).toBe(false);
+    // drain() awaited the compaction (rename+reset) fully — the [←] exit reads the
+    // file right after drainHistory(), so no half-swapped tmp/bak may remain.
+    expect(await endState(vault)).toMatchObject({ tmp: null, bak: null });
   });
 
   it("crossing 200KB cancelled (few big undos) also fires", async () => {
