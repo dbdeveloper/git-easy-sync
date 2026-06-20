@@ -50,6 +50,7 @@ import {
 import { type MarkerKind, markerSpecs, verLineDecisions } from "./diff-decorations";
 import { autoNewlineFilter, diffBackspace, diffDelete, externalGuardFilter } from "./diff-edits";
 import { groupsOf, selectionLegalizeFilter } from "./diff-selection";
+import { autoResolveFilter } from "./diff-auto-resolve";
 import { computeWordDiff } from "./word-level-diff";
 import { diffLineNumbers } from "./diff-line-numbers";
 import { type ResolveChoice, type ResolveOpts, applyResolve, diffResolveKeymap } from "./diff-resolve";
@@ -451,6 +452,7 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       externalGuardFilter, // §2.2.5(1) — changeFilter (runs before transactionFilters)
       autoNewlineFilter, // §2.2.4(2) — transactionFilter (appends normalization)
       selectionLegalizeFilter, // §2.2.4(5)/§2.2.6 — transactionFilter (legalize selection)
+      autoResolveFilter, // §2.2.13 VANISH — edit makes ver1==ver2 → collapse group to normal lines
       // §2.2.9 marker-button clicks are wired as DIRECT listeners in MarkerWidget.
       // toDOM (the §1 pattern) — the old domEventHandlers delegation didn't fire
       // for block-widget buttons (bug: buttons didn't resolve).
