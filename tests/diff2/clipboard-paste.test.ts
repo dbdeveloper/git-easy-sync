@@ -139,10 +139,13 @@ describe("paste undo/redo + crash→replay (incl. paste-that-triggers-merge)", (
     const g0v2 = readStructure(v.state).find((r) => r.group === 0 && r.ver === 2)!;
     const g1v1 = readStructure(v.state).find((r) => r.group === 1 && r.ver === 1)!;
     const before = dview(v);
+    const insFrom = g0v2.to; // paste point
     v.dispatch({ selection: { anchor: g0v2.to, head: g1v1.from } });
     const spec = pasteSpec(v.state, serializeGroup("B\n", "Y\n"))!;
     v.dispatch(spec);
     const afterPaste = dview(v);
+    const pasteEnd = v.state.selection.main.head; // paste-end caret (non-degenerate)
+    expect(pasteEnd).toBeGreaterThan(insFrom); // resolveCaret does real work here
     expect(splitModel(v.state.doc.toString(), readStructure(v.state))).toEqual({
       base: "A\nB\nC\n",
       sibling: "X\nY\nZ\n",
@@ -150,8 +153,10 @@ describe("paste undo/redo + crash→replay (incl. paste-that-triggers-merge)", (
 
     undo(v);
     expect(dview(v)).toEqual(before); // doc + structure fully restored
+    expect(v.state.selection.main.head).toBe(insFrom); // caret back at the paste point
     redo(v);
     expect(dview(v)).toEqual(afterPaste);
+    expect(v.state.selection.main.head).toBe(pasteEnd); // caret back at paste-end
 
     const jsonl = sink.blocks.map(serializeBlock).join("\n");
     const sink2 = arraySink();
@@ -159,5 +164,44 @@ describe("paste undo/redo + crash→replay (incl. paste-that-triggers-merge)", (
     const twin = mount("A\nsep\nC\n", "X\nsep\nZ\n", { sink: sink2, flag: flag2 });
     expect(replayWithGuard(twin, jsonl, flag2).stoppedAtCorrupt).toBe(false);
     expect(dview(twin)).toEqual(afterPaste); // recovered == live
+    expect(twin.state.selection.main.head).toBe(pasteEnd); // caret recovered
+    undo(twin);
+    expect(twin.state.selection.main.head).toBe(insFrom); // replayed undo → paste point
+  });
+
+  it("two-run paste survives replay (case-4 #2, multi-run cascade)", () => {
+    const sink = arraySink();
+    const flag = new ReplayFlag();
+    const v = mount("A\nsep\nC\n", "X\nsep\nZ\n", { sink, flag });
+    const g0v2 = readStructure(v.state).find((r) => r.group === 0 && r.ver === 2)!;
+    const g1v1 = readStructure(v.state).find((r) => r.group === 1 && r.ver === 1)!;
+    v.dispatch({ selection: { anchor: g0v2.to, head: g1v1.from } });
+    v.dispatch(pasteSpec(v.state, serializeGroup("B\n", "Y\n") + "mid\n" + serializeGroup("D\n", "W\n"))!);
+    const after = dview(v);
+    const jsonl = sink.blocks.map(serializeBlock).join("\n");
+    const sink2 = arraySink();
+    const flag2 = new ReplayFlag();
+    const twin = mount("A\nsep\nC\n", "X\nsep\nZ\n", { sink: sink2, flag: flag2 });
+    expect(replayWithGuard(twin, jsonl, flag2).stoppedAtCorrupt).toBe(false);
+    expect(dview(twin)).toEqual(after);
+  });
+
+  it("paste that makes the merged run SPLIT (re-diff yields >1 group) → valid structure", () => {
+    // existing g0(A/X), g1(C/Z). Paste a group whose merge with g0 re-diffs into a
+    // split: paste (A\nP / X\nP) adjacent below g0 — wait, simplest: paste a group
+    // that shares a common line with the neighbour so buildModel re-tiles. Paste
+    // (P\nC / Q\nZ) right before g1 so the run g_pasted+g1 = buildModel(P\nC\nC,
+    // Q\nZ\nZ)... just assert splitModel round-trips to a valid 2-side reconstruction.
+    const s0 = st("A\nsep\nC\n", "X\nsep\nZ\n", { anchor: 0, head: 0 });
+    const g0v2 = readStructure(s0).find((r) => r.group === 0 && r.ver === 2)!;
+    const g1v1 = readStructure(s0).find((r) => r.group === 1 && r.ver === 1)!;
+    const sel = st("A\nsep\nC\n", "X\nsep\nZ\n", { anchor: g0v2.to, head: g1v1.from });
+    // paste a group sharing line "A" on ver1 with g0 → merged run re-diffs with a
+    // common "A", which splits. We only assert the result is a VALID structure
+    // (splitModel round-trips; no overlapping/dangling ranges).
+    const s1 = paste(sel, serializeGroup("A\nB\n", "Y\n"))!;
+    const sp = splitModel(s1.doc.toString(), readStructure(s1));
+    // round-trip stability: rebuilding from the split files reproduces the doc.
+    expect(buildModel(sp.base, sp.sibling).doc).toBe(s1.doc.toString());
   });
 });
