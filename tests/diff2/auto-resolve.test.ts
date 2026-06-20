@@ -238,6 +238,79 @@ describe("VANISH via DELETE + multi-keystroke granularity", () => {
   });
 });
 
+describe("SPLIT / SHRINK (step 3 — scoped re-diff structure, caret deferred)", () => {
+  const split = (v: EditorView) => splitModel(v.state.doc.toString(), readStructure(v.state));
+
+  it("middle line becomes common → group SPLITS into two (count UP), round-trips", () => {
+    const v = live("a\nb\nc\n", "x\ny\nz\n"); // 1 group, all differ
+    expect(groupCount(v)).toBe(1);
+    const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
+    // edit ver1 middle "b" → "y" (== ver2 middle) → split.
+    v.dispatch({ changes: { from: v1.from + 2, to: v1.from + 3, insert: "y" }, userEvent: "input.type" });
+    expect(groupCount(v)).toBe(2);
+    expect(split(v)).toEqual({ base: "a\ny\nc\n", sibling: "x\ny\nz\n" });
+  });
+
+  it("FIRST line becomes common → SHRINK-front: a normal line BEFORE the group", () => {
+    const v = live("a\nb\nc\n", "x\ny\nz\n");
+    const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
+    v.dispatch({ changes: { from: v1.from, to: v1.from + 1, insert: "x" }, userEvent: "input.type" }); // "a"→"x"
+    expect(groupCount(v)).toBe(1); // shrank, not split
+    expect(split(v)).toEqual({ base: "x\nb\nc\n", sibling: "x\ny\nz\n" });
+    // the freed common line "x" sits BEFORE the surviving group (line 1 is normal).
+    const g = readStructure(v.state).find((r) => r.ver === 1)!;
+    expect(v.state.doc.lineAt(g.from).number).toBeGreaterThan(1);
+  });
+
+  it("LAST line becomes common → SHRINK-back: a normal line AFTER the group", () => {
+    const v = live("a\nb\nc\n", "x\ny\nz\n");
+    const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
+    v.dispatch({ changes: { from: v1.from + 4, to: v1.from + 5, insert: "z" }, userEvent: "input.type" }); // "c"→"z"
+    expect(groupCount(v)).toBe(1);
+    expect(split(v)).toEqual({ base: "a\nb\nz\n", sibling: "x\ny\nz\n" });
+    // the freed common line "z" sits AFTER the group (last doc line is normal).
+    const v2 = readStructure(v.state).find((r) => r.ver === 2)!;
+    expect(v2.to).toBeLessThan(v.state.doc.length);
+  });
+
+  it("in-ver edit with NO common line → no restructure (group survives, round-trips)", () => {
+    const v = live("a\nb\n", "x\ny\n");
+    const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
+    v.dispatch({ changes: { from: v1.from, to: v1.from + 1, insert: "Q" }, userEvent: "input.type" }); // "a"→"Q"
+    expect(groupCount(v)).toBe(1);
+    expect(split(v)).toEqual({ base: "Q\nb\n", sibling: "x\ny\n" });
+  });
+
+  it("SPLIT a MIDDLE group in a multi-group doc → neighbours intact at right offsets", () => {
+    const v = live("g1a\ng1b\ng1c\nC\ng2a\n", "h1a\nh1b\nh1c\nC\nh2a\n"); // 2 groups, "C" common
+    expect(groupCount(v)).toBe(2);
+    const g0v1 = readStructure(v.state).find((r) => r.group === 0 && r.ver === 1)!;
+    // edit group0 middle "g1b" → "h1b" (common) → group0 splits; group1 must survive.
+    const line2 = v.state.doc.lineAt(g0v1.from).number + 1; // "g1b" line
+    const l = v.state.doc.line(line2);
+    v.dispatch({ changes: { from: l.from, to: l.to, insert: "h1b" }, userEvent: "input.type" });
+    expect(groupCount(v)).toBe(3); // group0 → 2, group1 stays
+    expect(split(v)).toEqual({
+      base: "g1a\nh1b\ng1c\nC\ng2a\n",
+      sibling: "h1a\nh1b\nh1c\nC\nh2a\n",
+    });
+  });
+
+  it("split survives feed → replay (structure)", () => {
+    const sink = arraySink();
+    const flag = new ReplayFlag();
+    const v = live("a\nb\nc\n", "x\ny\nz\n", { sink, flag });
+    const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
+    v.dispatch({ changes: { from: v1.from + 2, to: v1.from + 3, insert: "y" }, userEvent: "input.type" });
+    const jsonl = sink.blocks.map(serializeBlock).join("\n");
+    const sink2 = arraySink();
+    const flag2 = new ReplayFlag();
+    const twin = live("a\nb\nc\n", "x\ny\nz\n", { sink: sink2, flag: flag2 });
+    expect(replayWithGuard(twin, jsonl, flag2).stoppedAtCorrupt).toBe(false);
+    expect(docStruct(twin)).toEqual(docStruct(v));
+  });
+});
+
 describe("VANISH end-to-end: real feed → replay (recovery)", () => {
   it("captured history.jsonl replays into a fresh view identically; no double-record", () => {
     const sink = arraySink();

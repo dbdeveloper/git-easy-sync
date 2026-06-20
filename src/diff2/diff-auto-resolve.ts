@@ -33,9 +33,15 @@ import {
   type TransactionSpec,
 } from "@codemirror/state";
 import { isolateHistory } from "@codemirror/commands";
-import type { VerRange } from "./diff-model";
+import { buildModel, type VerRange } from "./diff-model";
 import { resolveGroup } from "./diff-resolve";
-import { fromRangeSet, resolveCaret, setStructure, structureField } from "./diff-structure";
+import {
+  fromRangeSet,
+  resolveCaret,
+  setStructure,
+  structureField,
+  toRangeSet,
+} from "./diff-structure";
 
 // content of a ver range, terminal `\n` dropped (mirror of splitModel / resolveGroup).
 const verContent = (doc: Text, r: VerRange): string => doc.sliceString(r.from, r.to - 1);
@@ -124,7 +130,98 @@ export function vanishSpec(tr: Transaction): TransactionSpec | null {
   };
 }
 
-// The live filter. Vanish only (step 2); split/shrink add a branch here (step 3).
+// ── step 3 — SPLIT / SHRINK (scoped re-diff) ─────────────────────────────────
+//
+// An in-ver edit that does NOT converge the whole group but makes some line(s)
+// COMMON re-tiles the group: split into two (a middle line became common),
+// shrink-front (first line common → a normal line BEFORE the group), or
+// shrink-back (last line common → a normal line AFTER). The recompute is SCOPED
+// to the edited group: re-diff ONLY its (c1, c2) via buildModel and splice the
+// result over the group's span. Scoping (not whole-doc) means a distant group can
+// never be re-tiled (the §6 risk) and keeps neighbours byte-stable.
+//
+// STRUCTURE-FIRST (this commit): emit setStructure for the new tiling; the caret
+// is a placeholder (v1.from). The §6.1 split/shrink caret rule lands in a separate
+// commit (resolveCaret) once the rule is user-confirmed.
+
+// Renumber ranges into sequential group ids by document order. A group's ver1
+// always immediately precedes its ver2 (no normal text between them, groups never
+// overlap), so a ver1 starts a new id and the following ver2 inherits it.
+function renumberGroups(ranges: VerRange[]): VerRange[] {
+  let g = -1;
+  return [...ranges]
+    .sort((a, b) => a.from - b.from)
+    .map((r) => {
+      if (r.ver === 1) g += 1;
+      return { ...r, group: g };
+    });
+}
+
+// The diff-group whose span the edit landed in, with its post-edit contents.
+function editedGroup(
+  tr: Transaction,
+): { group: number; v1: VerRange; v2: VerRange; c1: string; c2: string; mapped: VerRange[] } | null {
+  if (!tr.docChanged) return null;
+  if (tr.effects.some((e) => e.is(setStructure))) return null; // own output / replay
+
+  const mapped = fromRangeSet(tr.startState.field(structureField).map(tr.changes));
+  let lo = Infinity;
+  let hi = -1;
+  tr.changes.iterChangedRanges((_fa, _ta, fromB, toB) => {
+    if (fromB < lo) lo = fromB;
+    if (toB > hi) hi = toB;
+  });
+  if (hi < 0) return null;
+
+  const byGroup = new Map<number, { v1?: VerRange; v2?: VerRange }>();
+  for (const r of mapped) {
+    const e = byGroup.get(r.group) ?? {};
+    if (r.ver === 1) e.v1 = r;
+    else e.v2 = r;
+    byGroup.set(r.group, e);
+  }
+  for (const [group, { v1, v2 }] of byGroup) {
+    if (!v1 || !v2) continue;
+    if (hi < v1.from || lo > v2.to) continue; // change didn't touch this group
+    return { group, v1, v2, c1: verContent(tr.newDoc, v1), c2: verContent(tr.newDoc, v2), mapped };
+  }
+  return null;
+}
+
+// Build the split/shrink spec, or null when the edit neither converges (vanish,
+// handled by vanishSpec) nor re-tiles (plain edit). Scoped re-diff: replace the
+// edited group's span with buildModel(c1, c2).doc and set the spliced structure.
+export function splitShrinkSpec(tr: Transaction): TransactionSpec | null {
+  const eg = editedGroup(tr);
+  if (!eg) return null;
+  if (eg.c1 === eg.c2) return null; // convergence → vanishSpec owns it
+
+  const originalSpan = tr.newDoc.sliceString(eg.v1.from, eg.v2.to);
+  const sub = buildModel(eg.c1, eg.c2);
+  // No common line ⇒ buildModel yields ONE group covering everything ⇒ sub.doc ===
+  // the original span ⇒ no structural change (a plain in-ver edit, RangeSet maps).
+  if (sub.doc === originalSpan) return null;
+
+  const off = eg.v1.from;
+  const spliced = sub.ranges.map((r) => ({ ...r, from: r.from + off, to: r.to + off }));
+  const delta = sub.doc.length - originalSpan.length;
+  const others = eg.mapped
+    .filter((r) => r.group !== eg.group)
+    .map((r) => (r.from >= eg.v2.to ? { ...r, from: r.from + delta, to: r.to + delta } : r));
+  const merged = renumberGroups([...others, ...spliced]);
+
+  return {
+    changes: tr.changes.compose(
+      ChangeSet.of({ from: eg.v1.from, to: eg.v2.to, insert: sub.doc }, tr.newDoc.length),
+    ),
+    effects: [setStructure.of(toRangeSet(merged))],
+    selection: { anchor: eg.v1.from }, // STRUCTURE-FIRST placeholder; §6.1 caret = separate commit
+    annotations: isolateHistory.of("before"),
+  };
+}
+
+// The live filter. vanish (step 2) → split/shrink (step 3) → unchanged.
 export const autoResolveFilter = EditorState.transactionFilter.of(
-  (tr: Transaction): TransactionSpec | readonly TransactionSpec[] => vanishSpec(tr) ?? tr,
+  (tr: Transaction): TransactionSpec | readonly TransactionSpec[] =>
+    vanishSpec(tr) ?? splitShrinkSpec(tr) ?? tr,
 );
