@@ -253,6 +253,7 @@
 
 /* Marker block-widgets (<<<<<, =====, >>>>>) */
 .diff2-marker {
+    position: relative; /* §2.2.6 п.7 — stacking context for the selection ::before overlay */
     padding: 2px 6px;
     font-family: var(--font-monospace);
     font-size: 0.85em;
@@ -262,9 +263,17 @@
 /* The marker rows share the SAME tint as the ver-block lines they border, so
  * <<<<< flows into ver1 and >>>>> into ver2 as one continuous band (TODO §6).
  * --text-normal, not --text-on-accent: the glyph (<<<<<) + device label must be
- * theme-readable — black on the light theme, white on the dark. */
+ * theme-readable — black on the light theme, white on the dark.
+ *
+ * OPAQUE (bug-34/33): the marker is a block widget INSIDE .cm-content; the native
+ * drawSelection layer sits BEHIND .cm-content, so a translucent marker row let the
+ * trailing-`\n` selection rect of an adjacent normal-line selection bleed through.
+ * Compositing the side tint over an opaque --background-primary base (a solid-colour
+ * gradient layer over the colour) makes the row opaque → nothing behind shows. */
 .diff2-marker-top {
-    background: var(--diff2-ours-bg);
+    background:
+        linear-gradient(var(--diff2-ours-bg) 0 100%),
+        var(--background-primary);
     color: var(--text-normal);
     border-top: 1px solid var(--background-modifier-border);
 }
@@ -273,18 +282,59 @@
  * half = theirs (green), so it reads as the seam between the two sides instead
  * of a distracting blank white strip. Theme-aware via the Obsidian vars. */
 .diff2-marker-middle {
-    background: linear-gradient(
-        to bottom,
-        var(--diff2-ours-bg) 0 50%,
-        var(--diff2-theirs-bg) 50% 100%
-    );
+    background:
+        linear-gradient(
+            to bottom,
+            var(--diff2-ours-bg) 0 50%,
+            var(--diff2-theirs-bg) 50% 100%
+        ),
+        var(--background-primary);
     color: var(--text-normal);
 }
 
 .diff2-marker-bottom {
-    background: var(--diff2-theirs-bg);
+    background:
+        linear-gradient(var(--diff2-theirs-bg) 0 100%),
+        var(--background-primary);
     color: var(--text-normal);
     border-bottom: 1px solid var(--background-modifier-border);
+}
+
+/* §2.2.6 п.7 — when an ENTIRE ver-block (content + terminal \n) is selected, its
+ * marker rows show the selection too: open(<<<<<) + the ===== top-half for ver1,
+ * the ===== bottom-half + close(>>>>>) for ver2 (group-atomic lights all four).
+ * A translucent --text-selection overlay matching the content-line selection, drawn
+ * via ::before ABOVE the opaque tint but BELOW the glyph/buttons (which are lifted to
+ * z-index:1 below). full = whole row (open/close); top/bottom = half (the split ===). */
+.diff2-marker-sel-full::before,
+.diff2-marker-sel-top::before,
+.diff2-marker-sel-bottom::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    background: var(--text-selection);
+    pointer-events: none;
+    z-index: 0;
+}
+.diff2-marker-sel-full::before {
+    top: 0;
+    bottom: 0;
+}
+.diff2-marker-sel-top::before {
+    top: 0;
+    height: 50%;
+}
+.diff2-marker-sel-bottom::before {
+    bottom: 0;
+    height: 50%;
+}
+/* lift the row's interactive content above the ::before selection overlay. */
+.diff2-marker-glyph,
+.diff2-marker-buttons,
+.diff2-marker-label {
+    position: relative;
+    z-index: 1;
 }
 
 /* TODO §6 — ≥5px between the action buttons in the marker rows. */

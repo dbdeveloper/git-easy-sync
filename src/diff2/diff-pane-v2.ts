@@ -47,7 +47,7 @@ import {
   terminalProtectionFilter,
   toRangeSet,
 } from "./diff-structure";
-import { type MarkerKind, markerSpecs, verLineDecisions } from "./diff-decorations";
+import { type MarkerKind, markerSpecs, selectionAppearance, verLineDecisions } from "./diff-decorations";
 import {
   autoNewlineFilter,
   diffBackspace,
@@ -184,6 +184,11 @@ class MarkerWidget extends WidgetType {
     readonly kind: MarkerKind,
     readonly group: number,
     readonly config: DiffViewConfig,
+    // §2.2.6 п.7 marker-row selection overlay. open/close use both=its ver; mid
+    // splits: top=ver1, bottom=ver2. MUST be in eq() or CM6 reuses stale DOM and the
+    // overlay won't repaint on a selection-only change.
+    readonly selTop = false,
+    readonly selBottom = false,
   ) {
     super();
     this.diff2MarkerKind = kind;
@@ -192,6 +197,8 @@ class MarkerWidget extends WidgetType {
     return (
       other.kind === this.kind &&
       other.group === this.group &&
+      other.selTop === this.selTop &&
+      other.selBottom === this.selBottom &&
       other.config.localLabel === this.config.localLabel &&
       other.config.remoteLabel === this.config.remoteLabel &&
       other.config.isMarkdown === this.config.isMarkdown
@@ -204,6 +211,11 @@ class MarkerWidget extends WidgetType {
   toDOM(view: EditorView): HTMLElement {
     const el = document.createElement("div");
     el.className = `diff2-marker diff2-marker-${MARKER_CLASS[this.kind]}`;
+    // §2.2.6 п.7 — translucent selection overlay (::before in styles.css) over the
+    // OPAQUE marker row; full row for open/close, half-row for the split mid.
+    if (this.selTop && this.selBottom) el.classList.add("diff2-marker-sel-full");
+    else if (this.selTop) el.classList.add("diff2-marker-sel-top");
+    else if (this.selBottom) el.classList.add("diff2-marker-sel-bottom");
 
     const glyph = document.createElement("span");
     glyph.className = "diff2-marker-glyph";
@@ -303,10 +315,18 @@ export function buildDecorations(state: EditorState): DecorationSet {
   const caret = state.selection.main.head;
   const config = state.facet(diffViewConfigFacet);
   const all = [];
+  const sel = state.selection.main;
+  const appear = selectionAppearance(ranges, Math.min(sel.anchor, sel.head), Math.max(sel.anchor, sel.head));
   for (const m of markerSpecs(state.doc, ranges)) {
+    const st = appear.get(m.group);
+    const v1sel = st?.ver1 ?? false;
+    const v2sel = st?.ver2 ?? false;
+    // open(<<<<<)=ver1 full row, close(>>>>>)=ver2 full row, mid(=====) split top/bottom.
+    const selTop = m.kind === "close" ? v2sel : v1sel;
+    const selBottom = m.kind === "open" ? v1sel : v2sel;
     all.push(
       Decoration.widget({
-        widget: new MarkerWidget(m.kind, m.group, config),
+        widget: new MarkerWidget(m.kind, m.group, config, selTop, selBottom),
         block: true,
         side: m.side,
       }).range(m.pos),

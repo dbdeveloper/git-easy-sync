@@ -73,6 +73,46 @@ export function verLineDecisions(doc: Text, ranges: VerRange[], caret: number): 
   return out;
 }
 
+// §2.2.6 п.7 — marker-row selection appearance. A ver-block's marker rows light up
+// as "selected" ONLY when the ENTIRE block — its content AND its terminal `\n` — is
+// inside the selection [lo,hi]: `lo <= V.from && hi >= V.to`. A plain content
+// selection stops at `to-1` (terminal excluded by §2.2.4(5)), so `hi >= to` is
+// FALSE → markers stay unlit (this is the bug-34/33 case: head sits at the next
+// group's `from`, nothing of THAT block is selected). The terminal is only included
+// when the selection starts from the marker rows (п.7c/d/e/f) or spans the group
+// (group-atomic `[v1.from, v2.to]` → both blocks' `to` covered → whole group lights,
+// п.7c). open(`<<<<<`) + the `=====` top-half key off ver1; the `=====` bottom-half
+// + close(`>>>>>`) key off ver2.
+export interface MarkerSelectionState {
+  group: number;
+  ver1: boolean; // ver1 block (content + terminal \n) fully within the selection
+  ver2: boolean; // ver2 block fully within the selection
+}
+
+export function selectionAppearance(
+  ranges: VerRange[],
+  lo: number,
+  hi: number,
+): Map<number, MarkerSelectionState> {
+  const by = new Map<number, { v1?: VerRange; v2?: VerRange }>();
+  for (const r of ranges) {
+    const e = by.get(r.group) ?? {};
+    if (r.ver === 1) e.v1 = r;
+    else e.v2 = r;
+    by.set(r.group, e);
+  }
+  const out = new Map<number, MarkerSelectionState>();
+  for (const [group, { v1, v2 }] of by) {
+    if (!v1 || !v2) continue;
+    out.set(group, {
+      group,
+      ver1: lo <= v1.from && hi >= v1.to,
+      ver2: lo <= v2.from && hi >= v2.to,
+    });
+  }
+  return out;
+}
+
 export type MarkerKind = "open" | "mid" | "close"; // ≪ / == / ≫
 
 export interface MarkerSpec {

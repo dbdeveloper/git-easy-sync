@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { Text } from "@codemirror/state";
 import { buildModel } from "../../src/diff2/diff-model";
-import { markerSpecs, verLineDecisions } from "../../src/diff2/diff-decorations";
+import { markerSpecs, selectionAppearance, verLineDecisions } from "../../src/diff2/diff-decorations";
 
 function model(base: string, sibling: string) {
   const m = buildModel(base, sibling);
@@ -105,5 +105,51 @@ describe("diff-decorations — markerSpecs (§2.2.2)", () => {
     const specs = markerSpecs(m.text, m.ranges);
     expect(specs.filter((s) => s.kind === "open").map((s) => s.group)).toEqual([0, 1]);
     expect(specs).toHaveLength(6);
+  });
+});
+
+describe("diff-decorations — selectionAppearance (§2.2.6 п.7 marker selection)", () => {
+  // one group: ver1 "L1\nL2\n" / ver2 "R1\n" between normal "a\n" … "b\n".
+  const m = model("a\nL1\nL2\nb\n", "a\nR1\nb\n");
+  const v1 = m.ranges.find((r) => r.ver === 1)!;
+  const v2 = m.ranges.find((r) => r.ver === 2)!;
+
+  it("FULL ver1 incl terminal selected → ver1 lit, ver2 not (bug-35 п.7a)", () => {
+    const a = selectionAppearance(m.ranges, v1.from, v1.to);
+    expect(a.get(0)).toEqual({ group: 0, ver1: true, ver2: false });
+  });
+
+  it("content-only ver1 (terminal EXCLUDED, hi=to-1) → NOT lit (the §2.2.4(5) plain case)", () => {
+    const a = selectionAppearance(m.ranges, v1.from, v1.to - 1);
+    expect(a.get(0)!.ver1).toBe(false);
+  });
+
+  it("normal lines above, head AT v1.from → ver1 NOT lit (bug-34/33 no-bleed)", () => {
+    const a = selectionAppearance(m.ranges, 0, v1.from);
+    expect(a.get(0)).toEqual({ group: 0, ver1: false, ver2: false });
+  });
+
+  it("group-atomic [v1.from, v2.to] → whole group lit (п.7c)", () => {
+    const a = selectionAppearance(m.ranges, v1.from, v2.to);
+    expect(a.get(0)).toEqual({ group: 0, ver1: true, ver2: true });
+  });
+
+  it("FULL ver2 incl terminal → ver2 lit, ver1 not (п.7b)", () => {
+    const a = selectionAppearance(m.ranges, v2.from, v2.to);
+    expect(a.get(0)).toEqual({ group: 0, ver1: false, ver2: true });
+  });
+
+  it("caret (zero-width) → nothing lit", () => {
+    const a = selectionAppearance(m.ranges, v1.from, v1.from);
+    expect(a.get(0)).toEqual({ group: 0, ver1: false, ver2: false });
+  });
+
+  it("empty ver1 (terminal-only block) lights under group-atomic", () => {
+    const me = model("a\nb\n", "a\nX\nb\n"); // ver1 empty (to-from === 1)
+    const e1 = me.ranges.find((r) => r.ver === 1)!;
+    const e2 = me.ranges.find((r) => r.ver === 2)!;
+    expect(e1.to - e1.from).toBe(1); // empty
+    const a = selectionAppearance(me.ranges, e1.from, e2.to);
+    expect(a.get(0)!.ver1).toBe(true); // lo<=from && hi>=to covers the bare terminal
   });
 });
