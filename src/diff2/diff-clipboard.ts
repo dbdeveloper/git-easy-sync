@@ -103,15 +103,29 @@ export function copyClipboardText(state: EditorState): string | null {
 }
 
 // Thin edge: intercept copy when the selection spans a group; otherwise let CM6
-// copy plain text. (cut is a SEPARATE step — it mutates = copy + selection-delete.)
-// Device-gate: a real copy ClipboardEvent reaching this handler with a working
-// clipboardData is browser-validated, not unit-testable in happy-dom.
+// copy plain text. Device-gate: a real copy ClipboardEvent reaching this handler
+// with a working clipboardData is browser-validated, not unit-testable in happy-dom.
+//
+// CUT (full feature = copy-serialize + the selection-delete) is a SEPARATE step.
+// Until then, intercept `cut` on a group-spanning selection to PREVENT the default:
+// CM6's default cut would put the RAW doc slice (with inter-ver structure) on the
+// clipboard AND its terminal-spanning delete is blocked by terminalProtectionFilter
+// — i.e. garbage clipboard + no delete. We at least serialize correctly (so the
+// clipboard is valid) and preventDefault (no broken delete); the actual removal
+// lands with the cut step. A within-block cut falls through to the default.
 export const diffClipboardCopy = EditorView.domEventHandlers({
   copy(event, view) {
     const text = copyClipboardText(view.state);
     if (text === null) return false; // default plain copy
     event.clipboardData?.setData("text/plain", text);
     event.preventDefault();
+    return true;
+  },
+  cut(event, view) {
+    const text = copyClipboardText(view.state);
+    if (text === null) return false; // within-block → default cut
+    event.clipboardData?.setData("text/plain", text);
+    event.preventDefault(); // serialize-correct; deletion deferred to the cut step
     return true;
   },
 });

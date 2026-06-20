@@ -87,6 +87,10 @@ describe("serializeGroup — byte-exact against the spec Examples", () => {
       "```github-easy-sync\n≪\n- a↵\n- b\n==\n+ x↵\n≫\n```\n",
     );
   });
+
+  it("empty VER1 (delete-vs-modify / absent-base) → ≪ then == directly", () => {
+    expect(serializeGroup("", "x\n")).toBe("```github-easy-sync\n≪\n==\n+ x↵\n≫\n```\n");
+  });
 });
 
 describe("copyClipboardText — selection modes", () => {
@@ -114,6 +118,22 @@ describe("copyClipboardText — selection modes", () => {
     // whole doc selected: group fenced + trailing normal "c\n" verbatim.
     expect(copyClipboardText(s)).toBe("```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n" + "c\n");
     expect(v2to).toBeLessThan(m.doc.length); // there IS trailing normal
+  });
+
+  it("MULTI-group select-all → leading + between + trailing normal verbatim, each group fenced", () => {
+    // 2 groups (L/R, M/N) with normals pre, mid, post — exercises the
+    // normal-gap-BEFORE-a-non-first-group branch (the multi-region path).
+    const base = "pre\nL\nmid\nM\npost\n";
+    const sib = "pre\nR\nmid\nN\npost\n";
+    const m = buildModel(base, sib);
+    const s = state(base, sib, { anchor: 0, head: m.doc.length });
+    expect(copyClipboardText(s)).toBe(
+      "pre\n" +
+        "```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n" +
+        "mid\n" +
+        "```github-easy-sync\n≪\n- M↵\n==\n+ N↵\n≫\n```\n" +
+        "post\n",
+    );
   });
 
   it("empty selection → null", () => {
