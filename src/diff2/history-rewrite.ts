@@ -24,6 +24,7 @@
 
 import type { Vault } from "obsidian";
 import { autosaveDir } from "./autosave-store";
+import { compactHistoryV2 } from "./history-replay-v2";
 
 const historyPathFor = (conflictId: string): string => `${autosaveDir(conflictId)}/history.jsonl`;
 
@@ -78,4 +79,21 @@ export async function recoverHistoryRewrite(
   }
   // No bak → never reached the point of no return → discard any incomplete tmp.
   await rm(vault, tmp);
+}
+
+// §0.5.5 REOPEN-trigger: compact conflictId's history.jsonl and atomically swap it
+// in IF compaction actually changed it. The byte-identity guard (`compacted !==
+// original`) makes a clean (no-dead) log a no-op — compact re-seqs from 1 and
+// re-sums, and a clean log already serializes identically, so no needless swap /
+// rename churn on every reopen. Callers MUST gate on no commit-in-flight (done.json
+// absent) and no live writer (true at reopen, before mount). Returns whether it
+// rewrote — for logging / assertions.
+export async function compactSessionLog(vault: Vault, conflictId: string): Promise<boolean> {
+  const path = historyPathFor(conflictId);
+  if (!(await vault.adapter.exists(path))) return false;
+  const original = await vault.adapter.read(path);
+  const compacted = compactHistoryV2(original);
+  if (compacted === original) return false; // clean log → no-op (no churn)
+  await rewriteHistoryAtomic(vault, conflictId, compacted);
+  return true;
 }
