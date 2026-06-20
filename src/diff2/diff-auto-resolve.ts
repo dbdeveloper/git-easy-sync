@@ -27,7 +27,6 @@ import {
   ChangeSet,
   EditorState,
   type ChangeDesc,
-  type EditorSelection,
   type StateEffect,
   type Text,
   type Transaction,
@@ -520,8 +519,11 @@ function projectDeletion(
 
 // Does the selection include any ver-block terminal \n? Only then does the default
 // delete fail (terminalProtectionFilter) and we must rebuild.
-function selectionSpansTerminal(sel: EditorSelection, ranges: VerRange[]): boolean {
-  const { from, to } = sel.main;
+// Does [from, to) include any ver-block terminal \n? THE single source of truth
+// for "this selection is group-spanning" — shared by selection-delete, clipboard
+// COPY, and CUT so copy and delete can never disagree (a drift would silently make
+// Ctrl+X copy-without-delete). A terminal-spanning selection is group-atomic.
+export function selectionSpansTerminal(from: number, to: number, ranges: VerRange[]): boolean {
   if (from === to) return false;
   return ranges.some((r) => from <= r.to - 1 && r.to - 1 < to);
 }
@@ -530,7 +532,8 @@ function selectionSpansTerminal(sel: EditorSelection, ranges: VerRange[]): boole
 // selection is empty / within-block (let the default delete run).
 export function selectionDeleteSpec(state: EditorState): TransactionSpec | null {
   const ranges = readStructure(state);
-  if (!selectionSpansTerminal(state.selection, ranges)) return null;
+  if (!selectionSpansTerminal(state.selection.main.from, state.selection.main.to, ranges))
+    return null;
   const { from } = state.selection.main;
   const { base, sibling } = projectDeletion(state.doc, ranges, from, state.selection.main.to);
   const rebuilt = buildModel(base, sibling);

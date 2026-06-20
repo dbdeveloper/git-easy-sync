@@ -22,7 +22,12 @@ import {
   structureField,
   toRangeSet,
 } from "./diff-structure";
-import { renumberGroups, resolveAllAdjacencies, selectionDeleteSpec } from "./diff-auto-resolve";
+import {
+  renumberGroups,
+  resolveAllAdjacencies,
+  selectionDeleteSpec,
+  selectionSpansTerminal,
+} from "./diff-auto-resolve";
 
 // §2.2.7 markers/prefixes (byte-exact, user-finalized 2026-06-20). Unicode here is
 // cosmetic for ≪/≫; uniqueness is carried by the fence tag + all-or-nothing parse.
@@ -145,24 +150,19 @@ export function clipboardHasGroup(text: string): boolean {
 
 const verContent = (doc: Text, r: VerRange): string => doc.sliceString(r.from, r.to - 1);
 
-// Does the selection include any ver-block terminal \n? (Mirror of
-// diff-auto-resolve's check — a terminal-spanning selection is group-atomic, so
-// every touched group is wholly inside it.) Within-one-ver-block selections never
-// include a terminal (§2.2.4 p5a) → plain copy.
-function spansTerminal(from: number, to: number, ranges: VerRange[]): boolean {
-  if (from === to) return false;
-  return ranges.some((r) => from <= r.to - 1 && r.to - 1 < to);
-}
-
 // The clipboard text for the current selection, or null to let the default copy
 // run (empty / within-one-ver-block selection → plain text, §2.2.7 п.1). Walks the
 // selection in document order: normal gaps verbatim, each wholly-contained group
 // as a fenced block. (EOL-less last group falls out of contentLines — no isLast
 // flag needed: the content itself is EOL-less.)
+//
+// Uses selectionSpansTerminal — THE SAME predicate selectionDeleteSpec uses — so
+// CUT's copy and delete halves can never disagree (advisor: a divergence would
+// silently make Ctrl+X copy-without-delete).
 export function copyClipboardText(state: EditorState): string | null {
   const sel = state.selection.main;
   const ranges = readStructure(state);
-  if (!spansTerminal(sel.from, sel.to, ranges)) return null;
+  if (!selectionSpansTerminal(sel.from, sel.to, ranges)) return null;
 
   const byGroup = new Map<number, { v1?: VerRange; v2?: VerRange }>();
   for (const r of ranges) {

@@ -250,4 +250,21 @@ describe("CUT — group-spanning selection: copy text + delete via selectionDele
     expect(copyClipboardText(s)).not.toBeNull();
     expect(selectionDeleteSpec(s)).not.toBeNull(); // both fire on the same group-spanning selection
   });
+
+  it("INVARIANT over EVERY selection: copy-text ⟺ delete-spec (single shared predicate)", () => {
+    // The whole CUT correctness rests on copy and delete agreeing on "group-spanning"
+    // for ANY selection — they now share selectionSpansTerminal, so this can't drift.
+    const base = "p\nL\nq\nMM\nr\n";
+    const sib = "p\nR\nq\nNN\nr\n";
+    const m = buildModel(base, sib);
+    const n = m.doc.length;
+    for (let from = 0; from <= n; from++) {
+      for (let to = from; to <= n; to++) {
+        const s = state(base, sib, { anchor: from, head: to });
+        const hasText = copyClipboardText(s) !== null;
+        const hasSpec = selectionDeleteSpec(s) !== null;
+        expect(hasText, `copy⟺delete must agree at [${from},${to}]`).toBe(hasSpec);
+      }
+    }
+  });
 });
