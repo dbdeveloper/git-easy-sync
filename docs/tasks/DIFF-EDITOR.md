@@ -180,7 +180,13 @@ diff-library drift може зсунути межі при тих самих б�
   undo/redo) → recovered doc+структура+undoDepth==live, resolution-undo→group+`before`, burst→1 крок.
   Net-глибина = (#edit − #undo + #redo) переграних. **Усі persistence-gate'и закриті → продакшн розблоковано.**
 
-#### §0.5.5 «Карусель» — compaction (DESIGN; reopen-тригер у роботі 2026-06-20)
+#### §0.5.5 «Карусель» — compaction (✅ reopen-тригер DONE 2026-06-20; threshold-тригер = next)
+> **СТАН 2026-06-20 (bug-31/32):** metric-фікс (лічильник рахує `newGroup` = жива undo-depth, `2472ed8`) +
+> conservative `compactHistoryV2` (pure, lockstep-доведено на реальному 428→68 лозі) + seq-in-checksum/`reseal`
+> (`e76e225`) + atomic-swap `rewriteHistoryAtomic`/`recoverHistoryRewrite` + reopen-тригер `compactSessionLog`
+> (перед Resume-модалкою; onload marker-recovery) (`b11bf3a`/`383f588`). **Threshold-тригер (mid-edit
+> `shouldCompact`) — наступний інкремент** (каркас `accrueStats`/`shouldCompact` уже є; той самий `compact()`).
+
 Append-only лог росте; periodic compaction його стискає (видаляє скасовані undo/redo-послідовності), зберігаючи
 net-стан.
 
