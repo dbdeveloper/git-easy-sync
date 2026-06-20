@@ -144,8 +144,11 @@ describe("paste undo/redo + crash→replay (incl. paste-that-triggers-merge)", (
     const spec = pasteSpec(v.state, serializeGroup("B\n", "Y\n"))!;
     v.dispatch(spec);
     const afterPaste = dview(v);
-    const pasteEnd = v.state.selection.main.head; // paste-end caret (non-degenerate)
-    expect(pasteEnd).toBeGreaterThan(insFrom); // resolveCaret does real work here
+    // §5 (user 2026-06-20): a paste that TRIGGERS a merge lands on the MERGE caret
+    // (join-point = first line of the last-appended group's ver1 = "C"), NOT
+    // paste-end. UNDO → the paste point (insFrom). before/after kept; paste-end not.
+    const mergeCaret = v.state.selection.main.head;
+    expect(v.state.doc.lineAt(mergeCaret).text).toBe("C"); // join-point, not paste-end
     expect(splitModel(v.state.doc.toString(), readStructure(v.state))).toEqual({
       base: "A\nB\nC\n",
       sibling: "X\nY\nZ\n",
@@ -156,7 +159,7 @@ describe("paste undo/redo + crash→replay (incl. paste-that-triggers-merge)", (
     expect(v.state.selection.main.head).toBe(insFrom); // caret back at the paste point
     redo(v);
     expect(dview(v)).toEqual(afterPaste);
-    expect(v.state.selection.main.head).toBe(pasteEnd); // caret back at paste-end
+    expect(v.state.selection.main.head).toBe(mergeCaret); // caret back at the merge join-point
 
     const jsonl = sink.blocks.map(serializeBlock).join("\n");
     const sink2 = arraySink();
@@ -164,7 +167,7 @@ describe("paste undo/redo + crash→replay (incl. paste-that-triggers-merge)", (
     const twin = mount("A\nsep\nC\n", "X\nsep\nZ\n", { sink: sink2, flag: flag2 });
     expect(replayWithGuard(twin, jsonl, flag2).stoppedAtCorrupt).toBe(false);
     expect(dview(twin)).toEqual(afterPaste); // recovered == live
-    expect(twin.state.selection.main.head).toBe(pasteEnd); // caret recovered
+    expect(twin.state.selection.main.head).toBe(mergeCaret); // caret recovered
     undo(twin);
     expect(twin.state.selection.main.head).toBe(insFrom); // replayed undo → paste point
   });

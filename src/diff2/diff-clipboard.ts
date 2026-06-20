@@ -296,7 +296,12 @@ export function pasteSpec(state: EditorState, text: string): TransactionSpec | n
     };
   }
   const csB = ChangeSet.of(cascade.changes, newDoc.length);
-  const after = csB.mapPos(caretNew, 1);
+  // §5/§6.1 (user 2026-06-20): a paste that TRIGGERS a merge lands the caret on the
+  // merge's join-point (the cascade's final caret), NOT paste-end — paste sets
+  // paste-end, then the merge replay repositions it. before=insFrom (UNDO → the
+  // paste point); only before/after are kept (intermediate paste-end is not).
+  const after = cascade.caret;
+  void caretNew;
   return {
     changes: csA.compose(csB),
     effects: [

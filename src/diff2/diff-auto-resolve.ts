@@ -380,7 +380,11 @@ const contentStr = (doc: string, r: VerRange): string => doc.slice(r.from, r.to 
 export function resolveAllAdjacencies(
   doc: string,
   ranges: VerRange[],
-): { changes: { from: number; to: number; insert: string }[]; finalRanges: VerRange[] } | null {
+): {
+  changes: { from: number; to: number; insert: string }[];
+  finalRanges: VerRange[];
+  caret: number;
+} | null {
   const runs = allAdjacentRuns(ranges);
   if (runs.length === 0) return null;
 
@@ -406,7 +410,25 @@ export function resolveAllAdjacencies(
       finalRanges.push({ ...sr, from: sr.from + base, to: sr.to + base });
     }
   }
-  return { changes, finalRanges: renumberGroups(finalRanges) };
+
+  // §6.1 merge caret for the cascade: each merge repositions the caret; the LAST
+  // run (highest position) is processed last, so its join-point wins (user
+  // 2026-06-20 — paste→merge→diff2 is one command; only the final caret is kept).
+  // Join-point = first line of the last-appended group's ver1, or its ver2 first
+  // line when that ver1 is empty (same rule as mergeSpec).
+  const lastRun = runs[runs.length - 1];
+  const lastInfo = runInfo[runInfo.length - 1];
+  const lastGroup = lastRun[lastRun.length - 1];
+  const lastVer1Empty = contentStr(doc, lastGroup.v1) === "";
+  const caretSide: 1 | 2 = lastVer1Empty ? 2 : 1;
+  const caretOffset = lastRun
+    .slice(0, -1)
+    .reduce((s, g) => s + contentStr(doc, caretSide === 1 ? g.v1 : g.v2).length, 0);
+  const caret =
+    cs.mapPos(lastInfo.spanFrom, 1) +
+    caretInSubDoc(lastInfo.sub.doc, lastInfo.sub.ranges, caretSide, caretOffset);
+
+  return { changes, finalRanges: renumberGroups(finalRanges), caret };
 }
 
 export function mergeSpec(tr: Transaction): TransactionSpec | null {
