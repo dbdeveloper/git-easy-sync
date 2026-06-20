@@ -235,13 +235,12 @@ col) після re-diff опиняється в одному з:
 довжин (advisor) → нова offset редагованого рядка в `sub.doc`; + `col`. Зберігається як `resolveCaret{before,after}`
 (патерн резолюції): правило виконується НАЖИВО раз, результат у блоці, replay ЗАСТОСОВУЄ (не переганяє diff2),
 undo/redo через invertedEffects.
-- **VANISH** (CONFIRMED): окремий випадок — увесь блок normal, рядок на тій самій line-index, col.
-- **SPLIT / SHRINK** (PENDING user-confirm — узагальнене правило вище): каретка на новій позиції редагованого
-  рядка (normal або ver-sub-block). Знімає «різні ситуації»: одне правило + walk.
-
-> **Перед кодуванням caret-коміту:** (1) підтвердження користувача цього єдиного правила; (2) pure probe
-> `(c1,c2,editedLineIndex,col)→offset` на split-middle / shrink-front / shrink-back / split-caret-stays-in-ver
-> (advisor — довести walk ДО wiring).
+- **VANISH** (✅ DONE, step 2): окремий випадок — увесь блок normal, рядок на тій самій line-index, col.
+- **SPLIT / SHRINK** (✅ DONE, step 3 `a2a5669`/`4435cc4`, user-confirmed 2026-06-20): каретка на новій позиції
+  редагованого рядка (normal або ver-sub-block). Реалізовано як `caretInSubDoc` (інверсія splitModel-walk:
+  side-offset у c1/c2 → sub.doc offset, boundary `<` → слідує за рядком). Доведено: pure probe
+  (split-middle→normal / ver2 / shrink-front+back→ver-sub-block / col>1) + view undo/redo/replay caret-walk
+  (undo→before/edit-site, redo→after/moved-line, replay recovers caret).
 
 **MERGE (тригер = delete роздільника) — окреме правило (CONFIRMED, користувач виправив ver2→ver1):** каретка →
 **ПЕРШИЙ рядок ОСТАННЬОЇ долученої diff-group у VER1-block** (точка злиття). Для 2 груп — позиція початку ver1
