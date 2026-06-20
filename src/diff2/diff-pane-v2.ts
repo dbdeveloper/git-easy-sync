@@ -50,7 +50,7 @@ import {
 import { type MarkerKind, markerSpecs, verLineDecisions } from "./diff-decorations";
 import { autoNewlineFilter, diffBackspace, diffDelete, externalGuardFilter } from "./diff-edits";
 import { groupsOf, selectionLegalizeFilter } from "./diff-selection";
-import { autoResolveFilter } from "./diff-auto-resolve";
+import { autoResolveFilter, diffSelectionDelete } from "./diff-auto-resolve";
 import { computeWordDiff } from "./word-level-diff";
 import { diffLineNumbers } from "./diff-line-numbers";
 import { type ResolveChoice, type ResolveOpts, applyResolve, diffResolveKeymap } from "./diff-resolve";
@@ -457,6 +457,16 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       // toDOM (the §1 pattern) — the old domEventHandlers delegation didn't fire
       // for block-widget buttons (bug: buttons didn't resolve).
       diffResolveKeymap(resolveOpts), // §1.9 hotkeys — resolve current group (Ctrl-Enter etc.)
+      // §2.2.4 p5c/§2.2.6/§2.2.9 — a terminal-spanning selection delete (incl.
+      // Ctrl+A) rebuilds via setStructure; Prec.highest so it beats both the
+      // boundary keymap and defaultKeymap. Returns false for empty/within-block →
+      // falls through to the boundary keymap below.
+      Prec.highest(
+        keymap.of([
+          { key: "Backspace", run: diffSelectionDelete },
+          { key: "Delete", run: diffSelectionDelete },
+        ]),
+      ),
       // §2.2.4(6,7)/§2.2.5 — boundary Backspace/Delete consumed (caret stays put);
       // Prec.high so it beats defaultKeymap's deleteChar*. Returns false off-boundary.
       Prec.high(

@@ -27,16 +27,19 @@ import {
   ChangeSet,
   EditorState,
   type ChangeDesc,
+  type EditorSelection,
   type StateEffect,
   type Text,
   type Transaction,
   type TransactionSpec,
 } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
 import { isolateHistory } from "@codemirror/commands";
 import { buildModel, type VerRange } from "./diff-model";
 import { resolveGroup } from "./diff-resolve";
 import {
   fromRangeSet,
+  readStructure,
   resolveCaret,
   setStructure,
   structureField,
@@ -355,6 +358,105 @@ export function mergeSpec(tr: Transaction): TransactionSpec | null {
     .slice(0, -1)
     .reduce((s, g) => s + verContent(tr.newDoc, g.v1).length, 0);
   return rediffSplice(tr, spanFrom, spanTo, base, sibling, others, 1, joinOffset);
+}
+
+// ── §2.2.4 p5c / p8a + §2.2.6 + §2.2.9 "neither" — selection-DELETE ───────────
+//
+// A selection that includes a ver-block's terminal \n can't be deleted by the
+// default keymap: terminalProtectionFilter blocks it wholesale → the "Ctrl+A,
+// Delete does nothing" bug. The fix is a keymap COMMAND that, for a
+// terminal-spanning selection, CONSUMES the keystroke and dispatches its own
+// rebuild routed through setStructure (so terminalProtectionFilter stays exactly
+// as strict for stray single-keystroke terminal deletes — this passes by being
+// structural). NOT the §2.2.5(3) return-false shape.
+//
+// Semantics: deleting a group-spanning selection removes the group from BOTH sides
+// (= §2.2.9 "neither"). We project the deletion onto the logical files (base,
+// sibling) — keeping ver terminals (internal, never selected, §2.2.4 p5a) — then
+// whole-doc rebuild via buildModel. Group-atomic legalization (§2.2.6) guarantees
+// any touched group is wholly inside the selection, so this is well-defined for N
+// groups in ONE transaction. Ctrl+A is the maximal case: the whole doc → ("","")
+// → empty. A within-block selection (no terminal inside) is NOT handled here
+// (returns null) — the default delete already yields a valid one-empty block.
+
+// New (base, sibling) after removing the chars in [F, T) from the doc, keeping ver
+// terminals. Inverse-of-buildModel walk: each segment's kept part = its chars
+// OUTSIDE [F, T); normal gaps go to both sides, ver content to its side, terminals
+// are skipped (internal).
+function projectDeletion(
+  doc: Text,
+  ranges: VerRange[],
+  F: number,
+  T: number,
+): { base: string; sibling: string } {
+  const sorted = [...ranges].sort((a, b) => a.from - b.from);
+  let base = "";
+  let sibling = "";
+  let pos = 0;
+  const kept = (segFrom: number, segTo: number): string => {
+    const text = doc.sliceString(segFrom, segTo);
+    if (F >= segTo || T <= segFrom) return text; // no overlap with the deletion
+    const left = Math.max(0, F - segFrom);
+    const right = Math.max(0, segTo - T);
+    return text.slice(0, left) + (right > 0 ? text.slice(text.length - right) : "");
+  };
+  for (const r of sorted) {
+    if (r.from > pos) {
+      const g = kept(pos, r.from); // normal gap → both sides
+      base += g;
+      sibling += g;
+    }
+    const c = kept(r.from, r.to - 1); // ver content (terminal r.to-1 excluded)
+    if (r.ver === 1) base += c;
+    else sibling += c;
+    pos = r.to;
+  }
+  if (pos < doc.length) {
+    const g = kept(pos, doc.length);
+    base += g;
+    sibling += g;
+  }
+  return { base, sibling };
+}
+
+// Does the selection include any ver-block terminal \n? Only then does the default
+// delete fail (terminalProtectionFilter) and we must rebuild.
+function selectionSpansTerminal(sel: EditorSelection, ranges: VerRange[]): boolean {
+  const { from, to } = sel.main;
+  if (from === to) return false;
+  return ranges.some((r) => from <= r.to - 1 && r.to - 1 < to);
+}
+
+// The rebuild spec for a terminal-spanning selection delete, or null if the
+// selection is empty / within-block (let the default delete run).
+export function selectionDeleteSpec(state: EditorState): TransactionSpec | null {
+  const ranges = readStructure(state);
+  if (!selectionSpansTerminal(state.selection, ranges)) return null;
+  const { from } = state.selection.main;
+  const { base, sibling } = projectDeletion(state.doc, ranges, from, state.selection.main.to);
+  const rebuilt = buildModel(base, sibling);
+  // caret → the deletion point. Everything before `from` is unchanged by the
+  // delete (selection is [from,to)); clamp to the rebuilt length (Ctrl+A → 0).
+  const after = Math.min(from, rebuilt.doc.length);
+  return {
+    changes: { from: 0, to: state.doc.length, insert: rebuilt.doc },
+    effects: [
+      setStructure.of(toRangeSet(rebuilt.ranges)),
+      resolveCaret.of({ before: from, after }),
+    ],
+    selection: { anchor: after },
+    annotations: isolateHistory.of("before"),
+  };
+}
+
+// Keymap command (Backspace/Delete). Consumes (true) + dispatches the rebuild for
+// a terminal-spanning selection; returns false otherwise so the default
+// delete/diffBackspace/diffDelete chain runs (empty or within-block selection).
+export function diffSelectionDelete(view: EditorView): boolean {
+  const spec = selectionDeleteSpec(view.state);
+  if (!spec) return false;
+  view.dispatch(spec);
+  return true;
 }
 
 // The live filter. vanish (step 2) → split/shrink (step 3) → merge (step 4) →

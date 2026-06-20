@@ -452,23 +452,27 @@ describe("MERGE (step 4 — §2.2.12 cases 1&2 + §2.2.5(3), REAL keypress)", ()
     expect(v.state.selection.main.head).toBe(s); // bug-17: blocked change must NOT slide the caret
   });
 
-  it("ONE delete can't create TWO runs → mergeSpec's single-run is sufficient", () => {
-    // 3 groups, two empty separators. A selection spanning BOTH separators
-    // necessarily contains the middle group, whose terminal \n is protected
-    // (terminalProtectionFilter) → the delete is BLOCKED wholesale: no change, so
-    // no two separate adjacencies can form in one transaction. (Single-cursor +
-    // contiguous deletion already means at most one adjacency; this confirms the
-    // group-spanning case can't sneak a second. Deleting a group-spanning
-    // selection AS resolve-to-neither is a SEPARATE feature, not step 4.)
+  it("ONE delete can't create TWO un-merged runs (group-spanning selection rebuilds, §2.2.9)", () => {
+    // 3 groups, two empty separators. A selection spanning BOTH separators contains
+    // the middle group → it is a terminal-spanning selection → diffSelectionDelete
+    // REBUILDS in one transaction (group-atomic §2.2.9 "neither"): the middle group
+    // + both separators are removed and the whole span re-diffed → group0/group2's
+    // remaining content re-tiled. No dangling two-run state can persist (it's a
+    // single buildModel over the projected files, not a reactive per-group merge).
     const v = live("a\n\nc\n\ne\n", "x\n\nz\n\nw\n"); // groups (a/x),(c/z),(e/w)
     expect(groupCount(v)).toBe(3);
-    const before = v.state.doc.toString();
     const g0v2 = readStructure(v.state).find((r) => r.group === 0 && r.ver === 2)!;
     const g2v1 = readStructure(v.state).find((r) => r.group === 2 && r.ver === 1)!;
     v.dispatch({ selection: { anchor: g0v2.to, head: g2v1.from } }); // spans the middle group
     press(v, "Delete");
-    expect(v.state.doc.toString()).toBe(before); // blocked → no two-run state
-    expect(groupCount(v)).toBe(3);
+    // middle group (c/z) + separators deleted from both sides; a/x and e/w remain,
+    // now separated only by what's left. splitModel must be a valid 2-group tiling.
+    const sp = splitModel(v.state.doc.toString(), readStructure(v.state));
+    expect(sp.base).toBe("a\ne\n");
+    expect(sp.sibling).toBe("x\nw\n");
+    // exactly one group survived as a single conflict (a/x vs e/w → 1 group), and no
+    // two touching groups (a valid structure).
+    expect(groupCount(v)).toBe(1);
   });
 
   it("case 2 — SELECT the normal line + Delete merges (multi-char delete passes the keymap)", () => {
