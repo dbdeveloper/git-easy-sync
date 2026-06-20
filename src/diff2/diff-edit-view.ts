@@ -55,7 +55,8 @@ import {
   ResumeRecoveryModal,
   SaveToAltModal,
 } from "./recovery-dialog";
-import { assessHistoryV2, replayHistoryV2, scanHistoryV2 } from "./history-replay-v2";
+import { assessHistoryV2, compactHistoryV2, replayHistoryV2, scanHistoryV2 } from "./history-replay-v2";
+import { rewriteHistoryAtomic } from "./history-rewrite";
 import { readCursor } from "./cursor-store";
 import type Logger from "../logger";
 import { atomicWriteFile } from "../sync2/atomic-write";
@@ -432,6 +433,22 @@ export class DiffEditView extends ItemView {
         );
         return;
       }
+      // §0.5.5 carousel REOPEN-trigger: compact history.jsonl BEFORE classifying /
+      // showing the Resume modal, so the modal's "edits saved" + the replay use the
+      // compacted log. Safe here — the done.json guard above already excluded a
+      // commit-in-flight (the one window where compaction must not run), and there
+      // is no live undo stack yet. Conservative: nothing reachable is lost.
+      {
+        const histPath = `${dir}/history.jsonl`;
+        if (await adapter.exists(histPath)) {
+          const original = await adapter.read(histPath);
+          const compacted = compactHistoryV2(original);
+          if (compacted !== original) {
+            await rewriteHistoryAtomic(this.deps.vault, conflictId, compacted);
+          }
+        }
+      }
+
       // Classify the reopen → action (pure dispatch, W4c Step A).
       const action = reopenAction(
         await classifyReopen(

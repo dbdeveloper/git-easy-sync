@@ -23,6 +23,7 @@
 import type { Vault } from "obsidian";
 import { sweepAll } from "./autosave-cleanup";
 import { recoverCommit, type RecoverResult } from "./exit-commit";
+import { recoverHistoryRewrite } from "./history-rewrite";
 
 export interface OnloadRecoveryResult {
   // Total `.diff2-autosave/*` dirs seen this sweep.
@@ -41,6 +42,10 @@ export async function recoverAutosaveDirs(
   const sweepResults = await sweepAll(vault);
   const results: Array<{ conflictId: string; recover: RecoverResult }> = [];
   for (const r of sweepResults) {
+    // §0.5.5 — finish/roll-back any interrupted history compaction-swap first, so a
+    // crash mid-rewrite leaves a consistent history.jsonl before anything reads it.
+    // Independent of the done.json/commit recovery below (different files).
+    await recoverHistoryRewrite(vault, r.conflictId);
     if (r.decision.action === "defer-to-commit") {
       const recover = await recoverCommit(vault, r.conflictId);
       results.push({ conflictId: r.conflictId, recover });
