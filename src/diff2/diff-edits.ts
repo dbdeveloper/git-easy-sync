@@ -132,6 +132,21 @@ function separatorsOf(doc: Text, ranges: VerRange[]): Set<number> {
   return out;
 }
 
+// §2.2.5(3) — is `sepPos` the LONE empty normal line "\n" sitting between two
+// diff-groups (a group ends exactly at sepPos, another starts at sepPos+1)?
+// Deleting it makes the groups adjacent → autoResolveFilter merges them. This is
+// the carve-out the boundary Delete/Backspace must NOT consume.
+export function isLoneEmptySeparator(doc: Text, ranges: VerRange[], sepPos: number): boolean {
+  if (doc.sliceString(sepPos, sepPos + 1) !== "\n") return false;
+  let endsBefore = false;
+  let startsAfter = false;
+  for (const r of ranges) {
+    if (r.ver === 2 && r.to === sepPos) endsBefore = true; // a group ends right before the \n
+    if (r.ver === 1 && r.from === sepPos + 1) startsAfter = true; // another starts right after
+  }
+  return endsBefore && startsAfter;
+}
+
 // Backspace deletes [pos-1, pos). No-op when pos is a group/ver-block start
 // (§2.2.4.6 — pos-1 is then a separator or the previous block's terminal) OR
 // pos-1 is a terminal `\n` (§2.2.5.2 — Backspace just after a ver-block).
@@ -155,6 +170,10 @@ export function diffBackspace(view: EditorView): boolean {
     deleteCharForward(view); // "|\n\n" → "|\n" (empty ver-block)
     return true;
   }
+  // §2.2.5(3): Backspace at a group start whose preceding char is a LONE empty
+  // separator between two groups → DELETE it (don't consume) so the groups become
+  // adjacent and autoResolveFilter merges them.
+  if (fromsOf(ranges).has(pos) && isLoneEmptySeparator(view.state.doc, ranges, pos - 1)) return false;
   return fromsOf(ranges).has(pos) || terminalsOf(ranges).has(pos - 1);
 }
 
@@ -165,5 +184,9 @@ export function diffDelete(view: EditorView): boolean {
   if (!sel.empty) return false;
   const ranges = readStructure(view.state);
   const pos = sel.head;
+  // §2.2.5(3): Delete ON a LONE empty separator between two groups → DELETE it
+  // (don't consume) so the groups merge.
+  if (separatorsOf(view.state.doc, ranges).has(pos) && isLoneEmptySeparator(view.state.doc, ranges, pos))
+    return false;
   return terminalsOf(ranges).has(pos) || separatorsOf(view.state.doc, ranges).has(pos);
 }

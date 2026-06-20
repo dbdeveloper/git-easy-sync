@@ -236,52 +236,130 @@ function editedGroup(
   return null;
 }
 
-// Build the split/shrink spec, or null when the edit neither converges (vanish,
-// handled by vanishSpec) nor re-tiles (plain edit). Scoped re-diff: replace the
-// edited group's span with buildModel(c1, c2).doc and set the spliced structure.
-export function splitShrinkSpec(tr: Transaction): TransactionSpec | null {
-  const eg = editedGroup(tr);
-  if (!eg) return null;
-  if (eg.c1 === eg.c2) return null; // convergence → vanishSpec owns it
+// Shared splice: re-diff (base, sibling) and splice the result over [spanFrom,
+// spanTo), set the new structure (others shifted by delta + sub.ranges offset,
+// renumbered), and place the caret via caretInSubDoc(side, sideOffset). Used by
+// BOTH split/shrink (one group's span) and merge (an adjacent run's span). Returns
+// null when re-diff is a no-op (sub.doc === the original span). `others` = mapped
+// ranges OUTSIDE the span (newDoc coords).
+function rediffSplice(
+  tr: Transaction,
+  spanFrom: number,
+  spanTo: number,
+  base: string,
+  sibling: string,
+  others: VerRange[],
+  caretSide: 1 | 2,
+  caretSideOffset: number,
+): TransactionSpec | null {
+  const originalSpan = tr.newDoc.sliceString(spanFrom, spanTo);
+  const sub = buildModel(base, sibling);
+  if (sub.doc === originalSpan) return null; // no structural change
 
-  const originalSpan = tr.newDoc.sliceString(eg.v1.from, eg.v2.to);
-  const sub = buildModel(eg.c1, eg.c2);
-  // No common line ⇒ buildModel yields ONE group covering everything ⇒ sub.doc ===
-  // the original span ⇒ no structural change (a plain in-ver edit, RangeSet maps).
-  if (sub.doc === originalSpan) return null;
-
-  const off = eg.v1.from;
-  const spliced = sub.ranges.map((r) => ({ ...r, from: r.from + off, to: r.to + off }));
+  const spliced = sub.ranges.map((r) => ({ ...r, from: r.from + spanFrom, to: r.to + spanFrom }));
   const delta = sub.doc.length - originalSpan.length;
-  const others = eg.mapped
-    .filter((r) => r.group !== eg.group)
-    .map((r) => (r.from >= eg.v2.to ? { ...r, from: r.from + delta, to: r.to + delta } : r));
-  const merged = renumberGroups([...others, ...spliced]);
-
-  // §6.1 caret: follow the EDITED line. P (post-edit caret) is in vX of the group;
-  // map its side-offset (P − vX.from) into sub.doc, then + the splice offset
-  // (eg.v1.from). The edited line may land normal OR in a ver-sub-block — the walk
-  // handles both. Stored as resolveCaret (replay applies; undo/redo via
-  // invertedEffects); before = pre-edit caret (undo lands at the edit site).
-  const p = tr.newSelection.main.head;
-  const side: 1 | 2 = p >= eg.v1.from && p < eg.v1.to ? 1 : 2;
-  const vX = side === 1 ? eg.v1 : eg.v2;
-  const sideOffset = Math.max(0, Math.min(p - vX.from, vX.to - 1 - vX.from));
-  const after = eg.v1.from + caretInSubDoc(sub.doc, sub.ranges, side, sideOffset);
-  const before = tr.startState.selection.main.head;
+  const shifted = others.map((r) =>
+    r.from >= spanTo ? { ...r, from: r.from + delta, to: r.to + delta } : r,
+  );
+  const merged = renumberGroups([...shifted, ...spliced]);
+  const after = spanFrom + caretInSubDoc(sub.doc, sub.ranges, caretSide, caretSideOffset);
 
   return {
     changes: tr.changes.compose(
-      ChangeSet.of({ from: eg.v1.from, to: eg.v2.to, insert: sub.doc }, tr.newDoc.length),
+      ChangeSet.of({ from: spanFrom, to: spanTo, insert: sub.doc }, tr.newDoc.length),
     ),
-    effects: [setStructure.of(toRangeSet(merged)), resolveCaret.of({ before, after })],
+    effects: [
+      setStructure.of(toRangeSet(merged)),
+      resolveCaret.of({ before: tr.startState.selection.main.head, after }),
+    ],
     selection: { anchor: after },
     annotations: isolateHistory.of("before"),
   };
 }
 
-// The live filter. vanish (step 2) → split/shrink (step 3) → unchanged.
+// Build the split/shrink spec, or null when the edit neither converges (vanish,
+// handled by vanishSpec) nor re-tiles (plain edit). Scoped re-diff over the edited
+// group's span; caret follows the edited line (§6.1).
+export function splitShrinkSpec(tr: Transaction): TransactionSpec | null {
+  const eg = editedGroup(tr);
+  if (!eg) return null;
+  if (eg.c1 === eg.c2) return null; // convergence → vanishSpec owns it
+
+  // §6.1 caret: follow the EDITED line. P (post-edit caret) is in vX; map its
+  // side-offset into sub.doc (caretInSubDoc handles normal OR ver-sub-block).
+  const p = tr.newSelection.main.head;
+  const side: 1 | 2 = p >= eg.v1.from && p < eg.v1.to ? 1 : 2;
+  const vX = side === 1 ? eg.v1 : eg.v2;
+  const sideOffset = Math.max(0, Math.min(p - vX.from, vX.to - 1 - vX.from));
+  const others = eg.mapped.filter((r) => r.group !== eg.group);
+  return rediffSplice(tr, eg.v1.from, eg.v2.to, eg.c1, eg.c2, others, side, sideOffset);
+}
+
+// ── step 4 — MERGE (§2.2.12 cases 1&2 + §2.2.5(3)) ───────────────────────────
+//
+// When an edit removes the normal gap between groups (single Delete/Backspace on a
+// lone empty separator — keymap §2.2.5(3); or select-the-normal-lines + Delete),
+// the groups become ADJACENT (prev.v2.to === next.v1.from). Per §2.2.12.2 + the
+// 1210 clarification, concat the run's ver1s + ver2s and ALWAYS re-diff. This is
+// the SAME scoped re-diff (rediffSplice) over the run's combined span. Caret =
+// the join point: the first line of the LAST-appended group's ver1 in the
+// concatenated base (§6.1 merge rule), mapped through the re-diff.
+
+interface GroupEntry {
+  group: number;
+  v1: VerRange;
+  v2: VerRange;
+}
+
+// The first maximal run (≥2) of consecutive groups that are now adjacent (no
+// normal char between prev.v2.to and next.v1.from), or null.
+function adjacentRun(mapped: VerRange[]): GroupEntry[] | null {
+  const byGroup = new Map<number, { v1?: VerRange; v2?: VerRange }>();
+  for (const r of mapped) {
+    const e = byGroup.get(r.group) ?? {};
+    if (r.ver === 1) e.v1 = r;
+    else e.v2 = r;
+    byGroup.set(r.group, e);
+  }
+  const entries = [...byGroup.values()]
+    .filter((e): e is GroupEntry => !!e.v1 && !!e.v2)
+    .map((e) => ({ group: e.v1.group, v1: e.v1, v2: e.v2 }))
+    .sort((a, b) => a.v1.from - b.v1.from);
+  for (let i = 0; i + 1 < entries.length; i++) {
+    if (entries[i].v2.to !== entries[i + 1].v1.from) continue;
+    const run = [entries[i]];
+    let j = i + 1;
+    while (j < entries.length && entries[j - 1].v2.to === entries[j].v1.from) run.push(entries[j++]);
+    return run;
+  }
+  return null;
+}
+
+export function mergeSpec(tr: Transaction): TransactionSpec | null {
+  if (!tr.docChanged) return null;
+  if (tr.effects.some((e) => e.is(setStructure))) return null; // own output / replay
+
+  const mapped = fromRangeSet(tr.startState.field(structureField).map(tr.changes));
+  const run = adjacentRun(mapped);
+  if (!run) return null;
+
+  const spanFrom = run[0].v1.from;
+  const spanTo = run[run.length - 1].v2.to;
+  // concat the run's contents (adjacent ⇒ this == splitModel of the span).
+  const base = run.map((g) => verContent(tr.newDoc, g.v1)).join("");
+  const sibling = run.map((g) => verContent(tr.newDoc, g.v2)).join("");
+  const runIds = new Set(run.map((g) => g.group));
+  const others = mapped.filter((r) => !runIds.has(r.group));
+  // §6.1 merge caret: join point = start of the LAST appended group's ver1.
+  const joinOffset = run
+    .slice(0, -1)
+    .reduce((s, g) => s + verContent(tr.newDoc, g.v1).length, 0);
+  return rediffSplice(tr, spanFrom, spanTo, base, sibling, others, 1, joinOffset);
+}
+
+// The live filter. vanish (step 2) → split/shrink (step 3) → merge (step 4) →
+// unchanged. A gap-delete makes editedGroup no-op splitShrink, so it reaches merge.
 export const autoResolveFilter = EditorState.transactionFilter.of(
   (tr: Transaction): TransactionSpec | readonly TransactionSpec[] =>
-    vanishSpec(tr) ?? splitShrinkSpec(tr) ?? tr,
+    vanishSpec(tr) ?? splitShrinkSpec(tr) ?? mergeSpec(tr) ?? tr,
 );

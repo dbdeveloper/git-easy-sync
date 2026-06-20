@@ -40,6 +40,13 @@ function arraySink(): HistorySink & { blocks: HistoryBlockV2[] } {
   };
 }
 
+// REAL keydown so the §2.2.5(3) boundary keymap (diffDelete/diffBackspace) runs —
+// a direct v.dispatch({changes}) would bypass the keymap+changeFilter the trigger
+// must survive (advisor).
+const press = (v: EditorView, key: string) =>
+  v.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+const at = (v: EditorView, pos: number) => v.dispatch({ selection: { anchor: pos } });
+
 const parents: HTMLElement[] = [];
 function live(base: string, sibling: string, hooks?: Parameters<typeof mountDiffPaneV2>[3]) {
   const p = document.createElement("div");
@@ -408,6 +415,87 @@ describe("SPLIT / SHRINK (step 3 — scoped re-diff structure + caret)", () => {
     const twin = live("a\nb\nc\n", "x\ny\nz\n", { sink: sink2, flag: flag2 });
     expect(replayWithGuard(twin, jsonl, flag2).stoppedAtCorrupt).toBe(false);
     expect(docStruct(twin)).toEqual(docStruct(v));
+  });
+});
+
+describe("MERGE (step 4 — §2.2.12 cases 1&2 + §2.2.5(3), REAL keypress)", () => {
+  // group0(a/x), a LONE EMPTY normal line "\n", group1(c/z). doc:
+  // "a\n\nx\n\n\nc\n\nz\n\n"; separator (empty line) between the groups.
+  const LONE = ["a\n\nc\n", "x\n\nz\n"] as const;
+  const split = (v: EditorView) => splitModel(v.state.doc.toString(), readStructure(v.state));
+  const sep = (v: EditorView) => readStructure(v.state).find((r) => r.group === 1 && r.ver === 1)!.from - 1;
+
+  it("case 1 — DELETE on the lone empty separator merges the groups (real keydown)", () => {
+    const v = live(...LONE);
+    expect(groupCount(v)).toBe(2);
+    at(v, sep(v)); // caret ON the empty separator line
+    press(v, "Delete"); // §2.2.5(3): NOT consumed → deletes the \n → merge
+    expect(groupCount(v)).toBe(1);
+    expect(split(v)).toEqual({ base: "a\nc\n", sibling: "x\nz\n" });
+  });
+
+  it("case 1 — BACKSPACE at the next group start merges the groups (real keydown)", () => {
+    const v = live(...LONE);
+    const g1from = readStructure(v.state).find((r) => r.group === 1 && r.ver === 1)!.from;
+    at(v, g1from); // caret at the start of group1 (just after the empty line)
+    press(v, "Backspace");
+    expect(groupCount(v)).toBe(1);
+    expect(split(v)).toEqual({ base: "a\nc\n", sibling: "x\nz\n" });
+  });
+
+  it("a single Delete on a NON-empty separator is still BLOCKED (not a merge)", () => {
+    const v = live("a\nMID\nc\n", "x\nMID\nz\n"); // normal "MID\n" between groups
+    const s = sep(v); // points into "MID\n" region's leading \n
+    at(v, s);
+    press(v, "Delete");
+    expect(groupCount(v)).toBe(2); // externalGuard/keymap protect a non-empty separator
+  });
+
+  it("case 2 — SELECT the normal line + Delete merges (multi-char delete passes the keymap)", () => {
+    const v = live("a\nMID\nc\n", "x\nMID\nz\n");
+    const g0v2 = readStructure(v.state).find((r) => r.group === 0 && r.ver === 2)!;
+    const g1v1 = readStructure(v.state).find((r) => r.group === 1 && r.ver === 1)!;
+    v.dispatch({ selection: { anchor: g0v2.to, head: g1v1.from } }); // select "MID\n"
+    press(v, "Delete"); // non-empty selection → defaultKeymap deletes it → merge
+    expect(groupCount(v)).toBe(1);
+    expect(split(v)).toEqual({ base: "a\nc\n", sibling: "x\nz\n" });
+  });
+
+  it("merge of a MIDDLE pair leaves the THIRD group intact", () => {
+    // 3 groups; merge group0+group1 (lone empty sep), group2 untouched.
+    const v = live("a\n\nc\nK\ne\n", "x\n\nz\nK\nw\n"); // groups (a/x),(c/z) then K common then (e/w)
+    expect(groupCount(v)).toBe(3);
+    at(v, sep(v)); // separator between group0 and group1
+    press(v, "Delete");
+    expect(groupCount(v)).toBe(2); // 0+1 merged, group2 survives
+    expect(split(v)).toEqual({ base: "a\nc\nK\ne\n", sibling: "x\nz\nK\nw\n" });
+  });
+
+  it("merge caret = join point; survives UNDO/REDO + REPLAY", () => {
+    const sink = arraySink();
+    const flag = new ReplayFlag();
+    const v = live(...LONE, { sink, flag });
+    const before = sep(v);
+    at(v, before); // caret on the empty separator
+    press(v, "Delete"); // merge
+    const after = v.state.selection.main.head;
+    // §6.1 merge caret = first line of the LAST group's ver1 ("c").
+    expect(v.state.doc.lineAt(after).text).toBe("c");
+
+    undo(v);
+    expect(groupCount(v)).toBe(2); // separator + both groups restored
+    expect(v.state.selection.main.head).toBe(before);
+    redo(v);
+    expect(v.state.selection.main.head).toBe(after);
+    expect(v.state.doc.lineAt(after).text).toBe("c");
+
+    const jsonl = sink.blocks.map(serializeBlock).join("\n");
+    const sink2 = arraySink();
+    const flag2 = new ReplayFlag();
+    const twin = live(...LONE, { sink: sink2, flag: flag2 });
+    replayWithGuard(twin, jsonl, flag2);
+    expect(docStruct(twin)).toEqual(docStruct(v));
+    expect(twin.state.selection.main.head).toBe(after);
   });
 });
 
