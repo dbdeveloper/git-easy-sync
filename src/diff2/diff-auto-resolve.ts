@@ -198,7 +198,7 @@ export function caretInSubDoc(
 // Renumber ranges into sequential group ids by document order. A group's ver1
 // always immediately precedes its ver2 (no normal text between them, groups never
 // overlap), so a ver1 starts a new id and the following ver2 inherits it.
-function renumberGroups(ranges: VerRange[]): VerRange[] {
+export function renumberGroups(ranges: VerRange[]): VerRange[] {
   let g = -1;
   return [...ranges]
     .sort((a, b) => a.from - b.from)
@@ -336,6 +336,77 @@ function adjacentRun(mapped: VerRange[]): GroupEntry[] | null {
     return run;
   }
   return null;
+}
+
+// ALL maximal runs (≥2) of adjacent groups, left-to-right (each run = the groups
+// that must merge). Used by paste (step 6b), which can create several adjacencies
+// in one transaction (§2.2.12.1 case 4) — adjacentRun (first-only) is the reactive
+// single-keystroke case where at most one forms.
+function allAdjacentRuns(mapped: VerRange[]): GroupEntry[][] {
+  const byGroup = new Map<number, { v1?: VerRange; v2?: VerRange }>();
+  for (const r of mapped) {
+    const e = byGroup.get(r.group) ?? {};
+    if (r.ver === 1) e.v1 = r;
+    else e.v2 = r;
+    byGroup.set(r.group, e);
+  }
+  const entries = [...byGroup.values()]
+    .filter((e): e is GroupEntry => !!e.v1 && !!e.v2)
+    .map((e) => ({ group: e.v1.group, v1: e.v1, v2: e.v2 }))
+    .sort((a, b) => a.v1.from - b.v1.from);
+  const runs: GroupEntry[][] = [];
+  let i = 0;
+  while (i + 1 < entries.length) {
+    if (entries[i].v2.to !== entries[i + 1].v1.from) {
+      i++;
+      continue;
+    }
+    const run = [entries[i]];
+    let j = i + 1;
+    while (j < entries.length && entries[j - 1].v2.to === entries[j].v1.from) run.push(entries[j++]);
+    runs.push(run);
+    i = j;
+  }
+  return runs;
+}
+
+const contentStr = (doc: string, r: VerRange): string => doc.slice(r.from, r.to - 1);
+
+// Pure cascade: merge EVERY adjacent run in (doc, ranges) — concat each run's
+// ver1s/ver2s and re-diff via buildModel (§2.2.12.2 + 1210) — and return the
+// change set (in `doc` coords) + the final structure (post-change coords). Used by
+// the paste filter, which materializes literal groups that may abut existing ones
+// in several places at once. Returns null when there's no adjacency (nothing to do).
+export function resolveAllAdjacencies(
+  doc: string,
+  ranges: VerRange[],
+): { changes: { from: number; to: number; insert: string }[]; finalRanges: VerRange[] } | null {
+  const runs = allAdjacentRuns(ranges);
+  if (runs.length === 0) return null;
+
+  const runInfo = runs.map((run) => {
+    const spanFrom = run[0].v1.from;
+    const spanTo = run[run.length - 1].v2.to;
+    const base = run.map((g) => contentStr(doc, g.v1)).join("");
+    const sib = run.map((g) => contentStr(doc, g.v2)).join("");
+    return { spanFrom, spanTo, ids: new Set(run.map((g) => g.group)), sub: buildModel(base, sib) };
+  });
+  const changes = runInfo.map((ri) => ({ from: ri.spanFrom, to: ri.spanTo, insert: ri.sub.doc }));
+  const cs = ChangeSet.of(changes, doc.length);
+
+  const runGroupIds = new Set(runInfo.flatMap((ri) => [...ri.ids]));
+  const finalRanges: VerRange[] = [];
+  for (const r of ranges) {
+    if (runGroupIds.has(r.group)) continue; // replaced by a run's re-diff
+    finalRanges.push({ ...r, from: cs.mapPos(r.from, 1), to: cs.mapPos(r.to, -1) });
+  }
+  for (const ri of runInfo) {
+    const base = cs.mapPos(ri.spanFrom, 1); // start of this run's re-diffed region
+    for (const sr of ri.sub.ranges) {
+      finalRanges.push({ ...sr, from: sr.from + base, to: sr.to + base });
+    }
+  }
+  return { changes, finalRanges: renumberGroups(finalRanges) };
 }
 
 export function mergeSpec(tr: Transaction): TransactionSpec | null {

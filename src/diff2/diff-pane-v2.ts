@@ -51,7 +51,7 @@ import { type MarkerKind, markerSpecs, verLineDecisions } from "./diff-decoratio
 import { autoNewlineFilter, diffBackspace, diffDelete, externalGuardFilter } from "./diff-edits";
 import { groupsOf, selectionLegalizeFilter } from "./diff-selection";
 import { autoResolveFilter, diffSelectionDelete } from "./diff-auto-resolve";
-import { diffClipboardCopy } from "./diff-clipboard";
+import { diffClipboardCopy, diffClipboardPaste } from "./diff-clipboard";
 import { computeWordDiff } from "./word-level-diff";
 import { diffLineNumbers } from "./diff-line-numbers";
 import { type ResolveChoice, type ResolveOpts, applyResolve, diffResolveKeymap } from "./diff-resolve";
@@ -478,6 +478,7 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       ),
       diffNavKeymap,
       diffClipboardCopy, // §2.2.7 — copy a group-spanning selection as a fenced block
+      diffClipboardPaste, // §2.2.7 п.3a — paste fenced groups into normal → materialize + cascade
       keymap.of([...historyKeymap, ...defaultKeymap]),
       // §1.11 / TODO §6.9 — draw the selection ourselves so its background extends
       // to the END of the line, INCLUDING the trailing `↵` glyph widget (native

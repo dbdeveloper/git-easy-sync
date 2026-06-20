@@ -12,9 +12,17 @@
 // a real copy ClipboardEvent into CM6 — same limitation as marker-button clicks).
 
 import { EditorView } from "@codemirror/view";
-import type { EditorState, Text } from "@codemirror/state";
+import { ChangeSet, type EditorState, type Text, type TransactionSpec } from "@codemirror/state";
+import { isolateHistory } from "@codemirror/commands";
 import type { VerRange } from "./diff-model";
-import { readStructure } from "./diff-structure";
+import {
+  readStructure,
+  resolveCaret,
+  setStructure,
+  structureField,
+  toRangeSet,
+} from "./diff-structure";
+import { renumberGroups, resolveAllAdjacencies } from "./diff-auto-resolve";
 
 // §2.2.7 markers/prefixes (byte-exact, user-finalized 2026-06-20). Unicode here is
 // cosmetic for ≪/≫; uniqueness is carried by the fence tag + all-or-nothing parse.
@@ -203,6 +211,115 @@ export const diffClipboardCopy = EditorView.domEventHandlers({
     if (text === null) return false; // within-block → default cut
     event.clipboardData?.setData("text/plain", text);
     event.preventDefault(); // serialize-correct; deletion deferred to the cut step
+    return true;
+  },
+});
+
+// ── §2.2.7 п.3a — PASTE into normal text: materialize fenced groups + cascade ──
+//
+// Materialize parsed segments into the model's doc form: normal text verbatim,
+// each group → ver1 content + terminal \n, ver2 content + terminal \n (the
+// buildModel convention). Literal groups (NOT re-diffed — paste is faithful to the
+// copy); adjacency with existing groups is resolved by the cascade below.
+function materialize(segments: ClipSegment[]): { text: string; ranges: VerRange[] } {
+  let text = "";
+  const ranges: VerRange[] = [];
+  let group = -1;
+  const block = (lines: string[]): string => lines.map((l) => `${l}\n`).join(""); // "L1\nL2\n" | ""
+  for (const seg of segments) {
+    if (seg.kind === "normal") {
+      text += seg.text;
+      continue;
+    }
+    group += 1;
+    const f1 = text.length;
+    text += `${block(seg.ver1)}\n`; // content + terminal \n
+    ranges.push({ from: f1, to: text.length, ver: 1, group });
+    const f2 = text.length;
+    text += `${block(seg.ver2)}\n`;
+    ranges.push({ from: f2, to: text.length, ver: 2, group });
+  }
+  return { text, ranges };
+}
+
+// pos is inside a ver-block (content or terminal) → §2.2.7 п.3b paste-as-is.
+function insideVerBlock(ranges: VerRange[], pos: number): boolean {
+  return ranges.some((r) => pos >= r.from && pos < r.to);
+}
+
+// Build the paste transaction for pasting `text` at the current selection, or null
+// to let the default paste run (no group in clipboard / paste into a ver-block §3b
+// / paste over a group-spanning selection — DEFERRED). On success: materialize the
+// segments at the insertion point, then run the FULL multi-run adjacency cascade
+// (the paste tx carries setStructure, so autoResolveFilter skips it — paste must
+// resolve its own adjacencies, incl. §2.2.12.1 case 4 two-run). Caret = paste-end.
+export function pasteSpec(state: EditorState, text: string): TransactionSpec | null {
+  const segments = parseClipboard(text);
+  if (!segments.some((s) => s.kind === "group")) return null; // plain → default paste
+
+  const ranges = readStructure(state);
+  const sel = state.selection.main;
+  const insFrom = sel.from;
+  const insTo = sel.to;
+  if (insideVerBlock(ranges, insFrom)) return null; // §3b — paste as-is into a ver-block
+  // paste-over-a-group-spanning selection is deferred (= selection-delete + paste).
+  if (insFrom !== insTo && ranges.some((r) => insFrom <= r.to - 1 && r.to - 1 < insTo)) return null;
+
+  const startDoc = state.doc.toString();
+  const mat = materialize(segments);
+
+  // changeA: replace the selection with the materialized model text.
+  const csA = ChangeSet.of({ from: insFrom, to: insTo, insert: mat.text }, startDoc.length);
+  const newDoc = startDoc.slice(0, insFrom) + mat.text + startDoc.slice(insTo);
+  const delta = mat.text.length - (insTo - insFrom);
+  // Renumber by from-order: materialize's group ids (0,1,…) collide with the
+  // existing groups' ids, which would make allAdjacentRuns conflate them.
+  const newRanges = renumberGroups([
+    ...ranges
+      .filter((r) => r.to <= insFrom || r.from >= insTo) // paste into normal → none span the point
+      .map((r) => (r.from >= insTo ? { ...r, from: r.from + delta, to: r.to + delta } : r)),
+    ...mat.ranges.map((r) => ({ ...r, from: r.from + insFrom, to: r.to + insFrom })),
+  ]);
+
+  const caretNew = insFrom + mat.text.length; // paste-end (in newDoc)
+  const cascade = resolveAllAdjacencies(newDoc, newRanges);
+  if (!cascade) {
+    return {
+      changes: csA,
+      effects: [
+        setStructure.of(toRangeSet(newRanges)),
+        resolveCaret.of({ before: insFrom, after: caretNew }),
+      ],
+      selection: { anchor: caretNew },
+      annotations: isolateHistory.of("before"),
+      userEvent: "input.paste",
+    };
+  }
+  const csB = ChangeSet.of(cascade.changes, newDoc.length);
+  const after = csB.mapPos(caretNew, 1);
+  return {
+    changes: csA.compose(csB),
+    effects: [
+      setStructure.of(toRangeSet(cascade.finalRanges)),
+      resolveCaret.of({ before: insFrom, after }),
+    ],
+    selection: { anchor: after },
+    annotations: isolateHistory.of("before"),
+    userEvent: "input.paste",
+  };
+}
+
+// Thin edge: intercept paste of a clipboard that carries a fenced group. Pure
+// pasteSpec is the testable core; the DOM paste event (clipboardData.getData) is a
+// device-gate (happy-dom can't deliver a real paste into CM6).
+export const diffClipboardPaste = EditorView.domEventHandlers({
+  paste(event, view) {
+    const text = event.clipboardData?.getData("text/plain");
+    if (!text) return false;
+    const spec = pasteSpec(view.state, text);
+    if (!spec) return false; // plain paste / into-ver-block / over-selection → default
+    view.dispatch(spec);
+    event.preventDefault();
     return true;
   },
 });
