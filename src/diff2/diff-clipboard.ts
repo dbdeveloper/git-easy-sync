@@ -22,7 +22,7 @@ import {
   structureField,
   toRangeSet,
 } from "./diff-structure";
-import { renumberGroups, resolveAllAdjacencies } from "./diff-auto-resolve";
+import { renumberGroups, resolveAllAdjacencies, selectionDeleteSpec } from "./diff-auto-resolve";
 
 // §2.2.7 markers/prefixes (byte-exact, user-finalized 2026-06-20). Unicode here is
 // cosmetic for ≪/≫; uniqueness is carried by the fence tag + all-or-nothing parse.
@@ -207,10 +207,15 @@ export const diffClipboardCopy = EditorView.domEventHandlers({
     return true;
   },
   cut(event, view) {
+    // CUT = COPY (serialize the group-spanning selection) + the terminal-safe
+    // selection-delete (§2.2.4 p5c / §2.2.9 "neither", group-atomic). One undo unit
+    // (the delete is a single setStructure transaction; the copy mutates nothing).
     const text = copyClipboardText(view.state);
-    if (text === null) return false; // within-block → default cut
+    if (text === null) return false; // within-block → default cut (plain text)
     event.clipboardData?.setData("text/plain", text);
-    event.preventDefault(); // serialize-correct; deletion deferred to the cut step
+    const spec = selectionDeleteSpec(view.state);
+    if (spec) view.dispatch(spec); // group-spanning → rebuild-delete (never a raw slice)
+    event.preventDefault();
     return true;
   },
 });

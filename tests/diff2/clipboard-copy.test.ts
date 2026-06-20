@@ -8,8 +8,8 @@
 
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { buildModel } from "../../src/diff2/diff-model";
-import { structureField, toRangeSet } from "../../src/diff2/diff-structure";
+import { buildModel, splitModel } from "../../src/diff2/diff-model";
+import { readStructure, structureField, toRangeSet } from "../../src/diff2/diff-structure";
 import {
   contentLines,
   copyClipboardText,
@@ -17,6 +17,7 @@ import {
   parseClipboard,
   clipboardHasGroup,
 } from "../../src/diff2/diff-clipboard";
+import { selectionDeleteSpec } from "../../src/diff2/diff-auto-resolve";
 
 // Build a real EditorState (with structure) the way createDiffPaneState seeds it,
 // so copyClipboardText reads the same structure the editor would.
@@ -213,5 +214,40 @@ describe("parseClipboard — fenced block → group; malformed → as-is (rule 5
   it("clipboardHasGroup discriminates", () => {
     expect(clipboardHasGroup(G6)).toBe(true);
     expect(clipboardHasGroup("plain text")).toBe(false);
+  });
+});
+
+// ── §2.2.7 CUT = serialize (copy) + selection-delete, step 7 ─────────────────
+describe("CUT — group-spanning selection: copy text + delete via selectionDeleteSpec", () => {
+  it("cutting a whole group serializes it AND removes it (both sides → 'neither')", () => {
+    const base = "a\nL\nc\n";
+    const sib = "a\nR\nc\n";
+    const m = buildModel(base, sib);
+    const v1 = m.ranges.find((r) => r.ver === 1)!;
+    const v2 = m.ranges.find((r) => r.ver === 2)!;
+    const s = state(base, sib, { anchor: v1.from, head: v2.to });
+    // COPY half: serialized fenced block.
+    expect(copyClipboardText(s)).toBe("```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n");
+    // DELETE half: the group-spanning selection rebuilds to group-gone.
+    const spec = selectionDeleteSpec(s)!;
+    expect(spec).not.toBeNull();
+    const after = s.update(spec).state;
+    expect(splitModel(after.doc.toString(), readStructure(after))).toEqual({
+      base: "a\nc\n",
+      sibling: "a\nc\n",
+    });
+  });
+
+  it("within-block selection → both halves null (cut falls through to plain default)", () => {
+    const s = state("a\nWORD\nc\n", "a\nR\nc\n", { anchor: 2, head: 6 }); // inside ver1
+    expect(copyClipboardText(s)).toBeNull(); // → default plain cut
+    expect(selectionDeleteSpec(s)).toBeNull();
+  });
+
+  it("cut serialize + delete are CONSISTENT: whenever copy yields text, delete yields a spec", () => {
+    const m = buildModel("p\nL\nq\nM\nr\n", "p\nR\nq\nN\nr\n"); // 2 groups
+    const s = state("p\nL\nq\nM\nr\n", "p\nR\nq\nN\nr\n", { anchor: 0, head: m.doc.length });
+    expect(copyClipboardText(s)).not.toBeNull();
+    expect(selectionDeleteSpec(s)).not.toBeNull(); // both fire on the same group-spanning selection
   });
 });
