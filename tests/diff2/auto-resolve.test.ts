@@ -13,7 +13,7 @@ import type { EditorView } from "@codemirror/view";
 import { mountDiffPaneV2 } from "../../src/diff2/diff-pane-v2";
 import { buildModel, splitModel } from "../../src/diff2/diff-model";
 import { fromRangeSet, readStructure, toRangeSet } from "../../src/diff2/diff-structure";
-import { detectVanish } from "../../src/diff2/diff-auto-resolve";
+import { caretInSubDoc, detectVanish } from "../../src/diff2/diff-auto-resolve";
 import {
   buildCommandBlock,
   buildEditBlock,
@@ -238,39 +238,92 @@ describe("VANISH via DELETE + multi-keystroke granularity", () => {
   });
 });
 
-describe("SPLIT / SHRINK (step 3 — scoped re-diff structure, caret deferred)", () => {
+describe("caretInSubDoc (pure §6.1 probe — follow the edited line through re-diff)", () => {
+  // helper: the char at the mapped offset (what line the caret lands on).
+  const at = (c1: string, c2: string, side: 1 | 2, sideOffset: number) => {
+    const sub = buildModel(c1, c2);
+    const off = caretInSubDoc(sub.doc, sub.ranges, side, sideOffset);
+    return { off, doc: sub.doc, line: sub.doc.slice(0, off).split("\n").length - 1, lineText: () => {
+      const lines = sub.doc.split("\n");
+      return lines[sub.doc.slice(0, off).split("\n").length - 1];
+    } };
+  };
+
+  it("split-middle: edited line became COMMON → caret lands on the normal line (ver1)", () => {
+    // c1 "a\ny\nc\n" (middle edited to "y" == c2 middle) vs c2 "x\ny\nz\n".
+    const r = at("a\ny\nc\n", "x\ny\nz\n", 1, 2); // offset 2 = start of "y" in c1
+    expect(r.lineText()).toBe("y"); // landed on the now-normal "y"
+  });
+
+  it("split-middle from VER2 side also lands on the common line", () => {
+    const r = at("a\ny\nc\n", "x\ny\nz\n", 2, 2); // "y" in c2
+    expect(r.lineText()).toBe("y");
+  });
+
+  it("shrink-front: caret on a line that STAYED in the ver-block (not the freed common line)", () => {
+    // c1 "x\nb\nc\n" (first edited to "x" == c2 first) vs c2 "x\ny\nz\n".
+    // "x" frees to a normal line BEFORE; caret on "b" stays in ver1 sub-block.
+    const r = at("x\nb\nc\n", "x\ny\nz\n", 1, 2); // "b"
+    expect(r.lineText()).toBe("b");
+  });
+
+  it("shrink-back: caret on a line still in the ver-block", () => {
+    const r = at("a\nb\nz\n", "x\ny\nz\n", 1, 2); // "b"; "z" frees AFTER
+    expect(r.lineText()).toBe("b");
+  });
+});
+
+describe("SPLIT / SHRINK (step 3 — scoped re-diff structure + caret)", () => {
   const split = (v: EditorView) => splitModel(v.state.doc.toString(), readStructure(v.state));
 
   it("middle line becomes common → group SPLITS into two (count UP), round-trips", () => {
     const v = live("a\nb\nc\n", "x\ny\nz\n"); // 1 group, all differ
     expect(groupCount(v)).toBe(1);
     const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
-    // edit ver1 middle "b" → "y" (== ver2 middle) → split.
-    v.dispatch({ changes: { from: v1.from + 2, to: v1.from + 3, insert: "y" }, userEvent: "input.type" });
+    // edit ver1 middle "b" → "y" (== ver2 middle) → split. caret after "y".
+    v.dispatch({
+      changes: { from: v1.from + 2, to: v1.from + 3, insert: "y" },
+      selection: { anchor: v1.from + 3 },
+      userEvent: "input.type",
+    });
     expect(groupCount(v)).toBe(2);
     expect(split(v)).toEqual({ base: "a\ny\nc\n", sibling: "x\ny\nz\n" });
+    // §6.1 caret follows the edited line → the now-common normal "y".
+    expect(v.state.doc.lineAt(v.state.selection.main.head).text).toBe("y");
   });
 
   it("FIRST line becomes common → SHRINK-front: a normal line BEFORE the group", () => {
     const v = live("a\nb\nc\n", "x\ny\nz\n");
     const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
-    v.dispatch({ changes: { from: v1.from, to: v1.from + 1, insert: "x" }, userEvent: "input.type" }); // "a"→"x"
+    v.dispatch({
+      changes: { from: v1.from, to: v1.from + 1, insert: "x" },
+      selection: { anchor: v1.from + 1 },
+      userEvent: "input.type",
+    }); // "a"→"x"
     expect(groupCount(v)).toBe(1); // shrank, not split
     expect(split(v)).toEqual({ base: "x\nb\nc\n", sibling: "x\ny\nz\n" });
     // the freed common line "x" sits BEFORE the surviving group (line 1 is normal).
     const g = readStructure(v.state).find((r) => r.ver === 1)!;
     expect(v.state.doc.lineAt(g.from).number).toBeGreaterThan(1);
+    // §6.1 caret follows the edited line → the freed normal "x".
+    expect(v.state.doc.lineAt(v.state.selection.main.head).text).toBe("x");
   });
 
   it("LAST line becomes common → SHRINK-back: a normal line AFTER the group", () => {
     const v = live("a\nb\nc\n", "x\ny\nz\n");
     const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
-    v.dispatch({ changes: { from: v1.from + 4, to: v1.from + 5, insert: "z" }, userEvent: "input.type" }); // "c"→"z"
+    v.dispatch({
+      changes: { from: v1.from + 4, to: v1.from + 5, insert: "z" },
+      selection: { anchor: v1.from + 5 },
+      userEvent: "input.type",
+    }); // "c"→"z"
     expect(groupCount(v)).toBe(1);
     expect(split(v)).toEqual({ base: "a\nb\nz\n", sibling: "x\ny\nz\n" });
     // the freed common line "z" sits AFTER the group (last doc line is normal).
     const v2 = readStructure(v.state).find((r) => r.ver === 2)!;
     expect(v2.to).toBeLessThan(v.state.doc.length);
+    // §6.1 caret follows the edited line → the freed normal "z".
+    expect(v.state.doc.lineAt(v.state.selection.main.head).text).toBe("z");
   });
 
   it("in-ver edit with NO common line → no restructure (group survives, round-trips)", () => {

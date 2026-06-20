@@ -144,6 +144,54 @@ export function vanishSpec(tr: Transaction): TransactionSpec | null {
 // is a placeholder (v1.from). The §6.1 split/shrink caret rule lands in a separate
 // commit (resolveCaret) once the rule is user-confirmed.
 
+// §6.1 caret — where does offset `sideOffset` of side `side` (1=base/2=sibling) of
+// a re-diffed group land in sub.doc? The INVERSE of splitModel's walk: splitModel
+// reconstructs (base, sibling) from (sub.doc, sub.ranges) by concatenating normal
+// gaps (both sides) + ver-range contents (one side); we replay that walk and stop
+// when the chosen side's reconstructed length reaches `sideOffset`, returning the
+// sub.doc offset of that char. Boundary uses `<` so an offset at a segment's end
+// maps to the START of the NEXT segment — i.e. the caret follows the EDITED LINE to
+// its new home (normal line OR ver-sub-block), per §6.1. Deterministic, no
+// content-search. (side-offset maps directly: splitModel(sub)===(c1,c2) byte-exact,
+// so an offset into c1/c2 is an offset into the reconstructed base/sibling.)
+export function caretInSubDoc(
+  subDoc: string,
+  subRanges: VerRange[],
+  side: 1 | 2,
+  sideOffset: number,
+): number {
+  const sorted = [...subRanges].sort((a, b) => a.from - b.from);
+  let baseLen = 0;
+  let sibLen = 0;
+  let pos = 0;
+  // a [segStart, segStart+len) slice of subDoc appended to base and/or sibling;
+  // returns the subDoc offset if the target side crosses sideOffset within it.
+  const consume = (segStart: number, len: number, toBase: boolean, toSib: boolean): number | null => {
+    if (side === 1 && toBase && sideOffset >= baseLen && sideOffset < baseLen + len)
+      return segStart + (sideOffset - baseLen);
+    if (side === 2 && toSib && sideOffset >= sibLen && sideOffset < sibLen + len)
+      return segStart + (sideOffset - sibLen);
+    if (toBase) baseLen += len;
+    if (toSib) sibLen += len;
+    return null;
+  };
+  for (const r of sorted) {
+    if (r.from > pos) {
+      const hit = consume(pos, r.from - pos, true, true); // normal gap → both sides
+      if (hit !== null) return hit;
+    }
+    const contentLen = r.to - 1 - r.from; // ver content (terminal \n dropped)
+    const hit = consume(r.from, contentLen, r.ver === 1, r.ver === 2);
+    if (hit !== null) return hit;
+    pos = r.to;
+  }
+  if (pos < subDoc.length) {
+    const hit = consume(pos, subDoc.length - pos, true, true);
+    if (hit !== null) return hit;
+  }
+  return subDoc.length; // offset at the very end (rare; caret never rests on a terminal)
+}
+
 // Renumber ranges into sequential group ids by document order. A group's ver1
 // always immediately precedes its ver2 (no normal text between them, groups never
 // overlap), so a ver1 starts a new id and the following ver2 inherits it.
@@ -210,12 +258,24 @@ export function splitShrinkSpec(tr: Transaction): TransactionSpec | null {
     .map((r) => (r.from >= eg.v2.to ? { ...r, from: r.from + delta, to: r.to + delta } : r));
   const merged = renumberGroups([...others, ...spliced]);
 
+  // §6.1 caret: follow the EDITED line. P (post-edit caret) is in vX of the group;
+  // map its side-offset (P − vX.from) into sub.doc, then + the splice offset
+  // (eg.v1.from). The edited line may land normal OR in a ver-sub-block — the walk
+  // handles both. Stored as resolveCaret (replay applies; undo/redo via
+  // invertedEffects); before = pre-edit caret (undo lands at the edit site).
+  const p = tr.newSelection.main.head;
+  const side: 1 | 2 = p >= eg.v1.from && p < eg.v1.to ? 1 : 2;
+  const vX = side === 1 ? eg.v1 : eg.v2;
+  const sideOffset = Math.max(0, Math.min(p - vX.from, vX.to - 1 - vX.from));
+  const after = eg.v1.from + caretInSubDoc(sub.doc, sub.ranges, side, sideOffset);
+  const before = tr.startState.selection.main.head;
+
   return {
     changes: tr.changes.compose(
       ChangeSet.of({ from: eg.v1.from, to: eg.v2.to, insert: sub.doc }, tr.newDoc.length),
     ),
-    effects: [setStructure.of(toRangeSet(merged))],
-    selection: { anchor: eg.v1.from }, // STRUCTURE-FIRST placeholder; §6.1 caret = separate commit
+    effects: [setStructure.of(toRangeSet(merged)), resolveCaret.of({ before, after })],
+    selection: { anchor: after },
     annotations: isolateHistory.of("before"),
   };
 }
