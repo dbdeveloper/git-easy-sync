@@ -68,13 +68,13 @@ export function detectVanish(
     if (!v1 || !v2) continue;
     // overlap test: the change region [lo,hi] touches the group span [v1.from,v2.to)
     if (hi < v1.from || lo > v2.to) continue;
-    const c = verContent(newDoc, v1);
-    // VANISH only on NON-EMPTY convergence. Both-sides-EMPTY ("") is NOT a vanish:
-    // an empty ver-block is a valid §2.2.4 editing state (the user may be mid-edit),
-    // and an empty resolution means DELETION — handled at commit (empty-resolution
-    // semantics), not a collapse-to-normal here. Excluding "" also keeps §2.2.4
-    // empty↔non-empty transitions working.
-    if (c !== "" && c === verContent(newDoc, v2)) return group;
+    // ver1content === ver2content (incl. BOTH empty) → VANISH. Both-sides-empty IS
+    // a classic resolution (user 2026-06-20): a one-side-empty ver-block is a valid
+    // §2.2.4 placeholder, but BOTH empty means the conflict resolved to nothing →
+    // collapse. (If this empties the whole file, the commit-time empty-resolution /
+    // SYNC2 §2.9 path handles deletion — unaffected here, which only drops the
+    // group's lines.)
+    if (verContent(newDoc, v1) === verContent(newDoc, v2)) return group;
   }
   return null;
 }

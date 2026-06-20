@@ -11,7 +11,7 @@ import { redo, undo, undoDepth } from "@codemirror/commands";
 import { ChangeSet, Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { mountDiffPaneV2 } from "../../src/diff2/diff-pane-v2";
-import { buildModel } from "../../src/diff2/diff-model";
+import { buildModel, splitModel } from "../../src/diff2/diff-model";
 import { fromRangeSet, readStructure, toRangeSet } from "../../src/diff2/diff-structure";
 import { detectVanish } from "../../src/diff2/diff-auto-resolve";
 import {
@@ -135,14 +135,106 @@ describe("VANISH in the real stack (full filters, history() default)", () => {
     expect(groupCount(v)).toBe(1); // still a conflict
   });
 
-  it("both sides edited to EMPTY does NOT vanish (empty = valid §2.2.4 state / commit-time delete)", () => {
-    // delete-vs-modify: ver1 empty, ver2 "gone\n". Delete ver2 content → both empty.
+  it("both sides edited to EMPTY DOES vanish (classic resolution — diff2 never emits both-empty)", () => {
+    // delete-vs-modify: ver1 empty (placeholder — only ONE side may be an empty
+    // ver-block), ver2 "gone\n". Delete ver2 content → BOTH empty. buildModel can
+    // never PRODUCE both-empty (its flush skips ver1===""&&ver2===""), so this is a
+    // pure editing artifact = the conflict resolved to nothing → vanish.
     const v = live("a\nb\n", "a\ngone\nb\n"); // ver1 empty, ver2 "gone\n"
     const v2 = readStructure(v.state).find((r) => r.ver === 2)!;
     expect(groupCount(v)).toBe(1);
-    // delete ver2's content "gone" (keep its \n) → ver2 becomes empty too.
-    v.dispatch({ changes: { from: v2.from, to: v2.from + 4 }, userEvent: "delete.backward" });
-    expect(groupCount(v)).toBe(1); // group SURVIVES (empty-vs-empty is not a vanish)
+    // delete ver2's whole content line "gone\n" (NOT the terminal) → ver2 content
+    // "" == ver1 "" → both empty.
+    v.dispatch({ changes: { from: v2.from, to: v2.from + 5 }, userEvent: "delete.backward" });
+    expect(groupCount(v)).toBe(0); // VANISHED (both empty = resolution)
+  });
+});
+
+describe("VANISH in a MULTI-group doc (the compose + shift-others path)", () => {
+  // 3 groups (1/A, 2/B, 3/C) separated by common lines h,i,j,k. Converge the
+  // MIDDLE group → it vanishes, the BEFORE and AFTER groups must survive intact at
+  // shifted offsets. Single-group tests can't exercise this (remaining is empty).
+  const BASE = "h\n1\ni\n2\nj\n3\nk\n";
+  const SIB = "h\nA\ni\nB\nj\nC\nk\n";
+
+  it("editing the middle group to converge vanishes ONLY it; neighbours stay resolvable", () => {
+    const v = live(BASE, SIB);
+    expect(groupCount(v)).toBe(3);
+    const g1v1 = readStructure(v.state).find((r) => r.group === 1 && r.ver === 1)!;
+    // replace ver1 "2" with "B" (== ver2 of the middle group) → vanish middle.
+    v.dispatch({
+      changes: { from: g1v1.from, to: g1v1.from + 1, insert: "B" },
+      selection: { anchor: g1v1.from + 1 },
+      userEvent: "input.type",
+    });
+
+    expect(groupCount(v)).toBe(2); // middle gone, two survive
+    // surviving groups intact at the RIGHT offsets: splitModel round-trips to the
+    // logical files with the middle line now common ("B").
+    const split = splitModel(v.state.doc.toString(), readStructure(v.state));
+    expect(split).toEqual({ base: "h\n1\ni\nB\nj\n3\nk\n", sibling: "h\nA\ni\nB\nj\nC\nk\n" });
+    // caret landed in the vanished (now-normal) region, not shifted onto a neighbour.
+    const head = v.state.selection.main.head;
+    expect(v.state.doc.lineAt(head).text).toBe("B");
+
+    // and the surviving groups are still independently resolvable (undo restores all 3).
+    undo(v);
+    expect(groupCount(v)).toBe(3);
+  });
+
+  it("multi-group vanish survives feed → replay", () => {
+    const sink = arraySink();
+    const flag = new ReplayFlag();
+    const v = live(BASE, SIB, { sink, flag });
+    const g1v1 = readStructure(v.state).find((r) => r.group === 1 && r.ver === 1)!;
+    v.dispatch({
+      changes: { from: g1v1.from, to: g1v1.from + 1, insert: "B" },
+      selection: { anchor: g1v1.from + 1 },
+      userEvent: "input.type",
+    });
+    const jsonl = sink.blocks.map(serializeBlock).join("\n");
+    const sink2 = arraySink();
+    const flag2 = new ReplayFlag();
+    const twin = live(BASE, SIB, { sink: sink2, flag: flag2 });
+    expect(replayWithGuard(twin, jsonl, flag2).stoppedAtCorrupt).toBe(false);
+    expect(docStruct(twin)).toEqual(docStruct(v));
+  });
+});
+
+describe("VANISH via DELETE + multi-keystroke granularity", () => {
+  it("converge by DELETING chars (not insert) → vanish", () => {
+    const v = live("XYZ\n", "YZ\n"); // ver1 "XYZ\n", ver2 "YZ\n"
+    const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
+    // delete the leading "X" → ver1 "YZ\n" == ver2 → vanish.
+    v.dispatch({
+      changes: { from: v1.from, to: v1.from + 1 },
+      selection: { anchor: v1.from },
+      userEvent: "delete.backward",
+    });
+    expect(groupCount(v)).toBe(0);
+    expect(v.state.doc.toString()).toBe("YZ\n");
+  });
+
+  it("type-type-VANISH across separate dispatches: vanish is its OWN undo step", () => {
+    const v = live("x\n", "ab\n"); // converge ver1 "x"→"ab" in two keystrokes
+    const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
+    // op1: x → a  (no vanish: "a\n" != "ab\n")
+    v.dispatch({ changes: { from: v1.from, to: v1.from + 1, insert: "a" }, selection: { anchor: v1.from + 1 }, userEvent: "input.type" });
+    expect(groupCount(v)).toBe(1);
+    // op2: insert b → "ab\n" == ver2 → vanish
+    const v1b = readStructure(v.state).find((r) => r.ver === 1)!;
+    v.dispatch({ changes: { from: v1b.from + 1, insert: "b" }, selection: { anchor: v1b.from + 2 }, userEvent: "input.type" });
+    expect(groupCount(v)).toBe(0);
+
+    // undo the VANISH alone → back to the "a\n" conflict (group restored), op1 kept.
+    undo(v);
+    expect(groupCount(v)).toBe(1);
+    const r = readStructure(v.state).find((x) => x.ver === 1)!;
+    expect(v.state.doc.sliceString(r.from, r.to - 1)).toBe("a\n");
+    // undo again → op1 reverted (back to original "x").
+    undo(v);
+    const r2 = readStructure(v.state).find((x) => x.ver === 1)!;
+    expect(v.state.doc.sliceString(r2.from, r2.to - 1)).toBe("x\n");
   });
 });
 

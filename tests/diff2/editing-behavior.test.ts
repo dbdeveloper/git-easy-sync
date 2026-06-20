@@ -155,25 +155,28 @@ describe("§2.2.4 empty ↔ non-empty ver-block transitions", () => {
   });
 
   it("bug-19: delete blank ver2 → empty, then Enter grows VER2 (not ver1) — no ↵↵", () => {
-    // group0: ver1 [2,3) empty, ver2 [3,5) a blank line. Delete the blank → ver2
-    // empty too; both empty + adjacent (the worst boundary). Enter must grow ver2.
-    const v = mount("a\nb\n", "a\n\nb\n");
-    v.dispatch({ selection: { anchor: 3 } }); // ver2.from (start of the blank line)
-    press(v, "Delete"); // ver2 → empty [3,4)
+    // ver1 non-empty "L", ver2 a blank line. Delete the blank → ver2 empty (ver1
+    // stays non-empty, so this is a valid one-side-empty state — NOT an auto-resolve
+    // vanish, which needs BOTH sides equal). Enter must grow ver2, not ver1.
+    const v = mount("a\nL\nb\n", "a\n\nb\n"); // ver1 "L\n", ver2 blank "\n\n"
+    const v2start = readStructure(v.state).find((x) => x.ver === 2)!.from;
+    v.dispatch({ selection: { anchor: v2start } }); // start of the blank line
+    press(v, "Delete"); // ver2 → empty
     let r = readStructure(v.state);
     expect(r.find((x) => x.ver === 2)!.to - r.find((x) => x.ver === 2)!.from).toBe(1); // ver2 empty
+    expect(r.find((x) => x.ver === 1)!.to - r.find((x) => x.ver === 1)!.from).toBe(3); // ver1 "L\n" intact (no vanish)
     const caret = v.state.selection.main.head;
     v.dispatch({ changes: { from: caret, insert: "\n" }, selection: { anchor: caret + 1 }, userEvent: "input" });
     r = readStructure(v.state);
     const v1 = r.find((x) => x.ver === 1)!;
     const v2 = r.find((x) => x.ver === 2)!;
-    expect(v1.to - v1.from).toBe(1); // ver1 still empty — did NOT absorb the Enter
+    expect(v1.to - v1.from).toBe(3); // ver1 unchanged — did NOT absorb the Enter
     expect(v2.to - v2.from).toBe(2); // ver2 grew to a blank line
     expect(v1.to).toBeLessThanOrEqual(v2.from); // no overlap
   });
 
   it("Backspacing the content down to empty lands on '\\n' (not stuck at '\\n\\n')", () => {
-    const v = mount("a\nX\nb\n", "a\nb\n"); // ver1 non-empty "X\n\n", ver2 empty
+    const v = mount("a\nX\nb\n", "a\nY\nb\n"); // ver1 "X\n", ver2 "Y\n" (non-empty, so ver1→empty doesn't vanish)
     const v1 = readStructure(v.state).find((r) => r.ver === 1)!; // content "X\n"
     // caret after "X" (content char), backspace twice to clear content
     at(v, v1.from + 1);
@@ -244,8 +247,8 @@ describe("§2.2.12 last-group EOL-less editing (Delete removes the trailing \\n)
   });
 
   it("[Backspace] at the START of a blank single-line block '|\\n\\n' acts like Delete → empty '|\\n'", () => {
-    // last group ver2 = a blank line "\n\n" (sibling added a blank line after "x").
-    const v = mount("x\n", "x\n\n");
+    // ver1 "y\n" (non-empty, so ver2→empty doesn't vanish); ver2 = a blank line "\n\n".
+    const v = mount("x\ny\n", "x\n\n");
     const v2 = readStructure(v.state).find((r) => r.ver === 2)!;
     expect(v.state.doc.sliceString(v2.from, v2.to)).toBe("\n\n"); // blank content line + terminal
     at(v, v2.from); // "|\n\n"
@@ -257,7 +260,7 @@ describe("§2.2.12 last-group EOL-less editing (Delete removes the trailing \\n)
   });
 
   it("[Backspace] blank-line→empty also works for a NON-last group (mirrors Delete)", () => {
-    const v = mount("a\nb\n", "a\n\nb\n"); // group0 ver2 = blank line "\n\n", "b" follows
+    const v = mount("a\nc\nb\n", "a\n\nb\n"); // ver1 "c\n" (non-empty); ver2 = blank line "\n\n", "b" follows
     const v2 = readStructure(v.state).find((r) => r.ver === 2)!;
     expect(v.state.doc.sliceString(v2.from, v2.to)).toBe("\n\n");
     at(v, v2.from);
