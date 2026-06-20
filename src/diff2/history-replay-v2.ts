@@ -24,7 +24,14 @@ import { isolateHistory, redo, undo } from "@codemirror/commands";
 import { ChangeSet, EditorSelection, Transaction } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { resolveCaret, setStructure, toRangeSet } from "./diff-structure";
-import { parseBlock, replayDispatch, verifyBlock } from "./history-log-v2";
+import {
+  buildCommandBlock,
+  parseBlock,
+  replayDispatch,
+  reseal,
+  serializeBlock,
+  verifyBlock,
+} from "./history-log-v2";
 import type { EditBlock, HistoryBlockV2 } from "./history-log-v2";
 
 // Parse + verify the trustworthy PREFIX of `jsonl`, stopping at the first blank-
@@ -44,6 +51,56 @@ export function scanHistoryV2(jsonl: string): {
     blocks.push(b);
   }
   return { blocks, stoppedAtCorrupt: false };
+}
+
+// ── §0.5.5 carousel — CONSERVATIVE compaction (pure) ─────────────────────────
+//
+// Remove ONLY dead history: groups that were undone AND whose redo branch was then
+// truncated by a later edit, plus the undo commands that cancelled them. Reachable
+// state — the live undo stack AND the live redo stack — is preserved, so after
+// recovery the user can undo to the base AND redo exactly as before the crash
+// (user 2026-06-20: "10 edits → undo 7 → +1 edit → exactly 4 survive").
+//
+// Simulate CM6's undo model over the clean prefix: a group = one `newGroup` edit +
+// its `newGroup:false` continuations; undo moves the top group undo→redo; redo
+// reverses; ANY edit clears the redo stack (the dead groups vanish). Then emit the
+// live groups in CHRONOLOGICAL order — undoStack bottom→top, then redoStack
+// top→bottom (redo pops the top, so top→bottom IS chronological) — followed by
+// `undo × redoCount` to push the redo groups back onto the redo stack.
+//
+// POSITION-SAFETY (why dropping dead edits can't corrupt the survivors): undo is
+// LIFO, so a dead group could only be popped after every later group was already
+// undone — i.e. at the moment any surviving later edit was applied, the dead
+// edits were fully reverted and absent from the doc. So every survivor's ChangeSet
+// is already positioned against a doc that excludes the dead edits. seq is part of
+// the checksum, so renumber via `reseal`. Replay-equivalent BOTH directions
+// (undo-to-base + redo-to-top), proven by the lockstep oracle on the real log.
+export function compactHistoryV2(jsonl: string): string {
+  const { blocks } = scanHistoryV2(jsonl);
+  const undoStack: EditBlock[][] = [];
+  const redoStack: EditBlock[][] = [];
+  let lastAt = "";
+  for (const b of blocks) {
+    if (b.kind === "edit") {
+      lastAt = b.at;
+      if (b.newGroup || undoStack.length === 0) undoStack.push([b]);
+      else undoStack[undoStack.length - 1].push(b);
+      redoStack.length = 0; // an edit truncates the redo branch → dead groups dropped
+    } else if (b.kind === "undo") {
+      const g = undoStack.pop();
+      if (g) redoStack.push(g);
+    } else {
+      const g = redoStack.pop();
+      if (g) undoStack.push(g);
+    }
+  }
+  // chronological order of all reachable edits.
+  const liveGroups: EditBlock[][] = [...undoStack, ...redoStack.slice().reverse()];
+  const out: HistoryBlockV2[] = [];
+  let seq = 0;
+  for (const g of liveGroups) for (const e of g) out.push(reseal(e, ++seq));
+  for (let i = 0; i < redoStack.length; i++) out.push(buildCommandBlock("undo", ++seq, lastAt));
+  return out.length ? out.map(serializeBlock).join("\n") + "\n" : "";
 }
 
 // What the recovery dialog needs BEFORE committing to a replay (§3.5).

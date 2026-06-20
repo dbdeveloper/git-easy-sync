@@ -94,6 +94,7 @@ function checksumPayload(b: HistoryBlockV2): string {
   if (b.kind === "edit") {
     return JSON.stringify({
       kind: b.kind,
+      seq: b.seq,
       change: b.change,
       newGroup: b.newGroup,
       structure: b.structure,
@@ -101,7 +102,15 @@ function checksumPayload(b: HistoryBlockV2): string {
       sel: b.sel,
     });
   }
-  return JSON.stringify({ kind: b.kind });
+  return JSON.stringify({ kind: b.kind, seq: b.seq });
+}
+
+// Re-stamp a block's seq and recompute its sum (seq is part of the checksum). Used
+// by compact() to renumber the surviving blocks 1..N. Pure.
+export function reseal<B extends HistoryBlockV2>(block: B, seq: number): B {
+  const b = { ...block, seq };
+  b.sum = fnv1a32(checksumPayload(b));
+  return b;
 }
 
 // Pure: build an edit block. The EDGE supplies `change` (ChangeSet.toJSON()), the
