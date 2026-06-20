@@ -449,6 +449,26 @@ describe("MERGE (step 4 — §2.2.12 cases 1&2 + §2.2.5(3), REAL keypress)", ()
     at(v, s);
     press(v, "Delete");
     expect(groupCount(v)).toBe(2); // externalGuard/keymap protect a non-empty separator
+    expect(v.state.selection.main.head).toBe(s); // bug-17: blocked change must NOT slide the caret
+  });
+
+  it("ONE delete can't create TWO runs → mergeSpec's single-run is sufficient", () => {
+    // 3 groups, two empty separators. A selection spanning BOTH separators
+    // necessarily contains the middle group, whose terminal \n is protected
+    // (terminalProtectionFilter) → the delete is BLOCKED wholesale: no change, so
+    // no two separate adjacencies can form in one transaction. (Single-cursor +
+    // contiguous deletion already means at most one adjacency; this confirms the
+    // group-spanning case can't sneak a second. Deleting a group-spanning
+    // selection AS resolve-to-neither is a SEPARATE feature, not step 4.)
+    const v = live("a\n\nc\n\ne\n", "x\n\nz\n\nw\n"); // groups (a/x),(c/z),(e/w)
+    expect(groupCount(v)).toBe(3);
+    const before = v.state.doc.toString();
+    const g0v2 = readStructure(v.state).find((r) => r.group === 0 && r.ver === 2)!;
+    const g2v1 = readStructure(v.state).find((r) => r.group === 2 && r.ver === 1)!;
+    v.dispatch({ selection: { anchor: g0v2.to, head: g2v1.from } }); // spans the middle group
+    press(v, "Delete");
+    expect(v.state.doc.toString()).toBe(before); // blocked → no two-run state
+    expect(groupCount(v)).toBe(3);
   });
 
   it("case 2 — SELECT the normal line + Delete merges (multi-char delete passes the keymap)", () => {
