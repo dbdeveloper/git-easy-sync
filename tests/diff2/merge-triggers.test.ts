@@ -149,25 +149,35 @@ describe("select normal line(s) between groups + Delete/Backspace → merge", ()
   });
 });
 
-describe("§2.2.5 п.2 / §2.2.12.1 — TWO blank lines between groups do NOT merge", () => {
-  it("Backspace on the FIRST blank (adjacent to the upper terminal) → NO-OP", () => {
-    const v = mount("a\n\n\nc\n", "x\n\n\nz\n"); // groups with TWO blank normal lines between
-    expect(groupCount(v)).toBe(2);
+describe("§2.2.5 п.1/п.2 — TWO blank lines between groups: protected-direction = NO-OP", () => {
+  // doc has TWO blank normal lines between the groups. The two protected directions
+  // (user-confirmed 2026-06-20) must be no-ops; the other two delete a blank
+  // (gradual reduction toward the lone separator, §2.2.12.1) and never merge while
+  // >1 blank remains.
+  const first = (v: EditorView) => readStructure(v.state).find((r) => r.group === 0 && r.ver === 2)!.to;
+
+  it("caret on the FIRST blank + Backspace → NO-OP (can't eat the upper terminal, п.2)", () => {
+    const v = mount("a\n\n\nc\n", "x\n\n\nz\n");
     const before = v.state.doc.toString();
-    const g0v2 = readStructure(v.state).find((r) => r.group === 0 && r.ver === 2)!;
-    at(v, g0v2.to); // ON the first blank line (its \n directly follows the terminal)
-    expect(diffBackspace(v)).toBe(true); // consumed, no-op (§2.2.5 п.2)
+    at(v, first(v)); // first blank
+    expect(diffBackspace(v)).toBe(true); // consumed, no-op
     expect(v.state.doc.toString()).toBe(before);
-    expect(groupCount(v)).toBe(2); // NOT merged — only a LONE separator merges (п.3)
+    expect(groupCount(v)).toBe(2);
   });
 
-  it("Delete on the first of two blanks does NOT merge (not a lone separator)", () => {
+  it("caret on the SECOND blank + Delete → NO-OP (can't eat the group-leading separator, п.1)", () => {
     const v = mount("a\n\n\nc\n", "x\n\n\nz\n");
-    const g0v2 = readStructure(v.state).find((r) => r.group === 0 && r.ver === 2)!;
-    at(v, g0v2.to);
-    // Delete here is NOT the lone-separator carve-out → falls through; either way
-    // the groups must NOT merge (two blanks remain >1 until reduced to one).
-    diffDelete(v);
+    at(v, first(v) + 1); // second blank
+    expect(diffDelete(v)).toBe(true); // consumed, no-op
+    expect(groupCount(v)).toBe(2);
+  });
+
+  it("the OTHER directions delete one blank (gradual, §2.2.12.1) — no merge yet", () => {
+    // Delete on the first blank → removes one blank, two groups remain (now lone).
+    const v = mount("a\n\n\nc\n", "x\n\n\nz\n");
+    at(v, first(v));
+    expect(diffDelete(v)).toBe(false); // NOT consumed → default deletes one blank
+    // (default delete would run on the real keystroke; structurally it's allowed.)
     expect(groupCount(v)).toBe(2);
   });
 });
