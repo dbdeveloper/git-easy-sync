@@ -15,21 +15,44 @@
 // doc.
 
 import { afterEach, describe, expect, it } from "vitest";
+import { undo, undoDepth } from "@codemirror/commands";
 import type { EditorView } from "@codemirror/view";
 import { mountDiffPaneV2 } from "../../src/diff2/diff-pane-v2";
 import { readStructure } from "../../src/diff2/diff-structure";
 import { splitModel } from "../../src/diff2/diff-model";
+import {
+  buildCommandBlock,
+  buildEditBlock,
+  serializeBlock,
+  type HistoryBlockV2,
+} from "../../src/diff2/history-log-v2";
+import { ReplayFlag, replayWithGuard, type HistorySink } from "../../src/diff2/history-feed";
 
 const groupCount = (v: EditorView): number =>
   new Set(readStructure(v.state).map((r) => r.group)).size;
 const split = (v: EditorView) => splitModel(v.state.doc.toString(), readStructure(v.state));
+const docStruct = (v: EditorView) => ({ doc: v.state.doc.toString(), struct: readStructure(v.state) });
+
+function arraySink(): HistorySink & { blocks: HistoryBlockV2[] } {
+  const blocks: HistoryBlockV2[] = [];
+  let seq = 0;
+  return {
+    blocks,
+    recordEdit(change, effects, delta, at, sel) {
+      blocks.push(buildEditBlock(++seq, at, change, effects, delta, sel));
+    },
+    recordCommand(kind, at) {
+      blocks.push(buildCommandBlock(kind, ++seq, at));
+    },
+  };
+}
 
 const parents: HTMLElement[] = [];
-function mount(base: string, sibling: string): EditorView {
+function mount(base: string, sibling: string, hooks?: Parameters<typeof mountDiffPaneV2>[3]) {
   const p = document.createElement("div");
   document.body.appendChild(p);
   parents.push(p);
-  return mountDiffPaneV2(p, base, sibling);
+  return mountDiffPaneV2(p, base, sibling, hooks);
 }
 afterEach(() => {
   for (const p of parents.splice(0)) p.remove();
@@ -103,6 +126,40 @@ describe("§2.2.6 / §2.2.9 'neither' — deleting a selection that wholly conta
     press(v, "Delete");
     expect(groupCount(v)).toBe(2); // middle gone; neighbours survive
     expect(split(v)).toEqual({ base: "1\nA\n2\n3\nC\n4\n", sibling: "1\nX\n2\n3\nZ\n4\n" });
+  });
+});
+
+describe("selection-delete UNDO + crash→replay (the setStructure/resolveCaret path)", () => {
+  it("one-group delete: UNDO restores doc+structure (one undo unit); REDO re-deletes", () => {
+    const v = mount("a\nL\nc\n", "a\nR\nc\n");
+    const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
+    const v2 = readStructure(v.state).find((r) => r.ver === 2)!;
+    const before = docStruct(v);
+    v.dispatch({ selection: { anchor: v1.from, head: v2.to } });
+    press(v, "Delete");
+    expect(groupCount(v)).toBe(0);
+    expect(undoDepth(v.state)).toBe(1); // ONE undo unit
+    undo(v);
+    expect(docStruct(v)).toEqual(before); // doc + structure restored together
+    expect(undoDepth(v.state)).toBe(0);
+  });
+
+  it("Ctrl+A clear survives crash → replay (whole-doc-replace-to-'' block)", () => {
+    const sink = arraySink();
+    const flag = new ReplayFlag();
+    const v = mount("a\nL\nc\n", "a\nR\nc\n", { sink, flag });
+    v.dispatch({ selection: { anchor: 0, head: v.state.doc.length } });
+    press(v, "Delete");
+    expect(v.state.doc.toString()).toBe("");
+
+    const jsonl = sink.blocks.map(serializeBlock).join("\n");
+    const sink2 = arraySink();
+    const flag2 = new ReplayFlag();
+    const twin = mount("a\nL\nc\n", "a\nR\nc\n", { sink: sink2, flag: flag2 });
+    expect(replayWithGuard(twin, jsonl, flag2).stoppedAtCorrupt).toBe(false);
+    expect(sink2.blocks.length, "replay must not re-record").toBe(0);
+    expect(docStruct(twin), "recovered == live (empty doc, no groups)").toEqual(docStruct(v));
+    expect(twin.state.doc.toString()).toBe("");
   });
 });
 
