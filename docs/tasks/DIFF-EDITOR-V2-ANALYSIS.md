@@ -1,14 +1,22 @@
-# DIFF-EDITOR-V2 — план решти роботи (інтеракційні фічі)
+# DIFF-EDITOR-V2 — інтеракційні фічі (✅ MILESTONE ЗАВЕРШЕНО 2026-06-20)
 
-> **V2-редактор фактично ПРАЦЮЄ.** Модель (terminal-`\n` + Inclusive RangeSet), представлення, резолюція
-> (scenario-2 region-replace), навігація (`cursorVert` крізь height:0), нумерація, персистентність
-> (command-log `history-log-v2`/`history-replay-v2`), commit/recovery (representation-independent
-> `commit7Step`/`recoverCommit`), absent-base + empty-resolution — **shipped на гілці `fix-diff-editor`**.
+> **✅ УВЕСЬ інтеракційний roadmap РЕАЛІЗОВАНО й протестовано** (гілка `fix-diff-editor`, pushed @ `2c698a9`,
+> device-verified у реальному Obsidian). Базовий V2-редактор (terminal-`\n` + Inclusive RangeSet, представлення,
+> резолюція scenario-2, навігація `cursorVert`, нумерація, персистентність command-log, commit/recovery,
+> absent-base + empty-resolution) shipped раніше; ця сесія додала останні інтеракційні фічі:
 >
-> Цей документ описує **ЛИШЕ останні фічі**, яких бракує:
-> **§2.2.7** clipboard, **§2.2.12** злиття diff-groups, **§2.2.13** динамічний re-resolve, **§2.2.5 п.3**
-> merge-trigger. Історія міграції §1→V2 (рішення Minimal-bridge, gate-спайки 1a/1b, фазовий план 0–5) —
-> ВИКОНАНА і тут не дублюється. Складено з /advisor 2026-06-20.
+> - **§2.2.13** auto-resolve (VANISH `ver1==ver2`) + split / shrink-front / shrink-back (scoped re-diff,
+>   `diff-auto-resolve.ts`);
+> - **§2.2.12 + §2.2.5 п.3** merge (Delete/Backspace роздільника, Ctrl+Y/Shift+Mod+K delete-line, select+delete,
+>   2/3/4-групове злиття, multi-run каскад) з §6.1 caret (join-point / ver2-при-порожньому-ver1);
+> - **§2.2.4 p5c** Ctrl+A / group-spanning selection delete (= §2.2.9 "neither"), terminal-safe;
+> - **§2.2.7 clipboard** COPY + PASTE (parse + materialize + каскад) + CUT (single shared predicate);
+> - boundary-bug-фікси (Backspace на separator/group-start §2.2.5 п.1-3/§2.2.4 п.6), Ctrl+K.
+>
+> Усі fixes пройшли gate-спайк + /advisor done-check; **diff2 988 unit-тестів зелені, tsc чисто.** Решта документа —
+> запис РІШЕНЬ і АРХІТЕКТУРИ цього milestone (модель «text + Ranges», context-dispatch, caret-правила, gate).
+> Залишок (НЕ блокуючий): toolbar-редизайн, History/Compare/Deleted режими, entry-points E4/E5/E6 — поза цим
+> milestone. Історія міграції §1→V2 (Minimal-bridge, gate-спайки 1a/1b, фази 0–5) ВИКОНАНА, тут не дублюється.
 
 ---
 
@@ -127,18 +135,19 @@ OFF (§2.2.4(10)) + group-atomic selection (§2.2.6, `diff-selection.ts`) + term
 
 ---
 
-## 4. Послідовність (tightest-constraint-first)
+## 4. Послідовність (tightest-constraint-first) — ✅ ВСІ КРОКИ ВИКОНАНІ
 
-1. **GATE-СПАЙК** (mandated 2.2.12/2.2.13) — §5 нижче. Якщо провалиться, модель «live-filter рахує каскад раз →
-   записує (text, structure) → undo/redo+replay застосовують» змінюється → блокує все.
-2. **Auto-resolve (ver1==ver2 → vanish)** — заявлена кінцева мета користувача + найдешевший вироджений re-diff.
-   Будує мінімальний edit-location-driven recompute scaffolding. ** Shipped first.**
-3. **Повний 2.2.13** (split / shrink-after / shrink-before) на тому ж scaffolding — 5 сценаріїв.
-4. **2.2.12 merge cases 1&2** (Delete/Backspace-роздільника, select+Delete) + **2.2.5 п.3** trigger + Ctrl+Y.
-   Concat affected-set → переви́користовує re-diff з кроку 3 (per 1210).
-5. **2.2.7 clipboard COPY** — незалежна; serialize виділеної групи у fenced-блок. Слот будь-де після кроку 1.
-6. **2.2.7 PASTE** (парсер fenced-блоку → вставка групи) → **розблоковує 2.2.12 cases 3&4** (paste-між-групами,
-   paste-bracketed-by-groups) тими самими тригерами кроку 4.
+1. ✅ **GATE-СПАЙК** — `v2-restructure-replay-spike` (augment-in-filter = 1 undo unit; replay застосовує записане).
+2. ✅ **Auto-resolve (VANISH)** — `diff-auto-resolve.ts` `vanishSpec`; both-empty теж vanish (buildModel ніколи не
+   видає both-empty).
+3. ✅ **Повний 2.2.13** split / shrink-front / shrink-back — `splitShrinkSpec` + `rediffSplice` + `caretInSubDoc`
+   (caret слідує за редагованим рядком).
+4. ✅ **2.2.12 merge** cases 1&2 + **2.2.5 п.3** trigger + Ctrl+Y/Shift+Mod+K (`diffDeleteLine`, terminal-safe) +
+   select+delete; §6.1 caret (join-point / ver2-при-порожньому-ver1).
+5. ✅ **2.2.7 COPY** — `copyClipboardText`/`serializeGroup` (byte-exact Examples 6/7).
+6. ✅ **2.2.7 PASTE** — `pasteSpec` (parse→materialize→multi-run каскад), cases 3&4; paste-merge caret = cascade-final.
+7. ✅ **CUT** — COPY + selection-delete, один shared `selectionSpansTerminal` (copy⟺delete не розходяться).
++ ✅ **§2.2.4 p5c** Ctrl+A/group-spanning selection-delete; boundary bug-fixes; Ctrl+K.
 
 ---
 
