@@ -34,6 +34,18 @@ afterEach(() => {
 // Let the fire-and-forget file write settle before asserting on disk.
 const settle = () => new Promise((r) => setTimeout(r, 10));
 
+// Poll until `pred` holds, instead of a fixed sleep — the fire-and-forget
+// adapter.remove/write can take >10ms under parallel load, which made the disk
+// asserts flaky (race between the 10ms settle and the async file op). Polls every
+// 5ms up to 2s, then throws so a genuine never-true surfaces as a clear failure.
+async function waitUntil(pred: () => boolean | Promise<boolean>): Promise<void> {
+  for (let i = 0; i < 400; i++) {
+    if (await pred()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error("waitUntil: condition not met within 2s");
+}
+
 describe("classifyAuthOutcome — per-drain mapping", () => {
   it("null / undefined (success) → clear", () => {
     expect(classifyAuthOutcome(null)).toBe("clear");
@@ -70,7 +82,7 @@ describe("TokenExpiredFlag — in-memory authoritative + file mirror", () => {
     await f.init();
     f.set();
     expect(f.isExpiredCached()).toBe(true); // synchronous, before any await
-    await settle();
+    await waitUntil(() => vault.adapter.exists(MARKER));
     expect(await vault.adapter.exists(MARKER)).toBe(true);
     expect(await f.isExpired()).toBe(true); // fresh on-disk read agrees
   });
@@ -83,7 +95,7 @@ describe("TokenExpiredFlag — in-memory authoritative + file mirror", () => {
     expect(f.isExpiredCached()).toBe(true);
     f.clear();
     expect(f.isExpiredCached()).toBe(false); // synchronous
-    await settle();
+    await waitUntil(async () => !(await vault.adapter.exists(MARKER)));
     expect(await vault.adapter.exists(MARKER)).toBe(false);
   });
 
@@ -96,7 +108,7 @@ describe("TokenExpiredFlag — in-memory authoritative + file mirror", () => {
     f.set();
     f.set(); // double-set
     expect(f.isExpiredCached()).toBe(true);
-    await settle();
+    await waitUntil(() => vault.adapter.exists(MARKER));
     expect(await vault.adapter.exists(MARKER)).toBe(true);
   });
 
@@ -124,7 +136,7 @@ describe("TokenExpiredFlag — in-memory authoritative + file mirror", () => {
     const f = new TokenExpiredFlag(vault, PLUGIN_DIR);
     await f.init();
     f.set();
-    await settle();
+    await waitUntil(() => vault.adapter.exists(MARKER));
     await vault.adapter.remove(MARKER); // something deletes the file behind us
     expect(f.isExpiredCached()).toBe(true); // memory wins
   });

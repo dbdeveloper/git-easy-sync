@@ -4,6 +4,13 @@ import path from "path";
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
+    // The diff2 suite mounts real CM6 EditorViews under happy-dom (heavy), and
+    // some fuzz/replay tests do hundreds of dispatches. Under parallel load on a
+    // busy machine these legitimately exceed Vitest's 5s default and time out
+    // (they pass in ~1.5s standalone). Bump the ceiling so load-induced timeouts
+    // stop masquerading as failures, while a genuine hang still surfaces.
+    testTimeout: 30000,
+    hookTimeout: 30000,
     // Integration tests live under tests/integration/ and perf
     // baselines under tests/perf/. Both reach the real GitHub API
     // and have their own configs (vitest.integration.config.ts and
