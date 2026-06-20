@@ -71,6 +71,35 @@ describe("assessHistoryV2", () => {
     ].join("\n");
     expect(assessHistoryV2(jsonl).edits).toBe(1);
   });
+
+  it("(bug-31/32) counts only newGroup edits = live undo depth, NOT raw edit blocks", () => {
+    // a coalesced burst: 1 newGroup + 2 continuations (newGroup:false) → ONE undo
+    // group, not three. The old all-edits count gave 3; the live undo depth is 1.
+    const jsonl = [editLine(1, 1), editLine(2, 0), editLine(3, 0)].join("\n");
+    expect(assessHistoryV2(jsonl).edits).toBe(1); // ← was 3 before the metric fix
+  });
+
+  it("(bug-31/32) net over coalesced bursts + undos = live undo depth", () => {
+    // 3 groups (each a 2-block coalesced burst) then 2 undos → live depth 1.
+    const jsonl = [
+      editLine(1, 1), editLine(2, 0), // group 1
+      editLine(3, 1), editLine(4, 0), // group 2
+      editLine(5, 1), editLine(6, 0), // group 3
+      serializeBlock(buildCommandBlock("undo", 7, "t")),
+      serializeBlock(buildCommandBlock("undo", 8, "t")),
+    ].join("\n");
+    // raw-edit count would be 6−2 = 4; live undo groups = 3−2 = 1.
+    expect(assessHistoryV2(jsonl).edits).toBe(1);
+  });
+
+  it("(bug-31/32) a fully-undone session is empty (no live groups)", () => {
+    const jsonl = [
+      editLine(1, 1), editLine(2, 0), // one coalesced group
+      serializeBlock(buildCommandBlock("undo", 3, "t")),
+    ].join("\n");
+    expect(assessHistoryV2(jsonl).empty).toBe(true); // 1 newGroup − 1 undo = 0
+    expect(assessHistoryV2(jsonl).edits).toBe(0);
+  });
 });
 
 describe("replayStep — pure classifier", () => {

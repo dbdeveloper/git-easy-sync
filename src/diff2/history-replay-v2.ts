@@ -64,9 +64,17 @@ export interface HistoryAssessmentV2 {
 // matters: a fresh/stale session shows no modal.
 export function assessHistoryV2(jsonl: string): HistoryAssessmentV2 {
   const { blocks, stoppedAtCorrupt } = scanHistoryV2(jsonl);
+  // (bug-31/32) Count only `newGroup` edits — that is the live UNDO DEPTH, which is
+  // what "edits saved" means to the user. CM6 coalesces a typing burst into ONE
+  // undo group but the log keeps one edit block per keystroke (`newGroup:false`
+  // continuations); counting ALL edit blocks over-reports wildly (the real log:
+  // 275 edits / 133 newGroup → net 162, but only 20 live undo-groups). Each newGroup
+  // pushes a group (+1); undo moves one group to the redo stack (−1); redo reverses
+  // (+1); truncation clears only the redo stack (never undo) → not in this formula.
+  // Result === CM6's undoDepth after replay.
   let net = 0;
   for (const b of blocks) {
-    if (b.kind === "edit") net += 1;
+    if (b.kind === "edit") net += b.newGroup ? 1 : 0;
     else if (b.kind === "undo") net -= 1;
     else net += 1; // redo
   }

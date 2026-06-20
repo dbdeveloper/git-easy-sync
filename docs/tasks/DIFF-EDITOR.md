@@ -180,9 +180,41 @@ diff-library drift може зсунути межі при тих самих б�
   undo/redo) → recovered doc+структура+undoDepth==live, resolution-undo→group+`before`, burst→1 крок.
   Net-глибина = (#edit − #undo + #redo) переграних. **Усі persistence-gate'и закриті → продакшн розблоковано.**
 
-#### §0.5.5 «Карусель» — compaction (DESIGN-ONLY, відкладено)
+#### §0.5.5 «Карусель» — compaction (DESIGN; reopen-тригер у роботі 2026-06-20)
 Append-only лог росте; periodic compaction його стискає (видаляє скасовані undo/redo-послідовності), зберігаючи
-net-стан. **Тригери (OR):** (1) поріг кількості undo-записів; (2) поріг суми **скасованих байтів** (накопичувати
+net-стан.
+
+> **REOPEN-ТРИГЕР (рішення користувача 2026-06-20, bug-31/32).** При відкритті конфлікту з diff-panel, якщо
+> `history.jsonl` має filesize > 0, **СПЕРШУ запустити `compact()`** і atomic-перезаписати `history.jsonl`, а
+> ВЖЕ ПОТІМ показувати модалку «Resume previous edit session?» з пост-компресійним «edits saved». Це найбезпечніший
+> момент (ще немає живої undo-стопки в редакторі → compaction безумовно безпечна), і він тримає лог малим на
+> природному checkpoint. Threshold-тригер (`shouldCompact` mid-edit) — окремий ПІЗНІШИЙ інкремент (де
+> undo-preservation під час активного редагування складніша; не блокуюче).
+>
+> **МETRIC-нюанс (bug-31/32, інспекція реального логу 2026-06-20):** «edits saved» у модалці росло до 162 при
+> живій undo-глибині ~20 — це **НЕ bloat, а metric-баг**. `assessHistoryV2.edits = #edit − #undo + #redo` рахує
+> ВСІ edit-блоки, але CM6 коалесує бурст у ОДНУ undo-групу (кілька `newGroup:false`-блоків). Реальний лог: 275 edit
+> (з них 133 `newGroup:true`), 133 undo, 20 redo → net 162, але **живих undo-груп = 133−133+20 = 20**. Правильна
+> «edits saved» = `#(edit&&newGroup) − #undo + #redo`. Консервативна compaction net-інваріантна → лічильник НЕ
+> змінює; metric — окремий дешевий фікс (рахувати лише `newGroup`-edits).
+
+> **СЕМАНТИКА = CONSERVATIVE (рішення користувача 2026-06-20).** Приклад: 10 правок → undo×7 → +1 правка → після
+> compaction РІВНО 4 (перші 3, що пережили undo, + 1 нова). Тобто прибираємо ЛИШЕ **мертві** edits (undone +
+> redo-гілка обрізана наступною правкою) разом з їх undo-командами; **живу** undo/redo-досяжність зберігаємо
+> (нічого досяжного не викидаємо — НЕ aggressive). Після recovery undo/redo сягають рівно як до краху.
+> **POSITION-SAFETY (чому видалення коректне):** мертві edits скасовуються (undo) ПЕРЕД наступною правкою, тож
+> `ChangeSet` живих edits після них уже позиціонований відносно doc БЕЗ мертвих → видалення не зсуває позиції.
+> **АЛГОРИТМ (pure, simulate-our-undo-model):** пройти блоки, ведучи `undoStack`/`redoStack` груп (edit newGroup→
+> push нову групу + CLEAR redoStack[обрізання]; newGroup:false→append у топ-групу + clear redo; undo→pop undo→push
+> redo; redo→pop redo→push undo). Наприкінці emit мінімальний лог = [живі undo-групи edits, у порядку] + [живі
+> redo-групи edits] + [undo×(redo-count)] → replay дає той самий doc+structure+undo-depth+redo-depth. Re-seq/re-sum.
+> **ВИМОГА (користувач 2026-06-20):** після compact+recovery-replay undo-to-bottom (рівно N=живих-груп UNDO) має
+> повернути до ПОЧАТКОВОГО стану конфлікту (базовий diff-документ). Conservative це гарантує (зберігає всі N живих
+> undo-груп). ⇒ ORACLE = **повний lockstep undo-до-дна + redo-до-верху**: `replay(compact(log))` == `replay(log)`
+> покроково (doc+structure+caret на КОЖНОМУ кроці), не лише фінальний стан (lossy vs conservative нерозрізнимі на
+> фіналі — різниця лише в undo/redo-проході).
+
+**Тригери (OR):** (1) поріг кількості undo-записів; (2) поріг суми **скасованих байтів** (накопичувати
 розмір, що кожен undo відкотив). **Bloat-stats** у лог (total bytes/entries/undo-count/cancelled-bytes) → щоб
 емпірично вивести константи. **Compaction крутиться на MAIN** (рішення 2026-06-13: воркер-офлоуд відмінено —
 тригериться РІДКО по порогу, тож невеликий фріз на мобільному, якщо й виникне, то дуже-дуже рідко; не вартий
