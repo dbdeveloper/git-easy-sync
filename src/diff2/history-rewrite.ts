@@ -24,7 +24,7 @@
 
 import type { Vault } from "obsidian";
 import { autosaveDir } from "./autosave-store";
-import { compactHistoryV2 } from "./history-replay-v2";
+import { compactHistoryV2, scanHistoryV2 } from "./history-replay-v2";
 
 const historyPathFor = (conflictId: string): string => `${autosaveDir(conflictId)}/history.jsonl`;
 
@@ -86,14 +86,18 @@ export async function recoverHistoryRewrite(
 // original`) makes a clean (no-dead) log a no-op — compact re-seqs from 1 and
 // re-sums, and a clean log already serializes identically, so no needless swap /
 // rename churn on every reopen. Callers MUST gate on no commit-in-flight (done.json
-// absent) and no live writer (true at reopen, before mount). Returns whether it
-// rewrote — for logging / assertions.
-export async function compactSessionLog(vault: Vault, conflictId: string): Promise<boolean> {
+// absent). Used at reopen (no live writer) AND as the writer's threshold-trigger
+// runner (chained on the writer's tail → race-free with appends). Returns the NEW
+// on-disk block count when it rewrote (the trigger resets seq to it), null on no-op.
+export async function compactSessionLog(
+  vault: Vault,
+  conflictId: string,
+): Promise<number | null> {
   const path = historyPathFor(conflictId);
-  if (!(await vault.adapter.exists(path))) return false;
+  if (!(await vault.adapter.exists(path))) return null;
   const original = await vault.adapter.read(path);
   const compacted = compactHistoryV2(original);
-  if (compacted === original) return false; // clean log → no-op (no churn)
+  if (compacted === original) return null; // clean log → no-op (no churn)
   await rewriteHistoryAtomic(vault, conflictId, compacted);
-  return true;
+  return scanHistoryV2(compacted).blocks.length;
 }

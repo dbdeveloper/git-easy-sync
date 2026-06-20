@@ -61,7 +61,9 @@ export interface HistorySink {
     at: string,
     sel?: SelPair, // ordinary edit's before/after selection (faithful u/r replay)
   ): void;
-  recordCommand(kind: "undo" | "redo", at: string): void;
+  // undoneBytes (undo only) = the byte span the undo reverted, for the §0.5.5
+  // cancelled-bytes compaction trigger. 0 for redo.
+  recordCommand(kind: "undo" | "redo", at: string, undoneBytes?: number): void;
 }
 
 // Shared mutable flag — ONE instance wired into BOTH the listener and
@@ -104,7 +106,16 @@ export function historyFeedListener(
         };
         sink.recordEdit(tr.changes.toJSON(), tr.effects, delta, at, sel);
       } else {
-        sink.recordCommand(action, at);
+        // §0.5.5 cancelled-bytes: an UNDO's change is the inverse of the group it
+        // reverted — measure its full span (deleted length + re-inserted length) so
+        // a 100KB paste/coalesced-burst undone as ONE group counts ~100KB. redo → 0.
+        let undoneBytes = 0;
+        if (action === "undo") {
+          tr.changes.iterChanges((fromA, toA, _fb, _tb, ins) => {
+            undoneBytes += toA - fromA + ins.length;
+          });
+        }
+        sink.recordCommand(action, at, undoneBytes);
       }
     }
   });

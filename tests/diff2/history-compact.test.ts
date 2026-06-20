@@ -88,27 +88,27 @@ function replayInto(base: string, sibling: string, jsonl: string): EditorView {
   return v;
 }
 
-// THE ORACLE: replay(original) and replay(compacted) must match step-by-step
-// through undo-all-the-way-down AND redo-all-the-way-up (doc + structure + caret).
-function assertReplayEquivalent(base: string, sibling: string, jsonl: string): void {
-  const a = replayInto(base, sibling, compactHistoryV2(jsonl));
-  const b = replayInto(base, sibling, jsonl);
-  expect(undoDepth(a.state), "compacted undo depth == original").toBe(undoDepth(b.state));
-  expect(dcs(a), "post-replay state equal").toEqual(dcs(b));
-
-  const depth = undoDepth(b.state);
+// THE ORACLE: two logs replay to the SAME state and stay equal step-by-step through
+// undo-all-the-way-down AND redo-all-the-way-up (doc + structure each step).
+function assertLogsEquivalent(base: string, sibling: string, a: string, b: string): void {
+  const va = replayInto(base, sibling, a);
+  const vb = replayInto(base, sibling, b);
+  expect(undoDepth(va.state), "undo depth equal").toBe(undoDepth(vb.state));
+  expect(dcs(va), "post-replay state equal").toEqual(dcs(vb));
+  const depth = undoDepth(vb.state);
   for (let i = 0; i < depth; i++) {
-    undo(a);
-    undo(b);
-    expect(dcs(a), `undo step ${i + 1}/${depth}`).toEqual(dcs(b));
+    undo(va);
+    undo(vb);
+    expect(dcs(va), `undo step ${i + 1}/${depth}`).toEqual(dcs(vb));
   }
-  // a (and b) are now at the bottom of the undo stack.
   for (let i = 0; i < depth; i++) {
-    redo(a);
-    redo(b);
-    expect(dcs(a), `redo step ${i + 1}/${depth}`).toEqual(dcs(b));
+    redo(va);
+    redo(vb);
+    expect(dcs(va), `redo step ${i + 1}/${depth}`).toEqual(dcs(vb));
   }
 }
+const assertReplayEquivalent = (base: string, sibling: string, jsonl: string): void =>
+  assertLogsEquivalent(base, sibling, compactHistoryV2(jsonl), jsonl);
 
 const editCount = (jsonl: string) =>
   scanHistoryV2(jsonl).blocks.filter((b) => b.kind === "edit").length;
@@ -184,6 +184,38 @@ describe("compactHistoryV2 — conservative, replay-equivalent both directions",
 
   it("empty log → empty", () => {
     expect(compactHistoryV2("")).toBe("");
+  });
+});
+
+describe("append-after-compact boundary (mid-session threshold-trigger surface)", () => {
+  // The case mid-edit compaction introduces and nothing else covers: the log becomes
+  // [compacted prefix] ++ [new appends]. A crash→replay across that boundary must
+  // reconstruct the live editor exactly (advisor 2026-06-20). We simulate the trigger
+  // by compacting the prefix, then appending more REAL edits to the SAME live view
+  // (its CM6 history is untouched by compaction), and assert replay(boundary) ==
+  // replay(full-uncompacted) through the whole undo/redo walk spanning the seam.
+  it("compacted prefix + later edits replays == the full uncompacted session", () => {
+    const v = mount("seed\n", "seed\n");
+    const rec = recorder(v);
+    // prefix L1 — has dead pairs (5 edits, undo 3, +1 truncating edit).
+    for (let i = 0; i < 5; i++) rec.edit({ changes: { from: 0, insert: `${i}\n` }, userEvent: "input.type" });
+    rec.undo(); rec.undo(); rec.undo();
+    rec.edit({ changes: { from: 0, insert: "X\n" }, userEvent: "input.type" });
+    const l1Count = rec.log.length;
+    const compactedPrefix = compactHistoryV2(rec.jsonl());
+
+    // continue the SAME view (CM6 history intact) — these are the post-compact appends.
+    rec.edit({ changes: { from: 0, insert: "A\n" }, userEvent: "input.type" });
+    rec.edit({ changes: { from: 0, insert: "B\n" }, userEvent: "input.type" });
+    rec.undo(); // exercise undo across the seam too
+    const l2 = rec.log.slice(l1Count).map(serializeBlock).join("\n");
+
+    const fullLog = rec.jsonl(); // uncompacted L1 ++ L2
+    const boundaryLog = `${compactedPrefix}${l2}\n`; // compacted prefix ++ raw L2
+
+    // both must scan clean (every block self-verifies — seq gap across the seam is fine).
+    expect(scanHistoryV2(boundaryLog).stoppedAtCorrupt).toBe(false);
+    assertLogsEquivalent("seed\n", "seed\n", boundaryLog, fullLog);
   });
 });
 

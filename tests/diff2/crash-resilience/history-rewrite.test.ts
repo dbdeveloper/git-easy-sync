@@ -17,6 +17,8 @@ import {
   recoverHistoryRewrite,
 } from "../../../src/diff2/history-rewrite";
 import { assessHistoryV2, scanHistoryV2 } from "../../../src/diff2/history-replay-v2";
+import { HistoryWriterV2 } from "../../../src/diff2/history-log-v2";
+import { compactSessionLog as runner } from "../../../src/diff2/history-rewrite";
 
 const ID = "rewrite-crash";
 const OLD = "old-line-1\nold-line-2\nold-line-3\n";
@@ -114,7 +116,7 @@ describe("compactSessionLog — the reopen-trigger end-to-end on disk", () => {
 
     const before = scanHistoryV2(original);
     const rewrote = await compactSessionLog(vault, ID);
-    expect(rewrote).toBe(true);
+    expect(rewrote).not.toBeNull(); // number = block count
 
     const onDisk = await vault.adapter.read(P()); // what the modal/replay now read
     const after = scanHistoryV2(onDisk);
@@ -139,13 +141,65 @@ describe("compactSessionLog — the reopen-trigger end-to-end on disk", () => {
     await compactSessionLog(vault, ID); // first reopen compacts
     const afterFirst = await vault.adapter.read(P());
     const rewroteAgain = await compactSessionLog(vault, ID); // second reopen
-    expect(rewroteAgain).toBe(false); // clean log → no-op
+    expect(rewroteAgain).toBeNull(); // clean log → no-op
     expect(await vault.adapter.read(P())).toBe(afterFirst); // byte-identical, untouched
   });
 
   it("missing history.jsonl → no-op (returns false)", async () => {
     const { vault } = fixture();
     await mkdir(vault);
-    expect(await compactSessionLog(vault, ID)).toBe(false);
+    expect(await compactSessionLog(vault, ID)).toBeNull();
+  });
+});
+
+// §0.5.5 threshold-trigger: the writer fires compaction on its tail when stats
+// cross 100 undos OR 200KB cancelled. Driven through the REAL HistoryWriterV2 +
+// its injected compactRunner (= compactSessionLog), so the trigger wiring (not just
+// the pure fn) is exercised.
+describe("HistoryWriterV2 threshold-trigger fires + resets", () => {
+  const CHANGE = [1, [0, "x"]]; // opaque ChangeSet.toJSON() — compact reorders, never applies it
+
+  it("crossing 100 undos compacts the on-disk log on the writer's tail", async () => {
+    const { vault } = fixture();
+    await mkdir(vault);
+    const w = new HistoryWriterV2(vault, ID, 0, () => runner(vault, ID));
+    // 100 dead (edit,undo) cycles: each edit truncates the prior redo → all dead.
+    for (let i = 0; i < 100; i++) {
+      w.recordEdit(CHANGE, [], 1, "t"); // newGroup
+      w.recordCommand("undo", "t");
+    }
+    w.recordEdit(CHANGE, [], 1, "t"); // the lone survivor
+    await w.drain();
+    const onDisk = scanHistoryV2(await vault.adapter.read(P()));
+    // 201 recorded → compacted to a handful (100 dead pairs removed).
+    expect(onDisk.blocks.length).toBeLessThan(10);
+    expect(onDisk.stoppedAtCorrupt).toBe(false);
+  });
+
+  it("crossing 200KB cancelled (few big undos) also fires", async () => {
+    const { vault } = fixture();
+    await mkdir(vault);
+    const w = new HistoryWriterV2(vault, ID, 0, () => runner(vault, ID));
+    const BIG = 100 * 1024; // 100KB cancelled per undo
+    for (let i = 0; i < 3; i++) {
+      w.recordEdit(CHANGE, [], 1, "t");
+      w.recordCommand("undo", "t", BIG); // 3×100KB = 300KB > 200KB after the 2nd
+    }
+    w.recordEdit(CHANGE, [], 1, "t");
+    await w.drain();
+    const onDisk = scanHistoryV2(await vault.adapter.read(P()));
+    expect(onDisk.blocks.length).toBeLessThan(8); // only 3 undos but byte-trigger fired
+  });
+
+  it("below thresholds → NO compaction (log grows untouched)", async () => {
+    const { vault } = fixture();
+    await mkdir(vault);
+    const w = new HistoryWriterV2(vault, ID, 0, () => runner(vault, ID));
+    for (let i = 0; i < 5; i++) {
+      w.recordEdit(CHANGE, [], 1, "t");
+      w.recordCommand("undo", "t", 1024);
+    }
+    await w.drain();
+    expect(scanHistoryV2(await vault.adapter.read(P())).blocks.length).toBe(10); // all kept
   });
 });

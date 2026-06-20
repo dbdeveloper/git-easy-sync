@@ -24,6 +24,7 @@ import { splitModel } from "./diff-model";
 import { readStructure } from "./diff-structure";
 import { type DiffViewConfig, mountDiffPaneV2 } from "./diff-pane-v2";
 import { HistoryWriterV2 } from "./history-log-v2";
+import { compactSessionLog } from "./history-rewrite";
 import { ReplayFlag, replayWithGuard } from "./history-feed";
 import { applyResolveAll, type ResolveChoice, type ResolveOpts } from "./diff-resolve";
 import { CursorScheduler, type CursorActivity } from "./cursor-timer";
@@ -67,7 +68,13 @@ export class DiffPaneOwner {
     private readonly logger?: Logger,
   ) {
     this.resolveOpts = { label: config.remoteLabel, date: config.date };
-    this.writer = new HistoryWriterV2(vault, conflictId, startSeq);
+    // §0.5.5 threshold-trigger: the writer fires this on its tail when the log
+    // crosses 100 undos / 200KB cancelled. compactSessionLog rewrites the on-disk
+    // log + returns the new block count (→ the writer resets seq). Mutually
+    // exclusive with appends (runs on the tail) → race-free.
+    this.writer = new HistoryWriterV2(vault, conflictId, startSeq, () =>
+      compactSessionLog(vault, conflictId),
+    );
     this.cursorScheduler = new CursorScheduler(() => this.flushCursor());
     this.view = mountDiffPaneV2(parent, base, sibling, {
       sink: this.writer,

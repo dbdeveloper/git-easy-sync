@@ -226,11 +226,12 @@ export interface CompactThresholds {
   maxCancelledBytes: number; // OR-trigger 2: sum of cancelled bytes
 }
 
-// Placeholders — to be derived empirically from logged bloat-stats (§0.5.5).
-// Conservative so compaction is RARE (a rare main-thread freeze is acceptable).
+// User-set (2026-06-20): compact once the log holds 100 excess modify-undo pairs
+// OR those pairs total > 200 KB of cancelled content. Rare → a rare main-thread
+// compaction freeze is acceptable (§0.5.5).
 export const DEFAULT_COMPACT_THRESHOLDS: CompactThresholds = {
-  maxUndoCount: 200,
-  maxCancelledBytes: 1_000_000,
+  maxUndoCount: 100,
+  maxCancelledBytes: 200 * 1024,
 };
 
 export function shouldCompact(stats: BloatStats, t: CompactThresholds = DEFAULT_COMPACT_THRESHOLDS): boolean {
@@ -248,11 +249,18 @@ export class HistoryWriterV2 {
   private stats: BloatStats = emptyStats();
   private queue: string[] = [];
   private tail: Promise<void> = Promise.resolve();
+  private compacting = false;
 
+  // `compactRunner` (injected by the owner — avoids a history-log↔history-rewrite
+  // import cycle) runs compact+atomic-swap and returns the new on-disk block count
+  // (or null if nothing changed). It runs ON this.tail (chained after a flush), so
+  // it is MUTUALLY EXCLUSIVE with appends — no read-then-append-then-swap race
+  // (§0.5.5 threshold-trigger).
   constructor(
     private readonly vault: Vault,
     private readonly autosaveId: string,
     startSeq = 0,
+    private readonly compactRunner?: () => Promise<number | null>,
   ) {
     this.seq = startSeq;
   }
@@ -282,11 +290,36 @@ export class HistoryWriterV2 {
   private enqueue(block: HistoryBlockV2, undoneBytes = 0): void {
     this.stats = accrueStats(this.stats, block, undoneBytes);
     this.queue.push(serializeBlock(block));
-    this.tail = this.tail.then(() => this.flush()).catch((e) => {
-      // A failed append loses one increment; session snapshots + prior history +
-      // the [← back] Step-1 drain are the backstop. NEVER propagate into CM6.
-      console.error("[gh-sync] diff2 v2 history append failed", e);
-    });
+    this.tail = this.tail
+      .then(() => this.flush())
+      .then(() => this.maybeCompact())
+      .catch((e) => {
+        // A failed append loses one increment; session snapshots + prior history +
+        // the [← back] Step-1 drain are the backstop. NEVER propagate into CM6.
+        console.error("[gh-sync] diff2 v2 history append failed", e);
+      });
+  }
+
+  // §0.5.5 threshold-trigger — runs on the tail after a flush. shouldCompact reads
+  // the live stats (undoCount / cancelledBytes); on a hit, compactRunner rewrites
+  // the on-disk log and we reset seq to the new block count (so subsequent appends
+  // stay contiguous on the compacted file) + reset stats. The compacted log is
+  // replay-equivalent to the original, so a crash after this still recovers the live
+  // editor state. compactRunner itself is async-chained — control returns to the
+  // editor immediately; the compaction runs behind the next appends.
+  private async maybeCompact(): Promise<void> {
+    if (this.compacting || !this.compactRunner) return;
+    if (!shouldCompact(this.stats)) return;
+    this.compacting = true;
+    try {
+      const n = await this.compactRunner();
+      if (n !== null) {
+        this.seq = n;
+        this.stats = emptyStats();
+      }
+    } finally {
+      this.compacting = false;
+    }
   }
 
   // Append all queued blocks as one NDJSON write (adapter.append is mobile-proven
