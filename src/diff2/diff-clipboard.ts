@@ -58,6 +58,83 @@ export function serializeGroup(c1: string, c2: string): string {
   );
 }
 
+// ── §2.2.7 п.4–6 — PARSE (clipboard text → segments), the inverse of serialize ──
+//
+// A clipboard string is a sequence of normal text and fenced ```github-easy-sync
+// blocks. parseClipboard scans for blocks; a block that matches rules 4(a–f)
+// EXACTLY becomes a group segment, anything else (incl. a malformed fence, rule 5)
+// stays literal normal text. All-or-nothing PER BLOCK. Pure — the paste filter
+// (step 6b) materializes these segments into the doc + structure.
+
+export type ClipSegment =
+  | { kind: "normal"; text: string }
+  | { kind: "group"; ver1: string[]; ver2: string[] };
+
+// strip the trailing ↵ (rule 4c/4e: "↵ перед \n") — once.
+const stripGlyph = (s: string): string => (s.endsWith(NL_GLYPH) ? s.slice(0, -1) : s);
+
+// Try to parse a fenced block starting at line `start`. Returns the group's
+// ver1/ver2 line contents + the index AFTER the close fence, or null if ANY rule
+// 4(a–f) fails (→ caller treats the opening line as ordinary normal text, rule 5).
+function tryParseBlock(
+  lines: string[],
+  start: number,
+): { ver1: string[]; ver2: string[]; next: number } | null {
+  if (lines[start] !== FENCE_OPEN) return null; // 4a
+  if (lines[start + 1] !== VER1_OPEN) return null; // 4b
+  let i = start + 2;
+  const ver1: string[] = [];
+  while (i < lines.length && lines[i] !== SEP) {
+    if (!lines[i].startsWith(VER1_PREFIX)) return null; // 4c — must be "- "
+    ver1.push(stripGlyph(lines[i].slice(VER1_PREFIX.length)));
+    i++;
+  }
+  if (i >= lines.length) return null; // 4d — no "=="
+  i++; // skip "=="
+  const ver2: string[] = [];
+  while (i < lines.length && lines[i] !== VER2_CLOSE) {
+    if (!lines[i].startsWith(VER2_PREFIX)) return null; // 4e — must be "+ "
+    ver2.push(stripGlyph(lines[i].slice(VER2_PREFIX.length)));
+    i++;
+  }
+  if (i >= lines.length) return null; // 4e — no "≫"
+  i++; // skip "≫"
+  if (lines[i] !== FENCE_CLOSE) return null; // 4f — close fence
+  return { ver1, ver2, next: i + 1 };
+}
+
+export function parseClipboard(text: string): ClipSegment[] {
+  const lines = text.split("\n");
+  // line i contributed "text\n" in the original unless it's the last split part.
+  const lineWithNL = (i: number): string => lines[i] + (i < lines.length - 1 ? "\n" : "");
+  const segments: ClipSegment[] = [];
+  let normal = "";
+  const flush = (): void => {
+    if (normal !== "") segments.push({ kind: "normal", text: normal });
+    normal = "";
+  };
+  let i = 0;
+  while (i < lines.length) {
+    const block = tryParseBlock(lines, i);
+    if (block) {
+      flush();
+      segments.push({ kind: "group", ver1: block.ver1, ver2: block.ver2 });
+      i = block.next;
+    } else {
+      normal += lineWithNL(i);
+      i++;
+    }
+  }
+  flush();
+  return segments;
+}
+
+// True iff the clipboard contains at least one convertible diff-group (so the
+// paste filter knows to rewrite rather than insert verbatim).
+export function clipboardHasGroup(text: string): boolean {
+  return parseClipboard(text).some((s) => s.kind === "group");
+}
+
 const verContent = (doc: Text, r: VerRange): string => doc.sliceString(r.from, r.to - 1);
 
 // Does the selection include any ver-block terminal \n? (Mirror of

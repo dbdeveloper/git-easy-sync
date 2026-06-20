@@ -14,6 +14,8 @@ import {
   contentLines,
   copyClipboardText,
   serializeGroup,
+  parseClipboard,
+  clipboardHasGroup,
 } from "../../src/diff2/diff-clipboard";
 
 // Build a real EditorState (with structure) the way createDiffPaneState seeds it,
@@ -139,5 +141,77 @@ describe("copyClipboardText — selection modes", () => {
   it("empty selection → null", () => {
     const s = state("a\nL\nc\n", "a\nR\nc\n", { anchor: 3, head: 3 });
     expect(copyClipboardText(s)).toBeNull();
+  });
+});
+
+// ── §2.2.7 п.4–6 — PARSE (clipboard → segments), step 6a ─────────────────────
+describe("parseClipboard — fenced block → group; malformed → as-is (rule 5)", () => {
+  const G6 =
+    "```github-easy-sync\n≪\n- ver1-visible-line-1↵\n-   ver1-visible-line-2↵\n" +
+    "- ver1-visible-line-3  ↵\n==\n≫\n```\n";
+  const G7 =
+    "```github-easy-sync\n≪\n- ver1-visible-line-1↵\n-   ver1-visible-line-2↵\n" +
+    "- ver1-visible-line-3  ↵\n==\n+ ver2-visible-line-1↵\n+ ↵\n+ ver2-visible-line-2↵\n≫\n```\n";
+
+  it("Example 6 → one group, empty ver2 (prefixes + ↵ stripped, whitespace kept)", () => {
+    expect(parseClipboard(G6)).toEqual([
+      {
+        kind: "group",
+        ver1: ["ver1-visible-line-1", "  ver1-visible-line-2", "ver1-visible-line-3  "],
+        ver2: [],
+      },
+    ]);
+  });
+
+  it("Example 7 → one group, both sides (blank middle ver2 line preserved)", () => {
+    expect(parseClipboard(G7)).toEqual([
+      {
+        kind: "group",
+        ver1: ["ver1-visible-line-1", "  ver1-visible-line-2", "ver1-visible-line-3  "],
+        ver2: ["ver2-visible-line-1", "", "ver2-visible-line-2"],
+      },
+    ]);
+  });
+
+  it("round-trips serializeGroup → parseClipboard for a both-sides group", () => {
+    const s = serializeGroup("L1\nL2\n", "R1\n");
+    expect(parseClipboard(s)).toEqual([{ kind: "group", ver1: ["L1", "L2"], ver2: ["R1"] }]);
+  });
+
+  it("each rule-4 failure → the whole text stays NORMAL (as-is, rule 5)", () => {
+    const asIs = (t: string) => expect(parseClipboard(t)).toEqual([{ kind: "normal", text: t }]);
+    asIs("```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n"); // 4f: no close fence
+    asIs("```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n```\n"); // 4e: no ≫
+    asIs("```github-easy-sync\n≪\n- L↵\n+ R↵\n≫\n```\n"); // 4d: no ==
+    asIs("```github-easy-sync\n≪\nL↵\n==\n≫\n```\n"); // 4c: ver1 line missing "- "
+    asIs("```github-easy-sync\nX\n- L↵\n==\n≫\n```\n"); // 4b: not ≪
+    asIs("```other\n≪\n- L↵\n==\n≫\n```\n"); // 4a: wrong fence tag
+  });
+
+  it("scan: normal + valid block + normal → 3 segments in order", () => {
+    const t = "before\n```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\nafter\n";
+    expect(parseClipboard(t)).toEqual([
+      { kind: "normal", text: "before\n" },
+      { kind: "group", ver1: ["L"], ver2: ["R"] },
+      { kind: "normal", text: "after\n" },
+    ]);
+  });
+
+  it("scan: valid block + INVALID block → group then literal normal (mixed all-or-nothing)", () => {
+    const valid = "```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n";
+    const invalid = "```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n"; // no close fence
+    const segs = parseClipboard(valid + invalid);
+    expect(segs[0]).toEqual({ kind: "group", ver1: ["L"], ver2: ["R"] });
+    expect(segs[1].kind).toBe("normal");
+    expect((segs[1] as { text: string }).text).toBe(invalid);
+  });
+
+  it("plain text with no fence → one normal segment", () => {
+    expect(parseClipboard("just\nsome\ntext\n")).toEqual([{ kind: "normal", text: "just\nsome\ntext\n" }]);
+  });
+
+  it("clipboardHasGroup discriminates", () => {
+    expect(clipboardHasGroup(G6)).toBe(true);
+    expect(clipboardHasGroup("plain text")).toBe(false);
   });
 });
