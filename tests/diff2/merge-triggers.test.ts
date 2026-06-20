@@ -149,6 +149,29 @@ describe("select normal line(s) between groups + Delete/Backspace → merge", ()
   });
 });
 
+describe("§2.2.5 п.2 / §2.2.12.1 — TWO blank lines between groups do NOT merge", () => {
+  it("Backspace on the FIRST blank (adjacent to the upper terminal) → NO-OP", () => {
+    const v = mount("a\n\n\nc\n", "x\n\n\nz\n"); // groups with TWO blank normal lines between
+    expect(groupCount(v)).toBe(2);
+    const before = v.state.doc.toString();
+    const g0v2 = readStructure(v.state).find((r) => r.group === 0 && r.ver === 2)!;
+    at(v, g0v2.to); // ON the first blank line (its \n directly follows the terminal)
+    expect(diffBackspace(v)).toBe(true); // consumed, no-op (§2.2.5 п.2)
+    expect(v.state.doc.toString()).toBe(before);
+    expect(groupCount(v)).toBe(2); // NOT merged — only a LONE separator merges (п.3)
+  });
+
+  it("Delete on the first of two blanks does NOT merge (not a lone separator)", () => {
+    const v = mount("a\n\n\nc\n", "x\n\n\nz\n");
+    const g0v2 = readStructure(v.state).find((r) => r.group === 0 && r.ver === 2)!;
+    at(v, g0v2.to);
+    // Delete here is NOT the lone-separator carve-out → falls through; either way
+    // the groups must NOT merge (two blanks remain >1 until reduced to one).
+    diffDelete(v);
+    expect(groupCount(v)).toBe(2);
+  });
+});
+
 describe("§6.1 merge caret — join-point, or ver2 first line when lower ver1 empty", () => {
   it("non-empty lower ver1 → caret on the join line (first line of lower group's ver1)", () => {
     const v = mount("a\n\nC1\nC2\n", "x\n\nZ1\nZ2\n"); // g0(a/x), sep, g1(C1\nC2 / Z1\nZ2)
