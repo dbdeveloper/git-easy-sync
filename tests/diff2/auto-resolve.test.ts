@@ -271,6 +271,15 @@ describe("caretInSubDoc (pure §6.1 probe — follow the edited line through re-
     const r = at("a\nb\nz\n", "x\ny\nz\n", 1, 2); // "b"; "z" frees AFTER
     expect(r.lineText()).toBe("b");
   });
+
+  it("preserves COLUMN on a multi-char moving line (mid-line caret)", () => {
+    // "yy" line moves to normal; caret at col 1 (between the y's) must stay col 1.
+    const sub = buildModel("aa\nyy\ncc\n", "xx\nyy\nzz\n");
+    const off = caretInSubDoc(sub.doc, sub.ranges, 1, 4); // "aa\n"=0-3, "yy" col1 = 4
+    const lineStart = sub.doc.lastIndexOf("\n", off - 1) + 1;
+    expect(sub.doc.slice(lineStart).startsWith("yy")).toBe(true); // on the "yy" line
+    expect(off - lineStart).toBe(1); // column preserved
+  });
 });
 
 describe("SPLIT / SHRINK (step 3 — scoped re-diff structure + caret)", () => {
@@ -347,6 +356,44 @@ describe("SPLIT / SHRINK (step 3 — scoped re-diff structure + caret)", () => {
       base: "g1a\nh1b\ng1c\nC\ng2a\n",
       sibling: "h1a\nh1b\nh1c\nC\nh2a\n",
     });
+  });
+
+  it("split caret survives UNDO/REDO and REPLAY (the resolveCaret/invertedEffects walk)", () => {
+    const sink = arraySink();
+    const flag = new ReplayFlag();
+    const v = live("a\nb\nc\n", "x\ny\nz\n", { sink, flag });
+    const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
+    const before = v1.from + 2; // caret on "b" BEFORE the edit
+    v.dispatch({ selection: { anchor: before } });
+    // edit "b"→"y" (split); caret advances past the inserted "y".
+    v.dispatch({
+      changes: { from: v1.from + 2, to: v1.from + 3, insert: "y" },
+      selection: { anchor: v1.from + 3 },
+      userEvent: "input.type",
+    });
+    const after = v.state.selection.main.head;
+    expect(v.state.doc.lineAt(after).text).toBe("y"); // forward: on the moved line
+
+    // UNDO → caret at the edit site (before), on the restored "b" in the restored group.
+    undo(v);
+    expect(groupCount(v)).toBe(1);
+    expect(v.state.selection.main.head).toBe(before);
+    expect(v.state.doc.lineAt(v.state.selection.main.head).text).toBe("b");
+    // REDO → caret back on the moved "y" line.
+    redo(v);
+    expect(v.state.selection.main.head).toBe(after);
+    expect(v.state.doc.lineAt(after).text).toBe("y");
+
+    // REPLAY: the recorded resolveCaret lands the twin's caret identically.
+    const jsonl = sink.blocks.map(serializeBlock).join("\n");
+    const sink2 = arraySink();
+    const flag2 = new ReplayFlag();
+    const twin = live("a\nb\nc\n", "x\ny\nz\n", { sink: sink2, flag: flag2 });
+    replayWithGuard(twin, jsonl, flag2);
+    expect(docStruct(twin)).toEqual(docStruct(v));
+    expect(twin.state.selection.main.head).toBe(after); // caret recovered
+    undo(twin); // replayed undo → before, like live
+    expect(twin.state.selection.main.head).toBe(before);
   });
 
   it("split survives feed → replay (structure)", () => {
