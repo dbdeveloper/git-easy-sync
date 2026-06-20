@@ -19,7 +19,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { EditorView } from "@codemirror/view";
 import { mountDiffPaneV2 } from "../../src/diff2/diff-pane-v2";
 import { readStructure } from "../../src/diff2/diff-structure";
-import { splitModel } from "../../src/diff2/diff-model";
+import { buildModel, splitModel } from "../../src/diff2/diff-model";
+import { deleteToLineEnd } from "@codemirror/commands";
 import { diffBackspace, diffDelete, diffDeleteLine } from "../../src/diff2/diff-edits";
 
 const groupCount = (v: EditorView): number =>
@@ -92,15 +93,35 @@ describe("§2.2.5(3) Ctrl+Y (diffDeleteLine) — terminal-safe delete-line merge
   });
 
   it("diffDeleteLine on a normal line NOT between groups → line deleted, no merge", () => {
-    const v = mount("a\nL\nkeep\n", "a\nR\nkeep\n"); // group then normals a..keep
-    // delete the trailing "keep" normal line (line 4 in the doc)
-    const keepLine = v.state.doc.line(v.state.doc.lines); // last line "" (after final \n) — use prev
-    void keepLine;
+    const v = mount("a\nL\nkeep\n", "a\nR\nkeep\n"); // group then normal "keep"
     const line = v.state.doc.lineAt(v.state.doc.length - 1); // the "keep" line region
     at(v, line.from);
     const before = groupCount(v);
     expect(diffDeleteLine(v)).toBe(true);
     expect(groupCount(v)).toBe(before); // unchanged (still 1 group)
+    // the "keep" line is actually GONE (not a silent no-op).
+    expect(splitModel(v.state.doc.toString(), readStructure(v.state)).base).toBe("a\nL\n");
+  });
+});
+
+describe("Ctrl+K — deleteToLineEnd (within-line, never a terminal)", () => {
+  it("deletes from the caret to the end of a ver content line; terminal survives", () => {
+    const v = mount("a\nHELLO\nc\n", "a\nR\nc\n"); // ver1 "HELLO\n"
+    const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
+    at(v, v1.from + 2); // caret after "HE"
+    deleteToLineEnd(v); // removes "LLO" up to line end (before the content \n)
+    expect(splitModel(v.state.doc.toString(), readStructure(v.state)).base).toBe("a\nHE\nc\n");
+  });
+
+  it("emptying a ver content line via deleteToLineEnd leaves a valid structure", () => {
+    const v = mount("a\nWORD\nc\n", "a\nR\nc\n");
+    const v1 = readStructure(v.state).find((r) => r.ver === 1)!;
+    at(v, v1.from); // start of "WORD"
+    deleteToLineEnd(v); // → ver1 content "" (empty), terminal kept
+    // structure stays valid: splitModel round-trips and the group survives (1 group).
+    const sp = splitModel(v.state.doc.toString(), readStructure(v.state));
+    expect(buildModel(sp.base, sp.sibling).doc).toBe(v.state.doc.toString());
+    expect(groupCount(v)).toBe(1);
   });
 });
 
