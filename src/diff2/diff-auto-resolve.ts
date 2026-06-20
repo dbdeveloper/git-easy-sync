@@ -424,11 +424,17 @@ export function mergeSpec(tr: Transaction): TransactionSpec | null {
   const sibling = run.map((g) => verContent(tr.newDoc, g.v2)).join("");
   const runIds = new Set(run.map((g) => g.group));
   const others = mapped.filter((r) => !runIds.has(r.group));
-  // §6.1 merge caret: join point = start of the LAST appended group's ver1.
-  const joinOffset = run
+  // §6.1 merge caret: join point = start of the LAST appended group's ver1. But if
+  // that group's ver1 is EMPTY (nowhere to put the caret on the ver1 side), drop to
+  // its ver2 first line instead (user 2026-06-20). side=1 with the ver1-prefix sum,
+  // or side=2 with the ver2-prefix sum.
+  const last = run[run.length - 1];
+  const lastVer1Empty = verContent(tr.newDoc, last.v1) === "";
+  const caretSide: 1 | 2 = lastVer1Empty ? 2 : 1;
+  const caretOffset = run
     .slice(0, -1)
-    .reduce((s, g) => s + verContent(tr.newDoc, g.v1).length, 0);
-  return rediffSplice(tr, spanFrom, spanTo, base, sibling, others, 1, joinOffset);
+    .reduce((s, g) => s + verContent(tr.newDoc, caretSide === 1 ? g.v1 : g.v2).length, 0);
+  return rediffSplice(tr, spanFrom, spanTo, base, sibling, others, caretSide, caretOffset);
 }
 
 // ── §2.2.4 p5c / p8a + §2.2.6 + §2.2.9 "neither" — selection-DELETE ───────────

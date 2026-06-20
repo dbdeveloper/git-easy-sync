@@ -434,12 +434,18 @@ describe("MERGE (step 4 — §2.2.12 cases 1&2 + §2.2.5(3), REAL keypress)", ()
     expect(split(v)).toEqual({ base: "a\nc\n", sibling: "x\nz\n" });
   });
 
-  it("case 1 — BACKSPACE at the next group start merges the groups (real keydown)", () => {
+  it("case 1 — BACKSPACE ON the separator line merges (NOT at the group start — §2.2.4 п.6)", () => {
+    // §2.2.4 п.6: Backspace at the lower group's ver1.from must be a NO-OP (editing
+    // keys can't leave a ver-block). The merge trigger is Backspace ON the separator.
     const v = live(...LONE);
     const g1from = readStructure(v.state).find((r) => r.group === 1 && r.ver === 1)!.from;
-    at(v, g1from); // caret at the start of group1 (just after the empty line)
+    at(v, g1from); // at the group start
     press(v, "Backspace");
-    expect(groupCount(v)).toBe(1);
+    expect(groupCount(v)).toBe(2); // NO-OP — not merged (§2.2.4 п.6)
+
+    at(v, g1from - 1); // ON the lone separator line
+    press(v, "Backspace");
+    expect(groupCount(v)).toBe(1); // merged
     expect(split(v)).toEqual({ base: "a\nc\n", sibling: "x\nz\n" });
   });
 

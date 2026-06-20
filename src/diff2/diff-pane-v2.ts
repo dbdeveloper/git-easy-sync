@@ -25,7 +25,7 @@ import {
   Transaction,
   type Extension,
 } from "@codemirror/state";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, deleteToLineEnd, history, historyKeymap } from "@codemirror/commands";
 import {
   Decoration,
   type DecorationSet,
@@ -48,7 +48,13 @@ import {
   toRangeSet,
 } from "./diff-structure";
 import { type MarkerKind, markerSpecs, verLineDecisions } from "./diff-decorations";
-import { autoNewlineFilter, diffBackspace, diffDelete, externalGuardFilter } from "./diff-edits";
+import {
+  autoNewlineFilter,
+  diffBackspace,
+  diffDelete,
+  diffDeleteLine,
+  externalGuardFilter,
+} from "./diff-edits";
 import { groupsOf, selectionLegalizeFilter } from "./diff-selection";
 import { autoResolveFilter, diffSelectionDelete } from "./diff-auto-resolve";
 import { diffClipboardCopy, diffClipboardPaste } from "./diff-clipboard";
@@ -474,6 +480,13 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
         keymap.of([
           { key: "Backspace", run: diffBackspace },
           { key: "Delete", run: diffDelete },
+          // §2.2.5(3) delete-line (merge trigger): Ctrl+Y + Shift-Mod-k →
+          // terminal-safe diffDeleteLine (CM6's deleteLine eats the upper group's
+          // terminal). Ctrl+K → deleteToLineEnd (emacs-style; not in defaultKeymap;
+          // [pos,lineEnd) never touches a terminal).
+          { key: "Ctrl-y", run: diffDeleteLine },
+          { key: "Shift-Mod-k", run: diffDeleteLine },
+          { key: "Ctrl-k", run: deleteToLineEnd },
         ]),
       ),
       diffNavKeymap,

@@ -170,10 +170,19 @@ export function diffBackspace(view: EditorView): boolean {
     deleteCharForward(view); // "|\n\n" → "|\n" (empty ver-block)
     return true;
   }
-  // §2.2.5(3): Backspace at a group start whose preceding char is a LONE empty
-  // separator between two groups → DELETE it (don't consume) so the groups become
-  // adjacent and autoResolveFilter merges them.
-  if (fromsOf(ranges).has(pos) && isLoneEmptySeparator(view.state.doc, ranges, pos - 1)) return false;
+  // §2.2.5(3): Backspace with the caret ON a lone empty separator between two
+  // groups → delete it (forward) so the groups merge. BOTH Delete and Backspace
+  // on the separator trigger the merge (bug-fix: previously Backspace here hit the
+  // upper group's protected terminal and no-op'd). deleteCharForward removes the
+  // separator's own \n; autoResolveFilter then merges.
+  if (isLoneEmptySeparator(view.state.doc, ranges, pos)) {
+    deleteCharForward(view);
+    return true;
+  }
+  // §2.2.4 п.6: Backspace at a group start (Range.from) is IGNORED — editing keys
+  // can NEVER leave a ver-block, so neither this nor the previous range is
+  // destroyed. (This is why merge is triggered by the caret being ON the
+  // separator above, NOT at the group start below it.)
   return fromsOf(ranges).has(pos) || terminalsOf(ranges).has(pos - 1);
 }
 
@@ -189,4 +198,28 @@ export function diffDelete(view: EditorView): boolean {
   if (separatorsOf(view.state.doc, ranges).has(pos) && isLoneEmptySeparator(view.state.doc, ranges, pos))
     return false;
   return terminalsOf(ranges).has(pos) || separatorsOf(view.state.doc, ranges).has(pos);
+}
+
+// §2.2.5(3) delete-line (Ctrl+Y, and a fix for Shift+Mod+K). CM6's deleteLine does
+// `from--` to also eat the PRECEDING line-break — between two groups that is the
+// upper group's protected terminal, so terminalProtectionFilter drops the whole
+// change while deleteLine's moveVertically selection still runs → the "nothing
+// deleted, caret jumps down" bug. This terminal-safe variant deletes the caret's
+// line FORWARD (line + its OWN trailing \n, never the preceding char), so a lone
+// separator line is removed and autoResolveFilter merges the groups (it computes
+// the caret too — this command is thin, never re-implements merge). Empty-selection
+// only; a real selection falls through (diffSelectionDelete / defaultKeymap).
+export function diffDeleteLine(view: EditorView): boolean {
+  const sel = view.state.selection.main;
+  if (!sel.empty) return false;
+  const doc = view.state.doc;
+  const line = doc.lineAt(sel.head);
+  const to = line.to < doc.length ? line.to + 1 : line.to; // include this line's own \n
+  if (line.from === to) return true; // empty last line → consume, nothing to delete
+  // If this range still hits a protected terminal (e.g. the line IS a ver-block's
+  // content line whose forward \n is the terminal), terminalProtectionFilter drops
+  // it — a clean no-op (we set no selection, so the caret can't jump). For a normal
+  // separator line the forward bias avoids the upper terminal → deletes → merges.
+  view.dispatch({ changes: { from: line.from, to }, userEvent: "delete.line" });
+  return true;
 }
