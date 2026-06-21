@@ -39,6 +39,7 @@ import {
   caretOffTerminal,
   cursorHistory,
   cursorVertTarget,
+  selectionVertTarget,
   horizontalSkip,
   readStructure,
   resolveCaret,
@@ -393,12 +394,35 @@ function horizontal(view: EditorView, forward: boolean): boolean {
   return true;
 }
 
+// §2.2.6 п.7e — Shift+Up/Down EXTEND the selection with the same diff-aware stops:
+// keep the anchor, move the head to the first region boundary (selectionVertTarget).
+// Without this, Shift+arrow fell through to defaultKeymap → native column-preserving
+// motion overshot the collapsed group (browser-observed). Horizontal Shift+Left/Right
+// already lands correctly (one-char step hits the boundary) → left to the default.
+function verticalSelect(view: EditorView, forward: boolean): boolean {
+  const cur = view.state.selection.main;
+  const ranges = readStructure(view.state);
+  const native = view.moveVertically(cur, forward);
+  const head = selectionVertTarget(ranges, cur.head, native.head, forward);
+  // §2.2.6 п.7e.ii.d / п.7e.iii.c — a selection that STARTS on an EMPTY ver-block
+  // selects NOTHING (the block has no content): the first Shift+arrow just moves the
+  // caret to the boundary (as if a plain arrow, then Shift), re-basing the anchor
+  // there. Only fires from a cursor sitting exactly on an empty ver's single slot.
+  const startedOnEmptyVer =
+    cur.empty && ranges.some((r) => r.to - r.from === 1 && r.from === cur.head);
+  const anchor = startedOnEmptyVer ? head : cur.anchor;
+  view.dispatch({ selection: EditorSelection.range(anchor, head), scrollIntoView: true });
+  return true;
+}
+
 export const diffNavKeymap: Extension = Prec.highest(
   keymap.of([
     { key: "ArrowDown", run: (v) => vertical(v, true) },
     { key: "ArrowUp", run: (v) => vertical(v, false) },
     { key: "ArrowRight", run: (v) => horizontal(v, true) },
     { key: "ArrowLeft", run: (v) => horizontal(v, false) },
+    { key: "Shift-ArrowDown", run: (v) => verticalSelect(v, true) },
+    { key: "Shift-ArrowUp", run: (v) => verticalSelect(v, false) },
   ]),
 );
 

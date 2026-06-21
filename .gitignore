@@ -167,3 +167,4 @@ benchmark_result.json
 *~
 *.swp
 
+harness/diff-pane-harness.js

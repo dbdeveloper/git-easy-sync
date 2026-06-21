@@ -179,6 +179,34 @@ export function cursorVertTarget(
   return skipped.length ? skipped[0] : nativeHead;
 }
 
+// §2.2.6 п.7e — KEYBOARD SELECTION (Shift+Up/Down) boundary-stop. Browser-observed
+// (harness): native moveVertically preserves the visual COLUMN, so Shift+Down from a
+// non-zero column OVERSHOOTS the whole collapsed diff-group (head lands at the normal
+// AFTER the group) instead of stopping at the region boundary. Fix: land the head at
+// the FIRST region boundary in the travel direction between cur and the native
+// landing — entering ver1 (v1.from), entering ver2 (v2.from), or exiting the group to
+// the normal below (v2.to). Empty (collapsed) vers are subsumed (their .from is a
+// boundary). The (correct) legalizer + render then visualize. Pure (the native head
+// is the input); the gesture itself is browser/device-verified.
+export function selectionVertTarget(
+  ranges: VerRange[],
+  curHead: number,
+  nativeHead: number,
+  forward: boolean,
+): number {
+  const boundaries: number[] = [];
+  for (const r of ranges) {
+    boundaries.push(r.from); // enter ver1 / enter ver2
+    if (r.ver === 2) boundaries.push(r.to); // exit the group to the normal below
+  }
+  if (forward) {
+    const cand = boundaries.filter((b) => b > curHead && b <= nativeHead).sort((a, b) => a - b);
+    return cand.length ? cand[0] : nativeHead;
+  }
+  const cand = boundaries.filter((b) => b < curHead && b >= nativeHead).sort((a, b) => b - a);
+  return cand.length ? cand[0] : nativeHead;
+}
+
 // §2.2.4(9b/9f) — Left/Right must STEP OVER a non-empty ver-block's hidden terminal
 // `\n` line (the height:0 line at `to-1` that exists when the content ends with a
 // `\n`). forward → `to` (next block/normal); backward → `to-2` (end of the block's

@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>diff2 V2 pane — motion observation harness</title>
+    <link rel="stylesheet" href="../styles.css" />
+    <style>
+      /* Obsidian theme vars the diff2 CSS relies on (dark-theme approximations) so the
+         render + selection are visible in a bare Chromium page. */
+      :root {
+        --background-primary: #1e1e1e;
+        --background-primary-alt: #262626;
+        --background-modifier-border: #444;
+        --text-normal: #dadada;
+        --text-faint: #888;
+        --text-selection: rgba(80, 130, 220, 0.4);
+        --interactive-accent: #5b6cff;
+        --text-on-accent: #fff;
+        --font-monospace: ui-monospace, monospace;
+      }
+      body {
+        background: var(--background-primary);
+        color: var(--text-normal);
+        margin: 16px;
+        font-family: var(--font-monospace);
+      }
+      #editor {
+        width: 640px;
+        border: 1px solid #444;
+      }
+      .cm-editor {
+        height: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="editor"></div>
+    <script src="./diff-pane-harness.js"></script>
+  </body>
+</html>

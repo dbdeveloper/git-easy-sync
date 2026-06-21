@@ -1,51 +1,68 @@
-// @vitest-environment happy-dom
+// §2.2.6 п.7e KEYBOARD selection MOTION (Shift+Up/Down).
 //
-// §2.2.6 п.7e KEYBOARD selection MOTION — where Shift+arrow LANDS the head when it
-// crosses a diff-group boundary or a collapsed empty ver-block. These are CARET-
-// LANDING bugs, NOT legalizer bugs: the legalizer (diff-selection.ts) computes the
-// correct selection GIVEN the landed position (proven in diff-selection.test.ts), but
-// the V2 nav keymap (diff-pane-v2.ts diffNavKeymap) handles ONLY plain Up/Down/Left/
-// Right — Shift+arrow "falls through to defaultKeymap" (diff-pane-v2.ts:374-375),
-// which preserves the visual column and skips height:0 empty vers. So the head lands
-// INSIDE the group (captures chars → whole group) or PAST a collapsed empty ver
-// (captures its terminal → whole group) instead of at the boundary.
-//
-// These can't be honestly unit-tested in happy-dom: they depend on CM6
-// moveVertically's heightmap geometry + the real Shift+arrow keybinding, which the
-// fast device loop / Chromium oracle ([[project-diff2-render-oracle]]) verifies, not
-// happy-dom. Left as it.todo with the exact spec so the fix has a target. The fix =
-// extend diffNavKeymap to handle Shift+Arrow (+ PgUp/PgDn): mirror cursorVertTarget
-// but EXTEND the selection (keep anchor, move head to the boundary stop), landing the
-// head at position 0 of the next ver-block / normal line, and treating a collapsed
-// empty ver as a one-step stop. Then the (correct) legalizer + render do the rest.
+// SPLIT by what's testable where (the lesson from 4 lost rounds — happy-dom can't see
+// CM6 moveVertically geometry, so the INTEGRATION is browser-verified, only the pure
+// landing-DECISION is unit-tested):
+//   - selectionVertTarget (pure): given the native moveVertically landing, snap the
+//     head to the first region boundary in the travel direction. Unit-tested here
+//     against the EXACT native landings OBSERVED in the browser harness.
+//   - the integration (does Shift+Down actually produce that native landing + does
+//     the legalizer/clipboard agree) is verified in the real Chromium harness
+//     (harness/diff-pane-harness.html via browser MCP) — see the browser-verified
+//     log in the commit. happy-dom CANNOT simulate it.
 
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { buildModel } from "../../src/diff2/diff-model";
+import { selectionVertTarget } from "../../src/diff2/diff-structure";
 
-describe("§2.2.6 п.7e keyboard selection motion (Chromium/device-gated — it.todo)", () => {
-  // 7e.i (bug-36 / Screenshot-11): caret on "li|ne 2" (a NON-zero column of a normal
-  // line ABOVE a diff-group) + Shift+Down. EXPECT: head lands at position 0 of the
-  // first ver1 line → selection = ONLY "line 2" + its \n (normal-only); the diff-
-  // group is NOT selected and NOT in the clipboard. ACTUAL: column 2 is preserved →
-  // head lands at v1.from+2 → captures ver1 chars → whole group selected + copied.
-  it.todo("7e.i: Shift+Down from a normal line lands head at ver1 pos-0 (normal-only, no group)");
+// The harness model: "line 1\nline 2\nL1\nL2\nbelow\n" / "...R1...".
+// doc "line 1\nline 2\nL1\nL2\n\nR1\n\nbelow\n"; ver1[14,21] ver2[21,25]; normal "below"[25,31].
+const M = buildModel("line 1\nline 2\nL1\nL2\nbelow\n", "line 1\nline 2\nR1\nbelow\n");
+const R = M.ranges;
 
-  // 7e.ii.c: caret in a NON-empty ver1 whose sibling ver2 is EMPTY (collapsed) +
-  // Shift+Down. EXPECT: head lands at position 0 of the (collapsed) empty ver2 =
-  // v2.from → ver1-only (legalizer keeps it). Only a FURTHER extension past the group
-  // → whole group. ACTUAL: the collapsed empty ver2 is skipped → head lands at v2.to
-  // (the normal after) → captures ver2's terminal → whole group selected.
-  it.todo("7e.ii.c: Shift+Down with an empty ver2 lands head at empty-ver2 pos-0 (ver1-only)");
+describe("selectionVertTarget — boundary-stop (browser-observed native landings)", () => {
+  it("col-0 normal → ver1: native already at v1.from → stays (7e.i OK)", () => {
+    // OBSERVED: Shift+Down from idx 7 (col 0 of 'line 2') native-lands at 14.
+    expect(selectionVertTarget(R, 7, 14, true)).toBe(14);
+  });
 
-  // 7e.ii.d (bug-37): ver1 is EMPTY; start selection there + Shift+Down. EXPECT:
-  // NOTHING is selected (ver1 is empty!) — the caret moves to ver2 pos-0 as if a
-  // plain Down was pressed, and selection then behaves as if STARTED at ver2 pos-0.
-  // ACTUAL: the selection wrongly extends UPWARD onto the normal line ABOVE the empty
-  // ver1 (see bug-37.png) and grabs the whole group.
-  it.todo("7e.ii.d: Shift+Down starting on an EMPTY ver1 selects nothing (anchor re-bases to ver2 pos-0)");
+  it("col-2 normal → OVERSHOOT past the group: snap to first boundary v1.from (7e.i bug→fix)", () => {
+    // OBSERVED: Shift+Down from idx 9 (col 2) native-OVERSHOOTS to 25 (the normal
+    // after the whole collapsed group). Snap to 14 = v1.from → normal-only selection.
+    expect(selectionVertTarget(R, 9, 25, true)).toBe(14);
+  });
 
-  // 7e.iii.c: caret at pos-0 of an EMPTY ver2 + Down/Shift+Down. EXPECT: the empty
-  // ver2 is NOT included at all — the selection effectively starts at pos-0 of the
-  // first normal line after the diff-group. ACTUAL: visual selection grabs ver1+ver2
-  // lines and the whole group lands in the clipboard.
-  it.todo("7e.iii.c: motion from an EMPTY ver2 ignores it — selection starts at the next normal line");
+  it("within multi-line ver1 (no boundary crossed) → native preserved", () => {
+    // OBSERVED: from idx 14 (L1) native-lands at 17 (L2) — same ver1, no snap.
+    expect(selectionVertTarget(R, 14, 17, true)).toBe(17);
+  });
+
+  it("ver1 last line → ver2: snap to v2.from (7e.ii.a)", () => {
+    // OBSERVED: from idx 17 (L2) Shift+Down → head 21 = v2.from.
+    expect(selectionVertTarget(R, 17, 21, true)).toBe(21);
+    expect(selectionVertTarget(R, 17, 25, true)).toBe(21); // even if native overshoots
+  });
+
+  it("ver2 → exit the group: snap to v2.to (7e.iii.a)", () => {
+    // OBSERVED: from idx 21 (R1) Shift+Down → head 25 = v2.to (the normal after).
+    expect(selectionVertTarget(R, 21, 25, true)).toBe(25);
+    expect(selectionVertTarget(R, 21, 31, true)).toBe(25); // overshoot → still v2.to
+  });
+
+  it("normal → normal (no group between) → native preserved (column kept)", () => {
+    expect(selectionVertTarget(R, 0, 7, true)).toBe(7); // line 1 → line 2, no boundary
+  });
+
+  it("backward (Shift+Up) snaps to the nearest boundary above curHead", () => {
+    // from ver2.from (21) up, overshooting to 7 → first boundary above is v1.from 14.
+    expect(selectionVertTarget(R, 21, 7, false)).toBe(14);
+  });
+
+  it("empty ver2: its .from is a boundary (7e.ii.c)", () => {
+    // ver1="L1\nL2", ver2 EMPTY: doc "a\nL1\nL2\n\n\nb\n"; ver1[2,9] ver2[9,10].
+    const m = buildModel("a\nL1\nL2\nb\n", "a\nb\n");
+    const r = m.ranges;
+    // from idx 5 (L2) down, native overshoots to 10+ → snap to v2.from = 9.
+    expect(selectionVertTarget(r, 5, 11, true)).toBe(9);
+  });
 });
