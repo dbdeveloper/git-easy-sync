@@ -66,3 +66,29 @@ describe("selectionVertTarget — boundary-stop (browser-observed native landing
     expect(selectionVertTarget(r, 5, 11, true)).toBe(9);
   });
 });
+
+describe("selectionVertTarget — BACKWARD mirror stadiality (browser-verified)", () => {
+  // multi-line ver2: "a\nL1\nb\n" / "a\nR1\nR2\nR3\nb\n" → ver1[2,6] ver2[6,16] (R1@6,
+  // R2@9, R3@12); normal "b"[16,18]. Browser-verified: Shift+Up from R3 steps R3→R2→R1
+  // (ver2-only via the legalizer), then crossing into ver1 → whole group.
+  const m = buildModel("a\nL1\nb\n", "a\nR1\nR2\nR3\nb\n");
+  const r = m.ranges;
+
+  it("within multi-line ver2: native steps line-by-line (no boundary crossed) → preserved", () => {
+    expect(selectionVertTarget(r, 12, 9, false)).toBe(9); // R3 → R2, no snap
+    expect(selectionVertTarget(r, 9, 6, false)).toBe(6); // R2 → R1 (v2.from), no snap
+  });
+
+  it("ver2.from → ver1: snap to v1.from (whole group when the legalizer expands)", () => {
+    expect(selectionVertTarget(r, 6, 2, false)).toBe(2); // R1 (v2.from) up → v1.from
+  });
+
+  it("overshoot from R3 past v2.from → snap to v2.from (ver2-only, not whole)", () => {
+    expect(selectionVertTarget(r, 12, 2, false)).toBe(6); // native jumps to ver1 → snap v2.from
+  });
+
+  it("normal-below first Shift+Up → stop at v2.to (group bottom boundary), normal-only", () => {
+    // "below" at 16; native up into ver2 (e.g. 12) → snap to v2.to=16 (don't enter yet).
+    expect(selectionVertTarget(r, 17, 12, false)).toBe(16);
+  });
+});

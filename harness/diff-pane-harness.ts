@@ -50,5 +50,10 @@ const H = {
   focus() {
     view.focus();
   },
+  // observe the RAW native moveVertically landing (no dispatch) — to design motion.
+  peek(forward: boolean) {
+    const cur = view.state.selection.main;
+    return { anchor: cur.anchor, head: cur.head, native: view.moveVertically(cur, forward).head };
+  },
 };
 (window as unknown as { H: typeof H }).H = H;
