@@ -169,6 +169,34 @@ describe("copyClipboardText — selection modes", () => {
     const s = state("a\nL1\nc\n", "a\nR1\nR2\nc\n", { anchor: v2.from, head: v2.to });
     expect(copyClipboardText(s)).toBe("R1\nR2\n");
   });
+
+  // §2.2.12(a) LAST diff-group in the doc — EOL-less final line: the ver-block's
+  // ONLY trailing \n is the protected terminal (it doubles as L2's line-end), so
+  // verContent drops it → NO trailing newline. (Interior groups keep L2's own \n.)
+  // This is the difference the user flagged: same selection, different bytes by
+  // position. verContent handles both via slice-to-(to-1) — no special-casing.
+  it("7e.ii.a LAST group (EOL-less): WHOLE ver1 → 'L1\\nL2' (no trailing \\n)", () => {
+    const m = buildModel("a\nL1\nL2", "a\nR1\nR2"); // group is the LAST thing, EOL-less
+    const v1 = m.ranges.find((r) => r.ver === 1)!;
+    const v2 = m.ranges.find((r) => r.ver === 2)!;
+    const s = state("a\nL1\nL2", "a\nR1\nR2", { anchor: v1.from, head: v2.from });
+    expect(copyClipboardText(s)).toBe("L1\nL2"); // EOL-less → no trailing newline
+  });
+
+  it("7e.iii.a LAST group (EOL-less): WHOLE ver2 → 'R1\\nR2' (no trailing \\n)", () => {
+    const m = buildModel("a\nL1\nL2", "a\nR1\nR2");
+    const v2 = m.ranges.find((r) => r.ver === 2)!;
+    const s = state("a\nL1\nL2", "a\nR1\nR2", { anchor: v2.from, head: v2.to });
+    expect(copyClipboardText(s)).toBe("R1\nR2");
+  });
+
+  it("LAST group single-line EOL-less: WHOLE ver1 → 'L' (no newline at all)", () => {
+    const m = buildModel("a\nL", "a\nR"); // single EOL-less line each side
+    const v1 = m.ranges.find((r) => r.ver === 1)!;
+    const v2 = m.ranges.find((r) => r.ver === 2)!;
+    const s = state("a\nL", "a\nR", { anchor: v1.from, head: v2.from });
+    expect(copyClipboardText(s)).toBe("L");
+  });
 });
 
 // ── §2.2.7 п.4–6 — PARSE (clipboard → segments), step 6a ─────────────────────
@@ -261,6 +289,21 @@ describe("CUT — group-spanning selection: copy text + delete via selectionDele
     expect(splitModel(after.doc.toString(), readStructure(after))).toEqual({
       base: "a\nc\n",
       sibling: "a\nc\n",
+    });
+  });
+
+  it("LAST group (EOL-less) cut WHOLE ver1 → copies 'L1\\nL2', empties ver1", () => {
+    const m = buildModel("a\nL1\nL2", "a\nR1\nR2");
+    const v1 = m.ranges.find((r) => r.ver === 1)!;
+    const v2 = m.ranges.find((r) => r.ver === 2)!;
+    const s = state("a\nL1\nL2", "a\nR1\nR2", { anchor: v1.from, head: v2.from });
+    expect(copyClipboardText(s)).toBe("L1\nL2"); // EOL-less → no trailing \n
+    const spec = selectionDeleteSpec(s)!;
+    expect(spec).not.toBeNull();
+    const after = s.update(spec).state;
+    expect(splitModel(after.doc.toString(), readStructure(after))).toEqual({
+      base: "a\n", // ver1 emptied
+      sibling: "a\nR1\nR2", // ver2 (still EOL-less) untouched
     });
   });
 
