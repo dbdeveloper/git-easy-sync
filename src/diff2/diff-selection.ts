@@ -1,14 +1,16 @@
-// V2 selection legalization (DIFF-EDITOR-V2.md §2.2.4(5) + §2.2.6). Two rules,
-// applied to every selection-setting transaction:
-//   - §2.2.4(5): a selection ANCHORED inside a ver-block stays plain text within
-//     that block's content [from, to-1] — it never includes the terminal `\n`
-//     (index to-1) and never leaves the block while it stays inside it.
-//   - §2.2.6: the moment a selection crosses a diff-group boundary (from a normal
-//     line, from one ver-block into its sibling, or out of the group), the WHOLE
-//     group is selected — a diff-group behaves as ONE atomic character. Any group
-//     a selection partially overlaps is fully included (Ctrl+A → whole doc falls
-//     out of this: every group is fully contained, so nothing partial to expand).
+// V2 selection legalization (DIFF-EDITOR-V2.md §2.2.6 п.7 — STRICT boundary).
+// Applied to every selection-setting transaction. A diff-group behaves as ONE atomic
+// unit, BUT — per the user's §2.2.6 п.7e refinement (2026-06-21) — the group is pulled
+// in only when the selection captures ≥1 real CHARACTER of a region the anchor is NOT
+// in (half-open [lo,hi) capture). Landing exactly on a region boundary (= position 0
+// of the next region, having selected the current region incl. its terminal `\n`)
+// keeps the selection in the CURRENT region: normal-only / ver1-only / ver2-only.
+// This corrects the old SYMMETRIC overlap rule that over-expanded at the boundary.
+// See legalizeSelection below for the full per-case rule; the render layer
+// (diff-decorations.ts selectionAppearance) visualizes the legalized result.
 //
+// Mouse marker-zone gestures (п.7c/п.7f) are a SEPARATE production mechanism (pointer
+// handlers on the markers) that feed positions INTO this same legalizer — not here.
 // Multi-cursor is disabled (§2.2.4(10)), so only the main selection is legalized.
 // Pure `legalizeSelection` (unit-tested) + a thin transactionFilter.
 
@@ -37,40 +39,71 @@ export function groupsOf(ranges: VerRange[]): GroupSpan[] {
   return out.sort((a, b) => a.from - b.from);
 }
 
-// The ver-block whose selectable content zone [from, to-1] contains pos, else null.
-// (to-1 is the position just BEFORE the terminal \n — the terminal is never selectable.)
-function blockAt(ranges: VerRange[], pos: number): VerRange | null {
-  for (const r of ranges) if (pos >= r.from && pos <= r.to - 1) return r;
-  return null;
+interface GroupExtent {
+  v1from: number;
+  v1to: number;
+  v2from: number;
+  v2to: number;
+}
+function groupExtents(ranges: VerRange[]): GroupExtent[] {
+  const by = new Map<number, { v1?: VerRange; v2?: VerRange }>();
+  for (const r of ranges) {
+    const e = by.get(r.group) ?? {};
+    if (r.ver === 1) e.v1 = r;
+    else e.v2 = r;
+    by.set(r.group, e);
+  }
+  const out: GroupExtent[] = [];
+  for (const { v1, v2 } of by.values()) {
+    if (v1 && v2) out.push({ v1from: v1.from, v1to: v1.to, v2from: v2.from, v2to: v2.to });
+  }
+  return out.sort((a, b) => a.v1from - b.v1from);
 }
 
+// §2.2.6 п.7 — STRICT, anchor-relative group-atomic expansion. A diff-group is pulled
+// into the selection ONLY when the selection captures ≥1 real CHARACTER of a region
+// OTHER than the one the anchor sits in. "Captured chars" = the HALF-OPEN interval
+// [lo,hi): so a boundary position is region-membership-disambiguated by role —
+// `anchor=B` (covers index B+ = the next region) captures it, but `head=B` (covers up
+// to B-1 = the previous region) does NOT. This is the user's "24-as-start ≠
+// 24-as-end" — and the fix for the old bug where `blockAt(v2.from)` resolved the
+// boundary to ver2 and over-expanded (7e.ii: head at v2.from = ver1-only).
+//
+// Per group {v1, v2}, with the selection covering chars [lo, hi):
+//   ver1cap = ≥1 ver1 char (incl its terminal \n) captured
+//   ver2cap = ≥1 ver2 char captured
+//   before  = ≥1 char ABOVE the group captured
+//   after   = ≥1 char BELOW the group captured
+// WHOLE-group ⟺ it crosses the ===== seam (ver1cap && ver2cap), enters from a normal
+// above (ver1cap && before), exits to a normal below (ver2cap && after), or spans it
+// outright (before && after). Otherwise the selection stays within the single region
+// it touched: normal-only / ver1-only-incl-terminal (7e.ii) / ver2-only (7e.iii) /
+// plain intra-block (§2.2.4(5)). Verified against every п.7e/п.2/3/4 case.
 export function legalizeSelection(
   ranges: VerRange[],
   anchor: number,
   head: number,
 ): { anchor: number; head: number } {
-  const a = blockAt(ranges, anchor);
-  const h = blockAt(ranges, head);
-  // §2.2.4(5): plain intra-block selection — anchor & head in the SAME ver-block.
-  // blockAt already clamps to [from, to-1], so the terminal \n stays excluded.
-  if (a && h && a.from === h.from && a.to === h.to) {
-    return { anchor, head };
-  }
-  // §2.2.6: group-atomic — expand [lo,hi] so every group it overlaps is fully in.
+  if (anchor === head) return { anchor, head }; // a cursor captures no chars → never expands
   let lo = Math.min(anchor, head);
   let hi = Math.max(anchor, head);
-  const groups = groupsOf(ranges);
+  const groups = groupExtents(ranges);
   for (let changed = true; changed; ) {
     changed = false;
     for (const g of groups) {
-      if (lo < g.to && hi > g.from) {
-        // [lo,hi] selects ≥1 char of the group → include the whole group
-        if (g.from < lo) {
-          lo = g.from;
+      const ver1cap = lo < g.v1to && hi > g.v1from;
+      const ver2cap = lo < g.v2to && hi > g.v2from;
+      const before = lo < g.v1from;
+      const after = hi > g.v2to;
+      const whole =
+        (ver1cap && ver2cap) || (ver1cap && before) || (ver2cap && after) || (before && after);
+      if (whole) {
+        if (g.v1from < lo) {
+          lo = g.v1from;
           changed = true;
         }
-        if (g.to > hi) {
-          hi = g.to;
+        if (g.v2to > hi) {
+          hi = g.v2to;
           changed = true;
         }
       }
