@@ -27,6 +27,7 @@ import {
   resolveAllAdjacencies,
   selectionDeleteSpec,
   selectionSpansTerminal,
+  singleVerSpan,
 } from "./diff-auto-resolve";
 
 // §2.2.7 markers/prefixes (byte-exact, user-finalized 2026-06-20). Unicode here is
@@ -164,6 +165,21 @@ export function copyClipboardText(state: EditorState): string | null {
   const ranges = readStructure(state);
   if (!selectionSpansTerminal(sel.from, sel.to, ranges)) return null;
 
+  // §2.2.7 п.1 — a single-ver selection (within ONE ver-block, e.g. all of ver1 with
+  // head at v2.from) copies as PLAIN content WITHOUT the terminal \n — not a fence.
+  // Mirrors selectionDeleteSpec's single-ver branch (shared singleVerSpan) so CUT's
+  // copy & delete halves agree.
+  const v = singleVerSpan(sel.from, sel.to, ranges);
+  if (v) {
+    // §2.2.7 п.1 — plain ver-content WITHOUT the (protected) terminal \n = the LAST
+    // \n of the block; the content's own line-newlines stay (verContent = slice to
+    // v.to-1). This equals exactly what selectionDeleteSpec removes → CUT is symmetric
+    // (copy === deleted bytes). raw empty ⇒ null so copy agrees with delete (only the
+    // terminal selected → nothing to cut).
+    const raw = state.doc.sliceString(sel.from, Math.min(sel.to, v.to - 1));
+    return raw.length === 0 ? null : raw;
+  }
+
   const byGroup = new Map<number, { v1?: VerRange; v2?: VerRange }>();
   for (const r of ranges) {
     const e = byGroup.get(r.group) ?? {};
@@ -175,13 +191,18 @@ export function copyClipboardText(state: EditorState): string | null {
     .filter((e): e is { v1: VerRange; v2: VerRange } => !!e.v1 && !!e.v2)
     .sort((a, b) => a.v1.from - b.v1.from);
 
+  // §2.2.7 п.2 — fence ONLY groups WHOLLY inside the selection; everything else
+  // (normal gaps) verbatim. A partially-overlapped group can't reach here post-
+  // legalize (it would be the single-ver case above), but gating on full containment
+  // is the correct, defensive rule.
   let out = "";
   let pos = sel.from;
   for (const g of groups) {
-    if (g.v2.to <= sel.from || g.v1.from >= sel.to) continue; // group outside selection
-    if (g.v1.from > pos) out += state.doc.sliceString(pos, g.v1.from); // normal gap verbatim
-    out += serializeGroup(verContent(state.doc, g.v1), verContent(state.doc, g.v2));
-    pos = g.v2.to;
+    if (sel.from <= g.v1.from && g.v2.to <= sel.to) {
+      if (g.v1.from > pos) out += state.doc.sliceString(pos, g.v1.from); // normal gap verbatim
+      out += serializeGroup(verContent(state.doc, g.v1), verContent(state.doc, g.v2));
+      pos = g.v2.to;
+    }
   }
   if (pos < sel.to) out += state.doc.sliceString(pos, sel.to); // trailing normal
   return out;

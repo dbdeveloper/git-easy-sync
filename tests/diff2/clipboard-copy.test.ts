@@ -143,6 +143,32 @@ describe("copyClipboardText — selection modes", () => {
     const s = state("a\nL\nc\n", "a\nR\nc\n", { anchor: 3, head: 3 });
     expect(copyClipboardText(s)).toBeNull();
   });
+
+  // §2.2.7 п.1 + §2.2.6 п.7e.ii.a/e, п.7iii.a/d — a single-ver selection (now
+  // reachable via the strict legalizer: head lands at the boundary, NOT expanded to
+  // whole group) copies as PLAIN ver-content WITHOUT the terminal \n — NOT a fence.
+  it("7e.ii.a: WHOLE ver1 incl terminal [v1.from, v2.from] → plain ver1 content, NO terminal", () => {
+    const m = buildModel("a\nL1\nL2\nc\n", "a\nR1\nc\n");
+    const v1 = m.ranges.find((r) => r.ver === 1)!;
+    const v2 = m.ranges.find((r) => r.ver === 2)!;
+    const s = state("a\nL1\nL2\nc\n", "a\nR1\nc\n", { anchor: v1.from, head: v2.from }); // = [v1.from, v1.to]
+    expect(copyClipboardText(s)).toBe("L1\nL2\n"); // verContent: protected terminal dropped, line \n kept
+  });
+
+  it("7e.ii.e: INSIDE ver1, head at v2.from → only the selected ver1 chars, no terminal", () => {
+    const m = buildModel("a\nWORD\nc\n", "a\nR\nc\n");
+    const v1 = m.ranges.find((r) => r.ver === 1)!;
+    const v2 = m.ranges.find((r) => r.ver === 2)!;
+    const s = state("a\nWORD\nc\n", "a\nR\nc\n", { anchor: v1.from + 2, head: v2.from }); // "RD"+terminal
+    expect(copyClipboardText(s)).toBe("RD\n"); // selected chars + line \n; only protected terminal dropped
+  });
+
+  it("7e.iii.a: WHOLE ver2 [v2.from, v2.to] → plain ver2 content, NO terminal, NO fence", () => {
+    const m = buildModel("a\nL1\nc\n", "a\nR1\nR2\nc\n");
+    const v2 = m.ranges.find((r) => r.ver === 2)!;
+    const s = state("a\nL1\nc\n", "a\nR1\nR2\nc\n", { anchor: v2.from, head: v2.to });
+    expect(copyClipboardText(s)).toBe("R1\nR2\n");
+  });
 });
 
 // ── §2.2.7 п.4–6 — PARSE (clipboard → segments), step 6a ─────────────────────
@@ -242,6 +268,26 @@ describe("CUT — group-spanning selection: copy text + delete via selectionDele
     const s = state("a\nWORD\nc\n", "a\nR\nc\n", { anchor: 2, head: 6 }); // inside ver1
     expect(copyClipboardText(s)).toBeNull(); // → default plain cut
     expect(selectionDeleteSpec(s)).toBeNull();
+  });
+
+  // §2.2.7 п.1 single-ver CUT: copy plain ver-content + delete ver-CONTENT-only
+  // (terminal \n preserved → ver becomes empty), NOT the whole group. Consistent.
+  it("cutting WHOLE ver1 [v1.from, v2.from] → copies 'L1\\nL2', deletes ver1 content only (empty ver1)", () => {
+    const base = "a\nL1\nL2\nc\n";
+    const sib = "a\nR1\nc\n";
+    const m = buildModel(base, sib);
+    const v1 = m.ranges.find((r) => r.ver === 1)!;
+    const v2 = m.ranges.find((r) => r.ver === 2)!;
+    const s = state(base, sib, { anchor: v1.from, head: v2.from });
+    expect(copyClipboardText(s)).toBe("L1\nL2\n"); // verContent (protected terminal dropped) — == deleted bytes
+    const spec = selectionDeleteSpec(s)!;
+    expect(spec).not.toBeNull();
+    const after = s.update(spec).state;
+    // ver1 emptied, ver2 + normals intact → still a (delete-vs-modify) conflict.
+    expect(splitModel(after.doc.toString(), readStructure(after))).toEqual({
+      base: "a\nc\n", // ver1 content gone
+      sibling: "a\nR1\nc\n", // ver2 untouched
+    });
   });
 
   it("cut serialize + delete are CONSISTENT: whenever copy yields text, delete yields a spec", () => {

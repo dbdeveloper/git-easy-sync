@@ -528,13 +528,36 @@ export function selectionSpansTerminal(from: number, to: number, ranges: VerRang
   return ranges.some((r) => from <= r.to - 1 && r.to - 1 < to);
 }
 
+// §2.2.6 п.7e / §2.2.7 п.1 — the ver-block that WHOLLY contains [from,to], else null.
+// Post-strict-legalizer (diff-selection.ts) a terminal-spanning selection is EITHER a
+// whole group (singleVerSpan = null → fence/rebuild) OR contained in one ver-block
+// (single-ver → plain copy / content-only delete). This is why copy & delete must
+// branch the SAME way: selectionSpansTerminal alone no longer means "whole group".
+export function singleVerSpan(from: number, to: number, ranges: VerRange[]): VerRange | null {
+  return ranges.find((r) => from >= r.from && to <= r.to) ?? null;
+}
+
 // The rebuild spec for a terminal-spanning selection delete, or null if the
 // selection is empty / within-block (let the default delete run).
 export function selectionDeleteSpec(state: EditorState): TransactionSpec | null {
   const ranges = readStructure(state);
-  if (!selectionSpansTerminal(state.selection.main.from, state.selection.main.to, ranges))
-    return null;
-  const { from } = state.selection.main;
+  const { from, to } = state.selection.main;
+  if (!selectionSpansTerminal(from, to, ranges)) return null;
+  // §2.2.7 п.1 single-ver delete: the selection lies within ONE ver-block but spans
+  // its terminal \n (e.g. all of ver1, head at v2.from). Delete the CONTENT only and
+  // PRESERVE the terminal — the ver-block becomes empty, the group survives — instead
+  // of the whole-group rebuild. Keeps Ctrl+X / Delete consistent with the plain-text
+  // single-ver COPY (diff-clipboard copyClipboardText).
+  const v = singleVerSpan(from, to, ranges);
+  if (v) {
+    const delTo = Math.min(to, v.to - 1); // never the terminal
+    if (delTo <= from) return null; // only the terminal selected → nothing to delete
+    return {
+      changes: { from, to: delTo },
+      selection: { anchor: from },
+      annotations: isolateHistory.of("before"),
+    };
+  }
   const { base, sibling } = projectDeletion(state.doc, ranges, from, state.selection.main.to);
   const rebuilt = buildModel(base, sibling);
   // caret → the deletion point. Everything before `from` is unchanged by the
