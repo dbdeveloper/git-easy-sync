@@ -179,32 +179,86 @@ export function cursorVertTarget(
   return skipped.length ? skipped[0] : nativeHead;
 }
 
-// §2.2.6 п.7e — KEYBOARD SELECTION (Shift+Up/Down) boundary-stop. Browser-observed
-// (harness): native moveVertically preserves the visual COLUMN, so Shift+Down from a
-// non-zero column OVERSHOOTS the whole collapsed diff-group (head lands at the normal
-// AFTER the group) instead of stopping at the region boundary. Fix: land the head at
-// the FIRST region boundary in the travel direction between cur and the native
-// landing — entering ver1 (v1.from), entering ver2 (v2.from), or exiting the group to
-// the normal below (v2.to). Empty (collapsed) vers are subsumed (their .from is a
-// boundary). The (correct) legalizer + render then visualize. Pure (the native head
-// is the input); the gesture itself is browser/device-verified.
+// §2.2.6 п.7e — KEYBOARD SELECTION extend-target (Shift+Up/Down AND, after the
+// hidden-terminal skip, Shift+Left/Right). Browser-observed (harness): native motion
+// preserves the visual COLUMN, so a Shift+arrow from a non-zero column OVERSHOOTS the
+// whole collapsed diff-group instead of stopping at a region boundary. This snaps the
+// head to the correct STOP. The (correct) legalizer + render then visualize. Pure
+// (the native landing is the input); the gesture itself is browser/device-verified.
+//
+// The model is ANCHOR-AWARE (the fix for bug-3 shrink + bug-4):
+//   • A group the anchor is OUTSIDE is ATOMIC (§2.2.6 п.2/п.3): the head may only rest
+//     at its outer edges v1.from / v2.to, never the internal `=====` seam. When the
+//     head sits exactly on the near edge and crosses, it jumps the WHOLE group to the
+//     far edge — UNCLAMPED (a collapsed group's native step is short, so clamping to
+//     the native landing would strand the head inside → the legalizer re-expands to
+//     whole → shrinking gets STUCK; that was bug-3/bug-4).
+//   • The group the anchor is INSIDE is STADIAL (§2.2.6 п.7e.ii/iii): the head stops
+//     at the seam (ver1-only ↔ ver2-only) then the outer edge (whole), clamped to the
+//     native landing (free intra-block motion otherwise).
+// Anchor membership is DIRECTION-AWARE: a boundary position belongs to the region the
+// selection grows TOWARD (the "24-as-start ≠ 24-as-end" rule applied to the anchor) —
+// forward [v1.from, v2.to), backward (v1.from, v2.to] — so anchor==v2.to selecting UP
+// is ver2-stadial, while anchor==v2.to selecting DOWN is normal-below (atomic).
+interface GroupBound {
+  v1from: number;
+  v2from: number;
+  v2to: number;
+}
+function groupBounds(ranges: VerRange[]): GroupBound[] {
+  const by = new Map<number, { v1?: VerRange; v2?: VerRange }>();
+  for (const r of ranges) {
+    const e = by.get(r.group) ?? {};
+    if (r.ver === 1) e.v1 = r;
+    else e.v2 = r;
+    by.set(r.group, e);
+  }
+  const out: GroupBound[] = [];
+  for (const { v1, v2 } of by.values()) {
+    if (v1 && v2) out.push({ v1from: v1.from, v2from: v2.from, v2to: v2.to });
+  }
+  return out.sort((a, b) => a.v1from - b.v1from);
+}
+
 export function selectionVertTarget(
   ranges: VerRange[],
+  anchor: number,
   curHead: number,
   nativeHead: number,
   forward: boolean,
 ): number {
-  const boundaries: number[] = [];
-  for (const r of ranges) {
-    boundaries.push(r.from); // enter ver1 / enter ver2
-    if (r.ver === 2) boundaries.push(r.to); // exit the group to the normal below
+  const groups = groupBounds(ranges);
+  // Atomic cross: the head is exactly on an outside-group's near edge → jump the
+  // whole group to the far edge, UNCLAMPED (so a short native step can't strand it).
+  for (const g of groups) {
+    const insideF = anchor >= g.v1from && anchor < g.v2to;
+    const insideB = anchor > g.v1from && anchor <= g.v2to;
+    if (forward && !insideF && curHead === g.v1from) return g.v2to;
+    if (!forward && !insideB && curHead === g.v2to) return g.v1from;
   }
   if (forward) {
-    const cand = boundaries.filter((b) => b > curHead && b <= nativeHead).sort((a, b) => a - b);
-    return cand.length ? cand[0] : nativeHead;
+    let best = nativeHead;
+    for (const g of groups) {
+      const inside = anchor >= g.v1from && anchor < g.v2to;
+      if (inside) {
+        // stadial: seam (ver1-only) then outer edge (whole), clamped to native.
+        for (const s of [g.v2from, g.v2to]) if (s > curHead && s <= nativeHead) best = Math.min(best, s);
+      } else if (curHead < g.v1from && nativeHead > g.v1from) {
+        best = Math.min(best, g.v1from); // stop at the group's top edge (not yet entered)
+      }
+    }
+    return best;
   }
-  const cand = boundaries.filter((b) => b < curHead && b >= nativeHead).sort((a, b) => b - a);
-  return cand.length ? cand[0] : nativeHead;
+  let best = nativeHead;
+  for (const g of groups) {
+    const inside = anchor > g.v1from && anchor <= g.v2to;
+    if (inside) {
+      for (const s of [g.v2from, g.v1from]) if (s < curHead && s >= nativeHead) best = Math.max(best, s);
+    } else if (curHead > g.v2to && nativeHead < g.v2to) {
+      best = Math.max(best, g.v2to); // stop at the group's bottom edge (not yet entered)
+    }
+  }
+  return best;
 }
 
 // §2.2.4(9b/9f) — Left/Right must STEP OVER a non-empty ver-block's hidden terminal

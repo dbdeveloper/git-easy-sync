@@ -403,11 +403,32 @@ function verticalSelect(view: EditorView, forward: boolean): boolean {
   const cur = view.state.selection.main;
   const ranges = readStructure(view.state);
   const native = view.moveVertically(cur, forward);
-  const head = selectionVertTarget(ranges, cur.head, native.head, forward);
+  const head = selectionVertTarget(ranges, cur.anchor, cur.head, native.head, forward);
   // §2.2.6 п.7e.ii.d / п.7e.iii.c — a selection that STARTS on an EMPTY ver-block
   // selects NOTHING (the block has no content): the first Shift+arrow just moves the
   // caret to the boundary (as if a plain arrow, then Shift), re-basing the anchor
   // there. Only fires from a cursor sitting exactly on an empty ver's single slot.
+  const startedOnEmptyVer =
+    cur.empty && ranges.some((r) => r.to - r.from === 1 && r.from === cur.head);
+  const anchor = startedOnEmptyVer ? head : cur.anchor;
+  view.dispatch({ selection: EditorSelection.range(anchor, head), scrollIntoView: true });
+  return true;
+}
+
+// §2.2.6 п.7e — Shift+Left/Right EXTEND. Without this, Shift+Right fell through to
+// defaultKeymap → its one-char step landed the head ON a non-empty ver-block's hidden
+// terminal line (`to-1`), where caretOffTerminalListener can't reach it (it only
+// nudges EMPTY selections) — bug-40. Fix: move one char natively, skip a hidden
+// terminal (horizontalSkip), then apply the SAME anchor-aware atomic/stadial snap as
+// vertical (so Shift+Left out of a whole-selected group jumps the WHOLE group, and
+// Shift+Right into one selects it atomically). The skip-then-snap feeds the shared
+// selectionVertTarget — it is position-only, not vertical-specific.
+function horizontalSelect(view: EditorView, forward: boolean): boolean {
+  const cur = view.state.selection.main;
+  const ranges = readStructure(view.state);
+  const native = view.moveByChar(cur, forward);
+  const skipped = horizontalSkip(view.state.doc, ranges, native.head, forward);
+  const head = selectionVertTarget(ranges, cur.anchor, cur.head, skipped, forward);
   const startedOnEmptyVer =
     cur.empty && ranges.some((r) => r.to - r.from === 1 && r.from === cur.head);
   const anchor = startedOnEmptyVer ? head : cur.anchor;
@@ -423,6 +444,8 @@ export const diffNavKeymap: Extension = Prec.highest(
     { key: "ArrowLeft", run: (v) => horizontal(v, false) },
     { key: "Shift-ArrowDown", run: (v) => verticalSelect(v, true) },
     { key: "Shift-ArrowUp", run: (v) => verticalSelect(v, false) },
+    { key: "Shift-ArrowRight", run: (v) => horizontalSelect(v, true) },
+    { key: "Shift-ArrowLeft", run: (v) => horizontalSelect(v, false) },
   ]),
 );
 
