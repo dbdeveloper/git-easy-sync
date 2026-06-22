@@ -311,8 +311,14 @@
 .diff2-marker-sel-bottom::before {
     content: "";
     position: absolute;
-    left: 0;
-    right: 0;
+    /* bug-41/44 — inset to match CM6's native .cm-selectionBackground, which is drawn
+     * inside the .cm-line padding (left 6px / right 2px). The marker is a block widget
+     * whose ::before is positioned in its padding box (= the row's full width), so
+     * left:0/right:0 stuck out 6px past the content-line selection. Matching the line
+     * padding lines the marker selection up edge-to-edge with the ver-content AND the
+     * normal-line selection — one uniform left edge for the whole group. */
+    left: 6px;
+    right: 2px;
     background: var(--text-selection);
     pointer-events: none;
     z-index: 0;
