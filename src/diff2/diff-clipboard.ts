@@ -221,6 +221,15 @@ export function copyClipboardText(state: EditorState): string | null {
 // lands with the cut step. A within-block cut falls through to the default.
 export const diffClipboardCopy = EditorView.domEventHandlers({
   copy(event, view) {
+    // §2.2.7 — an EMPTY selection must NOT copy/cut the whole current line (CM6's
+    // default line-copy). A collapsed caret means "nothing selected" (e.g. bug-1b — a
+    // Shift+Up that lands the caret on a group edge), so the clipboard gets "" (user:
+    // empty string; keep-old is the free fallback when clipboardData is null).
+    if (view.state.selection.main.empty) {
+      event.clipboardData?.setData("text/plain", "");
+      event.preventDefault();
+      return true;
+    }
     const text = copyClipboardText(view.state);
     if (text === null) return false; // default plain copy
     event.clipboardData?.setData("text/plain", text);
@@ -228,6 +237,13 @@ export const diffClipboardCopy = EditorView.domEventHandlers({
     return true;
   },
   cut(event, view) {
+    // §2.2.7 — empty selection → "" clipboard + NO delete (CM6's default cut would
+    // DELETE the whole current line — a worse latent bug than the copy one).
+    if (view.state.selection.main.empty) {
+      event.clipboardData?.setData("text/plain", "");
+      event.preventDefault();
+      return true;
+    }
     // CUT = COPY (serialize the group-spanning selection) + the terminal-safe
     // selection-delete (§2.2.4 p5c / §2.2.9 "neither", group-atomic). One undo unit
     // (the delete is a single setStructure transaction; the copy mutates nothing).
