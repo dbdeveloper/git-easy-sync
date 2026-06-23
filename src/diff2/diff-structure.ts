@@ -180,26 +180,33 @@ export function cursorVertTarget(
 }
 
 // §2.2.6 п.7e — KEYBOARD SELECTION extend-target (Shift+Up/Down AND, after the
-// hidden-terminal skip, Shift+Left/Right). Browser-observed (harness): native motion
-// preserves the visual COLUMN, so a Shift+arrow from a non-zero column OVERSHOOTS the
-// whole collapsed diff-group instead of stopping at a region boundary. This snaps the
-// head to the correct STOP. The (correct) legalizer + render then visualize. Pure
-// (the native landing is the input); the gesture itself is browser/device-verified.
+// hidden-terminal skip, Shift+Left/Right/PgUp/PgDn). Browser-observed (harness): native
+// motion preserves the visual COLUMN, so a Shift+arrow OVERSHOOTS the collapsed group
+// instead of stopping at a region boundary. This snaps the head to the correct STOP;
+// the (correct) legalizer + render then visualize. Pure (the native landing is the
+// input); the gesture itself is browser/device-verified.
 //
-// The model is ANCHOR-AWARE (the fix for bug-3 shrink + bug-4):
-//   • A group the anchor is OUTSIDE is ATOMIC (§2.2.6 п.2/п.3): the head may only rest
-//     at its outer edges v1.from / v2.to, never the internal `=====` seam. When the
-//     head sits exactly on the near edge and crosses, it jumps the WHOLE group to the
-//     far edge — UNCLAMPED (a collapsed group's native step is short, so clamping to
-//     the native landing would strand the head inside → the legalizer re-expands to
-//     whole → shrinking gets STUCK; that was bug-3/bug-4).
-//   • The group the anchor is INSIDE is STADIAL (§2.2.6 п.7e.ii/iii): the head stops
-//     at the seam (ver1-only ↔ ver2-only) then the outer edge (whole), clamped to the
-//     native landing (free intra-block motion otherwise).
-// Anchor membership is DIRECTION-AWARE: a boundary position belongs to the region the
-// selection grows TOWARD (the "24-as-start ≠ 24-as-end" rule applied to the anchor) —
-// forward [v1.from, v2.to), backward (v1.from, v2.to] — so anchor==v2.to selecting UP
-// is ver2-stadial, while anchor==v2.to selecting DOWN is normal-below (atomic).
+// The model is the "ATOM" model (DIFF-EDITOR-V2.md §2.2.6 п.7e + the 2026-06-23
+// shrink-stadiality rule). Relative to the anchor, the doc is a sequence of FREE zones
+// (normal text + the anchor's HOME ver-block, where the head moves char/line-by-line)
+// and ATOMS (spans the head may only rest at the EDGES of, jumping across them
+// UNCLAMPED in one keypress):
+//   • every group the anchor is NOT in  → a whole-group atom [v1.from, v2.to];
+//   • the anchor's own group → only the NON-HOME ver-block is an atom; the HOME block
+//     (the one the anchor sits in) is FREE, with its OUTER edge a clamped stop
+//     (transition to the normal above/below). So shrinking a whole-group selection
+//     whose anchor sits at the group start (v1.from, after the legalizer pulled it
+//     there) goes: jump head to the seam = whole-ver1 (one press, UNCLAMPED across a
+//     multi-line ver2), then free char/line selection inside ver1 — and the mirror for
+//     anchor at v2.to. The earlier "stadial-but-clamped" model got STUCK here on a
+//     multi-line non-home block (native lands inside it, the clamped seam stop is
+//     rejected, the legalizer re-expands to whole). UNCLAMPED atom-cross fixes it.
+//   • an EMPTY home block (width-1, just its terminal) has no free interior → the whole
+//     group is an atom (preserves the empty-ver shrink: head jumps the whole group).
+// Anchor membership is endpoint-aware: the anchor is the LO endpoint when the head is
+// (or, at curHead==anchor, will be) on its HIGH side — `forward ? curHead>=anchor :
+// curHead>anchor` — so anchor==v2.to selecting DOWN is normal-below (atomic) but
+// selecting UP is ver2-home (free); LO covers index `anchor`, HI covers `anchor-1`.
 interface GroupBound {
   v1from: number;
   v2from: number;
@@ -227,37 +234,44 @@ export function selectionVertTarget(
   nativeHead: number,
   forward: boolean,
 ): number {
-  const groups = groupBounds(ranges);
-  // Atomic cross: the head is exactly on an outside-group's near edge → jump the
-  // whole group to the far edge, UNCLAMPED (so a short native step can't strand it).
-  for (const g of groups) {
-    const insideF = anchor >= g.v1from && anchor < g.v2to;
-    const insideB = anchor > g.v1from && anchor <= g.v2to;
-    if (forward && !insideF && curHead === g.v1from) return g.v2to;
-    if (!forward && !insideB && curHead === g.v2to) return g.v1from;
+  const anchorIsLo = forward ? curHead >= anchor : curHead > anchor;
+  const atoms: { a: number; b: number }[] = [];
+  let homeOuter: number | null = null; // the home block's outer (non-seam) edge, a clamped stop
+  for (const g of groupBounds(ranges)) {
+    const inV1 = anchorIsLo
+      ? anchor >= g.v1from && anchor < g.v2from
+      : anchor > g.v1from && anchor <= g.v2from;
+    const inV2 = anchorIsLo
+      ? anchor >= g.v2from && anchor < g.v2to
+      : anchor > g.v2from && anchor <= g.v2to;
+    const ver1Empty = g.v2from - g.v1from <= 1;
+    const ver2Empty = g.v2to - g.v2from <= 1;
+    if (inV1 && !ver1Empty) {
+      atoms.push({ a: g.v2from, b: g.v2to }); // non-home = ver2
+      homeOuter = g.v1from;
+    } else if (inV2 && !ver2Empty) {
+      atoms.push({ a: g.v1from, b: g.v2from }); // non-home = ver1
+      homeOuter = g.v2to;
+    } else {
+      atoms.push({ a: g.v1from, b: g.v2to }); // anchor outside, or empty home → whole-group atom
+    }
   }
+  // Atomic cross: head exactly on an atom's near edge → jump to the far edge, UNCLAMPED.
+  for (const at of atoms) {
+    if (forward && curHead === at.a) return at.b;
+    if (!forward && curHead === at.b) return at.a;
+  }
+  // Otherwise: nearest stop in the travel direction, clamped to the native landing
+  // (atom entry edges + the home block's outer edge). Free zones fall through to native.
   if (forward) {
     let best = nativeHead;
-    for (const g of groups) {
-      const inside = anchor >= g.v1from && anchor < g.v2to;
-      if (inside) {
-        // stadial: seam (ver1-only) then outer edge (whole), clamped to native.
-        for (const s of [g.v2from, g.v2to]) if (s > curHead && s <= nativeHead) best = Math.min(best, s);
-      } else if (curHead < g.v1from && nativeHead > g.v1from) {
-        best = Math.min(best, g.v1from); // stop at the group's top edge (not yet entered)
-      }
-    }
+    for (const at of atoms) if (curHead < at.a && nativeHead > at.a) best = Math.min(best, at.a);
+    if (homeOuter !== null && curHead < homeOuter && nativeHead > homeOuter) best = Math.min(best, homeOuter);
     return best;
   }
   let best = nativeHead;
-  for (const g of groups) {
-    const inside = anchor > g.v1from && anchor <= g.v2to;
-    if (inside) {
-      for (const s of [g.v2from, g.v1from]) if (s < curHead && s >= nativeHead) best = Math.max(best, s);
-    } else if (curHead > g.v2to && nativeHead < g.v2to) {
-      best = Math.max(best, g.v2to); // stop at the group's bottom edge (not yet entered)
-    }
-  }
+  for (const at of atoms) if (curHead > at.b && nativeHead < at.b) best = Math.max(best, at.b);
+  if (homeOuter !== null && curHead > homeOuter && nativeHead < homeOuter) best = Math.max(best, homeOuter);
   return best;
 }
 

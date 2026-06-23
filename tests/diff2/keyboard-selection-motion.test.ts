@@ -115,6 +115,52 @@ describe("selectionVertTarget — BACKWARD mirror stadiality (anchor in ver2, br
   });
 });
 
+describe("selectionVertTarget — SHRINK stadiality (2026-06-23, atom model, multi-line both sides)", () => {
+  // ver1 "A1\nA2\nA3" multi-line, ver2 "B1\nB2\nB3" multi-line → ver1[3,13] ver2[13,23].
+  const m = buildModel("N1\nA1\nA2\nA3\nN2\n", "N1\nB1\nB2\nB3\nN2\n");
+  const r = m.ranges;
+  const v1 = r.find((x) => x.ver === 1)!; // [3,13]
+  const v2 = r.find((x) => x.ver === 2)!; // [13,23]
+
+  it("anchor at v1.from, shrink UP from whole-group → jumps to v2.from = ver1-only, UNCLAMPED across multi-line ver2", () => {
+    // native lands INSIDE the multi-line ver2 (undershoot, e.g. 19); the seam stop must
+    // still be reached in ONE press — the bug the clamped model got stuck on.
+    expect(selectionVertTarget(r, v1.from, v2.to, 19, false)).toBe(v2.from);
+    expect(selectionVertTarget(r, v1.from, v2.to, v2.from, false)).toBe(v2.from); // even shorter native
+  });
+
+  it("anchor at v1.from, then free char/line selection INSIDE ver1 (native preserved)", () => {
+    expect(selectionVertTarget(r, v1.from, v2.from, 9, false)).toBe(9); // into ver1, free
+    expect(selectionVertTarget(r, v1.from, 9, 6, false)).toBe(6);
+  });
+
+  it("anchor at v1.from, shrink past the home outer edge → stop at v1.from (collapse), then normal above", () => {
+    expect(selectionVertTarget(r, v1.from, 6, 0, false)).toBe(v1.from); // homeOuter clamp
+    expect(selectionVertTarget(r, v1.from, v1.from, 0, false)).toBe(0); // anchor flips to HI → normal-only
+  });
+
+  it("MIRROR anchor at v2.to, shrink DOWN from whole-group → jumps to v2.from = ver2-only, UNCLAMPED across multi-line ver1", () => {
+    expect(selectionVertTarget(r, v2.to, v1.from, 9, true)).toBe(v2.from); // native inside ver1 (undershoot)
+    expect(selectionVertTarget(r, v2.to, v1.from, v2.from, true)).toBe(v2.from);
+  });
+
+  it("MIRROR anchor at v2.to, then free char/line selection INSIDE ver2 (native preserved)", () => {
+    expect(selectionVertTarget(r, v2.to, v2.from, 16, true)).toBe(16); // into ver2, free
+    expect(selectionVertTarget(r, v2.to, 16, 19, true)).toBe(19);
+  });
+
+  it("MIRROR anchor at v2.to, shrink past the home outer edge → stop at v2.to (collapse), then normal below", () => {
+    expect(selectionVertTarget(r, v2.to, 19, 26, true)).toBe(v2.to); // homeOuter clamp
+    expect(selectionVertTarget(r, v2.to, v2.to, 26, true)).toBe(26); // anchor flips to LO → normal-only
+  });
+
+  it("curHead==anchor at v2.to, GROW up → ver2-home (free), NOT whole-group atomic (lo/hi by direction)", () => {
+    // backward from a collapsed caret at v2.to: anchor is HI (home=ver2) → free into ver2,
+    // must NOT jump the whole group to v1.from.
+    expect(selectionVertTarget(r, v2.to, v2.to, 19, false)).toBe(19);
+  });
+});
+
 describe("selectionVertTarget — bug-3 empty-ver1 shrink does not stick", () => {
   // empty ver1, multi-line ver2: "a\nb\n" / "a\nR1\nR2\nc\n". diff: common "a\n",
   // ver1="" vs ver2="R1\nR2\n", common "...". Compute the actual ranges from the model.
