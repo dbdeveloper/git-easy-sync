@@ -16,7 +16,7 @@
 
 import { EditorSelection, EditorState } from "@codemirror/state";
 import type { VerRange } from "./diff-model";
-import { readStructure, setStructure } from "./diff-structure";
+import { readStructure, setStructure, slideAnchor } from "./diff-structure";
 
 export interface GroupSpan {
   group: number;
@@ -85,6 +85,10 @@ export function legalizeSelection(
   head: number,
 ): { anchor: number; head: number } {
   if (anchor === head) return { anchor, head }; // a cursor captures no chars → never expands
+  // §2.2.6 п.7e empty-block exception — an anchor on an empty block's slot (with the head
+  // on the far side) slides to the seam, so the selection is the NON-empty block's plain
+  // text (begin = seam), not the whole group. Same helper the motion target uses.
+  anchor = slideAnchor(ranges, anchor, head);
   let lo = Math.min(anchor, head);
   let hi = Math.max(anchor, head);
   const groups = groupExtents(ranges);

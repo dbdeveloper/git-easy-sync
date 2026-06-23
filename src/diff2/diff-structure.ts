@@ -227,13 +227,64 @@ function groupBounds(ranges: VerRange[]): GroupBound[] {
   return out.sort((a, b) => a.v1from - b.v1from);
 }
 
+// §2.2.6 п.7e (2026-06-23 empty-block exception) — an EMPTY ver-block is TRANSPARENT:
+// it has no selectable content, so an ANCHOR sitting exactly on its outer slot, with the
+// head on the far (non-empty) side, "slides" to the seam (v2.from = the ver1/ver2
+// boundary). Then the selection is plain text of the NON-empty block (begin = the seam),
+// NOT the whole group — e.g. shrinking a whole-group selection whose ver1 is empty steps
+// into ver2 plain text with begin=v2.from (the empty ver1's terminal `\n` is NOT copied —
+// clipboard correctness), and the mirror for empty ver2. The slide is GATED on the
+// anchor being EXACTLY at the slot AND the head being on the far side, so it does NOT
+// fire when the empty block is merely SPANNED by a larger selection (anchor above/below
+// it → whole group stays, Screenshot-9/10). Pure; applied in BOTH the motion target here
+// and the legalizer (diff-selection.ts) so head + stored begin stay consistent.
+export function slideAnchor(ranges: VerRange[], anchor: number, head: number): number {
+  for (const g of groupBounds(ranges)) {
+    if (g.v2from - g.v1from <= 1 && anchor === g.v1from && head > anchor) return g.v2from; // empty ver1
+    if (g.v2to - g.v2from <= 1 && anchor === g.v2to && head < anchor) return g.v2from; // empty ver2
+  }
+  return anchor;
+}
+
+// §2.2.6 п.7e.ii.d / п.7e.iii.c — a selection STARTING on an EMPTY ver-block (a caret
+// on its single collapsed slot). The empty block is TRANSPARENT (no content), so the
+// first Shift+arrow rebases the ANCHOR to the seam toward the adjacent NON-empty block
+// and selects FROM there into it — NOT a whole-group jump. The head follows the motion,
+// CLAMPED into the sibling block: a one-line/one-char step lands the caret at the seam
+// (no selection yet, then plain-text selection of the sibling begins); a big Shift+PgDn
+// that lands inside the sibling gives [seam, landing] in one gesture (user 2026-06-23).
+// Going the OTHER way (empty ver1 up / empty ver2 down) leaves the group into the normal
+// text — anchor at the group edge, head = the native landing. Returns null when the
+// caret is not on an empty ver-block. Pure → unit-tested; the view (verticalSelect /
+// horizontalSelect) dispatches the result.
+export function emptyVerStartSelection(
+  ranges: VerRange[],
+  caret: number,
+  nativeHead: number,
+  forward: boolean,
+): { anchor: number; head: number } | null {
+  const ev = ranges.find((r) => r.to - r.from === 1 && r.from === caret);
+  if (!ev) return null;
+  const v1 = ranges.find((r) => r.group === ev.group && r.ver === 1);
+  const v2 = ranges.find((r) => r.group === ev.group && r.ver === 2);
+  if (!v1 || !v2) return null;
+  const clamp = (x: number, lo: number, hi: number): number => Math.max(lo, Math.min(x, hi));
+  if (ev.ver === 1) {
+    if (forward) return { anchor: v2.from, head: clamp(nativeHead, v2.from, v2.to) }; // into ver2 below
+    return { anchor: v1.from, head: nativeHead }; // up → normal above
+  }
+  if (!forward) return { anchor: v2.from, head: clamp(nativeHead, v1.from, v2.from) }; // into ver1 above
+  return { anchor: v2.to, head: nativeHead }; // empty ver2 down → normal below
+}
+
 export function selectionVertTarget(
   ranges: VerRange[],
-  anchor: number,
+  anchorIn: number,
   curHead: number,
   nativeHead: number,
   forward: boolean,
 ): number {
+  const anchor = slideAnchor(ranges, anchorIn, curHead);
   const anchorIsLo = forward ? curHead >= anchor : curHead > anchor;
   const atoms: { a: number; b: number }[] = [];
   let homeOuter: number | null = null; // the home block's outer (non-seam) edge, a clamped stop

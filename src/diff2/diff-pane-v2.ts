@@ -39,6 +39,7 @@ import {
   caretOffTerminal,
   cursorHistory,
   cursorVertTarget,
+  emptyVerStartSelection,
   selectionVertTarget,
   horizontalSkip,
   readStructure,
@@ -403,15 +404,19 @@ function verticalSelect(view: EditorView, forward: boolean): boolean {
   const cur = view.state.selection.main;
   const ranges = readStructure(view.state);
   const native = view.moveVertically(cur, forward);
+  // §2.2.6 п.7e.ii.d / п.7e.iii.c — a selection STARTING on an EMPTY ver-block: the
+  // empty block is transparent → rebase the anchor to the seam toward the adjacent
+  // non-empty block and select from there (Shift+Down → caret at ver2 start; a big
+  // Shift+PgDn landing inside ver2 → [ver2.start, landing]).
+  if (cur.empty) {
+    const ev = emptyVerStartSelection(ranges, cur.head, native.head, forward);
+    if (ev) {
+      view.dispatch({ selection: EditorSelection.range(ev.anchor, ev.head), scrollIntoView: true });
+      return true;
+    }
+  }
   const head = selectionVertTarget(ranges, cur.anchor, cur.head, native.head, forward);
-  // §2.2.6 п.7e.ii.d / п.7e.iii.c — a selection that STARTS on an EMPTY ver-block
-  // selects NOTHING (the block has no content): the first Shift+arrow just moves the
-  // caret to the boundary (as if a plain arrow, then Shift), re-basing the anchor
-  // there. Only fires from a cursor sitting exactly on an empty ver's single slot.
-  const startedOnEmptyVer =
-    cur.empty && ranges.some((r) => r.to - r.from === 1 && r.from === cur.head);
-  const anchor = startedOnEmptyVer ? head : cur.anchor;
-  view.dispatch({ selection: EditorSelection.range(anchor, head), scrollIntoView: true });
+  view.dispatch({ selection: EditorSelection.range(cur.anchor, head), scrollIntoView: true });
   return true;
 }
 
@@ -427,12 +432,16 @@ function horizontalSelect(view: EditorView, forward: boolean): boolean {
   const cur = view.state.selection.main;
   const ranges = readStructure(view.state);
   const native = view.moveByChar(cur, forward);
+  if (cur.empty) {
+    const ev = emptyVerStartSelection(ranges, cur.head, native.head, forward);
+    if (ev) {
+      view.dispatch({ selection: EditorSelection.range(ev.anchor, ev.head), scrollIntoView: true });
+      return true;
+    }
+  }
   const skipped = horizontalSkip(view.state.doc, ranges, native.head, forward);
   const head = selectionVertTarget(ranges, cur.anchor, cur.head, skipped, forward);
-  const startedOnEmptyVer =
-    cur.empty && ranges.some((r) => r.to - r.from === 1 && r.from === cur.head);
-  const anchor = startedOnEmptyVer ? head : cur.anchor;
-  view.dispatch({ selection: EditorSelection.range(anchor, head), scrollIntoView: true });
+  view.dispatch({ selection: EditorSelection.range(cur.anchor, head), scrollIntoView: true });
   return true;
 }
 

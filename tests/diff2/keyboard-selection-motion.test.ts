@@ -14,7 +14,11 @@
 
 import { describe, expect, it } from "vitest";
 import { buildModel } from "../../src/diff2/diff-model";
-import { selectionVertTarget } from "../../src/diff2/diff-structure";
+import {
+  emptyVerStartSelection,
+  selectionVertTarget,
+  slideAnchor,
+} from "../../src/diff2/diff-structure";
 
 // The harness model: "line 1\nline 2\nL1\nL2\nbelow\n" / "...R1...".
 // doc "line 1\nline 2\nL1\nL2\n\nR1\n\nbelow\n"; ver1[14,21] ver2[21,25]; normal "below"[25,31].
@@ -161,27 +165,88 @@ describe("selectionVertTarget — SHRINK stadiality (2026-06-23, atom model, mul
   });
 });
 
-describe("selectionVertTarget — bug-3 empty-ver1 shrink does not stick", () => {
-  // empty ver1, multi-line ver2: "a\nb\n" / "a\nR1\nR2\nc\n". diff: common "a\n",
-  // ver1="" vs ver2="R1\nR2\n", common "...". Compute the actual ranges from the model.
+describe("emptyVerStartSelection — caret STARTING on an empty ver-block (п.7e.ii.d/iii.c)", () => {
+  // empty ver1[3,4], multi-line ver2[4,10].
   const m = buildModel("a\nc\n", "a\nR1\nR2\nc\n");
   const r = m.ranges;
-  const v1 = r.find((x) => x.ver === 1)!;
+  const v1 = r.find((x) => x.ver === 1)!; // [3,4] empty (here a\n=2, ver1 empty terminal)
   const v2 = r.find((x) => x.ver === 2)!;
 
+  it("empty ver1, Down ONE line → caret at v2.from, NO selection (rebase to ver2 start)", () => {
+    // native lands at v2.from (collapsed empty ver1, plain Down → ver2 col0).
+    expect(emptyVerStartSelection(r, v1.from, v2.from, true)).toEqual({ anchor: v2.from, head: v2.from });
+  });
+
+  it("empty ver1, PgDn landing INSIDE ver2 → [v2.from, landing] ver2 plain text", () => {
+    const landing = v2.from + 2;
+    expect(emptyVerStartSelection(r, v1.from, landing, true)).toEqual({ anchor: v2.from, head: landing });
+  });
+
+  it("empty ver1, PgDn landing PAST ver2 → clamped to v2.to (whole ver2, not beyond)", () => {
+    expect(emptyVerStartSelection(r, v1.from, v2.to + 5, true)).toEqual({ anchor: v2.from, head: v2.to });
+  });
+
+  it("empty ver1, Up → into normal above (anchor at v1.from, head = native)", () => {
+    expect(emptyVerStartSelection(r, v1.from, 0, false)).toEqual({ anchor: v1.from, head: 0 });
+  });
+
+  it("returns null when the caret is NOT on an empty ver-block slot", () => {
+    expect(emptyVerStartSelection(r, v2.from, 7, true)).toBeNull(); // caret in ver2, not empty
+  });
+
+  it("MIRROR — empty ver2, Up ONE line → caret at v2.from (rebase to ver1 end); PgUp inside ver1 → [native, v2.from]", () => {
+    const m2 = buildModel("a\nA1\nA2\nc\n", "a\nc\n"); // ver1[3,9] multi, ver2[9,10] empty (approx)
+    const r2 = m2.ranges;
+    const e1 = r2.find((x) => x.ver === 1)!;
+    const e2 = r2.find((x) => x.ver === 2)!;
+    // caret on empty ver2 slot (e2.from), Up: into ver1, clamped [e1.from, e2.from].
+    expect(emptyVerStartSelection(r2, e2.from, e2.from, false)).toEqual({ anchor: e2.from, head: e2.from });
+    expect(emptyVerStartSelection(r2, e2.from, e1.from + 1, false)).toEqual({ anchor: e2.from, head: e1.from + 1 });
+  });
+});
+
+describe("selectionVertTarget — empty-block EXCEPTION (2026-06-23 transparent empty block)", () => {
+  // empty ver1, multi-line ver2: ver1[2,3] (terminal only) ver2[3,10] (R1\nR2 + terminal).
+  const m = buildModel("a\nc\n", "a\nR1\nR2\nc\n");
+  const r = m.ranges;
+  const v1 = r.find((x) => x.ver === 1)!; // [2,3] empty
+  const v2 = r.find((x) => x.ver === 2)!; // [3,10]
+
   it("empty ver1 IS width-1 (terminal only), ver2 holds the remote content", () => {
-    expect(v1.to - v1.from).toBe(1); // empty ver1 = protected terminal only
+    expect(v1.to - v1.from).toBe(1);
     expect(v2.to - v2.from).toBeGreaterThan(1);
   });
 
-  it("anchor moved to empty v1.from (whole group), Shift+Up below the group → bottom edge", () => {
-    // whole group selected with anchor==v1.from (legalizer moved it there). curHead in
-    // normal below → atomic (anchor at v1.from is OUTSIDE for backward) → snap to v2.to.
-    const below = v2.to + 1;
-    expect(selectionVertTarget(r, v1.from, below, v2.from, false)).toBe(v2.to);
+  it("slideAnchor: anchor at empty ver1's slot (v1.from) with head below → slides to seam v2.from", () => {
+    expect(slideAnchor(r, v1.from, v2.to)).toBe(v2.from); // head below → slide
+    expect(slideAnchor(r, v1.from, v1.from)).toBe(v1.from); // head not below → no slide (no whole-group context)
   });
 
-  it("then head at v2.to, Shift+Up → ATOMIC CROSS to v1.from (group de-selects, unstuck)", () => {
-    expect(selectionVertTarget(r, v1.from, v2.to, v1.from, false)).toBe(v1.from);
+  it("empty ver1, shrink UP from whole-group → ver2 plain text (begin slid to v2.from), NOT collapse", () => {
+    // anchorIn = v1.from (legalizer parked it there); slideAnchor → v2.from, home = ver2
+    // (free), so the head steps freely DOWN-from-top inside ver2 — begin = v2.from.
+    const belowNative = 7; // native lands inside ver2 (free movement)
+    expect(selectionVertTarget(r, v1.from, v2.to, belowNative, false)).toBe(belowNative);
+  });
+
+  it("empty ver1 shrink does NOT stick (the old bug-3): it steps, never re-expands to whole", () => {
+    // from inside ver2 keep shrinking up — always returns the native (free), never v2.to.
+    expect(selectionVertTarget(r, v1.from, 7, 5, false)).toBe(5);
+  });
+
+  // MIRROR — empty ver2, multi-line ver1: ver1[2,9] ver2[9,10] (empty).
+  const m2 = buildModel("a\nA1\nA2\nc\n", "a\nc\n");
+  const r2 = m2.ranges;
+  const e2v1 = r2.find((x) => x.ver === 1)!; // [2,9]
+  const e2v2 = r2.find((x) => x.ver === 2)!; // [9,10] empty
+
+  it("slideAnchor mirror: anchor at empty ver2's slot (v2.to) with head above → slides to seam v2.from", () => {
+    expect(slideAnchor(r2, e2v2.to, e2v1.from)).toBe(e2v2.from); // head above → slide
+    expect(slideAnchor(r2, e2v2.to, e2v2.to)).toBe(e2v2.to); // not above → no slide
+  });
+
+  it("empty ver2, shrink DOWN from whole-group → ver1 plain text (begin slid to v2.from), NOT collapse", () => {
+    const insideVer1Native = 6;
+    expect(selectionVertTarget(r2, e2v2.to, e2v1.from, insideVer1Native, true)).toBe(insideVer1Native);
   });
 });
