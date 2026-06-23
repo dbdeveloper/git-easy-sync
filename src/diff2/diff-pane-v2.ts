@@ -16,6 +16,7 @@
 // resolution) land in the next increments.
 
 import {
+  Compartment,
   EditorSelection,
   EditorState,
   Facet,
@@ -395,6 +396,28 @@ function horizontal(view: EditorView, forward: boolean): boolean {
   return true;
 }
 
+// bug-45/46 — Obsidian's bundled CM6 drawSelection keeps a STALE-WIDTH node in its
+// rect pool when a keyboard selection SHRINKS across collapsed (height:0) lines: it
+// repositions the trailing rect (top) but never resizes it (frozen at the previous
+// word's width) → a phantom highlight on the wrong line. Confirmed from the live DOM:
+// exactly ONE view / ONE selectionLayer / 3 rects, rect-3's width frozen at w55 across
+// gestures (so NOT a stray range — CM6 enforces a single selection — and NOT a dup
+// view). CM6 6.36.2 (the harness) recomputes it correctly; Obsidian's version doesn't.
+// A plain `reconfigure(drawSelection())` is a NO-OP (same module-level ViewPlugin), so
+// we TEAR THE LAYER DOWN (reconfigure to []) then RE-ADD it in a second synchronous
+// dispatch: the destroy() drops the stale pool, the re-add builds fresh nodes. Both
+// dispatches run before the next paint → no empty-flash. Reverts cleanly if it doesn't
+// hold up (the alternative is bundling a known-good CM6, ~450KB).
+const drawSelectionComp = new Compartment();
+function dispatchSel(view: EditorView, anchor: number, head: number): void {
+  view.dispatch({ effects: drawSelectionComp.reconfigure([]) });
+  view.dispatch({
+    selection: EditorSelection.range(anchor, head),
+    effects: drawSelectionComp.reconfigure(drawSelection()),
+    scrollIntoView: true,
+  });
+}
+
 // §2.2.6 п.7e — Shift+Up/Down EXTEND the selection with the same diff-aware stops:
 // keep the anchor, move the head to the first region boundary (selectionVertTarget).
 // Without this, Shift+arrow fell through to defaultKeymap → native column-preserving
@@ -411,12 +434,12 @@ function verticalSelect(view: EditorView, forward: boolean): boolean {
   if (cur.empty) {
     const ev = emptyVerStartSelection(ranges, cur.head, native.head, forward);
     if (ev) {
-      view.dispatch({ selection: EditorSelection.range(ev.anchor, ev.head), scrollIntoView: true });
+      dispatchSel(view, ev.anchor, ev.head);
       return true;
     }
   }
   const head = selectionVertTarget(ranges, cur.anchor, cur.head, native.head, forward);
-  view.dispatch({ selection: EditorSelection.range(cur.anchor, head), scrollIntoView: true });
+  dispatchSel(view, cur.anchor, head);
   return true;
 }
 
@@ -435,13 +458,13 @@ function horizontalSelect(view: EditorView, forward: boolean): boolean {
   if (cur.empty) {
     const ev = emptyVerStartSelection(ranges, cur.head, native.head, forward);
     if (ev) {
-      view.dispatch({ selection: EditorSelection.range(ev.anchor, ev.head), scrollIntoView: true });
+      dispatchSel(view, ev.anchor, ev.head);
       return true;
     }
   }
   const skipped = horizontalSkip(view.state.doc, ranges, native.head, forward);
   const head = selectionVertTarget(ranges, cur.anchor, cur.head, skipped, forward);
-  view.dispatch({ selection: EditorSelection.range(cur.anchor, head), scrollIntoView: true });
+  dispatchSel(view, cur.anchor, head);
   return true;
 }
 
@@ -572,7 +595,7 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       // §1.11 / TODO §6.9 — draw the selection ourselves so its background extends
       // to the END of the line, INCLUDING the trailing `↵` glyph widget (native
       // browser selection stops at the text content and leaves the ↵ outside).
-      drawSelection(),
+      drawSelectionComp.of(drawSelection()), // bug-45/46 — rebuilt per Shift gesture
       EditorView.lineWrapping,
       // §0.5.6 step-2 — live history feed (optional; off in pure-CM6 unit tests).
       ...(hooks ? [historyFeedListener(hooks.sink, hooks.flag)] : []),
