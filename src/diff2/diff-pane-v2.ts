@@ -288,8 +288,28 @@ class MarkerWidget extends WidgetType {
     }
     return el;
   }
+  // bug-47 — a selection-only change flips selTop/selBottom → eq() returns false. WITHOUT
+  // this, CM6 DESTROYS + RECREATES this block-widget marker, and a freshly-created block
+  // widget's height is re-estimated (estimatedHeight is approximate — the buttons can
+  // wrap) before it's measured. That momentary mislayout shifts the lines around the
+  // marker, so drawSelection measures the selection rects against the WRONG line tops →
+  // the band shifts / gaps and the screen doesn't repaint (bug-47-1..4; phantom-adjacent
+  // but distinct). Updating ONLY the overlay class IN PLACE + returning true makes CM6
+  // KEEP the already-measured DOM → no reflow → no shift. The button listeners close over
+  // the same view + group/config (unchanged), so reusing the DOM is safe.
+  updateDOM(dom: HTMLElement, _view: EditorView): boolean {
+    if (!dom.classList.contains(`diff2-marker-${MARKER_CLASS[this.kind]}`)) return false;
+    dom.classList.toggle("diff2-marker-sel-full", this.selTop && this.selBottom);
+    dom.classList.toggle("diff2-marker-sel-top", this.selTop && !this.selBottom);
+    dom.classList.toggle("diff2-marker-sel-bottom", !this.selTop && this.selBottom);
+    return true;
+  }
   get estimatedHeight(): number {
-    return 18;
+    // The marker row is a glyph + wrapping action buttons + device label ≈ one text
+    // line of padding + button height (~36px), NOT 18. A too-small estimate mislays the
+    // lines below until the real measure lands (bug-47). updateDOM above keeps it from
+    // mattering after the first render, but the first render should still be close.
+    return 36;
   }
   // R7.8 — the marker is NOT a doc line; keep its events out of CM6's own editing/
   // selection handling (our direct button listeners do the work).
