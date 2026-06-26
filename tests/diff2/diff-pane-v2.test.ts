@@ -144,13 +144,13 @@ describe("diff-pane-v2 — mounts without error (happy-dom)", () => {
     }
   });
 
-  it("a real mousedown on a marker button RESOLVES the group (bug: buttons didn't fire)", () => {
+  it("a real click on a marker button RESOLVES the group (§2.2.6 п.7c: click, not mousedown)", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     const view = mountDiffPaneV2(parent, "a\nL\nc\n", "a\nR\nc\n");
     try {
       const apply = view.dom.querySelector<HTMLElement>('[data-diff2-resolve="keep2"]')!;
-      apply.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      apply.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
       expect(view.state.doc.toString()).toBe("a\nR\nc\n"); // resolved to ver2 (theirs)
       expect(readStructure(view.state)).toEqual([]);
     } finally {

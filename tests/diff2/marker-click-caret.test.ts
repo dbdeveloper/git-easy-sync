@@ -29,8 +29,11 @@ afterEach(() => {
   for (const p of parents.splice(0)) p.remove();
 });
 
+// §2.2.6 п.7c — caret placement is on a DOM `click` (fires only on a clean click; a drag
+// is a mouse SELECTION via mouseSelectionStyle). open/close need no geometry; the mid
+// (=====) 50% dual-zone needs real layout → harness-verified, not here.
 const tap = (el: Element) =>
-  el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 
 describe("verBlockCaretTarget (pure)", () => {
   // open(<<<<<) → ver1 "first"; close(>>>>>) → ver2 "last";

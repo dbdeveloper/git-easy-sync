@@ -51,6 +51,7 @@ import {
   toRangeSet,
 } from "./diff-structure";
 import { type MarkerKind, markerSpecs, selectionAppearance, verLineDecisions } from "./diff-decorations";
+import { type Zone, mouseDragSelection } from "./diff-mouse-select";
 import {
   autoNewlineFilter,
   diffBackspace,
@@ -219,6 +220,7 @@ class MarkerWidget extends WidgetType {
   toDOM(view: EditorView): HTMLElement {
     const el = document.createElement("div");
     el.className = `diff2-marker diff2-marker-${MARKER_CLASS[this.kind]}`;
+    el.dataset.group = String(this.group); // §2.2.6 п.7c — read by zoneAt for drag selection
     // §2.2.6 п.7 — translucent selection overlay (::before in styles.css) over the
     // OPAQUE marker row; full row for open/close, half-row for the split mid.
     if (this.selTop && this.selBottom) el.classList.add("diff2-marker-sel-full");
@@ -236,14 +238,13 @@ class MarkerWidget extends WidgetType {
     //   open(<<<<<)  → ver1 first line; close(>>>>>) → ver2 last line.
     //   mid(=====) is DUAL — it borders BOTH blocks: a click in the TOP half → ver1 LAST
     //     line; the BOTTOM half → ver2 FIRST line.
-    // mousedown (not click) + preventDefault/stopPropagation so CM6 doesn't move the
-    // selection first / lose focus.
+    // §2.2.6 п.7c — uses DOM `click` (fires ONLY on a clean click, never after a drag) and
+    // NO mousedown/preventDefault/stopPropagation, so a click+drag from this zone instead
+    // starts a mouse SELECTION via mouseSelectionStyle. Same for the buttons below.
     const hit = document.createElement("div");
     hit.className = "diff2-marker-glyph-hit diff2-marker-clickable";
     hit.appendChild(glyph);
-    hit.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
+    hit.addEventListener("click", (e) => {
       const d = view.state.doc;
       const rs = readStructure(view.state);
       let target: number | null;
@@ -279,12 +280,11 @@ class MarkerWidget extends WidgetType {
       btn.title = `${desc} (${fmtHotkey(b.hotkey)})`;
       btn.setAttribute("data-diff2-resolve", b.choice);
       btn.setAttribute("data-diff2-group", String(this.group));
-      // §2.2.9 — pointer resolve (caret synthesized at ver1.from). mousedown (not
-      // click) so CM6 doesn't move the selection first; stopPropagation keeps the
-      // event out of CM6's own handling, preventDefault avoids focus loss.
-      btn.addEventListener("mousedown", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
+      // §2.2.9 — pointer resolve (caret synthesized at ver1.from). §2.2.6 п.7c: DOM `click`
+      // (fires ONLY on a clean click, never after a drag) + NO preventDefault/stopPropagation,
+      // so a click+drag from a button starts a mouse SELECTION (the button sits on a marker
+      // row → that marker's drag zone) instead of resolving.
+      btn.addEventListener("click", () => {
         applyResolve(view, this.group, b.choice, resolveOpts, "pointer");
       });
       buttons.appendChild(btn);
@@ -330,10 +330,12 @@ class MarkerWidget extends WidgetType {
     // mattering after the first render, but the first render should still be close.
     return 36;
   }
-  // R7.8 — the marker is NOT a doc line; keep its events out of CM6's own editing/
-  // selection handling (our direct button listeners do the work).
+  // §2.2.6 п.7c — FALSE so the marker's mouse events reach CM6's input pipeline (the
+  // mouseSelectionStyle that drives marker-zone drag selection). Clean clicks are still
+  // handled by the DOM `click` listeners on the glyph zone / buttons (which fire only on a
+  // clean click); buttons no longer stopPropagation, so a drag from them selects instead.
   ignoreEvent(): boolean {
-    return true;
+    return false;
   }
 }
 
@@ -577,6 +579,23 @@ function cursorCadenceListener(onActivity: (activity: CursorActivity) => void): 
   });
 }
 
+// §2.2.6 п.7c — map mouse coords to a selection ZONE: over a marker block-widget → that
+// marker's zone (read from its class + `data-group`); otherwise the nearest text position
+// (posAtCoords precise:false never returns null). Drives the mouse-drag selection.
+function zoneAt(view: EditorView, clientX: number, clientY: number): Zone {
+  const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+  const mk = el?.closest(".diff2-marker") as HTMLElement | null;
+  if (mk) {
+    const m = /diff2-marker-(top|middle|bottom)/.exec(mk.className);
+    const group = Number(mk.dataset.group);
+    if (m && Number.isFinite(group)) {
+      const marker = m[1] === "top" ? "open" : m[1] === "middle" ? "mid" : "close";
+      return { kind: "marker", marker, group };
+    }
+  }
+  return { kind: "text", pos: view.posAtCoords({ x: clientX, y: clientY }, false) };
+}
+
 // ── assembly ─────────────────────────────────────────────────────────────────
 // Build the initial EditorState for a (base, sibling) pair. The structure field
 // is seeded via `.init()` from the model's ranges (no post-create dispatch).
@@ -641,6 +660,33 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       // browser selection stops at the text content and leaves the ↵ outside).
       drawSelectionComp.of(drawSelection()), // bug-45/46 — rebuilt per Shift gesture
       EditorView.lineWrapping,
+      // §2.2.6 п.7c/п.7f — mouse drag selection. ONE style for EVERY left single drag, so
+      // a drag that ENDS on a marker (7c.i/ii) is caught even when it STARTED on content.
+      // A drag resolves both endpoints to zones (marker block-widget → its zone; else text
+      // pos) and feeds mouseDragSelection → legalizeSelection (keyboard mirror). A clean
+      // click (no move) is left to the DOM `click` handlers (marker glyph → caret, button →
+      // resolve); on content it just places the caret. detail>1 (double/triple) → null so
+      // CM6 keeps word/line select.
+      EditorView.mouseSelectionStyle.of((view, startEvent) => {
+        if (startEvent.button !== 0 || startEvent.detail > 1) return null;
+        const start = zoneAt(view, startEvent.clientX, startEvent.clientY);
+        const sx = startEvent.clientX;
+        const sy = startEvent.clientY;
+        return {
+          get: (event: MouseEvent) => {
+            const moved = Math.abs(event.clientX - sx) > 2 || Math.abs(event.clientY - sy) > 2;
+            if (!moved) {
+              return start.kind === "marker"
+                ? view.state.selection // clean marker click → DOM `click` does caret/resolve
+                : EditorSelection.single(start.pos); // clean content click → caret
+            }
+            const cur = zoneAt(view, event.clientX, event.clientY);
+            const sel = mouseDragSelection(start, cur, readStructure(view.state));
+            return sel ? EditorSelection.single(sel.anchor, sel.head) : view.state.selection;
+          },
+          update: () => false,
+        };
+      }),
       // §0.5.6 step-2 — live history feed (optional; off in pure-CM6 unit tests).
       ...(hooks ? [historyFeedListener(hooks.sink, hooks.flag)] : []),
       // P6.3 — cursor-cadence tap (§2.9), separate from the history feed.
