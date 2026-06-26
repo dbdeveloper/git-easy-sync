@@ -797,6 +797,23 @@ text after\n
 
       ![Expected](./imgs/Expected.Selected_the_whole_empty_line_between_two_diff-groups.png)
 
+---
+
+##### 2.2.6.R — РЕНДЕР виділення: реалізація та інваріанти (impl-нотатка, 2026-06-26)
+
+> Це нотатка РЕАЛІЗАЦІЇ (як саме малюється виділення), а не правил поведінки вище. Зафіксована, щоб майбутні зміни не відтворили вже виправлені артефакти. Усі пункти device-verified; render-баги перевіряються в Chromium-harness (`harness/diff-pane-harness.*`), бо happy-dom не бачить геометрію CM6 — див. memory `project-diff2-render-oracle`.
+
+1. **Контент-рядки виділяються NATIVE CM6** (`drawSelection`/`.cm-selectionBackground`) — свій band ми НЕ малюємо, лише перекриваємо КОЛІР на `--text-selection` (`styles.css`). Тому правила п.7 нічого не «домальовують» на рядках — лише легалізують діапазон (`diff-selection.ts`), а CM6 його малює.
+
+2. **`line-height` мусить тримати selection-rect ≈ висоту рядка-боксу.** native `drawSelection` малює rect висотою ТЕКСТУ (~18px), а НЕ повного рядка-боксу. При `line-height: var(--line-height-normal)` (~1.5 → 24px) виникав leading 3px зверху/знизу, який CM6 ховає злиттям сусідніх рядків, АЛЕ оголює на block-widget маркерах (`<<<<<`/`=====`/`>>>>>`) — проміжок зверху + смужка, що висовується з-під маркера на наступний рядок (bug-47). **Фікс: `line-height: 1.2`** (вимір: rect≈бокс, gap 1px). НЕ повертати `--line-height-normal` і не покладатись на `font-size-adjust` (він додає лише ~2px). Корінь і метод (harness geometry dump) — у memory.
+
+3. **Виділення САМИХ маркерів — наш `::before`-overlay** (`.diff2-marker-sel-{full,top,bottom}::before`, `--text-selection`), бо маркери OPAQUE (bug-34/33: щоб native-band не протікав крізь них), і native-виділення за маркером не видно. `selectionAppearance` (`diff-decorations.ts`) світить маркери ⟺ повний extent ver-блоку ⊆ selection. `MarkerWidget.updateDOM` оновлює overlay-клас НА МІСЦІ (не пересоздає widget — інакше CM6 переоцінює його висоту й зсуває band).
+
+   **bug-49 — горизонтальний INSET мусить збігатися з native.** `::before` inset (`left`/`right`) має дорівнювати `.cm-line` padding (бо саме воно задає inset native-selection). CM6 DEFAULT line-padding (`0 2px 0 6px`) **РІЗНИЙ між версіями CM6**, а Obsidian бандлить свою → на пристрої native-inset ≠ хардкоджений `::before` (marker-selection виходила ширшою). Фікс: **`.cm-line` padding ЗАДАНО ЯВНО** (`styles.css`, `.cm-line:not(.diff2-collapsed)`) = version-independent; обидва (line-padding і `::before` inset) **мусять бути рівні попарно** (фінально 0/0 — flush). Знову той самий «harness-CM6 ≠ Obsidian-CM6» клас, що й фантом/bug-47.
+
+4. **Keyboard Shift-motion** (`selectionVertTarget`/`emptyVerStartSelection`/`slideAnchor` у `diff-structure.ts`) — «ATOM»-модель: native landing → snap до правильного STOP (anchor-aware atomic/stadial; empty-блок прозорий; shrink-стадіальність). Pure, unit-tested (`keyboard-selection-motion.test.ts`); інтеграція — harness.
+
+5. **«Фантом» виділення** (стара застрягла rect-нода в `drawSelection` Obsidian при shrink через collapsed-рядки, bug-45/46) — фікс: `dispatchSel` робить `[]`→`drawSelection()` teardown-rebuild щожесту (`diff-pane-v2.ts`). Це device-paint-клас (harness його НЕ відтворює), на відміну від п.2 (чиста геометрія).
 
 ####  2.2.7 Представлення diff-group в clipboard. Копіювання і вставка diff-groups в текст
 

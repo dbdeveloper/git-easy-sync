@@ -317,8 +317,8 @@
      * left:0/right:0 stuck out 6px past the content-line selection. Matching the line
      * padding lines the marker selection up edge-to-edge with the ver-content AND the
      * normal-line selection — one uniform left edge for the whole group. */
-    left: 6px;
-    right: 2px;
+    left: 0;
+    right: 0;
     background: var(--text-selection);
     pointer-events: none;
     z-index: 0;
@@ -539,6 +539,19 @@
      * band covers the full line and meets the markers edge-to-edge. Trade-off: slightly
      * denser lines than Obsidian's prose default — fine for a code/diff view. */
     line-height: 1.2;
+}
+/* bug-49 — PIN the .cm-line horizontal padding EXPLICITLY. CM6's DEFAULT line padding
+ * (`0 2px 0 6px`) differs between CM6 versions, and Obsidian ships a different CM6 than
+ * the harness — so the NATIVE .cm-selectionBackground inset on the device ≠ the marker
+ * ::before overlay's hardcoded inset → the marker selection looked wider than the
+ * content selection (left+right edges uneven). Pinning the line padding here makes the
+ * native selection inset version-independent. ⚠️ THESE TWO VALUES MUST EQUAL the marker
+ * ::before's `left` / `right` (search "bug-41/44 — inset to match", ~line 320:
+ * `left: 6px; right: 2px`). TUNE-BY-EYE on device: keep padding-left == ::before left,
+ * padding-right == ::before right, and the two selections line up edge-to-edge. */
+.diff2-edit-view-root .cm-line:not(.diff2-collapsed) {
+    padding-left: 0; /* ⟵ tune: must match the marker ::before `left` (~line 320) */
+    padding-right: 0; /* ⟵ tune: must match the marker ::before `right` (~line 320) */
 }
 /* The text caret — our bare CM6 EditorView doesn't inherit Obsidian's editor
  * caret colour, so it defaulted to black and went invisible on the dark theme.
