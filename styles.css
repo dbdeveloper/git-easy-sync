@@ -275,7 +275,7 @@
         linear-gradient(var(--diff2-ours-bg) 0 100%),
         var(--background-primary);
     color: var(--text-normal);
-    border-top: 1px solid var(--background-modifier-border);
+    /*border-top: 1px solid var(--background-modifier-border);*/
 }
 
 /* §6.6 — split the ===== separator background: top half = ours (red), bottom
@@ -297,7 +297,7 @@
         linear-gradient(var(--diff2-theirs-bg) 0 100%),
         var(--background-primary);
     color: var(--text-normal);
-    border-bottom: 1px solid var(--background-modifier-border);
+    /*border-bottom: 10px solid var(--background-modifier-border);*/
 }
 
 /* §2.2.6 п.7 — when an ENTIRE ver-block (content + terminal \n) is selected, its
@@ -530,7 +530,15 @@
      * matches markdown REGARDLESS of which monospace font is configured. Tune
      * 0.45–0.55 to taste. (Chromium ≥ 127; older → ignored, falls back to full px.) */
     font-size-adjust: 0.5;
-    line-height: var(--line-height-normal);
+    /* bug-47 — NOT --line-height-normal (~1.5). Native drawSelection draws the
+     * selection rect at the TEXT/font height (~18px); the extra line-height leading
+     * (1.5 → 24px box) is never covered, so the selection sits ~3px short top & bottom
+     * and that shortfall SHOWS at the block-widget markers (the band can't merge across
+     * them) — the "stripe under <<<<</=====/>>>>>" artifact. A tighter line-height makes
+     * the line box ≈ the selection rect (measured: 1.2 → 1px residual, no shift), so the
+     * band covers the full line and meets the markers edge-to-edge. Trade-off: slightly
+     * denser lines than Obsidian's prose default — fine for a code/diff view. */
+    line-height: 1.2;
 }
 /* The text caret — our bare CM6 EditorView doesn't inherit Obsidian's editor
  * caret colour, so it defaulted to black and went invisible on the dark theme.

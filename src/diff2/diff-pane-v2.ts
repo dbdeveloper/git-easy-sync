@@ -430,6 +430,11 @@ function horizontal(view: EditorView, forward: boolean): boolean {
 // hold up (the alternative is bundling a known-good CM6, ~450KB).
 const drawSelectionComp = new Compartment();
 function dispatchSel(view: EditorView, anchor: number, head: number): void {
+  // Tear the drawSelection layer DOWN then re-add it in a second synchronous dispatch
+  // (the []→drawSelection() round-trip — a plain reconfigure is a no-op) so its stale
+  // rect-node pool is dropped + rebuilt fresh. (Removing this did NOT help the bug-47
+  // marker gaps — those are fixed in styles.css by extending the marker ::before — so
+  // the teardown stays for the phantom.)
   view.dispatch({ effects: drawSelectionComp.reconfigure([]) });
   view.dispatch({
     selection: EditorSelection.range(anchor, head),
