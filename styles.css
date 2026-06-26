@@ -258,6 +258,11 @@
     font-family: var(--font-monospace);
     font-size: 0.85em;
     user-select: none;
+    /* §2.2.4.9 — flex row so the clickable glyph can stretch to the FULL row height
+     * (align-self:stretch below). align-items:center keeps glyph/buttons/label centred,
+     * as the old inline `vertical-align:middle` did. */
+    display: flex;
+    align-items: center;
 }
 
 /* The marker rows share the SAME tint as the ver-block lines they border, so
@@ -378,9 +383,21 @@
     cursor: pointer;
     text-decoration: underline dotted;
 }
-/* §2.2.4.9 (V2): the <<<<< / >>>>> glyph is always a click/tap target that drops the
- * caret into ver1 / ver2 (the only way to reach an EMPTY, collapsed ver-block). */
-.diff2-marker-glyph-clickable {
+/* §2.2.4.9 (V2): a hit wrapper around the open(<<<<<) / close(>>>>>) glyph that stretches
+ * to the marker's FULL HEIGHT (so it's an easy mouse/tap target — vs the short glyph
+ * line), but stops at the first action button (NOT the whole row): a click drops the
+ * caret at the block START (pos 0), so the target stays near the start to keep that
+ * intuitive. `.diff2-marker` is `display:flex` → align-self:stretch fills the row height;
+ * the inner glyph is centred. */
+.diff2-marker-glyph-hit {
+    align-self: stretch;
+    /* align-self:stretch fills the marker's CONTENT box; -2px margin reclaims the
+     * marker's 2px vertical padding so the hit is the marker's FULL height. */
+    margin-block: -2px;
+    display: flex;
+    align-items: center;
+}
+.diff2-marker-clickable {
     cursor: pointer;
 }
 

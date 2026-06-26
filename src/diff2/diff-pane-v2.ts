@@ -223,16 +223,21 @@ class MarkerWidget extends WidgetType {
     const glyph = document.createElement("span");
     glyph.className = "diff2-marker-glyph";
     glyph.textContent = MARKER_GLYPH[this.kind];
-    // Click/tap the <<<<< / >>>>> glyph → move the caret INTO the block — the only
-    // way to reach an EMPTY ver-block (collapsed/height:0, not directly clickable).
-    // open → ver1, close → ver2; the === separator is not a target. mousedown (not
-    // click) + preventDefault/stopPropagation, matching the resolve buttons (so CM6
-    // doesn't move the selection first and focus is kept). Touch taps emulate
-    // mousedown, so this covers tap too.
+    // §2.2.4.9 — wrap the open(<<<<<) / close(>>>>>) glyph in a hit div that stretches to
+    // the marker's FULL HEIGHT (CSS `.diff2-marker-glyph-hit` → align-self:stretch) and is
+    // the click/tap target. Clicking it moves the caret INTO the block (the only way to
+    // reach an EMPTY, collapsed ver-block); the caret lands at the block start (pos 0).
+    // The full-height glyph zone is an easy target — but it stops at the buttons (NOT the
+    // whole row): a far-from-start click landing the caret at pos 0 would be confusing
+    // (user). open → ver1, close → ver2; `=====` is not a target. mousedown (not click) +
+    // preventDefault/stopPropagation so CM6 doesn't move the selection first / lose focus.
+    const hit = document.createElement("div");
+    hit.className = "diff2-marker-glyph-hit";
+    hit.appendChild(glyph);
     if (this.kind === "open" || this.kind === "close") {
       const ver: 1 | 2 = this.kind === "open" ? 1 : 2;
-      glyph.classList.add("diff2-marker-glyph-clickable");
-      glyph.addEventListener("mousedown", (e) => {
+      hit.classList.add("diff2-marker-clickable");
+      hit.addEventListener("mousedown", (e) => {
         e.preventDefault();
         e.stopPropagation();
         const target = verBlockCaretTarget(view.state.doc, readStructure(view.state), this.group, ver);
@@ -242,7 +247,7 @@ class MarkerWidget extends WidgetType {
         }
       });
     }
-    el.appendChild(glyph);
+    el.appendChild(hit);
 
     const resolveOpts = { label: this.config.remoteLabel, date: this.config.date };
     const buttons = document.createElement("span");
