@@ -161,22 +161,27 @@ const MARKER_BUTTONS: Record<MarkerKind, BtnSpec[]> = {
   ],
 };
 
-// Caret target for clicking a marker glyph (§2.2.4.9 mouse/tap entry into a block —
-// the only way to reach an EMPTY ver-block, which is collapsed/height:0 and not
-// directly clickable). open(<<<<<) → ver1's FIRST line, col 0 (as [down] from the
-// normal line above); close(>>>>>) → ver2's LAST content line, col 0 (as [up] from
-// the line below). An EMPTY block → its single caret slot (`from`), which focus
-// expands. Returns null if the group/side is absent. Pure → unit-tested.
+// Caret target for clicking a marker glyph (§2.2.4.9 mouse/tap entry into a block — the
+// only way to reach an EMPTY ver-block, collapsed/height:0, not directly clickable).
+// `end` picks WHICH end of the block, chosen so the caret lands at the line NEAREST the
+// clicked marker:
+//   open(<<<<<) above ver1 → ver1 "first";  mid(=====) below ver1 → ver1 "last";
+//   mid(=====) above ver2  → ver2 "first";  close(>>>>>) below ver2 → ver2 "last".
+// "first" = the block's first line, col 0 (= range.from); "last" = its last CONTENT line,
+// col 0 (skipping the terminal `\n`). An EMPTY block (width-1, terminal only) → its single
+// caret slot (`from`) either way (focus expands it). Returns null if the group/side is
+// absent. Pure → unit-tested.
 export function verBlockCaretTarget(
   doc: Text,
   ranges: VerRange[],
   group: number,
   ver: 1 | 2,
+  end: "first" | "last",
 ): number | null {
   const r = ranges.find((x) => x.group === group && x.ver === ver);
   if (!r) return null;
-  if (ver === 1) return r.from; // first line col 0 (empty → the caret slot)
-  return r.to - r.from <= 1 ? r.from : doc.lineAt(r.to - 2).from; // ver2 last content line col 0
+  if (end === "first" || r.to - r.from <= 1) return r.from; // first line / empty caret slot
+  return doc.lineAt(r.to - 2).from; // last content line col 0
 }
 
 class MarkerWidget extends WidgetType {
@@ -223,30 +228,39 @@ class MarkerWidget extends WidgetType {
     const glyph = document.createElement("span");
     glyph.className = "diff2-marker-glyph";
     glyph.textContent = MARKER_GLYPH[this.kind];
-    // §2.2.4.9 — wrap the open(<<<<<) / close(>>>>>) glyph in a hit div that stretches to
-    // the marker's FULL HEIGHT (CSS `.diff2-marker-glyph-hit` → align-self:stretch) and is
-    // the click/tap target. Clicking it moves the caret INTO the block (the only way to
-    // reach an EMPTY, collapsed ver-block); the caret lands at the block start (pos 0).
-    // The full-height glyph zone is an easy target — but it stops at the buttons (NOT the
-    // whole row): a far-from-start click landing the caret at pos 0 would be confusing
-    // (user). open → ver1, close → ver2; `=====` is not a target. mousedown (not click) +
-    // preventDefault/stopPropagation so CM6 doesn't move the selection first / lose focus.
+    // §2.2.4.9 — wrap EVERY marker glyph in a hit div that stretches to the marker's FULL
+    // HEIGHT (CSS `.diff2-marker-glyph-hit` → align-self:stretch) and is the click/tap
+    // target — an easy target that stops at the first button (NOT the whole row: a click
+    // drops the caret at the NEAREST line's col 0, so the zone stays near the start). It
+    // moves the caret INTO a ver-block (the only way to reach an EMPTY, collapsed one):
+    //   open(<<<<<)  → ver1 first line; close(>>>>>) → ver2 last line.
+    //   mid(=====) is DUAL — it borders BOTH blocks: a click in the TOP half → ver1 LAST
+    //     line; the BOTTOM half → ver2 FIRST line.
+    // mousedown (not click) + preventDefault/stopPropagation so CM6 doesn't move the
+    // selection first / lose focus.
     const hit = document.createElement("div");
-    hit.className = "diff2-marker-glyph-hit";
+    hit.className = "diff2-marker-glyph-hit diff2-marker-clickable";
     hit.appendChild(glyph);
-    if (this.kind === "open" || this.kind === "close") {
-      const ver: 1 | 2 = this.kind === "open" ? 1 : 2;
-      hit.classList.add("diff2-marker-clickable");
-      hit.addEventListener("mousedown", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const target = verBlockCaretTarget(view.state.doc, readStructure(view.state), this.group, ver);
-        if (target !== null) {
-          view.dispatch({ selection: { anchor: target }, scrollIntoView: true });
-          view.focus();
-        }
-      });
-    }
+    hit.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const d = view.state.doc;
+      const rs = readStructure(view.state);
+      let target: number | null;
+      if (this.kind === "open") target = verBlockCaretTarget(d, rs, this.group, 1, "first");
+      else if (this.kind === "close") target = verBlockCaretTarget(d, rs, this.group, 2, "last");
+      else {
+        const rect = hit.getBoundingClientRect();
+        const topHalf = e.clientY - rect.top < rect.height / 2;
+        target = topHalf
+          ? verBlockCaretTarget(d, rs, this.group, 1, "last") // ===== top → ver1 last line
+          : verBlockCaretTarget(d, rs, this.group, 2, "first"); // ===== bottom → ver2 first line
+      }
+      if (target !== null) {
+        view.dispatch({ selection: { anchor: target }, scrollIntoView: true });
+        view.focus();
+      }
+    });
     el.appendChild(hit);
 
     const resolveOpts = { label: this.config.remoteLabel, date: this.config.date };
