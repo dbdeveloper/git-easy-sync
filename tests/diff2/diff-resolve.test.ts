@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { redo, undo } from "@codemirror/commands";
 import { buildModel, splitModel } from "../../src/diff2/diff-model";
 import { readStructure } from "../../src/diff2/diff-structure";
-import { currentGroupAt, resolveAll, resolveGroup } from "../../src/diff2/diff-resolve";
+import { currentGroupAt, formatJoinDate, resolveAll, resolveGroup } from "../../src/diff2/diff-resolve";
 import { groupsOf } from "../../src/diff2/diff-selection";
 import { createDiffPaneState } from "../../src/diff2/diff-pane-v2";
 
@@ -35,6 +35,11 @@ describe("diff-resolve — resolveGroup (pure, scenario-2)", () => {
       "L\n> Changes from `dev` at 2026-06-05 10:31:30:\n> R\n",
     );
   });
+  it("join header parses the FS-safe timestamp into a readable date", () => {
+    expect(insertOf("join", { label: "VladPixel 6 Pro", date: "2026-06-05T10-31-30Z" })).toBe(
+      "L\n> Changes from `VladPixel 6 Pro` at 2026-06-05 10:31:30:\n> R\n",
+    );
+  });
   it("replaces the WHOLE group span and puts the caret at the END of the insert (§2.2.9)", () => {
     const spec = resolveGroup(doc, ranges, 0, "keep1")!;
     expect(spec.changes).toMatchObject({ from: 2, to: 8, insert: "L\n" });
@@ -42,6 +47,20 @@ describe("diff-resolve — resolveGroup (pure, scenario-2)", () => {
   });
   it("returns null for an unknown group", () => {
     expect(resolveGroup(doc, ranges, 99, "keep1")).toBeNull();
+  });
+});
+
+describe("formatJoinDate — FS-safe timestamp → readable", () => {
+  it("YYYY-MM-DDTHH-MM-SSZ → YYYY-MM-DD HH:MM:SS (same numbers)", () => {
+    expect(formatJoinDate("2026-06-05T10-31-30Z")).toBe("2026-06-05 10:31:30");
+  });
+  it("tolerates a missing trailing Z", () => {
+    expect(formatJoinDate("2026-06-05T10-31-30")).toBe("2026-06-05 10:31:30");
+  });
+  it("leaves an already-formatted / unexpected / empty string untouched", () => {
+    expect(formatJoinDate("2026-06-05 10:31:30")).toBe("2026-06-05 10:31:30");
+    expect(formatJoinDate("")).toBe("");
+    expect(formatJoinDate("whatever")).toBe("whatever");
   });
 });
 

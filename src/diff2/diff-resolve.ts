@@ -33,12 +33,21 @@ export interface ResolveOpts {
   date?: string; // formatted date (for join)
 }
 
+// Reformat the filesystem-safe conflict timestamp "YYYY-MM-DDTHH-MM-SSZ" into a readable
+// "YYYY-MM-DD HH:MM:SS" for the join header (same numbers, just parsed — the colons can't
+// live in a filename, hence the dashed source). Anything not matching that exact shape is
+// left untouched (defensive — empty string, already-formatted, etc.).
+export function formatJoinDate(ts: string): string {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})Z?$/.exec(ts);
+  return m ? `${m[1]} ${m[2]}:${m[3]}:${m[4]}` : ts;
+}
+
 // "> "-quote each ver2 line under a header (§2.2.9(7) / TODO #13). Empty ver2 ⇒
 // nothing inserted.
 function joinText(ver2content: string, opts: ResolveOpts): string {
   if (ver2content === "") return "";
   const label = opts.label ?? "remote";
-  const date = opts.date ?? "";
+  const date = formatJoinDate(opts.date ?? "");
   const header = `> Changes from \`${label}\` at ${date}:\n`;
   const hadTrailingNl = ver2content.endsWith("\n");
   const body = hadTrailingNl ? ver2content.slice(0, -1) : ver2content;
