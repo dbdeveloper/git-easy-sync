@@ -1,7 +1,7 @@
 {
   "name": "github-easy-sync",
   "version": "2.0.2-beta",
-  "description": "Sync a GitHub repository with vaults on different platforms without requiring git installation",
+  "description": "Sync a GitHub repository with the Obsidian Vault on different platforms without requiring git installation",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",

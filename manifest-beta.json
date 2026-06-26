@@ -3,7 +3,7 @@
   "name": "GitHub Easy Sync",
   "version": "2.0.2-beta",
   "minAppVersion": "1.7.7",
-  "description": "Sync a GitHub repository with vaults on different platforms without requiring git installation",
+  "description": "Sync a GitHub repository with the Obsidian Vault on different platforms without requiring git installation",
   "author": "Vladyslav Kozlovskyy",
   "authorUrl": "https://github.com/dbdeveloper/github-easy-sync",
   "contributors": [
