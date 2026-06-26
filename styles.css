@@ -398,7 +398,9 @@
     align-items: center;
 }
 .diff2-marker-clickable {
-    cursor: pointer;
+    /* text I-beam, not a pointer finger: the zone POSITIONS the text caret (into the
+     * ver-block), it doesn't trigger a button-like action. */
+    cursor: text;
 }
 
 /* §1.6.a.1: ghost ↵ marking each real newline (line-wrap is always on, so
