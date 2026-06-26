@@ -17,6 +17,7 @@
 //   - docs/DIFF2_IMPLEMENTATION_PLAN.md §R9.1 Phase 1 acceptance
 
 import type { ConflictEntry } from "./synthetic-detector";
+import { formatConflictTimestamp } from "./strip-conflict-suffix";
 
 export interface ConflictsListCallbacks {
   // Fires when user clicks a sibling row. Receives base + sibling
@@ -109,7 +110,7 @@ function renderEntryRow(
   });
   meta.createSpan({
     cls: "diff2-conflicts-timestamp",
-    text: ` · ${entry.isoTimestamp}`,
+    text: ` · ${formatConflictTimestamp(entry.isoTimestamp)}`,
   });
 
   // Badge distinguishes tracked (registered conflict) from synthetic

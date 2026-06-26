@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { redo, undo } from "@codemirror/commands";
 import { buildModel, splitModel } from "../../src/diff2/diff-model";
 import { readStructure } from "../../src/diff2/diff-structure";
-import { currentGroupAt, formatJoinDate, resolveAll, resolveGroup } from "../../src/diff2/diff-resolve";
+import { currentGroupAt, resolveAll, resolveGroup } from "../../src/diff2/diff-resolve";
 import { groupsOf } from "../../src/diff2/diff-selection";
 import { createDiffPaneState } from "../../src/diff2/diff-pane-v2";
 
@@ -47,20 +47,6 @@ describe("diff-resolve — resolveGroup (pure, scenario-2)", () => {
   });
   it("returns null for an unknown group", () => {
     expect(resolveGroup(doc, ranges, 99, "keep1")).toBeNull();
-  });
-});
-
-describe("formatJoinDate — FS-safe timestamp → readable", () => {
-  it("YYYY-MM-DDTHH-MM-SSZ → YYYY-MM-DD HH:MM:SS (same numbers)", () => {
-    expect(formatJoinDate("2026-06-05T10-31-30Z")).toBe("2026-06-05 10:31:30");
-  });
-  it("tolerates a missing trailing Z", () => {
-    expect(formatJoinDate("2026-06-05T10-31-30")).toBe("2026-06-05 10:31:30");
-  });
-  it("leaves an already-formatted / unexpected / empty string untouched", () => {
-    expect(formatJoinDate("2026-06-05 10:31:30")).toBe("2026-06-05 10:31:30");
-    expect(formatJoinDate("")).toBe("");
-    expect(formatJoinDate("whatever")).toBe("whatever");
   });
 });
 

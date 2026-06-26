@@ -34,6 +34,7 @@ import type { ConflictCounter } from "../sync2/conflict-counter";
 import type ConflictStore from "../sync2/conflict-store";
 import { renderConflictsList } from "./conflicts-list";
 import { isMarkdownPath } from "./conflict-merge-all";
+import { formatConflictTimestamp } from "./strip-conflict-suffix";
 import { DiffPaneOwner, resolvedFromView } from "./diff-pane-owner";
 import { type DiffViewConfig, mountDiffPaneV2 } from "./diff-pane-v2";
 import {
@@ -386,7 +387,7 @@ export class DiffEditView extends ItemView {
     });
     titleRow.createEl("span", {
       cls: "diff2-detail-meta",
-      text: ` · ${entry.deviceLabel} @ ${entry.isoTimestamp}`,
+      text: ` · ${entry.deviceLabel} @ ${formatConflictTimestamp(entry.isoTimestamp)}`,
     });
 
     // Detail body — DiffPane mount.

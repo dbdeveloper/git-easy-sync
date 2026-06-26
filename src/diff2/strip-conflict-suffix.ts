@@ -68,3 +68,13 @@ export function parseSiblingFilename(
     isoTimestamp,
   };
 }
+
+// Reformat the 20-char filesystem-safe `isoTimestamp` ("YYYY-MM-DDTHH-MM-SSZ" — colons
+// can't live in a filename, hence the dashes) into a readable "YYYY-MM-DD HH:MM:SS" for
+// DISPLAY (the conflicts list, the detail-view title, the [join] header). Same numbers —
+// just T→space and the time dashes→colons, drop Z. Anything not matching that exact shape
+// (already-formatted, empty, unexpected) passes through untouched.
+export function formatConflictTimestamp(ts: string): string {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})Z?$/.exec(ts);
+  return m ? `${m[1]} ${m[2]}:${m[3]}:${m[4]}` : ts;
+}

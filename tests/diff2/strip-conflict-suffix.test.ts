@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { stripConflictSuffix } from "src/diff2/strip-conflict-suffix";
+import { formatConflictTimestamp, stripConflictSuffix } from "src/diff2/strip-conflict-suffix";
 import { buildSiblingPath } from "src/sync2/conflict-store";
 
 // Behavior contract for stripConflictSuffix: reverse the naming produced
@@ -190,5 +190,19 @@ describe("stripConflictSuffix", () => {
         expect(stripConflictSuffix(sibling)).toBe(vault);
       });
     }
+  });
+});
+
+describe("formatConflictTimestamp — FS-safe isoTimestamp → readable for display", () => {
+  it("YYYY-MM-DDTHH-MM-SSZ → YYYY-MM-DD HH:MM:SS (same numbers)", () => {
+    expect(formatConflictTimestamp("2026-06-05T10-31-30Z")).toBe("2026-06-05 10:31:30");
+  });
+  it("tolerates a missing trailing Z", () => {
+    expect(formatConflictTimestamp("2026-06-05T10-31-30")).toBe("2026-06-05 10:31:30");
+  });
+  it("leaves an already-formatted / unexpected / empty string untouched", () => {
+    expect(formatConflictTimestamp("2026-06-05 10:31:30")).toBe("2026-06-05 10:31:30");
+    expect(formatConflictTimestamp("")).toBe("");
+    expect(formatConflictTimestamp("whatever")).toBe("whatever");
   });
 });
