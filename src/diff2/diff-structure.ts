@@ -15,6 +15,7 @@
 
 import {
   EditorState,
+  Facet,
   RangeSet,
   RangeValue,
   StateEffect,
@@ -24,6 +25,17 @@ import {
 } from "@codemirror/state";
 import { invertedEffects } from "@codemirror/commands";
 import type { VerRange } from "./diff-model";
+
+// §2.2.14 touch-only / read-only mode. A view-level boolean facet (lives here — the
+// foundational module — so the edit commands in diff-edits/diff-clipboard/diff-selection can
+// read it without importing diff-pane-v2, which would cycle). createDiffPaneState provides it
+// from the view config; commands + the marker-click gate on it.
+export const touchOnlyFacet = Facet.define<boolean, boolean>({
+  combine: (vs) => vs[0] ?? false,
+});
+export function isTouchOnly(state: EditorState): boolean {
+  return state.facet(touchOnlyFacet);
+}
 
 // RangeValue sides (CM6 reads these in RangeSet.map):
 //   startSide = -1  → an insert AT `from` grows the range (so typing into an empty

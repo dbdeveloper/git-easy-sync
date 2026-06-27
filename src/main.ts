@@ -7,6 +7,7 @@ import {
   EventRef,
   MarkdownView,
   Menu,
+  Platform,
   Plugin,
   WorkspaceLeaf,
   Notice,
@@ -415,6 +416,8 @@ export default class GitHubSyncPlugin extends Plugin {
             // messages.
             localDeviceLabel: () =>
               this.settings.deviceLabel ?? "Obsidian",
+            // §2.2.14 — live-read the Touch mode setting at each view open.
+            touchOnly: () => this.settings.diffEditorTouchMode ?? false,
           }),
       );
       this.addCommand({
@@ -541,6 +544,15 @@ export default class GitHubSyncPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const raw = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, raw);
+
+    // §2.2.14 — diffEditorTouchMode has a PLATFORM-DEPENDENT default (desktop=false,
+    // mobile=true) that a static DEFAULT_SETTINGS can't express. Apply + persist it the
+    // first time the setting is created (absent from data.json — fresh install or the
+    // pre-feature data.json). Once written, the stored value (incl. a user toggle) wins.
+    if (this.settings.diffEditorTouchMode === undefined) {
+      this.settings.diffEditorTouchMode = Platform.isMobile;
+      await this.saveSettings();
+    }
 
     // Stage 7 manual data.json migration detection. The user base
     // is currently one person with two devices; the maintainer

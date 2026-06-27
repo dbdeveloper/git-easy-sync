@@ -14,13 +14,21 @@ let view: EditorView;
 
 const H = {
   // (re)mount with the given base/sibling; returns the structure for confirmation.
-  mount(base: string, sibling: string) {
+  // touchOnly=true → §2.2.14 read-only mode (config-only hooks).
+  mount(base: string, sibling: string, touchOnly = false) {
     const root = document.getElementById("editor")!;
     root.innerHTML = "";
     const host = document.createElement("div");
     host.className = "diff2-edit-view-root";
     root.appendChild(host);
-    view = mountDiffPaneV2(host, base, sibling);
+    view = mountDiffPaneV2(
+      host,
+      base,
+      sibling,
+      touchOnly
+        ? { config: { localLabel: "local", remoteLabel: "remote", date: "", isMarkdown: true, touchOnly: true } }
+        : undefined,
+    );
     view.focus();
     return H.struct();
   },

@@ -43,8 +43,10 @@ import {
   emptyVerStartSelection,
   selectionVertTarget,
   horizontalSkip,
+  isTouchOnly,
   readStructure,
   resolveCaret,
+  touchOnlyFacet,
   structureField,
   structureHistory,
   terminalProtectionFilter,
@@ -73,8 +75,10 @@ import type { CursorActivity } from "./cursor-timer";
 // every live transaction is fed to history.jsonl. Omitted in pure-CM6 unit tests,
 // so the render/nav/resolution spine stays testable without a vault.
 export interface DiffPaneV2Hooks {
-  sink: HistorySink;
-  flag: ReplayFlag; // SAME instance the owner passes to replayWithGuard
+  // sink+flag are paired (the live history feed); omit BOTH for a config-only hooks
+  // (e.g. the touch-only harness / a read-only mount with no recording).
+  sink?: HistorySink;
+  flag?: ReplayFlag; // SAME instance the owner passes to replayWithGuard
   // P6.3 — view config threaded into the marker decorations (device labels +
   // Join-button visibility) AND derived into ResolveOpts {label: remoteLabel,
   // date} for the in-editor buttons + resolve hotkeys (so a "Join" produces the
@@ -96,6 +100,10 @@ export interface DiffViewConfig {
   remoteLabel: string;
   date: string;
   isMarkdown: boolean;
+  // §2.2.14 — touch-only / read-only mode: the editor blocks edits (typing/delete/paste) but
+  // keeps resolve buttons, selection, copy, and undo/redo; the marker glyph-click (caret into
+  // a block) is disabled. Optional (default false); set from the "Interface" setting at open.
+  touchOnly?: boolean;
 }
 
 export const DEFAULT_VIEW_CONFIG: DiffViewConfig = {
@@ -103,6 +111,7 @@ export const DEFAULT_VIEW_CONFIG: DiffViewConfig = {
   remoteLabel: "remote",
   date: "",
   isMarkdown: true,
+  touchOnly: false,
 };
 
 // Facet carrying the config into buildDecorations (a StateField update only gets
@@ -245,6 +254,7 @@ class MarkerWidget extends WidgetType {
     hit.className = "diff2-marker-glyph-hit diff2-marker-clickable";
     hit.appendChild(glyph);
     hit.addEventListener("click", (e) => {
+      if (isTouchOnly(view.state)) return; // §2.2.14(3) — no caret-into-block in read-only mode
       const d = view.state.doc;
       const rs = readStructure(view.state);
       let target: number | null;
@@ -613,6 +623,18 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
     doc: m.doc,
     extensions: [
       diffViewConfigFacet.of(config), // marker decorations read this (device labels, Join gate)
+      touchOnlyFacet.of(config.touchOnly ?? false), // §2.2.14 read-only/touch mode (commands + marker-click gate on it)
+      // §2.2.14 touch-only — block user EDITS (typing/delete/paste) but NOT undo/redo/
+      // resolve/copy/selection. readOnly would have done it but it ALSO blocks undo (spec
+      // п.5 needs undo); editable=false blocks ALL keyboard incl Ctrl+C/Z. So: a changeFilter
+      // that rejects input/delete userEvents (native typing, the fall-through of guarded
+      // delete keymaps, native paste). undo/redo carry "undo"/"redo" userEvents; resolve
+      // carries none → both pass. Custom edit keymaps additionally no-op (return false) so
+      // they don't consume a key like Ctrl+Y (= redo).
+      EditorState.changeFilter.of((tr) => {
+        if (!tr.startState.facet(touchOnlyFacet)) return true;
+        return !(tr.isUserEvent("input") || tr.isUserEvent("delete"));
+      }),
       diffLineNumbers, // §2.2.10 per-side −/+ gutter (replaces lineNumbers())
       history(),
       structureField.init(() => toRangeSet(m.ranges)),
@@ -691,8 +713,9 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
           update: () => false,
         };
       }),
-      // §0.5.6 step-2 — live history feed (optional; off in pure-CM6 unit tests).
-      ...(hooks ? [historyFeedListener(hooks.sink, hooks.flag)] : []),
+      // §0.5.6 step-2 — live history feed (optional; off in pure-CM6 unit tests). Guard on
+      // `sink` (not `hooks`) so a config-only hooks — e.g. {config:{touchOnly}} — is valid.
+      ...(hooks?.sink && hooks.flag ? [historyFeedListener(hooks.sink, hooks.flag)] : []),
       // P6.3 — cursor-cadence tap (§2.9), separate from the history feed.
       ...(hooks?.onActivity ? [cursorCadenceListener(hooks.onActivity)] : []),
     ],
@@ -707,5 +730,10 @@ export function mountDiffPaneV2(
   sibling: string,
   hooks?: DiffPaneV2Hooks,
 ): EditorView {
-  return new EditorView({ state: createDiffPaneState(base, sibling, hooks), parent });
+  const view = new EditorView({ state: createDiffPaneState(base, sibling, hooks), parent });
+  // §2.2.14 — touch-only suppresses the mobile soft keyboard via inputmode="none". The
+  // editor stays focusable (contentEditable=true) so selection / Ctrl+C / undo-redo still
+  // work; the edits themselves are blocked by the changeFilter, not by editability.
+  if (hooks?.config?.touchOnly) view.contentDOM.inputMode = "none";
+  return view;
 }

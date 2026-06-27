@@ -16,7 +16,7 @@ import { ChangeSet, EditorState, type ChangeDesc, type Text } from "@codemirror/
 import type { EditorView } from "@codemirror/view";
 import { deleteCharForward } from "@codemirror/commands";
 import type { VerRange } from "./diff-model";
-import { fromRangeSet, readStructure, setStructure, structureField } from "./diff-structure";
+import { fromRangeSet, isTouchOnly, readStructure, setStructure, structureField } from "./diff-structure";
 import { replayDispatch } from "./history-log-v2";
 
 // §2.2.4(2): inserts needed to restore a missing content-trailing \n, one per
@@ -159,6 +159,7 @@ export function isLoneEmptySeparator(doc: Text, ranges: VerRange[], sepPos: numb
 // = the content \n (NOT the terminal at pos+1), and the auto-\n filter leaves the
 // now-empty block alone (to-from <= 1).
 export function diffBackspace(view: EditorView): boolean {
+  if (isTouchOnly(view.state)) return false; // §2.2.14 — read-only: no edits (fall through → changeFilter blocks)
   const sel = view.state.selection.main;
   if (!sel.empty) return false;
   const ranges = readStructure(view.state);
@@ -189,6 +190,7 @@ export function diffBackspace(view: EditorView): boolean {
 // Delete deletes [pos, pos+1). No-op when pos is a terminal `\n` (§2.2.4.7) or a
 // group-leading separator (§2.2.5.1).
 export function diffDelete(view: EditorView): boolean {
+  if (isTouchOnly(view.state)) return false; // §2.2.14 — read-only
   const sel = view.state.selection.main;
   if (!sel.empty) return false;
   const ranges = readStructure(view.state);
@@ -210,6 +212,7 @@ export function diffDelete(view: EditorView): boolean {
 // the caret too — this command is thin, never re-implements merge). Empty-selection
 // only; a real selection falls through (diffSelectionDelete / defaultKeymap).
 export function diffDeleteLine(view: EditorView): boolean {
+  if (isTouchOnly(view.state)) return false; // §2.2.14 — read-only (also lets Ctrl+Y fall through to redo)
   const sel = view.state.selection.main;
   if (!sel.empty) return false;
   const doc = view.state.doc;

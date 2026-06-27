@@ -58,6 +58,10 @@ export interface GitHubSyncSettings {
   // E3 (R2.7.4) — separate diff-panel ribbon icon (conflict-count badge +
   // always-available Conflicts/Deleted/Compare entry). Default ON.
   showDiffRibbonButton?: boolean;
+  // §2.2.14 — diff-editor "Touch mode" default: open conflict views read-only
+  // (resolve via buttons only; edits/typing blocked; mobile soft keyboard suppressed;
+  // selection + copy + undo/redo still work). Default OFF.
+  diffEditorTouchMode?: boolean;
 
   enableLogging: boolean;
 
@@ -181,6 +185,8 @@ export const DEFAULT_SETTINGS: GitHubSyncSettings = {
   showSyncRibbonButton: true,
   showCommitRibbonButton: false,
   showDiffRibbonButton: true,
+  // diffEditorTouchMode is intentionally ABSENT here — its default is platform-dependent
+  // (desktop=false, mobile=true), applied in main.ts loadSettings when unset.
   enableLogging: false,
   consolidateCommits: false,
   deviceLabel: "Obsidian",

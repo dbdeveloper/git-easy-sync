@@ -16,6 +16,7 @@ import { ChangeSet, type EditorState, type Text, type TransactionSpec } from "@c
 import { isolateHistory } from "@codemirror/commands";
 import type { VerRange } from "./diff-model";
 import {
+  isTouchOnly,
   readStructure,
   resolveCaret,
   setStructure,
@@ -250,8 +251,13 @@ export const diffClipboardCopy = EditorView.domEventHandlers({
     const text = copyClipboardText(view.state);
     if (text === null) return false; // within-block → default cut (plain text)
     event.clipboardData?.setData("text/plain", text);
-    const spec = selectionDeleteSpec(view.state);
-    if (spec) view.dispatch(spec); // group-spanning → rebuild-delete (never a raw slice)
+    // §2.2.14 — read-only: cut COPIES (proper format) but does NOT delete. The delete is a
+    // setStructure transaction with no "delete" userEvent, so the changeFilter can't catch
+    // it — skip the dispatch here. preventDefault still blocks the native raw-slice cut.
+    if (!isTouchOnly(view.state)) {
+      const spec = selectionDeleteSpec(view.state);
+      if (spec) view.dispatch(spec); // group-spanning → rebuild-delete (never a raw slice)
+    }
     event.preventDefault();
     return true;
   },
@@ -361,6 +367,7 @@ export function pasteSpec(state: EditorState, text: string): TransactionSpec | n
 // device-gate (happy-dom can't deliver a real paste into CM6).
 export const diffClipboardPaste = EditorView.domEventHandlers({
   paste(event, view) {
+    if (isTouchOnly(view.state)) return false; // §2.2.14 — read-only: paste disabled (native paste → input.paste → changeFilter blocks)
     const text = event.clipboardData?.getData("text/plain");
     if (!text) return false;
     const spec = pasteSpec(view.state, text);

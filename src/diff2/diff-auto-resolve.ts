@@ -38,6 +38,7 @@ import { buildModel, type VerRange } from "./diff-model";
 import { resolveGroup } from "./diff-resolve";
 import {
   fromRangeSet,
+  isTouchOnly,
   readStructure,
   resolveCaret,
   setStructure,
@@ -578,6 +579,7 @@ export function selectionDeleteSpec(state: EditorState): TransactionSpec | null 
 // a terminal-spanning selection; returns false otherwise so the default
 // delete/diffBackspace/diffDelete chain runs (empty or within-block selection).
 export function diffSelectionDelete(view: EditorView): boolean {
+  if (isTouchOnly(view.state)) return false; // §2.2.14 — read-only: selection-delete disabled
   const spec = selectionDeleteSpec(view.state);
   if (!spec) return false;
   view.dispatch(spec);

@@ -690,6 +690,26 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           });
       });
 
+      // ── Diff Editor ─────────────────────────────────────────────────
+      new Setting(containerEl).setName("Diff Editor").setHeading();
+
+      new Setting(containerEl)
+          .setName("Touch mode (read-only resolve)")
+          .setDesc(
+              "Open the conflict diff-editor read-only: resolve each conflict with the " +
+              "on-screen buttons only — typing/editing is disabled and the mobile soft " +
+              "keyboard is suppressed. Selection, copy and undo/redo still work. " +
+              "Convenient on small touch screens. (§2.2.14)",
+          )
+          .addToggle((toggle) => {
+              toggle
+                  .setValue(this.plugin.settings.diffEditorTouchMode ?? false)
+                  .onChange(async (value) => {
+                      this.plugin.settings.diffEditorTouchMode = value;
+                      await this.plugin.saveSettings();
+                  });
+          });
+
       // ── Performance ─────────────────────────────────────────────────
       new Setting(containerEl).setName("Performance").setHeading();
 

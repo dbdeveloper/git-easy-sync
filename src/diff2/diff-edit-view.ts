@@ -90,6 +90,9 @@ export interface DiffEditViewDeps {
   // Local device label for the top-marker / "Keep all local
   // (<label>)" button text. Falls back to "local" when undefined.
   localDeviceLabel?: () => string;
+  // §2.2.14 — read the current "Touch mode (read-only)" setting at view open. Optional
+  // (test fixtures omit it → editable as before).
+  touchOnly?: () => boolean;
   // Plugin logger — the §5.0.e one-side-silent exit logs here instead of
   // nagging the user with a Notice (no-op when logging is disabled). Optional
   // in test fixtures.
@@ -465,6 +468,7 @@ export class DiffEditView extends ItemView {
         remoteLabel: entry.deviceLabel,
         date: entry.isoTimestamp,
         isMarkdown: isMarkdownPath(entry.basePath),
+        touchOnly: this.deps.touchOnly?.() ?? false, // §2.2.14 read-only mode (Settings)
       };
 
       // Clear any prior dir, open a fresh session, and mount the owner from the
