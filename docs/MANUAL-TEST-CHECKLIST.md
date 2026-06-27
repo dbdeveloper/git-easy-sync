@@ -55,6 +55,16 @@ suite (`pnpm test:integration`).
 - [ ] 📱 **Battery death** (let the device power off below 1% mid-sync) → on relaunch, no corruption and no 0-byte files.
 - [ ] 📱 **Touch:** ribbon, settings, and the conflict list respond to taps as they do to clicks on desktop.
 
+**Installing a build on a device (BRAT).** There is no public-store build, so use [BRAT](https://github.com/TfTHacker/obsidian42-brat): *Add Beta Plugin* → this repo's URL → BRAT pulls `main.js` + `manifest.json` from the latest release tag. To test an unreleased branch, push an `X.Y.Z-beta` tag (the `release.yml` workflow cuts the artifact BRAT can fetch). Then run the 📱 / 🖥️📱 items here plus sections 2, 4, 6, 7, 8 on the device. "Pass" means the desktop contract holds identically on mobile.
+
+**Known platform limitations (behaviours, not plugin bugs — surface in the README so users know what to expect):**
+
+- **Android background-throttled timer.** Backgrounding Obsidian suspends the JS runtime within seconds; `Window.setInterval` stops firing. Watchdog drain resumes on foreground (the onload hook acts as a manual tick); a push interrupted mid-flight resumes on the next foreground via the `.attempted` marker.
+- **Android — no file watcher for external deletions.** Files removed via Android's Files app (not Obsidian) don't fire `vault.on("delete")`. ConflictStore's orphan cleanup at `load()` catches it on the next plugin start, but mid-session deletions stay invisible.
+- **Android Storage Access Framework.** Vaults under `/Android/data/md.obsidian/` work; arbitrary external paths may need user-granted access on each launch.
+- **Large uploads (>10 MB) on memory-constrained devices.** `createBlob`'s base64 step inflates ~33% in memory → either a slow push or an OOM crash. The push-queue persists the batch on disk; restart + retry usually succeeds (the resume layer skips already-uploaded blobs).
+- **iOS background suspension** is more aggressive than Android (~30 s typical). iOS fires `delete` reliably for in-Obsidian operations; external Files.app operations are inconsistent.
+
 ## 4. Conflict resolution / pseudo-merge — end-to-end (🌐)
 
 - [ ] 🖥️📱 Two devices edit the same file → a conflict sibling `*.conflict-from-<device>-<timestamp>.*` is created.
@@ -140,6 +150,10 @@ suite (`pnpm test:integration`).
 
 - [ ] **Mobile autosave benchmark** (Settings → *Run mobile autosave benchmark*): run on a mid-tier Android and on iOS; collect the p50/p95/p99 figures and send the log so the autosave timing can be tuned.
 - [ ] A large conflict (hundreds of change blocks) in the diff editor stays responsive on mobile.
+
+## Reporting a mobile issue
+
+Open a GitHub issue with: device + Android/iOS version + Obsidian version; the section/item above that failed; expected vs observed result; a snapshot of `<vault>/.obsidian/plugins/github-easy-sync/.push-queue/` (paths only — content may carry private data); and any relevant lines from `<vault>/.obsidian/github-easy-sync.log` (with "Enable logging" on).
 
 ---
 

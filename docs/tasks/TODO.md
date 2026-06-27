@@ -170,3 +170,11 @@ truncated-by-edit), а ЖИВІ undo/redo тримає (щоб після recove
 повних round-trip'ів (обережно: ЧАСТКОВИЙ round-trip, `redoDepth > 0` у кінці, треба зберегти —
 redo-стек реконструюється лише реальним undo), лог стане меншим → replay коротший. Це
 підсилює рішення A/B вище. Окрема обережна сесія (це той самий загартований history-шар).
+
+
+> Ідея від Obsidian sync:
+> Removed spinning from the status bar icon because it impacted battery life when the app idles.
+> Думаю, що варто додати в Settings  таке налаштування, щоб вмикати/вимикати це крутіння. Воно гарне і наочне, але справді 
+> не обов'язкове. Хоча на mobile його і так нема. А від батареї я працюю дуже рідко. Однак не я один користувач свого 
+> plugin.
+>   
