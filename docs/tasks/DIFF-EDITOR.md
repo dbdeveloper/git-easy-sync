@@ -14,6 +14,16 @@
 > покриває принципово **інший** рівень — intra-session, intra-chunk undo
 > всередині одного відкриття DiffPane, який жодного `[Sync]` ще не бачив.
 
+> **✅ СТАТУС (2026-06-27): реалізовано й живе** (гілка `fix-diff-editor`, pushed @ `1a928e3`).
+> §0 V2-модель + §2–§5 (commit7Step / A–K recovery / autosave / trash) працюють; DIFF-EDITOR-V2.md
+> interaction-шар + toolbar (§2.2.15) + touch-only (§2.2.14) завершені, device-verified. **Фічі
+> заморожено** (баги ще шукаємо). **bug-56 hardening:** `replayHistoryV2` тепер ЗУПИНЯЄТЬСЯ на
+> першому непридатному блоці (не throw) → resume ніколи не брикається (base+sibling = ground
+> truth); `autoResolveFilter` пропускає `replayDispatch` (replay не пере-каскадить); pre-flight
+> dry-run перед Resume-модалкою → чесний "NNN edits saved". **Open (не фічі):** recovery-replay
+> perf (`TODO.md`), entry-points E4/E5/E6, History/Compare/Deleted. Узгоджена майбутня фіча:
+> search-панель (Ctrl+F). Live-pointer статусу — memory `project-diff2-resume-point`.
+
 ## Зміст
 
 - §0. **V2-модель: інтеграційний контракт (БУДУЄТЬСЯ — модель + persistence-core готові)** — як §2–§5 адаптуються під нову модель

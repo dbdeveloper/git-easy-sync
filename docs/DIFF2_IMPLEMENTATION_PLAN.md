@@ -4,6 +4,16 @@
 > для плагіна `github-easy-sync`. "the conflict-view
 > UX is the one area still openly known to be primitive" — цей план
 > закриває цю дірку.
+>
+> **✅ СТАТУС (2026-06-27): дірку закрито — DIFF-EDITOR V2 FEATURE-COMPLETE** (гілка
+> `fix-diff-editor`, pushed @ `1a928e3`, device-verified). Conflict-view UX перероблено повністю:
+> CM6 DiffPane (V2-модель — terminal-`\n` per ver-block + Inclusive RangeSet), уся interaction
+> (DIFF-EDITOR-V2.md §2.2.x), touch-only, toolbar-редизайн, fault-tolerant recovery (bug-56).
+> **Фічі заморожено** (баги ще шукаємо). Цей PLAN — переважно ІСТОРИЧНИЙ (фазування R9.1 описує
+> елаборатну, НЕ shipped-послідовність). Поточний статус: CLAUDE.md (рядок «✅✅ DIFF-EDITOR V2
+> FEATURE-COMPLETE») + memory `project-diff2-resume-point`. Open (не фічі): recovery-replay perf
+> (`docs/tasks/TODO.md`), entry-points E4/E5/E6, History/Compare/Deleted. Узгоджена майбутня
+> фіча: search-панель (Ctrl+F).
 
 ## Назва підпроекту: `diff2`
 

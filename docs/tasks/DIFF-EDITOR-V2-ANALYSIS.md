@@ -1,5 +1,14 @@
 # DIFF-EDITOR-V2 — інтеракційні фічі (✅ MILESTONE ЗАВЕРШЕНО 2026-06-20)
 
+> **✅✅ ОНОВЛЕННЯ (2026-06-27): DIFF-EDITOR V2 FEATURE-COMPLETE, фічі заморожено** (pushed @
+> `1a928e3`). Після milestone нижче додано й device-verified: touch-only (§2.2.14), toolbar-редизайн
+> (§2.2.15), char-level diff (bug-8), trailing-`↵` diff (bug-50/51), назва файлу → view-header, і
+> **fault-tolerant recovery (bug-56)** — `replayHistoryV2` зупиняється безпечно (не throw),
+> `autoResolveFilter` пропускає `replayDispatch` (replay не пере-каскадить — це й був корінь
+> bug-56), pre-flight дає чесний "NNN edits saved". Open (не фічі): recovery-replay perf
+> (`TODO.md`), entry-points E4/E5/E6, History/Compare/Deleted. Узгоджена майбутня фіча: search
+> (Ctrl+F). Live-pointer: memory `project-diff2-resume-point`.
+
 > **✅ УВЕСЬ інтеракційний roadmap РЕАЛІЗОВАНО й протестовано** (гілка `fix-diff-editor`, pushed @ `2c698a9`,
 > device-verified у реальному Obsidian). Базовий V2-редактор (terminal-`\n` + Inclusive RangeSet, представлення,
 > резолюція scenario-2, навігація `cursorVert`, нумерація, персистентність command-log, commit/recovery,
