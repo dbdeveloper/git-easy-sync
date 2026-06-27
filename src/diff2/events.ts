@@ -19,22 +19,3 @@
 // sub-tabs (R2.7 asymmetry).
 export type DiffEditSubTab = "conflicts" | "deleted";
 
-// Top-level state machine of the Diff-Edit view.
-//   - sub-tab        — list view or detail view inside one of the
-//                      two global sub-tabs.
-//   - compare-detail — one-shot Compare session (R2.1); no sub-tab
-//                      header, only `[←]` to return to picker / source.
-//   - history-detail — one-shot History session (R2.3); same shell.
-//
-// Phase 0 only ever uses the trivial default state
-// `{ kind: "sub-tab", tab: "conflicts" }`. Later phases activate
-// the other variants.
-export type DiffEditViewState =
-  | { kind: "sub-tab"; tab: DiffEditSubTab }
-  | { kind: "compare-detail"; ours: string; theirs: string }
-  | { kind: "history-detail"; vaultPath: string };
-
-export const DEFAULT_DIFF_EDIT_VIEW_STATE: DiffEditViewState = {
-  kind: "sub-tab",
-  tab: "conflicts",
-};

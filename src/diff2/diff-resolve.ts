@@ -140,24 +140,6 @@ export function applyResolve(
   return true;
 }
 
-// A marker button carries `data-diff2-resolve="<choice>"` + `data-diff2-group`.
-// This handler catches the click and applies the resolution. Resolve options
-// (deviceLabel/date for join) are supplied by the view config at wiring time
-// (Phase 6); a default keeps the editor usable standalone.
-export function resolveClickHandler(opts: ResolveOpts = {}): Extension {
-  return EditorView.domEventHandlers({
-    mousedown(event, view) {
-      const target = event.target as HTMLElement | null;
-      const btn = target?.closest?.("[data-diff2-resolve]") as HTMLElement | null;
-      if (!btn) return false;
-      event.preventDefault();
-      const group = Number(btn.getAttribute("data-diff2-group"));
-      const choice = btn.getAttribute("data-diff2-resolve") as ResolveChoice;
-      return applyResolve(view, group, choice, opts, "pointer"); // §2.2.9 mouse/tap → synthesize caret
-
-    },
-  });
-}
 
 // ── keyboard hotkeys (§1.9) ──────────────────────────────────────────────────
 // The group whose span [ver1.from, ver2.to) contains the caret, else null.

@@ -20,7 +20,6 @@ import {
   readStructure,
   resolveCaret,
   setStructure,
-  structureField,
   toRangeSet,
 } from "./diff-structure";
 import {

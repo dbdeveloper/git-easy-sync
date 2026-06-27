@@ -26,7 +26,7 @@
 // exists checks), conflictStore (for record lookup). Outputs:
 // categorised list of conflict entries.
 
-import type { TFile, Vault } from "obsidian";
+import type { Vault } from "obsidian";
 import type ConflictStore from "../sync2/conflict-store";
 import type { ConflictRecord } from "../sync2/conflict-store";
 import { parseSiblingFilename } from "./strip-conflict-suffix";
@@ -144,6 +144,3 @@ export function groupByBasePath(
 // vault.getFiles() returns TFile[], not TAbstractFile[]. We treat
 // every match as a regular file because conflict-from-* names cannot
 // be folders by construction.
-// Unused-import bridge so the TFile type is reachable without an
-// explicit annotation downstream; treat as documentation.
-export type _TFileShape = TFile;

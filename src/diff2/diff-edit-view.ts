@@ -37,11 +37,7 @@ import { isMarkdownPath } from "./conflict-merge-all";
 import { formatConflictTimestamp } from "./strip-conflict-suffix";
 import { DiffPaneOwner, resolvedFromView } from "./diff-pane-owner";
 import { type DiffViewConfig, mountDiffPaneV2 } from "./diff-pane-v2";
-import {
-  DEFAULT_DIFF_EDIT_VIEW_STATE,
-  DiffEditSubTab,
-  DiffEditViewState,
-} from "./events";
+import { DiffEditSubTab } from "./events";
 import {
   autosaveDir,
   classifyReopen,
@@ -190,24 +186,6 @@ export class DiffEditView extends ItemView {
 
   getIcon(): string {
     return "git-merge";
-  }
-
-  // Phase 0 API kept for forward-compat. Phase 6 may use this to drop
-  // the view straight into a particular sub-tab from external entry
-  // points (file-menu, summary modal). Phase 1 ignores
-  // compare/history shapes — they're stubbed out below.
-  setDiffEditState(state: DiffEditViewState): void {
-    if (state.kind === "sub-tab") {
-      this.viewState = { mode: "list", tab: state.tab };
-      this.render();
-    }
-    // compare-detail / history-detail not handled in Phase 1.
-  }
-
-  getDiffEditState(): DiffEditViewState {
-    return this.viewState.mode === "list"
-      ? { kind: "sub-tab", tab: this.viewState.tab }
-      : { kind: "sub-tab", tab: this.viewState.tab };
   }
 
   async onOpen(): Promise<void> {

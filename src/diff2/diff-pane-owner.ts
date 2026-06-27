@@ -37,7 +37,7 @@ import { compactSessionLog } from "./history-rewrite";
 import { ReplayFlag, replayWithGuard } from "./history-feed";
 import type { ReplayResultV2 } from "./history-replay-v2";
 import { applyResolveAll, type ResolveChoice, type ResolveOpts } from "./diff-resolve";
-import { CursorScheduler, type CursorActivity } from "./cursor-timer";
+import { CursorScheduler } from "./cursor-timer";
 import { clampCursor, persistCursor } from "./cursor-store";
 import type { ResolvedSides } from "./exit-commit";
 import type Logger from "../logger";
@@ -61,8 +61,6 @@ export class DiffPaneOwner {
   private readonly writer: HistoryWriterV2;
   private readonly cursorScheduler: CursorScheduler;
   private cursorFlushing = false;
-  // Bulk resolve-all (interim toolbar) reuses the view config's join header.
-  private readonly resolveOpts: ResolveOpts;
 
   // `startSeq` continues a resumed history.jsonl's seq (scanHistoryV2(jsonl).
   // blocks.length); 0 for a fresh session. `config` = device labels + join date +
@@ -79,7 +77,6 @@ export class DiffPaneOwner {
     // §2.2.15 — fired on every doc/selection change so the view can refresh the toolbar.
     onUpdate?: () => void,
   ) {
-    this.resolveOpts = { label: config.remoteLabel, date: config.date };
     // §0.5.5 threshold-trigger: the writer fires this on its tail when the log
     // crosses 100 undos / 200KB cancelled. compactSessionLog rewrites the on-disk
     // log + returns the new block count (→ the writer resets seq). Mutually
@@ -157,7 +154,7 @@ export class DiffPaneOwner {
 
   // Bulk resolve every group toward `choice` (interim toolbar — see
   // [[project-diff2-toolbar-redesign]]). One transaction → one undo step → one
-  // recorded block. opts defaults to the constructor's resolveOpts via the view.
+  // recorded block. The module-level applyResolveAll derives opts from the view config.
   applyResolveAll(choice: ResolveChoice, opts?: ResolveOpts): boolean {
     return applyResolveAll(this.view, choice, opts);
   }

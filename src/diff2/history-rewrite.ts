@@ -31,11 +31,6 @@ const historyPathFor = (conflictId: string): string => `${autosaveDir(conflictId
 const rm = async (vault: Vault, p: string): Promise<void> => {
   if (await vault.adapter.exists(p)) await vault.adapter.remove(p);
 };
-// Capacitor-safe rename: remove dst first (its rename throws on an existing dst).
-const mv = async (vault: Vault, src: string, dst: string): Promise<void> => {
-  await rm(vault, dst);
-  await vault.adapter.rename(src, dst);
-};
 
 // Atomically replace conflictId's history.jsonl with `jsonl`. No-op safety: callers
 // only invoke when the compacted content actually differs.
