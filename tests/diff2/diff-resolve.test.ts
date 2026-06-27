@@ -120,6 +120,18 @@ describe("diff-resolve — resolveAll (bulk toolbar)", () => {
     const s0 = createDiffPaneState("x\ny\n", "x\ny\n");
     expect(resolveAll(s0.doc, readStructure(s0), "keep1")).toBeNull();
   });
+  it("join carries label + date into EVERY group's header (bug: Join All wrote `remote` at )", () => {
+    const s0 = createDiffPaneState("a\nL1\nb\nL2\nc\n", "a\nR1\nb\nR2\nc\n");
+    const spec = resolveAll(s0.doc, readStructure(s0), "join", {
+      label: "VladPixel 6 Pro",
+      date: "2026-06-05T09-19-09Z",
+    })!;
+    const s1 = s0.update(spec).state;
+    const doc = s1.doc.toString();
+    expect(doc).toContain("> Changes from `VladPixel 6 Pro` at 2026-06-05 09:19:09:");
+    expect(doc).not.toContain("`remote`");
+    expect(doc).not.toContain("at :");
+  });
 });
 
 describe("diff-resolve — undo/redo restore STRUCTURE + cursor (Mina 1: structureHistory)", () => {

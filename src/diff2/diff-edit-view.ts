@@ -372,7 +372,13 @@ export class DiffEditView extends ItemView {
         },
         onJoinAll: isMd
           ? () => {
-              this.owner?.applyResolveAll("join");
+              // Pass the conflict's label + timestamp so the join header reads
+              // "Changes from `<device>` at <date>" (all groups here share this one
+              // sibling); without opts joinText fell back to "remote" + "" (bug).
+              this.owner?.applyResolveAll("join", {
+                label: entry.deviceLabel,
+                date: entry.isoTimestamp,
+              });
             }
           : undefined,
       },
