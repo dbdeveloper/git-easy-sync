@@ -28,6 +28,11 @@ describe("computeWordDiff", () => {
   it("one-letter change → highlights only the letter (True vs true)", () => {
     expect(marked("True", "true")).toEqual({ ours: "T", theirs: "t" }); // shared "rue" untouched
   });
+  it("wordLevel=true → marks the WHOLE changed word (Settings: Words mode)", () => {
+    const r = computeWordDiff("True", "true", true);
+    expect(r.oursSpans.map((s) => "True".slice(s.start, s.end)).join("|")).toBe("True");
+    expect(r.theirsSpans.map((s) => "true".slice(s.start, s.end)).join("|")).toBe("true");
+  });
   it("shared suffix kept (false vs true → fals / tru, common trailing e)", () => {
     expect(marked("false", "true")).toEqual({ ours: "fals", theirs: "tru" });
   });

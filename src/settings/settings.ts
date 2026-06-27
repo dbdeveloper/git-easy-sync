@@ -62,6 +62,10 @@ export interface GitHubSyncSettings {
   // (resolve via buttons only; edits/typing blocked; mobile soft keyboard suppressed;
   // selection + copy + undo/redo still work). Default OFF.
   diffEditorTouchMode?: boolean;
+  // Intra-chunk diff highlight granularity: "characters" (precise per-character; default)
+  // or "words" (whole changed words). Large diff-groups auto-fall-back to word-level
+  // regardless (char-level is O(n·m)). Default "characters".
+  diffEditorDiffMode?: "characters" | "words";
 
   enableLogging: boolean;
 
@@ -187,6 +191,7 @@ export const DEFAULT_SETTINGS: GitHubSyncSettings = {
   showDiffRibbonButton: true,
   // diffEditorTouchMode is intentionally ABSENT here — its default is platform-dependent
   // (desktop=false, mobile=true), applied in main.ts loadSettings when unset.
+  diffEditorDiffMode: "characters",
   enableLogging: false,
   consolidateCommits: false,
   deviceLabel: "Obsidian",

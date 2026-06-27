@@ -418,6 +418,8 @@ export default class GitHubSyncPlugin extends Plugin {
               this.settings.deviceLabel ?? "Obsidian",
             // §2.2.14 — live-read the Touch mode setting at each view open.
             touchOnly: () => this.settings.diffEditorTouchMode ?? false,
+            // Diff highlight mode: "words" → word-level, else char-level (default).
+            diffWordLevel: () => this.settings.diffEditorDiffMode === "words",
           }),
       );
       this.addCommand({

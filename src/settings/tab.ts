@@ -710,6 +710,24 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
                   });
           });
 
+      new Setting(containerEl)
+          .setName("Diff highlight mode")
+          .setDesc(
+              "How the changed parts INSIDE a conflict line are highlighted: " +
+              "'Characters' marks only the differing characters (precise); 'Words' " +
+              "marks whole changed words. Large diff-groups always fall back to word-level " +
+              "(per-character is too slow on big blocks).",
+          )
+          .addDropdown((dd) => {
+              dd.addOption("characters", "Characters")
+                  .addOption("words", "Words")
+                  .setValue(this.plugin.settings.diffEditorDiffMode ?? "characters")
+                  .onChange(async (value) => {
+                      this.plugin.settings.diffEditorDiffMode = value === "words" ? "words" : "characters";
+                      await this.plugin.saveSettings();
+                  });
+          });
+
       // ── Performance ─────────────────────────────────────────────────
       new Setting(containerEl).setName("Performance").setHeading();
 

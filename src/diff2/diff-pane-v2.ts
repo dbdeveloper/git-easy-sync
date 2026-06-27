@@ -104,6 +104,9 @@ export interface DiffViewConfig {
   // keeps resolve buttons, selection, copy, and undo/redo; the marker glyph-click (caret into
   // a block) is disabled. Optional (default false); set from the "Interface" setting at open.
   touchOnly?: boolean;
+  // Intra-chunk diff highlight: true → whole changed WORDS (diffWords); false/undefined →
+  // per-CHARACTER (default). Large blocks auto-fall-back to word regardless. Settings-driven.
+  wordLevelDiff?: boolean;
 }
 
 export const DEFAULT_VIEW_CONFIG: DiffViewConfig = {
@@ -112,6 +115,7 @@ export const DEFAULT_VIEW_CONFIG: DiffViewConfig = {
   date: "",
   isMarkdown: true,
   touchOnly: false,
+  wordLevelDiff: false,
 };
 
 // Facet carrying the config into buildDecorations (a StateField update only gets
@@ -410,7 +414,7 @@ export function buildDecorations(state: EditorState): DecorationSet {
     if (!v1 || !v2) continue;
     const ours = state.doc.sliceString(v1.from, v1.to - 1); // content (drop terminal \n)
     const theirs = state.doc.sliceString(v2.from, v2.to - 1);
-    const wd = computeWordDiff(ours, theirs);
+    const wd = computeWordDiff(ours, theirs, config.wordLevelDiff ?? false);
     for (const s of wd.oursSpans) all.push(wordMark.range(v1.from + s.start, v1.from + s.end));
     for (const s of wd.theirsSpans) all.push(wordMark.range(v2.from + s.start, v2.from + s.end));
     // §2.2.12(a) bug-50 — a trailing-`\n` difference (last EOL-less group) → mark that side's

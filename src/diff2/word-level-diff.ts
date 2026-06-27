@@ -50,11 +50,12 @@ export interface WordDiffResult {
 export function computeWordDiff(
   oursText: string,
   theirsText: string,
+  wordLevel = false, // Settings "Diff highlight mode" — true → whole changed WORDS (diffWords)
 ): WordDiffResult {
-  const parts =
-    oursText.length * theirsText.length > CHAR_DIFF_BUDGET
-      ? diffWords(oursText, theirsText) // large block → cheaper coarser fallback
-      : diffChars(oursText, theirsText); // typical case → precise per-character
+  // wordLevel (user preference) OR the size guard (large block, char-level too slow) → the
+  // cheaper coarser word-level; otherwise the precise per-character diff.
+  const useWords = wordLevel || oursText.length * theirsText.length > CHAR_DIFF_BUDGET;
+  const parts = useWords ? diffWords(oursText, theirsText) : diffChars(oursText, theirsText);
   const oursSpans: WordSpan[] = [];
   const theirsSpans: WordSpan[] = [];
 

@@ -15,7 +15,7 @@ let view: EditorView;
 const H = {
   // (re)mount with the given base/sibling; returns the structure for confirmation.
   // touchOnly=true → §2.2.14 read-only mode (config-only hooks).
-  mount(base: string, sibling: string, touchOnly = false) {
+  mount(base: string, sibling: string, touchOnly = false, wordLevel = false) {
     const root = document.getElementById("editor")!;
     root.innerHTML = "";
     const host = document.createElement("div");
@@ -25,8 +25,17 @@ const H = {
       host,
       base,
       sibling,
-      touchOnly
-        ? { config: { localLabel: "local", remoteLabel: "remote", date: "", isMarkdown: true, touchOnly: true } }
+      touchOnly || wordLevel
+        ? {
+            config: {
+              localLabel: "local",
+              remoteLabel: "remote",
+              date: "",
+              isMarkdown: true,
+              touchOnly,
+              wordLevelDiff: wordLevel,
+            },
+          }
         : undefined,
     );
     view.focus();
