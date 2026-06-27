@@ -16,27 +16,25 @@ describe("computeWordDiff", () => {
     expect(result.theirsSpans[0]).toEqual({ start: 0, end: 3 });
   });
 
-  it("highlights only the changed word inside a shared sentence", () => {
-    const ours = "line from local file";
-    const theirs = "line from github repo";
-
-    const result = computeWordDiff(ours, theirs);
-
-    // Verify span content by slicing each side at the returned ranges.
-    const oursMarked = result.oursSpans
-      .map((s) => ours.slice(s.start, s.end))
-      .join("|");
-    const theirsMarked = result.theirsSpans
-      .map((s) => theirs.slice(s.start, s.end))
-      .join("|");
-
-    // "local file" → "github repo" — the changed suffix is captured
-    // on both sides. Exact split granularity is library-determined
-    // (diffWords may merge whitespace), so we use substring checks.
-    expect(oursMarked).toContain("local");
-    expect(oursMarked).toContain("file");
-    expect(theirsMarked).toContain("github");
-    expect(theirsMarked).toContain("repo");
+  // bug-8 — CHARACTER-level, not word-level: a one-letter change highlights only that
+  // letter, not the whole word. The marked slice on each side is exactly the differing chars.
+  const marked = (a: string, b: string) => {
+    const r = computeWordDiff(a, b);
+    return {
+      ours: r.oursSpans.map((s) => a.slice(s.start, s.end)).join("|"),
+      theirs: r.theirsSpans.map((s) => b.slice(s.start, s.end)).join("|"),
+    };
+  };
+  it("one-letter change → highlights only the letter (True vs true)", () => {
+    expect(marked("True", "true")).toEqual({ ours: "T", theirs: "t" }); // shared "rue" untouched
+  });
+  it("shared suffix kept (false vs true → fals / tru, common trailing e)", () => {
+    expect(marked("false", "true")).toEqual({ ours: "fals", theirs: "tru" });
+  });
+  it("highlights only the changed region inside a shared prefix", () => {
+    const { ours, theirs } = marked('"x": local', '"x": local2');
+    expect(ours).toBe(""); // ours is a prefix of theirs → nothing removed
+    expect(theirs).toBe("2"); // only the appended char
   });
 
   it("returns empty for added-only / removed-only side", () => {
@@ -51,11 +49,10 @@ describe("computeWordDiff", () => {
     expect(theirsMarked).toContain("world");
   });
 
-  it("merges adjacent spans on the same side", () => {
-    // diffWords sometimes splits "ab cd" → "ab" + " " (common) + "cd"
-    // — merge-adjacent collapses them back when the runs are
-    // contiguous. We assert at least one merged span when the change
-    // spans multiple word tokens.
+  it("keeps changed runs separated by a shared character non-adjacent", () => {
+    // "aaa bbb ccc" vs "aaa xxx yyy": the shared "aaa " + inner space stay common, so
+    // "bbb" and "ccc" are two separate spans — mergeAdjacent must NOT fuse across the
+    // common space. (When runs DO abut, mergeAdjacent collapses them — same invariant.)
     const result = computeWordDiff("aaa bbb ccc", "aaa xxx yyy");
     // Both "bbb" and "ccc" changed → expect 1 or 2 spans on ours; if
     // 2, they must not be adjacent in the merged output.

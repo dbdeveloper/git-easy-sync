@@ -1,17 +1,27 @@
-// Intra-chunk word-level diff highlighting (R7.4).
+// Intra-chunk CHARACTER-level diff highlighting (R7.4).
 //
 // For a `diff` chunk that has both ours and theirs sides, compute
-// character-range spans on each side marking words that DIFFER from
-// the other side. The DiffPane overlays these spans with a yellow
-// background that visually mixes with the base red (ours) or green
-// (theirs) line decoration to give orange / salad colors.
+// character-range spans on each side marking the exact characters that
+// DIFFER from the other side. The DiffPane overlays these spans with a
+// stronger side tint so they stand out from the subtle line tint.
+//
+// CHARACTER-level (diffChars), not word-level: a one-letter change
+// (`True` vs `true`) must highlight only `T`/`t`, not the whole word
+// (user, bug-8). The function/type/file names keep the historical
+// "word" wording — the granularity is the only thing that changed.
 //
 // Canonical specs:
-//   - docs/DIFF2_IMPLEMENTATION_PLAN.md §R7.4 (word-level highlighting)
+//   - docs/DIFF2_IMPLEMENTATION_PLAN.md §R7.4 (intra-chunk highlighting)
 //
 // Pure module — no DOM, no CodeMirror.
 
-import { diffWords } from "diff";
+import { diffChars, diffWords } from "diff";
+
+// char-level diff is O(n·m); a large ver-block (a big paste) diffed char-by-char on every
+// keystroke would freeze the render. Above this product of the two sides' lengths, fall
+// back to the much cheaper word-level diff (coarser highlight, but big blocks rarely need
+// per-character precision). Typical config-line conflicts are tiny → always char-level.
+const CHAR_DIFF_BUDGET = 200_000;
 
 export interface WordSpan {
   // Character offsets within the side's joined text (oursText or
@@ -26,11 +36,11 @@ export interface WordDiffResult {
   theirsSpans: WordSpan[]; // words present in theirs but not in ours (or different)
 }
 
-// Compute word-level diff between two text fragments. The result
+// Compute character-level diff between two text fragments. The result
 // describes which character ranges on each side are visually
-// "different" — those get the yellow overlay highlight per R7.4.
+// "different" — those get the overlay highlight per R7.4.
 //
-// `diff.diffWords` returns parts with `value`, `added`, `removed`.
+// `diff.diffChars` returns parts with `value`, `added`, `removed`.
 // We walk twice:
 //   - To compute ours-side spans, track a running offset across all
 //     non-added parts (added = "in theirs but not ours" → skip).
@@ -41,7 +51,10 @@ export function computeWordDiff(
   oursText: string,
   theirsText: string,
 ): WordDiffResult {
-  const parts = diffWords(oursText, theirsText);
+  const parts =
+    oursText.length * theirsText.length > CHAR_DIFF_BUDGET
+      ? diffWords(oursText, theirsText) // large block → cheaper coarser fallback
+      : diffChars(oursText, theirsText); // typical case → precise per-character
   const oursSpans: WordSpan[] = [];
   const theirsSpans: WordSpan[] = [];
 
