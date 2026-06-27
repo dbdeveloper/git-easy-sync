@@ -117,8 +117,10 @@ export function renderDiffToolbar(
   const l2 = row2.appendChild(document.createElement("div"));
   l2.className = "diff2-tb-left";
 
-  // Column 1: Conflicts: / NNN
+  // Column 1: Conflicts: / NNN — coloured red while conflicts remain, green at 0 (matches the
+  // ver1/ver2 gutter line-number colours). update() toggles `.is-zero`.
   const colCount = column(l2);
+  colCount.className = "diff2-tb-col diff2-tb-conflicts";
   colCount.appendChild(document.createElement("span")).textContent = "Conflicts:";
   const countEl = colCount.appendChild(document.createElement("span"));
   countEl.className = "diff2-tb-count";
@@ -153,6 +155,7 @@ export function renderDiffToolbar(
   return {
     update(s: DiffToolbarState) {
       countEl.textContent = String(s.conflictCount);
+      colCount.classList.toggle("is-zero", s.conflictCount === 0); // green at 0, red otherwise
       prevBtn.disabled = !s.hasPrev;
       nextBtn.disabled = !s.hasNext;
       undoBtn.disabled = !s.canUndo;

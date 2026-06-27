@@ -203,6 +203,11 @@
     gap: 6px;
     flex-wrap: wrap;
 }
+/* finger-friendly spacing between the LEFT-group buttons/columns (row1 back/Keep/Apply/Join,
+ * row2 Conflicts/nav/undo-redo) so they're easy to tap on a phone. */
+.diff2-tb-left {
+    gap: 14px;
+}
 .diff2-tb-right {
     margin-left: auto; /* push right group to the far edge; wrapped items stay right-aligned */
     justify-content: flex-end;
@@ -254,8 +259,16 @@
 }
 .diff2-tb-count {
     font-weight: 600;
-    color: var(--text-normal);
+    color: inherit; /* take the red/green from .diff2-tb-conflicts (below), not a fixed colour */
     text-align: center; /* centre NNN horizontally under the "Conflicts:" label (was left-aligned) */
+}
+/* "Conflicts:" + NNN coloured by remaining count — red (ver1 gutter colour) while >0, green
+ * (ver2 gutter colour) at 0. Both GitHub hues, legible in light + dark. update() sets .is-zero. */
+.diff2-tb-conflicts {
+    color: var(--diff2-ours-fg);
+}
+.diff2-tb-conflicts.is-zero {
+    color: var(--diff2-theirs-fg);
 }
 .diff2-tb-toggle,
 .diff2-tb-mode {
