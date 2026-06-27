@@ -122,6 +122,9 @@ export function legalizeSelection(
 // transactions (resolution/replay) drive the selection themselves.
 export const selectionLegalizeFilter = EditorState.transactionFilter.of((tr) => {
   if (!tr.selection || tr.docChanged) return tr;
+  // Ctrl/Cmd+F search drives its own match selection (find next/prev) — never legalize it to a
+  // group-atomic shape, or the highlighted match would jump/expand off the found text.
+  if (tr.isUserEvent("select.search")) return tr;
   if (tr.effects.some((e) => e.is(setStructure))) return tr;
   const ranges = readStructure(tr.startState);
   const sel = tr.selection.main;

@@ -29,6 +29,7 @@
 //   - docs/DIFF2_IMPLEMENTATION_PLAN.md §R7 (DiffPane form — Phase 2)
 
 import { ItemView, Notice, Scope, type Vault, WorkspaceLeaf } from "obsidian";
+import { closeSearchPanel, openSearchPanel, searchPanelOpen } from "@codemirror/search";
 import type SnapshotStore from "../sync2/snapshot-store";
 import type { ConflictCounter } from "../sync2/conflict-counter";
 import type ConflictStore from "../sync2/conflict-store";
@@ -189,6 +190,27 @@ export class DiffEditView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    // §2.2.17 — Cmd/Ctrl+F opens the diff-editor's OWN search panel. Obsidian captures Mod+F for
+    // its markdown-editor search before a custom view's CM6 keymap (a View scope does NOT win it —
+    // device-confirmed). A window capture-phase keydown fires BEFORE Obsidian's document-level
+    // handler, so it wins: it opens the panel only while OUR editor has focus. The CM6
+    // search()/searchKeymap cover the panel's own keys (next/prev/Esc) once it is open.
+    this.registerDomEvent(
+      window,
+      "keydown",
+      (e) => {
+        if (!((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "f" || e.key === "F"))) return;
+        const v = this.owner?.getView();
+        // Only when focus is in OUR editor — its content OR its (open) search panel, so Mod+F can
+        // also CLOSE the panel from inside the search field. `view.dom` is the whole .cm-editor.
+        if (!v || !v.dom.contains(document.activeElement)) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        this.toggleSearch();
+      },
+      { capture: true },
+    );
+
     // ConflictCounter notifies on any sibling-event vault change.
     // List-mode subscribers re-render; detail-mode just keeps showing
     // the active entry (refresh is a no-op for detail since the
@@ -391,6 +413,14 @@ export class DiffEditView extends ItemView {
     requestAnimationFrame(() => this.owner?.focusFirstConflict());
   }
 
+  // §2.2.17 — toggle the CM6 search panel (shared by Mod+F and the toolbar lens button).
+  private toggleSearch(): void {
+    const v = this.owner?.getView();
+    if (!v) return;
+    if (searchPanelOpen(v.state)) closeSearchPanel(v);
+    else openSearchPanel(v);
+  }
+
   // bug-56 pre-flight — how many edits would ACTUALLY be recovered, with NO side effects.
   // replayHistoryV2 stops at the first un-appliable block (a diverged/corrupt tail), so the
   // real recovery may restore fewer than the raw block count. We learn that here by replaying
@@ -442,6 +472,7 @@ export class DiffEditView extends ItemView {
       },
       {
         onBack: () => void this.exitDetailView(entry),
+        onSearch: () => this.toggleSearch(),
         onKeepAll: () => this.owner?.applyResolveAll("keep1"),
         onApplyAll: () => this.owner?.applyResolveAll("keep2"),
         onJoinAll: isMd ? () => this.owner?.applyResolveAll("join", joinOpts) : undefined,
@@ -449,12 +480,22 @@ export class DiffEditView extends ItemView {
         onNext: () => this.owner?.navNext(),
         onUndo: () => this.owner?.undo(),
         onRedo: () => this.owner?.redo(),
-        onToggleTouch: (on) => this.owner?.setTouchOnly(on),
+        // The toolbar toggles must NOT steal the caret from the editor — clicking a checkbox/
+        // select focuses it, so we hand focus straight back to the editor (Auto-focus ON then
+        // jumps to the first conflict via autoFocusFirst; the others just keep the caret put).
+        onToggleTouch: (on) => {
+          this.owner?.setTouchOnly(on);
+          this.owner?.getView().focus();
+        },
         onToggleAutoFocus: (on) => {
           this.autoFocus = on; // per-session JS flag; behaviour fires on resolve in refreshToolbar
+          this.owner?.getView().focus();
           this.autoFocusFirst(); // §2.2.15 — enabling Auto-focus jumps to the first conflict NOW (deferred)
         },
-        onSetDiffMode: (m) => this.owner?.setWordLevel(m === "words"),
+        onSetDiffMode: (m) => {
+          this.owner?.setWordLevel(m === "words");
+          this.owner?.getView().focus();
+        },
       },
     );
 

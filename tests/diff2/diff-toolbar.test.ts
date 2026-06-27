@@ -8,6 +8,7 @@ import { type DiffToolbarCallbacks, type DiffToolbarInitial, renderDiffToolbar }
 const noop = () => {};
 const cbs = (): DiffToolbarCallbacks => ({
   onBack: noop,
+  onSearch: noop,
   onKeepAll: noop,
   onApplyAll: noop,
   onJoinAll: noop,

@@ -27,6 +27,10 @@ import {
   type Extension,
 } from "@codemirror/state";
 import { defaultKeymap, deleteToLineEnd, history, historyKeymap, redoDepth, undoDepth } from "@codemirror/commands";
+// §2.2.17 search. Pinned to 6.5.6 (declares view/state `^6.0.0`, so it runs on the project's
+// device-verified CM6 6.36.2 / 6.6.0); package.json `pnpm.overrides` force-dedup view+state to
+// those. Do NOT bump search (6.7.x needs view ≥6.43) without re-verifying diff2 selection/geometry.
+import { search, searchKeymap } from "@codemirror/search";
 import {
   Decoration,
   type DecorationSet,
@@ -697,6 +701,13 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       // toggle them live; seeded from the view config.
       touchOnlyComp.of(touchOnlyFacet.of(config.touchOnly ?? false)),
       wordLevelComp.of(wordLevelFacet.of(config.wordLevelDiff ?? false)),
+      // §2.2.17 — mark the editor while touch-only so styles.css can drop the search panel's
+      // replace UI (replace is blocked anyway). Declarative via editorAttributes so CM6 keeps it
+      // across focus/updates (a manual classList.add gets wiped when CM6 rewrites view.dom's class)
+      // and it stays reactive to the touchOnly compartment.
+      EditorView.editorAttributes.compute([touchOnlyFacet], (state) => ({
+        class: state.facet(touchOnlyFacet) ? "diff2-touch-search" : "",
+      })),
       // §2.2.14 touch-only — block user EDITS (typing/delete/paste) but NOT undo/redo/
       // resolve/copy/selection. readOnly would have done it but it ALSO blocks undo (spec
       // п.5 needs undo); editable=false blocks ALL keyboard incl Ctrl+C/Z. So: a changeFilter
@@ -710,6 +721,20 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       }),
       diffLineNumbers, // §2.2.10 per-side −/+ gutter (replaces lineNumbers())
       history(),
+      // §2.2.17 — standard CM6 search panel (the same engine Obsidian's editor uses), opened
+      // with Mod+F. selectionLegalizeFilter skips the `select.search` userEvent so find-next/prev
+      // lands on the real match instead of a group-atomic selection.
+      search({ top: true }),
+      // §2.2.17 — relabel the search panel's controls (CM6 routes every label through
+      // state.phrase, so this is the clean way; order is the panel's own).
+      EditorState.phrases.of({
+        next: ">>",
+        previous: "<<",
+        all: "All",
+        "match case": "Aa",
+        regexp: ".*",
+        "by word": "word",
+      }),
       structureField.init(() => toRangeSet(m.ranges)),
       structureHistory, // version the structure field across undo/redo (resolution)
       cursorHistory, // §2.2.9 carry the resolveCaret marker across undo/redo
@@ -759,6 +784,7 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       ]),
       diffClipboardCopy, // §2.2.7 — copy a group-spanning selection as a fenced block
       diffClipboardPaste, // §2.2.7 п.3a — paste fenced groups into normal → materialize + cascade
+      keymap.of(searchKeymap), // §2.2.17 — Mod+F open, Mod+G next, Shift+Mod+G prev, Esc close
       keymap.of([...historyKeymap, ...defaultKeymap]),
       // §1.11 / TODO §6.9 — draw the selection ourselves so its background extends
       // to the END of the line, INCLUDING the trailing `↵` glyph widget (native

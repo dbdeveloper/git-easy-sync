@@ -18,6 +18,7 @@ export type DiffMode = "characters" | "words";
 
 export interface DiffToolbarCallbacks {
   onBack(): void;
+  onSearch(): void; // §2.2.17 — toggle the Mod+F search panel (lens button)
   onKeepAll(): void;
   onApplyAll(): void;
   onJoinAll?(): void; // omitted → no Join button (non-markdown base)
@@ -102,6 +103,7 @@ export function renderDiffToolbar(
   const l1 = row1.appendChild(document.createElement("div"));
   l1.className = "diff2-tb-left";
   iconButton(l1, "arrow-left", "Back to list", cb.onBack);
+  iconButton(l1, "search", "Search (Mod+F) — toggle", cb.onSearch);
   textButton(l1, "diff2-btn-keep-local", "Keep all", `Keep all local (${initial.localLabel}) changes`, cb.onKeepAll);
   textButton(l1, "diff2-btn-apply-remote", "Apply all", `Apply all remote (${initial.remoteLabel}) changes`, cb.onApplyAll);
   if (cb.onJoinAll) {

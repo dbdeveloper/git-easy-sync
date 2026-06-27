@@ -11,6 +11,7 @@ import { readStructure, touchOnlyFacet, wordLevelFacet } from "../src/diff2/diff
 import { groupsOf } from "../src/diff2/diff-selection";
 import { copyClipboardText } from "../src/diff2/diff-clipboard";
 import { renderDiffToolbar } from "../src/diff2/diff-toolbar";
+import { openSearchPanel } from "@codemirror/search";
 
 let view: EditorView;
 
@@ -103,12 +104,26 @@ const H = {
       tb,
       { localLabel: "Macbook", remoteLabel: "Pixel 6", isMarkdown: true, touchOn: false, autoFocusOn: true, diffMode: "characters" },
       {
-        onBack: noop, onKeepAll: noop, onApplyAll: noop, onJoinAll: noop,
+        onBack: noop, onSearch: noop, onKeepAll: noop, onApplyAll: noop, onJoinAll: noop,
         onPrev: noop, onNext: noop, onUndo: noop, onRedo: noop,
         onToggleTouch: noop, onToggleAutoFocus: noop, onSetDiffMode: noop,
       },
     );
     h.update({ conflictCount: count, hasPrev: false, hasNext: true, canUndo: true, canRedo: false });
+  },
+  // §2.2.17 search diagnostics — does openSearchPanel mount a VISIBLE panel, and does a
+  // synthetic Mod+F keydown trigger it (i.e. is the keymap wiring sound, Obsidian aside)?
+  openSearch() {
+    openSearchPanel(view);
+    const panel = document.querySelector(".cm-search") as HTMLElement | null;
+    const r = panel?.getBoundingClientRect();
+    return { found: !!panel, visible: !!r && r.height > 0 && r.width > 0, h: r ? Math.round(r.height) : 0 };
+  },
+  modF() {
+    view.focus();
+    view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "f", code: "KeyF", metaKey: true, ctrlKey: true, bubbles: true }));
+    const panel = document.querySelector(".cm-search") as HTMLElement | null;
+    return { opened: !!panel };
   },
   // observe the RAW native moveVertically landing (no dispatch) — to design motion.
   peek(forward: boolean) {

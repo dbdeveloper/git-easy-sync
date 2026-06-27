@@ -769,3 +769,95 @@
 .github-easy-sync-statusbar-conflict {
     color: var(--text-error);
 }
+
+/* §2.2.17 — tidy the CM6 search/replace panel (Mod+F) to match Obsidian's form controls. Scoped
+ * to the diff-editor. BLOCK layout (NOT flex) so the panel's native <br> reliably breaks the
+ * replace controls onto their own row at ANY width (a flex <br> only wraps when the row is full);
+ * the × close sits top-right. */
+.diff2-edit-view-root .cm-panels.cm-panels-top {
+    background: var(--background-secondary);
+    border-bottom: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+}
+.diff2-edit-view-root .cm-search {
+    position: relative;
+    padding: 8px 38px 8px 10px; /* right pad leaves room for the × */
+    font-size: var(--font-ui-small);
+    line-height: 2.4; /* vertical rhythm between the find + replace rows */
+}
+.diff2-edit-view-root .cm-search .cm-textfield {
+    background: var(--background-modifier-form-field);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-s);
+    color: var(--text-normal);
+    padding: 5px 8px;
+    margin: 0 6px 0 0;
+    font-size: var(--font-ui-small);
+    min-width: 12em;
+    vertical-align: middle;
+}
+.diff2-edit-view-root .cm-search .cm-textfield:focus {
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px var(--background-modifier-border-focus, var(--interactive-accent));
+    outline: none;
+}
+/* Buttons mirror the toolbar's `.diff2-btn` form, modelled on `[ > Join all ]` (accent border). */
+.diff2-edit-view-root .cm-search .cm-button {
+    padding: 4px 10px;
+    border: 1px solid var(--interactive-accent);
+    border-radius: 4px;
+    background: var(--background-secondary);
+    background-image: none;
+    box-shadow: none;
+    color: var(--text-normal);
+    margin: 0 6px 0 0;
+    font-size: 0.85em;
+    cursor: pointer;
+    vertical-align: middle;
+}
+.diff2-edit-view-root .cm-search .cm-button:hover {
+    background: var(--background-modifier-hover);
+}
+.diff2-edit-view-root .cm-search label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0 8px 0 0;
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+    user-select: none;
+    vertical-align: middle;
+}
+.diff2-edit-view-root .cm-search br {
+    display: block !important; /* Obsidian may hide panel <br>s; force the line break (block flow) */
+}
+/* the × close — a small rounded icon button with a hover plate (was flat/ugly) */
+.diff2-edit-view-root .cm-search [name="close"] {
+    position: absolute;
+    top: 7px;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 1.3em;
+    line-height: 1;
+    cursor: pointer;
+}
+.diff2-edit-view-root .cm-search [name="close"]:hover {
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
+}
+/* §2.2.17 Touch-mode ON — replace is blocked by the changeFilter, so drop the whole replace row
+ * (incl. the <br> break; !important to beat the base br's forced display:block). Find stays. */
+.diff2-touch-search .cm-search br,
+.diff2-touch-search .cm-search [name="replace"],
+.diff2-touch-search .cm-search [name="replaceAll"] {
+    display: none !important;
+}

@@ -699,7 +699,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
               "Open the conflict diff-editor read-only: resolve each conflict with the " +
               "on-screen buttons only — typing/editing is disabled and the mobile soft " +
               "keyboard is suppressed. Selection, copy and undo/redo still work. " +
-              "Convenient on small touch screens. (§2.2.14)",
+              "Convenient on small touch screens.",
           )
           .addToggle((toggle) => {
               toggle
