@@ -177,4 +177,14 @@ describe("diff-decorations — glyphDiffLine (§2.2.12(a) bug-50 trailing-newlin
     const m = model("x\nma1", "x\nmb1");
     expect(glyphDiffLine(m.text, v(m, 1), v(m, 2))).toBeNull();
   });
+  it("bug-51: NON-last group → null (a normal line follows, even with an empty-side asymmetry)", () => {
+    const m = model("a\nM\n", "a\nX\nM\n"); // group (ver1 empty / ver2 "X"), then normal "M"
+    expect(v(m, 1).to - v(m, 1).from).toBe(1); // ver1 empty
+    expect(glyphDiffLine(m.text, v(m, 1), v(m, 2))).toBeNull();
+  });
+  it("bug-51: LAST group, empty ver1 vs ver2 with a trailing \\n → marks ver2's ↵ (empty IS a valid asymmetry)", () => {
+    const m = model("a\nb\n", "a\nb\nX\n"); // last group: ver1 empty, ver2 "X\n"
+    expect(v(m, 1).to - v(m, 1).from).toBe(1); // ver1 empty
+    expect(glyphDiffLine(m.text, v(m, 1), v(m, 2))).toBe(m.text.lineAt(v(m, 2).from).from);
+  });
 });

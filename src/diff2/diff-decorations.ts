@@ -78,11 +78,21 @@ export function verLineDecisions(doc: Text, ranges: VerRange[], caret: number): 
 // files genuinely differ only by a trailing newline, bug-50). That `↵` is a real diff but
 // the editor sees the glyph only as a CSS `::after` (a visual artifact, not a doc char), so
 // it can't be a content mark — we flag its LINE instead. Returns the `.from` of the line
-// whose `↵` should render as a diff (the side that HAS the trailing `\n`), or null when both
-// sides agree (every non-last group: both ver contents end with `\n` → no asymmetry). Pure.
+// whose `↵` should render as a diff (the side that HAS the trailing `\n`) — but ONLY for the
+// genuinely-last group (nothing, not even a normal line, after it; bug-51: never on a middle
+// group). An empty side IS a legitimate asymmetry (empty ver1 vs ver2 "\n" → mark ver2's `↵`).
+// null when not the last group or both sides agree on the trailing `\n`. Pure.
 export function glyphDiffLine(doc: Text, v1: VerRange, v2: VerRange): number | null {
-  // content = the ver range minus its protected terminal `\n` (at to-1); may itself end in
-  // a real `\n` (the file's trailing newline).
+  // ONLY the genuinely LAST group — nothing (not even a normal line) after it. ver2.to points
+  // just past its protected terminal `\n`; for the last group that's the doc's final (empty)
+  // line ⇒ === doc.length. A non-last group has a normal line after ⇒ ver2.to < doc.length.
+  // (bug-51: the `↵`-diff must never appear on a middle group.)
+  if (v2.to !== doc.length) return null;
+  // content = the ver range minus its protected terminal `\n` (at to-1); may itself end in a
+  // real `\n` (the file's trailing newline). An EMPTY side is "" (never ends in `\n`), which is
+  // a LEGITIMATE asymmetry vs a side that has a `\n` (empty ver1 vs ver2 "\n" → ver2's `↵` IS
+  // the diff — user). The side WITHOUT the `\n` is never picked as `side`, so no empty-side
+  // underflow on to-2.
   const oursNl = doc.sliceString(v1.from, v1.to - 1).endsWith("\n");
   const theirsNl = doc.sliceString(v2.from, v2.to - 1).endsWith("\n");
   if (oursNl === theirsNl) return null;
