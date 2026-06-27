@@ -164,7 +164,28 @@ export class DiffEditView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Diff-Edit";
+    // The view header (and tab) double as the detail title — saves a body row. In a detail
+    // view it shows the file being resolved (path · device @ date); the list shows the panel
+    // name. render() calls refreshHeader() so it flips on enter/back. (Screenshot-17.)
+    if (this.viewState.mode === "detail") {
+      const e = this.viewState.entry;
+      return `${e.basePath} · ${e.deviceLabel} @ ${formatConflictTimestamp(e.isoTimestamp)}`;
+    }
+    return "Conflict Panel";
+  }
+
+  // Force Obsidian to re-read getDisplayText() for the view header + tab. `updateHeader` is an
+  // undocumented WorkspaceLeaf method (the standard dynamic-title trick); guarded so a future
+  // API change just leaves the header on its last value until the next natural refresh.
+  private refreshHeader(): void {
+    const title = this.getDisplayText();
+    // `updateHeader` (undocumented) refreshes the TAB; keep it best-effort.
+    (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
+    // Reliable path for the centered VIEW-HEADER title: set its DOM element directly, scoped to
+    // THIS leaf. Obsidian only re-reads getDisplayText() on its own events (active-leaf-change…),
+    // and getDisplayText() returns the same dynamic value, so the direct set stays consistent.
+    const headerTitle = this.contentEl.closest(".workspace-leaf-content")?.querySelector(".view-header-title");
+    if (headerTitle) headerTitle.textContent = title;
   }
 
   getIcon(): string {
@@ -311,6 +332,7 @@ export class DiffEditView extends ItemView {
     } else {
       this.renderDetail(container, this.viewState.entry);
     }
+    this.refreshHeader(); // §title — flip the view header to the file (detail) / "Conflict Panel" (list)
   }
 
   private renderHeader(parent: HTMLElement, activeTab: DiffEditSubTab): void {
@@ -458,17 +480,8 @@ export class DiffEditView extends ItemView {
       },
     );
 
-    // Title row under the toolbar — shows the conflict's identity so
-    // the user always sees which file they're resolving.
-    const titleRow = parent.createDiv({ cls: "diff2-detail-title-row" });
-    titleRow.createEl("span", {
-      cls: "diff2-detail-base-path",
-      text: entry.basePath,
-    });
-    titleRow.createEl("span", {
-      cls: "diff2-detail-meta",
-      text: ` · ${entry.deviceLabel} @ ${formatConflictTimestamp(entry.isoTimestamp)}`,
-    });
+    // §title (Screenshot-17): the file identity now lives in the VIEW HEADER (getDisplayText),
+    // so the old in-body title row is dropped — saving a row for the editor itself.
 
     // Detail body — DiffPane mount.
     const body = parent.createDiv({ cls: "diff2-detail-body" });

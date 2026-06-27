@@ -161,11 +161,6 @@
     height: 100%;
 }
 
-/* bug-23 — the detail title row is fixed between toolbar and body. */
-.diff2-detail-title-row {
-    flex: 0 0 auto;
-}
-
 .diff2-detail-error {
     color: var(--text-error);
 }
@@ -315,20 +310,6 @@
 
 .diff2-btn-join-all {
     border-color: var(--interactive-accent);
-}
-
-.diff2-detail-title-row {
-    padding: 4px 6px;
-    font-size: 0.9em;
-}
-
-.diff2-detail-base-path {
-    color: var(--text-normal);
-    font-weight: 600;
-}
-
-.diff2-detail-meta {
-    color: var(--text-muted);
 }
 
 /* ── DiffPane (Phase 2) — line + word decorations + markers ────── */
