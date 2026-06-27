@@ -73,6 +73,23 @@ export function verLineDecisions(doc: Text, ranges: VerRange[], caret: number): 
   return out;
 }
 
+// §2.2.12(a) — the trailing-newline diff glyph. The last diff-group can be EOL-less on
+// ONE side (its ver content ends with a real `\n` on one side but not the other — the
+// files genuinely differ only by a trailing newline, bug-50). That `↵` is a real diff but
+// the editor sees the glyph only as a CSS `::after` (a visual artifact, not a doc char), so
+// it can't be a content mark — we flag its LINE instead. Returns the `.from` of the line
+// whose `↵` should render as a diff (the side that HAS the trailing `\n`), or null when both
+// sides agree (every non-last group: both ver contents end with `\n` → no asymmetry). Pure.
+export function glyphDiffLine(doc: Text, v1: VerRange, v2: VerRange): number | null {
+  // content = the ver range minus its protected terminal `\n` (at to-1); may itself end in
+  // a real `\n` (the file's trailing newline).
+  const oursNl = doc.sliceString(v1.from, v1.to - 1).endsWith("\n");
+  const theirsNl = doc.sliceString(v2.from, v2.to - 1).endsWith("\n");
+  if (oursNl === theirsNl) return null;
+  const side = oursNl ? v1 : v2; // the side WITH the trailing `\n` owns the diff `↵`
+  return doc.lineAt(side.to - 2).from; // to-1 = protected terminal; to-2 = the file `\n` it ends on
+}
+
 // §2.2.6 п.7 — marker-row selection appearance. A ver-block's marker rows light up
 // as "selected" ONLY when the ENTIRE block — its content AND its terminal `\n` — is
 // inside the selection [lo,hi]: `lo <= V.from && hi >= V.to`. A plain content

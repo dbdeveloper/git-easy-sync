@@ -50,7 +50,7 @@ import {
   terminalProtectionFilter,
   toRangeSet,
 } from "./diff-structure";
-import { type MarkerKind, markerSpecs, selectionAppearance, verLineDecisions } from "./diff-decorations";
+import { type MarkerKind, glyphDiffLine, markerSpecs, selectionAppearance, verLineDecisions } from "./diff-decorations";
 import { type Zone, mouseDragSelection } from "./diff-mouse-select";
 import {
   autoNewlineFilter,
@@ -403,6 +403,10 @@ export function buildDecorations(state: EditorState): DecorationSet {
     const wd = computeWordDiff(ours, theirs);
     for (const s of wd.oursSpans) all.push(wordMark.range(v1.from + s.start, v1.from + s.end));
     for (const s of wd.theirsSpans) all.push(wordMark.range(v2.from + s.start, v2.from + s.end));
+    // §2.2.12(a) bug-50 — a trailing-`\n` difference (last EOL-less group) → mark that side's
+    // `↵` glyph as a diff via a line class (the glyph is CSS-only, not a doc char).
+    const gl = glyphDiffLine(state.doc, v1, v2);
+    if (gl !== null) all.push(Decoration.line({ class: "diff2-glyph-diff" }).range(gl));
   }
   return Decoration.set(all, true);
 }

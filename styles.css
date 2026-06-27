@@ -619,6 +619,21 @@
     color: var(--diff2-theirs-fg);
     opacity: 0.85;
 }
+/* bug-50 §2.2.12(a) — a trailing-newline DIFF (the last EOL-less group: one side's `↵`
+ * exists, the other's doesn't). The `↵` is a CSS-only glyph, so it can't carry a content
+ * mark — its LINE gets `.diff2-glyph-diff` and we render the glyph like a changed word:
+ * the strong side tint behind a full-opacity bold `↵`, so the newline difference reads as
+ * a diff instead of a faint decoration. */
+.diff2-glyph-line.diff2-glyph-diff::after {
+    opacity: 1;
+    font-weight: bold;
+}
+.diff2-line-ours.diff2-glyph-diff::after {
+    background: var(--diff2-ours-strong);
+}
+.diff2-line-theirs.diff2-glyph-diff::after {
+    background: var(--diff2-theirs-strong);
+}
 
 /* Word-level overlay (R7.4 / TODO §6.4) — the CHANGED fragments inside a ver
  * line get the STRONGER side tint (red in ver1, green in ver2), so they stand

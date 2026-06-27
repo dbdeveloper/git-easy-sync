@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { Text } from "@codemirror/state";
 import { buildModel } from "../../src/diff2/diff-model";
-import { markerSpecs, selectionAppearance, verLineDecisions } from "../../src/diff2/diff-decorations";
+import { glyphDiffLine, markerSpecs, selectionAppearance, verLineDecisions } from "../../src/diff2/diff-decorations";
 
 function model(base: string, sibling: string) {
   const m = buildModel(base, sibling);
@@ -151,5 +151,30 @@ describe("diff-decorations — selectionAppearance (§2.2.6 п.7 marker selectio
     expect(e1.to - e1.from).toBe(1); // empty
     const a = selectionAppearance(me.ranges, e1.from, e2.to);
     expect(a.get(0)!.ver1).toBe(true); // lo<=from && hi>=to covers the bare terminal
+  });
+});
+
+describe("diff-decorations — glyphDiffLine (§2.2.12(a) bug-50 trailing-newline diff)", () => {
+  const v = (m: ReturnType<typeof model>, ver: 1 | 2) =>
+    m.ranges.find((r) => r.ver === ver && r.group === 0)!;
+  it("last EOL-less group: ours has trailing \\n, theirs doesn't → ours' ↵ line", () => {
+    const m = model("x\nma1\n", "x\nma1"); // ver1 content "ma1\n", ver2 content "ma1" (EOL-less)
+    const line = glyphDiffLine(m.text, v(m, 1), v(m, 2));
+    expect(line).toBe(m.text.lineAt(v(m, 1).from).from);
+    expect(m.text.lineAt(line!).text).toBe("ma1");
+  });
+  it("mirror: theirs has trailing \\n, ours doesn't → theirs' ↵ line", () => {
+    const m = model("x\nma1", "x\nma1\n");
+    const line = glyphDiffLine(m.text, v(m, 1), v(m, 2));
+    expect(line).toBe(m.text.lineAt(v(m, 2).from).from);
+    expect(m.text.lineAt(line!).text).toBe("ma1");
+  });
+  it("non-last group (both ver contents end with \\n) → null", () => {
+    const m = model("a\nL1\nb\n", "a\nR1\nb\n");
+    expect(glyphDiffLine(m.text, v(m, 1), v(m, 2))).toBeNull();
+  });
+  it("both EOL-less, differ only in content → null (no newline asymmetry)", () => {
+    const m = model("x\nma1", "x\nmb1");
+    expect(glyphDiffLine(m.text, v(m, 1), v(m, 2))).toBeNull();
   });
 });
