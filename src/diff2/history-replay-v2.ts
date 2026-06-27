@@ -153,6 +153,10 @@ export function replayStep(block: HistoryBlockV2): ReplayAction {
 export interface ReplayResultV2 {
   replayed: number; // blocks applied (edit + undo + redo)
   stoppedAtCorrupt: boolean; // stopped before EOF on a corrupt block
+  // Replay STOPS (does not throw) at the first block whose recorded change can't apply to the
+  // current doc — a divergence (the doc + base/sibling are the ground truth; the user re-resolves
+  // the rest). Null when the whole log replayed cleanly. The caller logs this for monitoring.
+  stoppedAtError: { block: number; seq: number; docLen: number; message: string } | null;
 }
 
 // EDGE: replay `jsonl` into a mounted `view`. The caller MUST pause its history-
@@ -163,7 +167,12 @@ export interface ReplayResultV2 {
 // `cursor.json` (§2.9), NOT from replay.
 export function replayHistoryV2(view: EditorView, jsonl: string): ReplayResultV2 {
   const { blocks, stoppedAtCorrupt } = scanHistoryV2(jsonl);
-  for (const block of blocks) {
+  let stoppedAtError: ReplayResultV2["stoppedAtError"] = null;
+  let i = 0;
+  for (; i < blocks.length; i++) {
+    const block = blocks[i];
+    const docLenBefore = view.state.doc.length;
+    try {
     const action = replayStep(block);
     if (action === "undo") {
       undo(view);
@@ -201,6 +210,13 @@ export function replayHistoryV2(view: EditorView, jsonl: string): ReplayResultV2
       effects,
       annotations,
     });
+    } catch (e) {
+      // STOP, don't throw — replay only as far as it's safe. A divergence here means a later
+      // block can't apply; the doc + base/sibling snapshots are the ground truth, so we keep
+      // the safe prefix and let the user re-resolve the rest. (Crash here would brick the view.)
+      stoppedAtError = { block: i, seq: (block as EditBlock).seq ?? -1, docLen: docLenBefore, message: String(e) };
+      break;
+    }
   }
-  return { replayed: blocks.length, stoppedAtCorrupt };
+  return { replayed: i, stoppedAtCorrupt, stoppedAtError };
 }

@@ -26,7 +26,7 @@ import {
   Transaction,
   type Extension,
 } from "@codemirror/state";
-import { defaultKeymap, deleteToLineEnd, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, deleteToLineEnd, history, historyKeymap, redoDepth, undoDepth } from "@codemirror/commands";
 import {
   Decoration,
   type DecorationSet,
@@ -95,6 +95,17 @@ export interface DiffPaneV2Hooks {
   // §2.2.15 — fired on every doc/selection change so the toolbar can refresh its live state
   // (conflict count, ↑/↓ + undo/redo disabled). Cheap; the handler patches, not re-renders.
   onUpdate?: () => void;
+  // bug-56 monitoring — fired on every undo/redo with the before/after undoDepth + doc length
+  // so debit=credit can be watched over time (the owner logs it). Undo: depth −1; redo: +1.
+  onUndoRedo?: (info: {
+    kind: "undo" | "redo";
+    undoDepthBefore: number;
+    undoDepthAfter: number;
+    redoDepthBefore: number;
+    redoDepthAfter: number;
+    docLenBefore: number;
+    docLenAfter: number;
+  }) => void;
 }
 
 // View-level config the marker decorations need (and from which ResolveOpts is
@@ -632,6 +643,26 @@ function cursorCadenceListener(onActivity: (activity: CursorActivity) => void): 
   });
 }
 
+// bug-56 monitoring — report every undo/redo's depth + doc length before/after, so debit=credit
+// can be watched over time (the owner forwards it to the log).
+function undoRedoLogListener(cb: NonNullable<DiffPaneV2Hooks["onUndoRedo"]>): Extension {
+  return EditorView.updateListener.of((u) => {
+    for (const tr of u.transactions) {
+      const kind = tr.isUserEvent("undo") ? "undo" : tr.isUserEvent("redo") ? "redo" : null;
+      if (!kind) continue;
+      cb({
+        kind,
+        undoDepthBefore: undoDepth(tr.startState),
+        undoDepthAfter: undoDepth(tr.state),
+        redoDepthBefore: redoDepth(tr.startState),
+        redoDepthAfter: redoDepth(tr.state),
+        docLenBefore: tr.startState.doc.length,
+        docLenAfter: tr.state.doc.length,
+      });
+    }
+  });
+}
+
 // §2.2.6 п.7c — map mouse coords to a selection ZONE: over a marker block-widget → that
 // marker's zone (read from its class + `data-group`); otherwise the nearest text position
 // (posAtCoords precise:false never returns null). Drives the mouse-drag selection.
@@ -774,6 +805,8 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
             }),
           ]
         : []),
+      // bug-56 monitoring — permanent undo/redo depth/length log.
+      ...(hooks?.onUndoRedo ? [undoRedoLogListener(hooks.onUndoRedo)] : []),
     ],
   });
 }

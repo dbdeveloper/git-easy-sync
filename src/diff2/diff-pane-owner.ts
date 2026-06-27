@@ -35,6 +35,7 @@ import { conflictCount, firstConflict, nextConflict, prevConflict } from "./diff
 import { HistoryWriterV2 } from "./history-log-v2";
 import { compactSessionLog } from "./history-rewrite";
 import { ReplayFlag, replayWithGuard } from "./history-feed";
+import type { ReplayResultV2 } from "./history-replay-v2";
 import { applyResolveAll, type ResolveChoice, type ResolveOpts } from "./diff-resolve";
 import { CursorScheduler, type CursorActivity } from "./cursor-timer";
 import { clampCursor, persistCursor } from "./cursor-store";
@@ -97,6 +98,8 @@ export class DiffPaneOwner {
         if (!this.flag.replaying) this.cursorScheduler.schedule(a);
       },
       onUpdate, // §2.2.15 toolbar live-refresh
+      // bug-56 monitoring — permanent undo/redo balance log (debit=credit watch).
+      onUndoRedo: (info) => this.logger?.info("diff2 undo/redo", info),
     });
   }
 
@@ -148,8 +151,8 @@ export class DiffPaneOwner {
   // flag suppresses the feed listener for the WHOLE replay — edit re-dispatches
   // carry replayDispatch, but undo(view)/redo(view) build un-annotatable txs, so
   // the flag is what keeps them out of the log (history-feed trap-2).
-  replayWithGuard(jsonl: string): void {
-    replayWithGuard(this.view, jsonl, this.flag);
+  replayWithGuard(jsonl: string): ReplayResultV2 {
+    return replayWithGuard(this.view, jsonl, this.flag);
   }
 
   // Bulk resolve every group toward `choice` (interim toolbar — see

@@ -269,6 +269,7 @@ export class DiffEditView extends ItemView {
     // timer + destroys the view). For a FRESH session this in-memory net count is
     // authoritative; a resumed session is handled by `hadPriorEdits` below.
     const netEdits = this.owner?.inMemoryNetEdits() ?? 0;
+    this.deps.logger?.info("diff2 disposeOwner", { hadOwner: !!this.owner, hadToolbar: !!this.toolbarHandle });
     this.owner?.dispose();
     this.owner = null;
     this.toolbarHandle = null; // §2.2.15 — toolbar DOM is rebuilt on the next renderDetail
@@ -366,7 +367,13 @@ export class DiffEditView extends ItemView {
   // remaining conflict (count-decrease guard prevents a feedback loop from the scroll's own
   // selection-set update). Called via the owner's onUpdate hook + once after owner mount.
   private refreshToolbar(): void {
-    if (!this.owner || !this.toolbarHandle) return;
+    if (!this.owner || !this.toolbarHandle) {
+      this.deps.logger?.info("diff2 refreshToolbar SKIP", {
+        hasOwner: !!this.owner,
+        hasToolbar: !!this.toolbarHandle,
+      });
+      return;
+    }
     const s = this.owner.toolbarState();
     this.toolbarHandle.update(s);
     if (this.autoFocus && s.conflictCount > 0 && s.conflictCount < this.prevConflictCount) {
@@ -382,6 +389,32 @@ export class DiffEditView extends ItemView {
   private autoFocusFirst(): void {
     if (!this.autoFocus) return;
     requestAnimationFrame(() => this.owner?.focusFirstConflict());
+  }
+
+  // bug-56 pre-flight — how many edits would ACTUALLY be recovered, with NO side effects.
+  // replayHistoryV2 stops at the first un-appliable block (a diverged/corrupt tail), so the
+  // real recovery may restore fewer than the raw block count. We learn that here by replaying
+  // into a throwaway, sink-less view (no hooks → no history written; `destroy()` after), so the
+  // Resume modal's "NNN edits saved" == what `Continue` (the same stop-on-error replay) really
+  // restores. 0 → nothing to resume → caller starts fresh (silently).
+  private dryRunRecoverableEdits(base: string, sibling: string, jsonl: string): number {
+    const t0 = performance.now();
+    const host = document.createElement("div"); // detached; replay is pure state, no measure
+    const dv = mountDiffPaneV2(host, base, sibling);
+    const res = replayHistoryV2(dv, jsonl);
+    dv.destroy();
+    const recoverable = res.stoppedAtError
+      ? assessHistoryV2(jsonl.split("\n").slice(0, res.replayed).join("\n")).edits // net edits over the SAFE prefix
+      : assessHistoryV2(jsonl).edits;
+    // perf — this dry-run is the pre-modal lag. A full second replay happens on Continue
+    // (mountReplayed). Watch these to decide if a replay-once reorder is worth it for big files.
+    this.deps.logger?.info("diff2 dry-run (pre-modal)", {
+      recoverable,
+      replayedBlocks: res.replayed,
+      docBytes: base.length + sibling.length,
+      ms: Math.round(performance.now() - t0),
+    });
+    return recoverable;
   }
 
   private renderDetail(parent: HTMLElement, entry: ConflictEntry): void {
@@ -497,6 +530,7 @@ export class DiffEditView extends ItemView {
           entry.siblingPath,
         ),
       );
+      this.deps.logger?.info("diff2 reopenAction", { kind: action.kind, base: entry.basePath, hasToolbar: !!this.toolbarHandle });
 
       // View config threaded through the owner into the V2 pane: device labels
       // (top/bottom markers), join date, and isMarkdown (Join-button gate). The
@@ -514,6 +548,7 @@ export class DiffEditView extends ItemView {
       // CURRENT vault bytes. Used by fresh / discard-fresh and the "Start over"
       // choices. A fresh session has no prior edits → hadPriorEdits:false.
       const startFreshAndMount = async (): Promise<void> => {
+        const tFresh = performance.now();
         if (await adapter.exists(dir)) await adapter.rmdir(dir, true);
         const meta = await startSession(
           this.deps.vault,
@@ -521,6 +556,11 @@ export class DiffEditView extends ItemView {
           entry.basePath,
           entry.siblingPath,
         );
+        this.deps.logger?.info("diff2 fresh-mount", {
+          base: entry.basePath,
+          docBytes: ours.length + theirs.length,
+          ms: Math.round(performance.now() - tFresh),
+        });
         this.activeSession = { conflictId, meta, hadPriorEdits: false };
         this.owner = new DiffPaneOwner(
           this.deps.vault,
@@ -558,7 +598,23 @@ export class DiffEditView extends ItemView {
           this.deps.logger,
           () => this.refreshToolbar(), // §2.2.15 (no-op until this.owner is set below)
         );
-        owner.replayWithGuard(sess.jsonl);
+        const tReplay = performance.now();
+        const replayRes = owner.replayWithGuard(sess.jsonl);
+        this.deps.logger?.info("diff2 recovered", {
+          base: entry.basePath,
+          replayedBlocks: replayRes.replayed,
+          docBytes: sess.base.length + sess.sibling.length,
+          ms: Math.round(performance.now() - tReplay),
+        });
+        if (replayRes.stoppedAtError) {
+          // §2.2.15 recovery monitoring — a diverging history stopped at a safe prefix (the
+          // user re-resolves the rest). Permanent log: catch recurrences + their signature.
+          this.deps.logger?.info("diff2 replay STOPPED (divergence)", {
+            base: entry.basePath,
+            ...replayRes.stoppedAtError,
+            replayed: replayRes.replayed,
+          });
+        }
         const cursor = await readCursor(this.deps.vault, conflictId);
         if (cursor) {
           owner.setCursor(cursor.anchor, cursor.head, cursor.scrollTop);
@@ -582,11 +638,12 @@ export class DiffEditView extends ItemView {
             // the §3.2 ResumeRecoveryModal (a "*" marks the changed file — no
             // scary "files changed" dialog; it is just crash recovery).
             const sess = await readResumeSession(this.deps.vault, conflictId);
-            // §3.5 (TODO §2): zero trustworthy edits → nothing to restore even
-            // though one side changed in the vault. Skip the modal and start
-            // fresh from the CURRENT vault (which reflects that one-side change);
-            // there is no user work to carry onto the unchanged side.
-            if (assessHistoryV2(sess.jsonl).empty) {
+            // §3.5 + bug-56 pre-flight: how many edits would ACTUALLY recover (dry-run, stops
+            // safely). 0 → nothing to restore (empty OR a fully un-replayable log) → skip the
+            // modal, start fresh from the CURRENT vault (which reflects the one-side change).
+            const recoverable = this.dryRunRecoverableEdits(sess.base, sess.sibling, sess.jsonl);
+            if (recoverable === 0) {
+              this.deps.logger?.info("diff2 resume(changed) → fresh (0 recoverable)", { base: entry.basePath });
               await startFreshAndMount();
               break;
             }
@@ -594,7 +651,7 @@ export class DiffEditView extends ItemView {
               basePath: entry.basePath,
               siblingPath: entry.siblingPath,
               startedAtIso: action.meta.createdAt,
-              editCount: assessHistoryV2(sess.jsonl).edits,
+              editCount: recoverable, // bug-56 — the real recoverable count, == what Continue restores
               baseChanged: action.changedSide === "base",
               siblingChanged: action.changedSide === "sibling",
               nowMs: Date.now(),
@@ -672,14 +729,13 @@ export class DiffEditView extends ItemView {
             // exactly what replayFrom will apply (so the dialog can't promise
             // more than it restores).
             const sess = await readResumeSession(this.deps.vault, conflictId);
-            // §3.5 (TODO §2): a valid session whose history.jsonl holds ZERO
-            // trustworthy edits is stale — there is nothing to resume, so the
-            // "Resume previous edit session? · 0 edits saved" modal is pointless.
-            // Skip it and start fresh (wipe + fresh session). `empty` = no blocks
-            // AND no corruption; a corrupt-first-block session is a DIFFERENT
-            // §3.5 row (it would still surface a modal) so it's intentionally
-            // excluded here.
-            if (assessHistoryV2(sess.jsonl).empty) {
+            // §3.5 + bug-56 pre-flight: a dry-run replay (stops safely) tells us how many edits
+            // would ACTUALLY recover. 0 → nothing to resume (empty OR a fully un-replayable /
+            // corrupt log) → skip the pointless modal, start fresh (wipe + fresh session). This
+            // also subsumes the old `.empty` skip and silently drops a broken history.jsonl.
+            const recoverable = this.dryRunRecoverableEdits(sess.base, sess.sibling, sess.jsonl);
+            if (recoverable === 0) {
+              this.deps.logger?.info("diff2 resume → fresh (0 recoverable)", { base: entry.basePath });
               await startFreshAndMount();
               break;
             }
@@ -687,7 +743,7 @@ export class DiffEditView extends ItemView {
               basePath: entry.basePath,
               siblingPath: entry.siblingPath,
               startedAtIso: action.meta.createdAt,
-              editCount: assessHistoryV2(sess.jsonl).edits,
+              editCount: recoverable, // bug-56 — real recoverable count == what Continue restores
               nowMs: Date.now(),
             }).prompt();
 

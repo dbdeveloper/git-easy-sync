@@ -34,6 +34,7 @@ import {
 } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { isolateHistory } from "@codemirror/commands";
+import { replayDispatch } from "./history-log-v2";
 import { buildModel, type VerRange } from "./diff-model";
 import { resolveGroup } from "./diff-resolve";
 import {
@@ -589,6 +590,16 @@ export function diffSelectionDelete(view: EditorView): boolean {
 // The live filter. vanish (step 2) → split/shrink (step 3) → merge (step 4) →
 // unchanged. A gap-delete makes editedGroup no-op splitShrink, so it reaches merge.
 export const autoResolveFilter = EditorState.transactionFilter.of(
-  (tr: Transaction): TransactionSpec | readonly TransactionSpec[] =>
-    vanishSpec(tr) ?? splitShrinkSpec(tr) ?? mergeSpec(tr) ?? tr,
+  (tr: Transaction): TransactionSpec | readonly TransactionSpec[] => {
+    // The cascade (vanish/split/merge) augments a USER edit; it must NOT re-fire on a replay
+    // re-dispatch (the recorded change is already the FINAL composed result — re-cascading it
+    // diverges the doc → "Applying change set to the wrong length" on a later block, bug-56).
+    // undo/redo need NO guard: the filter does run on them, but its result (the reverted /
+    // reapplied state) never re-triggers a cascade, so undo lands EXACTLY on the prior doc
+    // (debit=credit) — proven by tests/diff2/recovery-forward.test.ts. An undo/redo userEvent
+    // guard was tried and removed: it was inert (the fixture stopped at the same block) and a
+    // needless live-semantics change.
+    if (tr.annotation(replayDispatch)) return tr;
+    return vanishSpec(tr) ?? splitShrinkSpec(tr) ?? mergeSpec(tr) ?? tr;
+  },
 );

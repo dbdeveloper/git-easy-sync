@@ -91,9 +91,13 @@ const H = {
   toolbar(count = 4) {
     const root = document.getElementById("editor")!;
     root.innerHTML = "";
+    // wrap in .diff2-edit-view-root — it defines the --diff2-* colour vars (as the real view does)
+    const viewRoot = document.createElement("div");
+    viewRoot.className = "diff2-edit-view-root";
+    root.appendChild(viewRoot);
     const tb = document.createElement("div");
     tb.className = "diff2-detail-toolbar";
-    root.appendChild(tb);
+    viewRoot.appendChild(tb);
     const noop = () => {};
     const h = renderDiffToolbar(
       tb,
