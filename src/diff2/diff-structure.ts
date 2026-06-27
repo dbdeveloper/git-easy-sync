@@ -37,6 +37,16 @@ export function isTouchOnly(state: EditorState): boolean {
   return state.facet(touchOnlyFacet);
 }
 
+// §2.2.15/§2.2.16 — intra-chunk diff granularity: true → whole WORDS, false → per-CHARACTER
+// (default). Like touchOnlyFacet it lives here so it's reconfigurable via a Compartment AND
+// readable without a diff-pane-v2 import. buildDecorations reads it for computeWordDiff.
+export const wordLevelFacet = Facet.define<boolean, boolean>({
+  combine: (vs) => vs[0] ?? false,
+});
+export function isWordLevel(state: EditorState): boolean {
+  return state.facet(wordLevelFacet);
+}
+
 // RangeValue sides (CM6 reads these in RangeSet.map):
 //   startSide = -1  → an insert AT `from` grows the range (so typing into an empty
 //                     ver-block at its single caret slot grows it; 1a-validated).

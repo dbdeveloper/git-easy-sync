@@ -20,9 +20,18 @@
 import { EditorSelection, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { Vault } from "obsidian";
+import { redo as cmRedo, redoDepth, undo as cmUndo, undoDepth } from "@codemirror/commands";
 import { splitModel } from "./diff-model";
-import { readStructure } from "./diff-structure";
-import { type DiffViewConfig, mountDiffPaneV2 } from "./diff-pane-v2";
+import { readStructure, touchOnlyFacet, wordLevelFacet } from "./diff-structure";
+import {
+  type DiffViewConfig,
+  gotoAdjacentConflict,
+  mountDiffPaneV2,
+  scrollToConflict,
+  touchOnlyComp,
+  wordLevelComp,
+} from "./diff-pane-v2";
+import { conflictCount, firstConflict, nextConflict, prevConflict } from "./diff-nav";
 import { HistoryWriterV2 } from "./history-log-v2";
 import { compactSessionLog } from "./history-rewrite";
 import { ReplayFlag, replayWithGuard } from "./history-feed";
@@ -66,6 +75,8 @@ export class DiffPaneOwner {
     config: DiffViewConfig,
     startSeq: number,
     private readonly logger?: Logger,
+    // §2.2.15 — fired on every doc/selection change so the view can refresh the toolbar.
+    onUpdate?: () => void,
   ) {
     this.resolveOpts = { label: config.remoteLabel, date: config.date };
     // §0.5.5 threshold-trigger: the writer fires this on its tail when the log
@@ -85,7 +96,52 @@ export class DiffPaneOwner {
         // changes too); live typing/nav still schedules.
         if (!this.flag.replaying) this.cursorScheduler.schedule(a);
       },
+      onUpdate, // §2.2.15 toolbar live-refresh
     });
+  }
+
+  // ── §2.2.15 toolbar surface ────────────────────────────────────────────────
+  // Live state for the toolbar (count + nav/undo/redo disabled), recomputed per update.
+  toolbarState(): { conflictCount: number; hasPrev: boolean; hasNext: boolean; canUndo: boolean; canRedo: boolean } {
+    const ranges = readStructure(this.view.state);
+    const caret = this.view.state.selection.main.head;
+    return {
+      conflictCount: conflictCount(ranges),
+      hasPrev: prevConflict(ranges, caret) !== null,
+      hasNext: nextConflict(ranges, caret) !== null,
+      canUndo: undoDepth(this.view.state) > 0,
+      canRedo: redoDepth(this.view.state) > 0,
+    };
+  }
+
+  undo(): void {
+    cmUndo(this.view);
+    this.view.focus();
+  }
+  redo(): void {
+    cmRedo(this.view);
+    this.view.focus();
+  }
+  navPrev(): void {
+    gotoAdjacentConflict(this.view, false);
+  }
+  navNext(): void {
+    gotoAdjacentConflict(this.view, true);
+  }
+
+  // Auto-focus: scroll to the FIRST remaining conflict (caret at its ver1.from). No-op if none.
+  focusFirstConflict(): void {
+    const g = firstConflict(readStructure(this.view.state));
+    if (g) scrollToConflict(this.view, g.from);
+  }
+
+  // §2.2.15 live mode toggles (per-session) — reconfigure the Compartments.
+  setTouchOnly(on: boolean): void {
+    this.view.dispatch({ effects: touchOnlyComp.reconfigure(touchOnlyFacet.of(on)) });
+    this.view.contentDOM.inputMode = on ? "none" : ""; // facet-driven changeFilter handles edits; keyboard is a DOM attr
+  }
+  setWordLevel(on: boolean): void {
+    this.view.dispatch({ effects: wordLevelComp.reconfigure(wordLevelFacet.of(on)) });
   }
 
   // Replay a saved history.jsonl into the live view (resume/recovery). The SHARED

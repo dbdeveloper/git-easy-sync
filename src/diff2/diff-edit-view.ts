@@ -74,7 +74,7 @@ import {
   findAllConflicts,
   type ConflictEntry,
 } from "./synthetic-detector";
-import { renderConflictsToolbar } from "./toolbar-conflicts";
+import { type DiffToolbarHandle, renderDiffToolbar } from "./diff-toolbar";
 
 export const DIFF2_EDIT_VIEW_TYPE = "diff2-edit-view";
 
@@ -95,6 +95,9 @@ export interface DiffEditViewDeps {
   touchOnly?: () => boolean;
   // Diff highlight granularity: true → word-level, false → char-level (default). Read at open.
   diffWordLevel?: () => boolean;
+  // §2.2.15 Auto-focus default (scroll to the first remaining conflict on each resolve). Read
+  // at open; toggled per-session in the toolbar. Default true.
+  autoFocus?: () => boolean;
   // Plugin logger — the §5.0.e one-side-silent exit logs here instead of
   // nagging the user with a Notice (no-op when logging is disabled). Optional
   // in test fixtures.
@@ -118,6 +121,11 @@ function initialState(): Phase1ViewState {
 export class DiffEditView extends ItemView {
   private viewState: Phase1ViewState = initialState();
   private readonly deps: DiffEditViewDeps;
+  // §2.2.15 toolbar — the live handle (update on every owner change) + per-session Auto-focus
+  // state + the last conflict count (to detect a resolve = count decrease → focus first).
+  private toolbarHandle: DiffToolbarHandle | null = null;
+  private autoFocus = false;
+  private prevConflictCount = 0;
   // Unsubscribe handle from ConflictCounter.subscribe — set on open,
   // called on close.
   private unsubscribeCounter: (() => void) | null = null;
@@ -263,6 +271,8 @@ export class DiffEditView extends ItemView {
     const netEdits = this.owner?.inMemoryNetEdits() ?? 0;
     this.owner?.dispose();
     this.owner = null;
+    this.toolbarHandle = null; // §2.2.15 — toolbar DOM is rebuilt on the next renderDetail
+    this.prevConflictCount = 0;
     // §4.1 zero-edit invariant: a session ABANDONED (sub-tab switch / view close,
     // the "інший механізм" exit) with no recovery value → wipe its dir (fire-and-
     // forget; the onload sweep is the backstop). A FRESH session is worthless iff
@@ -351,6 +361,29 @@ export class DiffEditView extends ItemView {
     });
   }
 
+  // §2.2.15 — refresh the toolbar's live state on every owner update (count + nav/undo/redo
+  // disabled). Auto-focus: a resolve dropped the conflict count → scroll to the first
+  // remaining conflict (count-decrease guard prevents a feedback loop from the scroll's own
+  // selection-set update). Called via the owner's onUpdate hook + once after owner mount.
+  private refreshToolbar(): void {
+    if (!this.owner || !this.toolbarHandle) return;
+    const s = this.owner.toolbarState();
+    this.toolbarHandle.update(s);
+    if (this.autoFocus && s.conflictCount > 0 && s.conflictCount < this.prevConflictCount) {
+      this.owner.focusFirstConflict();
+    }
+    this.prevConflictCount = s.conflictCount;
+  }
+
+  // §2.2.15 — Auto-focus the first conflict, DEFERRED past layout. On a just-mounted view the
+  // scroll/caret silently no-op (the view isn't measured yet) — that was the intermittent
+  // "auto-focus didn't work on open". rAF runs after CM6's measure cycle. No-op when the flag
+  // is off or the owner is gone (disposed / re-rendered).
+  private autoFocusFirst(): void {
+    if (!this.autoFocus) return;
+    requestAnimationFrame(() => this.owner?.focusFirstConflict());
+  }
+
   private renderDetail(parent: HTMLElement, entry: ConflictEntry): void {
     // R7.9a toolbar — [← Back] + group resolve buttons + Auto-advance
     // toggle. Phase 6 will add [Open in external tool] on the right
@@ -359,33 +392,36 @@ export class DiffEditView extends ItemView {
     const localLabel = this.deps.localDeviceLabel?.() ?? "local";
     const toolbar = parent.createDiv({ cls: "diff2-detail-toolbar" });
 
-    renderConflictsToolbar(
+    // §2.2.15 — per-session mode state seeded from Settings; toggled locally for this view.
+    // resolve-all routes to the V2 owner (ours→keep1, theirs→keep2, join→join). The join opts
+    // carry the conflict's label+date so the header reads "Changes from `<device>` at <date>".
+    this.autoFocus = this.deps.autoFocus?.() ?? true;
+    const joinOpts = { label: entry.deviceLabel, date: entry.isoTimestamp };
+    this.toolbarHandle = renderDiffToolbar(
       toolbar,
-      { localLabel, remoteLabel: entry.deviceLabel },
       {
-        onBack: () => {
-          void this.exitDetailView(entry);
+        localLabel,
+        remoteLabel: entry.deviceLabel,
+        isMarkdown: isMd,
+        touchOn: this.deps.touchOnly?.() ?? false,
+        autoFocusOn: this.autoFocus,
+        diffMode: this.deps.diffWordLevel?.() ? "words" : "characters",
+      },
+      {
+        onBack: () => void this.exitDetailView(entry),
+        onKeepAll: () => this.owner?.applyResolveAll("keep1"),
+        onApplyAll: () => this.owner?.applyResolveAll("keep2"),
+        onJoinAll: isMd ? () => this.owner?.applyResolveAll("join", joinOpts) : undefined,
+        onPrev: () => this.owner?.navPrev(),
+        onNext: () => this.owner?.navNext(),
+        onUndo: () => this.owner?.undo(),
+        onRedo: () => this.owner?.redo(),
+        onToggleTouch: (on) => this.owner?.setTouchOnly(on),
+        onToggleAutoFocus: (on) => {
+          this.autoFocus = on; // per-session JS flag; behaviour fires on resolve in refreshToolbar
+          this.autoFocusFirst(); // §2.2.15 — enabling Auto-focus jumps to the first conflict NOW (deferred)
         },
-        // Interim toolbar (the redesign is its own session — see
-        // [[project-diff2-toolbar-redesign]]); resolve-all routes to the V2 owner.
-        // ours→keep1 (keep ver1), theirs→keep2 (keep ver2), join→join.
-        onKeepAllLocal: () => {
-          this.owner?.applyResolveAll("keep1");
-        },
-        onApplyAllRemote: () => {
-          this.owner?.applyResolveAll("keep2");
-        },
-        onJoinAll: isMd
-          ? () => {
-              // Pass the conflict's label + timestamp so the join header reads
-              // "Changes from `<device>` at <date>" (all groups here share this one
-              // sibling); without opts joinText fell back to "remote" + "" (bug).
-              this.owner?.applyResolveAll("join", {
-                label: entry.deviceLabel,
-                date: entry.isoTimestamp,
-              });
-            }
-          : undefined,
+        onSetDiffMode: (m) => this.owner?.setWordLevel(m === "words"),
       },
     );
 
@@ -495,7 +531,10 @@ export class DiffEditView extends ItemView {
           config,
           0, // fresh history.jsonl seq
           this.deps.logger,
+          () => this.refreshToolbar(), // §2.2.15 toolbar live-refresh
         );
+        this.refreshToolbar(); // seed the toolbar's initial count/disabled state
+        this.autoFocusFirst(); // §2.2.15 — focus the first conflict on a fresh open (deferred)
       };
 
       // Non-lossy mount: rebuild the owner from the session-start SNAPSHOTS,
@@ -517,6 +556,7 @@ export class DiffEditView extends ItemView {
           config,
           scanHistoryV2(sess.jsonl).blocks.length,
           this.deps.logger,
+          () => this.refreshToolbar(), // §2.2.15 (no-op until this.owner is set below)
         );
         owner.replayWithGuard(sess.jsonl);
         const cursor = await readCursor(this.deps.vault, conflictId);
@@ -525,6 +565,10 @@ export class DiffEditView extends ItemView {
         }
         this.activeSession = { conflictId, meta, hadPriorEdits: true };
         this.owner = owner;
+        this.refreshToolbar(); // §2.2.15 seed toolbar after replay mount
+        // §2.2.15 — Auto-focus ON overrides the restored cursor: jump to the first conflict
+        // (user: cursor-restore is the right resume behaviour ONLY when Auto-focus is OFF).
+        this.autoFocusFirst();
       };
 
       try {
@@ -616,7 +660,10 @@ export class DiffEditView extends ItemView {
               config,
               0,
               this.deps.logger,
+              () => this.refreshToolbar(), // §2.2.15 toolbar live-refresh
             );
+            this.refreshToolbar();
+            this.autoFocusFirst(); // §2.2.15 — focus first conflict on (vault-changed) fresh open (deferred)
             break;
           }
           case "resume": {

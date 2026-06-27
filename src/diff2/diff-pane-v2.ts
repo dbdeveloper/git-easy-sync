@@ -44,9 +44,11 @@ import {
   selectionVertTarget,
   horizontalSkip,
   isTouchOnly,
+  isWordLevel,
   readStructure,
   resolveCaret,
   touchOnlyFacet,
+  wordLevelFacet,
   structureField,
   structureHistory,
   terminalProtectionFilter,
@@ -54,6 +56,7 @@ import {
 } from "./diff-structure";
 import { type MarkerKind, glyphDiffLine, markerSpecs, selectionAppearance, verLineDecisions } from "./diff-decorations";
 import { type Zone, mouseDragSelection } from "./diff-mouse-select";
+import { nextConflict, prevConflict } from "./diff-nav";
 import {
   autoNewlineFilter,
   diffBackspace,
@@ -89,6 +92,9 @@ export interface DiffPaneV2Hooks {
   // every transaction: docChanged → "typing", pure caret move → "nav". The owner
   // gates it on !flag.replaying so a replay's re-dispatches don't schedule flushes.
   onActivity?: (activity: CursorActivity) => void;
+  // §2.2.15 — fired on every doc/selection change so the toolbar can refresh its live state
+  // (conflict count, ↑/↓ + undo/redo disabled). Cheap; the handler patches, not re-renders.
+  onUpdate?: () => void;
 }
 
 // View-level config the marker decorations need (and from which ResolveOpts is
@@ -414,7 +420,7 @@ export function buildDecorations(state: EditorState): DecorationSet {
     if (!v1 || !v2) continue;
     const ours = state.doc.sliceString(v1.from, v1.to - 1); // content (drop terminal \n)
     const theirs = state.doc.sliceString(v2.from, v2.to - 1);
-    const wd = computeWordDiff(ours, theirs, config.wordLevelDiff ?? false);
+    const wd = computeWordDiff(ours, theirs, isWordLevel(state)); // live facet (toolbar-toggleable)
     for (const s of wd.oursSpans) all.push(wordMark.range(v1.from + s.start, v1.from + s.end));
     for (const s of wd.theirsSpans) all.push(wordMark.range(v2.from + s.start, v2.from + s.end));
     // §2.2.12(a) bug-50 — a trailing-`\n` difference (last EOL-less group) → mark that side's
@@ -468,6 +474,35 @@ function horizontal(view: EditorView, forward: boolean): boolean {
 // dispatches run before the next paint → no empty-flash. Reverts cleanly if it doesn't
 // hold up (the alternative is bundling a known-good CM6, ~450KB).
 const drawSelectionComp = new Compartment();
+
+// §2.2.15 — touch-only / word-level modes are LIVE-reconfigurable from the toolbar (the
+// owner reconfigures these). createDiffPaneState seeds them from the view config; the editor
+// reads the underlying facets (changeFilter/guards/marker-click → touchOnlyFacet;
+// buildDecorations → wordLevelFacet).
+export const touchOnlyComp = new Compartment();
+export const wordLevelComp = new Compartment();
+
+// §2.2.15 — scroll to a conflict group (2-line lead) + caret at ver1.from (its `from`). The
+// caret-cadence/structure handle the rest. Shared by the toolbar ↑/↓ and the Ctrl+[/] keys.
+export function scrollToConflict(view: EditorView, from: number): void {
+  view.dispatch({
+    selection: EditorSelection.cursor(from),
+    effects: EditorView.scrollIntoView(from, { y: "start", yMargin: view.defaultLineHeight * 2 }),
+  });
+  view.focus();
+}
+
+// §2.2.15 — move to the next/prev conflict relative to the caret. Returns false (no-op,
+// keymap falls through) when there is none. Used by both the toolbar buttons and Ctrl+[/].
+export function gotoAdjacentConflict(view: EditorView, forward: boolean): boolean {
+  const ranges = readStructure(view.state);
+  const caret = view.state.selection.main.head;
+  const g = forward ? nextConflict(ranges, caret) : prevConflict(ranges, caret);
+  if (!g) return false;
+  scrollToConflict(view, g.from);
+  return true;
+}
+
 function dispatchSel(view: EditorView, anchor: number, head: number): void {
   // Tear the drawSelection layer DOWN then re-add it in a second synchronous dispatch
   // (the []→drawSelection() round-trip — a plain reconfigure is a no-op) so its stale
@@ -627,7 +662,10 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
     doc: m.doc,
     extensions: [
       diffViewConfigFacet.of(config), // marker decorations read this (device labels, Join gate)
-      touchOnlyFacet.of(config.touchOnly ?? false), // §2.2.14 read-only/touch mode (commands + marker-click gate on it)
+      // §2.2.14/§2.2.15 — touch-only + word-level modes via Compartments so the toolbar can
+      // toggle them live; seeded from the view config.
+      touchOnlyComp.of(touchOnlyFacet.of(config.touchOnly ?? false)),
+      wordLevelComp.of(wordLevelFacet.of(config.wordLevelDiff ?? false)),
       // §2.2.14 touch-only — block user EDITS (typing/delete/paste) but NOT undo/redo/
       // resolve/copy/selection. readOnly would have done it but it ALSO blocks undo (spec
       // п.5 needs undo); editable=false blocks ALL keyboard incl Ctrl+C/Z. So: a changeFilter
@@ -682,6 +720,12 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
         ]),
       ),
       diffNavKeymap,
+      // §2.2.15 — Ctrl+[ / Ctrl+] jump to the prev/next conflict (toolbar ↑/↓ equivalent).
+      // Return false when there's none → the key falls through.
+      keymap.of([
+        { key: "Ctrl-[", run: (v) => gotoAdjacentConflict(v, false) },
+        { key: "Ctrl-]", run: (v) => gotoAdjacentConflict(v, true) },
+      ]),
       diffClipboardCopy, // §2.2.7 — copy a group-spanning selection as a fenced block
       diffClipboardPaste, // §2.2.7 п.3a — paste fenced groups into normal → materialize + cascade
       keymap.of([...historyKeymap, ...defaultKeymap]),
@@ -722,6 +766,14 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       ...(hooks?.sink && hooks.flag ? [historyFeedListener(hooks.sink, hooks.flag)] : []),
       // P6.3 — cursor-cadence tap (§2.9), separate from the history feed.
       ...(hooks?.onActivity ? [cursorCadenceListener(hooks.onActivity)] : []),
+      // §2.2.15 — toolbar live-refresh tap (count + disabled states).
+      ...(hooks?.onUpdate
+        ? [
+            EditorView.updateListener.of((u) => {
+              if (u.docChanged || u.selectionSet) hooks.onUpdate!();
+            }),
+          ]
+        : []),
     ],
   });
 }

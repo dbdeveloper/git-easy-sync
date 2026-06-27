@@ -420,6 +420,8 @@ export default class GitHubSyncPlugin extends Plugin {
             touchOnly: () => this.settings.diffEditorTouchMode ?? false,
             // Diff highlight mode: "words" → word-level, else char-level (default).
             diffWordLevel: () => this.settings.diffEditorDiffMode === "words",
+            // §2.2.15 Auto-focus default (toggleable per-document in the toolbar).
+            autoFocus: () => this.settings.diffEditorAutoFocus ?? true,
           }),
       );
       this.addCommand({

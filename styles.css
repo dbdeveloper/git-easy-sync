@@ -170,30 +170,99 @@
     color: var(--text-error);
 }
 
-/* Phase 3 — Conflicts-detail toolbar (R7.9a) */
-.diff2-conflicts-toolbar {
+/* §2.2.15 — diff-editor-v2 toolbar. Two ROWS; each row is a LEFT group + a RIGHT group that
+ * wrap independently (the right group right-aligned). Row 2's left/right groups hold 2-LINE
+ * COLUMNS (.diff2-tb-col) that wrap as atomic units. */
+.diff2-toolbar {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    /* the container also carries .diff2-detail-toolbar (align-items:center) — override so the
+     * rows STRETCH to full width; otherwise they shrink-to-content and bunch in the centre
+     * (bug-52). full-width rows let each row's justify-content:space-between push the left
+     * group left and the right group right. */
+    align-items: stretch;
+    gap: 6px;
     padding: 6px 4px;
     border-bottom: 1px solid var(--background-modifier-border);
-    flex-wrap: wrap;
+    flex: 0 0 auto;
 }
-
-.diff2-toolbar-actions {
+.diff2-tb-row {
     display: flex;
-    gap: 6px;
-    flex: 1;
+    justify-content: space-between;
+    /* center the left vs right group vertically — bug-54: row 1's single-line Touch-mode
+     * was top-aligned against the taller buttons. (Columns within each group are already
+     * centered by .diff2-tb-left/right; row 2's groups are both ~2-line so this is a no-op.) */
+    align-items: center;
+    gap: 6px 16px;
     flex-wrap: wrap;
 }
-
-.diff2-toolbar-right {
+.diff2-tb-left,
+.diff2-tb-right {
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-left: auto;
+    flex-wrap: wrap;
+}
+.diff2-tb-right {
+    margin-left: auto; /* push right group to the far edge; wrapped items stay right-aligned */
+    justify-content: flex-end;
     font-size: 0.9em;
     color: var(--text-muted);
+}
+/* a 2-line column (Conflicts:/NNN, ↑/↓, Undo/Redo, Auto-focus/Diff-mode) — wraps as one unit */
+.diff2-tb-col {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+/* bug-53 — in the RIGHT group the two stacked controls (Auto-focus / Diff-mode) right-align,
+ * so the narrower Auto-focus toggle's right edge lines up with the wider Diff-mode below it
+ * (and with Touch-mode in row 1). Left-group columns stay left-aligned. */
+.diff2-tb-right .diff2-tb-col {
+    align-items: flex-end;
+}
+/* row 2 — ONLY the RIGHT block (Auto-focus / Diff-mode) stretches to the row height and
+ * pushes Auto-focus to the top, Diff-mode to the bottom. The LEFT block (Conflicts/NNN,
+ * ↑/↓, Undo/Redo) stays compact + vertically centered (its base .diff2-tb-left
+ * align-items:center). The row stretches so the right column has the full height to span. */
+.diff2-tb-row-cols {
+    align-items: stretch;
+}
+.diff2-tb-row-cols .diff2-tb-right {
+    align-items: stretch;
+}
+.diff2-tb-row-cols .diff2-tb-right .diff2-tb-col {
+    justify-content: space-between;
+}
+.diff2-tb-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    background: var(--background-secondary);
+    color: var(--text-normal);
+    cursor: pointer;
+}
+.diff2-tb-icon:hover {
+    background: var(--background-modifier-hover);
+}
+.diff2-tb-icon:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+.diff2-tb-count {
+    font-weight: 600;
+    color: var(--text-normal);
+    text-align: center; /* centre NNN horizontally under the "Conflicts:" label (was left-aligned) */
+}
+.diff2-tb-toggle,
+.diff2-tb-mode {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
 }
 
 .diff2-btn {

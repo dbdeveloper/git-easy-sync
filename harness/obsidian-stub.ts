@@ -26,3 +26,7 @@ export class ItemView {}
 export class WorkspaceLeaf {}
 export class App {}
 export type EventRef = unknown;
+
+// §2.2.15 toolbar — diff-toolbar.ts imports setIcon; harness needs a no-op (no real icons
+// in the observation harness; the layout is what we screenshot).
+export function setIcon(_el: HTMLElement, _icon: string): void {}

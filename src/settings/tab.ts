@@ -728,6 +728,22 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
                   });
           });
 
+      new Setting(containerEl)
+          .setName("Auto-focus conflicts")
+          .setDesc(
+              "After resolving a conflict, scroll the diff-editor to the FIRST remaining " +
+              "conflict (cursor at its start). Speeds up resolving many conflicts in a row. " +
+              "(§2.2.15) Can be toggled per-document in the diff-editor toolbar.",
+          )
+          .addToggle((toggle) => {
+              toggle
+                  .setValue(this.plugin.settings.diffEditorAutoFocus ?? true)
+                  .onChange(async (value) => {
+                      this.plugin.settings.diffEditorAutoFocus = value;
+                      await this.plugin.saveSettings();
+                  });
+          });
+
       // ── Performance ─────────────────────────────────────────────────
       new Setting(containerEl).setName("Performance").setHeading();
 

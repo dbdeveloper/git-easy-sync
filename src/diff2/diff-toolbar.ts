@@ -113,7 +113,7 @@ export function renderDiffToolbar(
 
   // ── Row 2 ──────────────────────────────────────────────────────────────────
   const row2 = container.appendChild(document.createElement("div"));
-  row2.className = "diff2-tb-row";
+  row2.className = "diff2-tb-row diff2-tb-row-cols"; // -cols → columns stretch + top/bottom-align (§2.2.15)
   const l2 = row2.appendChild(document.createElement("div"));
   l2.className = "diff2-tb-left";
 

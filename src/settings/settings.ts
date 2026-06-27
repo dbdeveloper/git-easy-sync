@@ -66,6 +66,9 @@ export interface GitHubSyncSettings {
   // or "words" (whole changed words). Large diff-groups auto-fall-back to word-level
   // regardless (char-level is O(n·m)). Default "characters".
   diffEditorDiffMode?: "characters" | "words";
+  // §2.2.15 — Auto-focus: on each resolve, scroll the diff-editor to the FIRST remaining
+  // conflict (caret at its ver1.from). Default ON (most users want fast sequential resolve).
+  diffEditorAutoFocus?: boolean;
 
   enableLogging: boolean;
 
@@ -192,6 +195,7 @@ export const DEFAULT_SETTINGS: GitHubSyncSettings = {
   // diffEditorTouchMode is intentionally ABSENT here — its default is platform-dependent
   // (desktop=false, mobile=true), applied in main.ts loadSettings when unset.
   diffEditorDiffMode: "characters",
+  diffEditorAutoFocus: true,
   enableLogging: false,
   consolidateCommits: false,
   deviceLabel: "Obsidian",
