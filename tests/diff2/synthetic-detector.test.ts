@@ -8,6 +8,7 @@ import ConflictStore, {
   buildSiblingPath,
 } from "../../src/sync2/conflict-store";
 import {
+  entryFromSibling,
   findAllConflicts,
   groupByBasePath,
   type ConflictEntry,
@@ -306,5 +307,64 @@ describe("groupByBasePath", () => {
 
   it("returns empty map on empty input", () => {
     expect(groupByBasePath([]).size).toBe(0);
+  });
+});
+
+// entryFromSibling — the lifted loop body of findAllConflicts (S1 of the split,
+// SPLIT-PANEL-EDITOR-FEASIBILITY.md §12). The findAllConflicts suite above is its
+// parity net; these pin the single-entry contract the split's S4 row-click +
+// Phase-1B setState restore depend on.
+describe("entryFromSibling", () => {
+  let fx: ReturnType<typeof fixture>;
+
+  beforeEach(async () => {
+    fx = fixture();
+    await fx.store.load();
+  });
+
+  afterEach(() => {
+    cleanup(fx.root);
+  });
+
+  it("returns null for a path that is not a *.conflict-from-* sibling", () => {
+    expect(entryFromSibling(fx.store, "note.md")).toBeNull();
+    expect(entryFromSibling(fx.store, "Folder/regular.md")).toBeNull();
+  });
+
+  it("classifies a registered sibling as tracked (record present, fields parsed)", async () => {
+    writeFile(fx.root, "note.md", "ours bytes");
+    const record = await fx.store.create({
+      vaultPath: "note.md",
+      kind: "modify-vs-modify",
+      oursBlobSha: "deadbeef0000000000000000000000000000beef",
+      theirsBlobSha: "cafe00000000000000000000000000000000babe",
+      theirsContent: new TextEncoder().encode("theirs bytes").buffer as ArrayBuffer,
+      remoteDevice: "Phone",
+      baseMtime: null,
+      baseSize: null,
+      baseSha: null,
+    });
+
+    const entry = entryFromSibling(fx.store, record.siblingPath);
+    expect(entry).not.toBeNull();
+    expect(entry!.kind).toBe("tracked");
+    expect(entry!.record).toBeDefined();
+    expect(entry!.basePath).toBe("note.md");
+    expect(entry!.siblingPath).toBe(record.siblingPath);
+    expect(entry!.deviceLabel).toBe("Phone");
+    expect(entry!.isoTimestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z$/);
+  });
+
+  it("classifies an unregistered sibling as synthetic (no vault walk needed)", () => {
+    // No store.create + no base file on disk: entryFromSibling only parses the
+    // path + checks the store, so an absent base is irrelevant here (matches the
+    // absent-base-is-listed rule). getBySibling → undefined → synthetic.
+    const sibPath = siblingPathFor("note.md", "Laptop", Date.UTC(2026, 4, 26));
+    const entry = entryFromSibling(fx.store, sibPath);
+    expect(entry).not.toBeNull();
+    expect(entry!.kind).toBe("synthetic");
+    expect(entry!.record).toBeUndefined();
+    expect(entry!.basePath).toBe("note.md");
+    expect(entry!.deviceLabel).toBe("Laptop");
   });
 });

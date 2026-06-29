@@ -68,6 +68,29 @@ export function autosaveIdForEntry(entry: ConflictEntry): string {
     : deriveAutosaveId("synthetic", entry.basePath, entry.siblingPath);
 }
 
+// Reconstruct a single `ConflictEntry` from a sibling path — the loop body of
+// `findAllConflicts`, lifted so callers that already KNOW the sibling path (the
+// split's S4 row-click → `openEditorForPair`, and the Phase-1B `setState`
+// restore) rebuild the entry without re-walking the vault. Returns null when the
+// path is not a `*.conflict-from-*` sibling. An ABSENT base is NOT rejected (it
+// is a delete-vs-modify conflict — see the NOTE in `findAllConflicts`).
+export function entryFromSibling(
+  conflictStore: ConflictStore,
+  siblingPath: string,
+): ConflictEntry | null {
+  const parsed = parseSiblingFilename(siblingPath);
+  if (!parsed) return null;
+  const record = conflictStore.getBySibling(siblingPath);
+  return {
+    basePath: parsed.basePath,
+    siblingPath,
+    deviceLabel: parsed.deviceLabel,
+    isoTimestamp: parsed.isoTimestamp,
+    kind: record ? "tracked" : "synthetic",
+    record,
+  };
+}
+
 export interface DetectionResult {
   // All entries, sorted newest-first by isoTimestamp.
   entries: ConflictEntry[];
@@ -86,9 +109,6 @@ export function findAllConflicts(
   const files = vault.getFiles();
 
   for (const file of files) {
-    const parsed = parseSiblingFilename(file.path);
-    if (!parsed) continue; // not a sibling
-
     // NOTE (2026-06-18): an ABSENT base is NO LONGER skipped. A sibling whose base
     // file is missing is a delete-vs-modify conflict (base deleted, sibling holds
     // the other side) — both TRACKED (R2.5) and SYNTHETIC. It is LISTED so the user
@@ -97,15 +117,9 @@ export function findAllConflicts(
     // nothing to diff against — skip it"; the diff editor renders the ours side
     // empty (mountDiffPane reads "" when basePath is absent). Genuine leftover
     // siblings now surface too, by design — the user clears them from the panel.
-    const record = conflictStore.getBySibling(file.path);
-    entries.push({
-      basePath: parsed.basePath,
-      siblingPath: file.path,
-      deviceLabel: parsed.deviceLabel,
-      isoTimestamp: parsed.isoTimestamp,
-      kind: record ? "tracked" : "synthetic",
-      record,
-    });
+    const entry = entryFromSibling(conflictStore, file.path);
+    if (!entry) continue; // not a sibling
+    entries.push(entry);
   }
 
   // Newest-first by isoTimestamp. The string itself is lex-sortable
