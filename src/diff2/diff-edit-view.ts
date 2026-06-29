@@ -168,7 +168,9 @@ export class DiffEditView extends ItemView {
       const e = this.viewState.entry;
       return `${e.basePath} · ${e.deviceLabel} @ ${formatConflictTimestamp(e.isoTimestamp)}`;
     }
-    return "Conflict Panel";
+    // "Diff Panel" (not "Conflict Panel") — Conflicts is only one of its roles
+    // (Deleted / History sub-tabs too).
+    return "Diff Panel";
   }
 
   // Force Obsidian to re-read getDisplayText() for the view header + tab. `updateHeader` is an
@@ -332,7 +334,7 @@ export class DiffEditView extends ItemView {
     } else {
       this.renderDetail(container, this.viewState.entry);
     }
-    this.refreshHeader(); // §title — flip the view header to the file (detail) / "Conflict Panel" (list)
+    this.refreshHeader(); // §title — flip the view header to the file (detail) / "Diff Panel" (list)
   }
 
   private renderHeader(parent: HTMLElement, activeTab: DiffEditSubTab): void {

@@ -635,7 +635,7 @@ back-stack із 3 кроків / 3 view-types**:
   > window-keydown, ConflictCounter-subscribe (editor НІКОЛИ не підписується — list-only).
   > **🆕 TITLE-СПРОЩЕННЯ (користувач 2026-06-30):** динамічний `getDisplayText` flip +
   > `refreshHeader()`/`updateHeader()`-хак ВИКИНУТИ — кожен view має СТАТИЧНИЙ title (панель =
-  > "Conflict Panel"; editor = свій `base · device @ date`, фіксований на час життя). Це робиться в
+  > "Diff Panel"; editor = свій `base · device @ date`, фіксований на час життя). Це робиться в
   > S3 (editor getDisplayText) + S6 (panel getDisplayText, прибрати refreshHeader).
 - **S3 — `DiffEditorView` (multi-tab).** Новий ItemView на контролері; mount одного
   `ConflictEntry`, origin="conflict"; register `diff2-editor-view`; host →
