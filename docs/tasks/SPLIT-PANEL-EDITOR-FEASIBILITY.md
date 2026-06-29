@@ -604,9 +604,26 @@ back-stack із 3 кроків / 3 view-types**:
   > сирі шляхи з getState/title) — інакше overlap-compare мовчки промахнеться (2 редактори
   > на 1 файл, усі S1-тести зелені). Якщо не гарантуєш єдиний chokepoint — нормалізувати
   > оборонно в `openGuard`.
-- **S2 — екстракція detail-двигуна (build-green, parity).** Винести owner-lifecycle +
-  `mountDiffPane` (recovery-блок ВЕРБАТИМ) + toolbar + `exitDetailView`-тіло + exit-commit
-  у контролер. **Найризикованіший крок. Verify = manual parity-checklist (нижче), ДО і ПІСЛЯ.**
+- **S2 — екстракція detail-двигуна (build-green, parity). ✅ DONE (2026-06-30).**
+  `src/diff2/diff-detail-controller.ts` — `DiffDetailController` володіє двигуном
+  (owner-lifecycle + `mount` (= старий `mountDiffPane`, recovery-блок ВЕРБАТИМ) + toolbar +
+  `exit` (= старий `exitDetailView`) + `resolveToctou` + exit-commit); `DiffEditView`
+  тепер ЛИШЕ host (`implements DiffDetailHost`): list↔detail state-machine, sub-tab header,
+  conflicts-list, escScope, Mod+F (через `controller.getView()`), ConflictCounter-subscribe.
+  Контролер створюється per-view в `onOpen`; `render()`-top + `onClose` кличуть `dispose()`.
+  **Swap-inventory (advisor-pinned, verified): РІВНО 4 host-виклики** (3×`onLeaveDetail`:
+  restore-cancel / resume-cancel / no-session + 1×`onCommitExit`: success-tail) **+ 3
+  guard-rewrites** (`!isStillTargeting(entry) || !body.isConnected` — after-read /
+  after-restore-modal / after-resume-modal). `mount` створює toolbar+body divs сам (S3
+  reuse — один виклик дає ідентичний DOM). `committing`/toctou-cancel/commit-fail лишаються
+  bare-`return` (Gap-4, без навігації). main.ts НЕ чіпано; `diff-edit-view-v2-glue.test.ts`
+  не торкається view-internals → зелений. tsc clean + повний сьют **1613 green**.
+  > **Verify-стан:** автоматика зелена (build + 1613 unit). Manual parity-checklist 1–4
+  > (open→resolve→`[←]`→list; правка→close-x→reopen→ResumeModal; 0-edit close→fresh;
+  > commit-fail→лишається) — **DEFERRED на device/harness** (потребують живого ItemView-host;
+  > happy-dom не монтує). Прогнати при наступній device-сесії ПЕРЕД S5.
+  > **TITLE-СПРОЩЕННЯ лишилось S3/S6** (динамічний `getDisplayText`+`refreshHeader` НЕ чіпано
+  > в S2, як і ратифіковано нижче).
   > **🔒 LOCKED S2-КОНТРАКТ (design+advisor 2026-06-30; імплементувати у СВІЖІЙ сесії —
   > ~500-рядковий behavior-preserving extract + manual-only verify + довгий контекст = відкласти).**
   > **`src/diff2/diff-detail-controller.ts` — `DiffDetailController`** володіє двигуном:
