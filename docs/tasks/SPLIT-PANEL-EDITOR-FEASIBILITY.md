@@ -606,9 +606,37 @@ back-stack із 3 кроків / 3 view-types**:
   > оборонно в `openGuard`.
 - **S2 — екстракція detail-двигуна (build-green, parity).** Винести owner-lifecycle +
   `mountDiffPane` (recovery-блок ВЕРБАТИМ) + toolbar + `exitDetailView`-тіло + exit-commit
-  + ESC + search + session у контролер; шов = `onExitComplete(outcome)` (див. вище).
-  `DiffEditView` поки делегує (старий host → `render(list)`). **Найризикованіший крок —
-  ізолювати окремо. Verify = manual parity-checklist (нижче), прогнати ДО і ПІСЛЯ.**
+  у контролер. **Найризикованіший крок. Verify = manual parity-checklist (нижче), ДО і ПІСЛЯ.**
+  > **🔒 LOCKED S2-КОНТРАКТ (design+advisor 2026-06-30; імплементувати у СВІЖІЙ сесії —
+  > ~500-рядковий behavior-preserving extract + manual-only verify + довгий контекст = відкласти).**
+  > **`src/diff2/diff-detail-controller.ts` — `DiffDetailController`** володіє двигуном:
+  > поля `owner / activeSession / toolbarHandle / autoFocus / prevConflictCount / committing`;
+  > методи `mount(body, entry)` / `exit(entry)` / `resolveToctou` / `refreshToolbar` /
+  > `autoFocusFirst` / `toggleSearch` / `dryRunRecoverableEdits` / `renderToolbar(body, entry)` /
+  > `dispose()` / **`getView(): EditorView|null`** (gap-1: view-host Mod+F читає owner-view через
+  > контролер — інакше hotkey тихо ламається, tsc не ловить).
+  > **Host-інтерфейс (composition, НЕ base-class):**
+  > ```ts
+  > interface DiffDetailHost {
+  >   isStillTargeting(entry): boolean; // stale-guard після await/модалок: old→viewState match; new→true
+  >   onLeaveDetail(): void;            // cancel / no-session: old→render(list); new→leaf.detach()
+  >   onCommitExit(entry): void;        // [←] committed: old→render(list); new→detach+reveal+scroll (S5)
+  > }
+  > ```
+  > Контролер сам перевіряє `!body.isConnected`; host додає лише viewState-частину. **Gap-2:**
+  > `dispose()` ІДЕМПОТЕНТНИЙ (old host кличе з `render()` І з `onClose()`) — §4.1 abandon-wipe не
+  > двоїться. **Gap-3:** `entry` — ПАРАМЕТР кожного `mount`-виклику (не мутабельне поле): concurrent
+  > re-mount (клік іншого рядка поки відкрита resume-модалка) інакше порівнює stale-guard з НЕ тим
+  > entry → guard fails open. **Gap-4:** РІВНО два nav-callback-и (commit-fail + toctou-cancel
+  > коректно ЛИШАЮТЬСЯ змонтованими, без навігації) — тримати `onLeaveDetail`/`onCommitExit`
+  > роздільними з самого початку (S5 спеціалізує лише new-host).
+  > **Lifetime:** контролер — per-VIEW (створюється в `onOpen`, не per-mount); `mount/dispose` цикл
+  > усередині. **View-level лишається в `onOpen`/`onClose` кожного host:** `escScope`, Mod+F
+  > window-keydown, ConflictCounter-subscribe (editor НІКОЛИ не підписується — list-only).
+  > **🆕 TITLE-СПРОЩЕННЯ (користувач 2026-06-30):** динамічний `getDisplayText` flip +
+  > `refreshHeader()`/`updateHeader()`-хак ВИКИНУТИ — кожен view має СТАТИЧНИЙ title (панель =
+  > "Conflict Panel"; editor = свій `base · device @ date`, фіксований на час життя). Це робиться в
+  > S3 (editor getDisplayText) + S6 (panel getDisplayText, прибрати refreshHeader).
 - **S3 — `DiffEditorView` (multi-tab).** Новий ItemView на контролері; mount одного
   `ConflictEntry`, origin="conflict"; register `diff2-editor-view`; host →
   `onExitComplete = commit-вже-зроблено → leaf.detach()`. Smoke через тимчасову команду
