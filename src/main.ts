@@ -340,6 +340,16 @@ export default class GitHubSyncPlugin extends Plugin {
         if (this.settings.showDiffRibbonButton ?? true)
           this.showDiffRibbonIcon();
 
+        // #7 — the conflict count comes from findAllConflicts (vault.getFiles), whose
+        // file index is only reliably populated at LAYOUT-READY. The initSync2 flush ran
+        // earlier (plugin onload), so on a cold restart it counted 0 → the ribbon badge /
+        // status bar / tooltip showed no conflicts until the next vault event. Recompute
+        // now that getFiles() is ready AND the UI surfaces exist, so persisted conflicts
+        // paint on first layout. (Before #7 the count came from the ConflictStore, which
+        // IS loaded by initSync2 — hence the regression.)
+        this.conflictCounter?.markDirty();
+        void this.conflictCounter?.flush();
+
         // Delay BOTH the interval scheduler AND the startup sync past the
         // STARTUP_SYNC_DELAY_MS window — so NO timer (periodic tick, watchdog,
         // or the one-shot startup pulse) can race Obsidian's startup
