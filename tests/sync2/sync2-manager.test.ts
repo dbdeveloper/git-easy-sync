@@ -50,6 +50,8 @@ function makeFakeClient(): Sync2Client & {
   setTreeShaForCommit(commitSha: string, treeSha: string): void;
   setCommitDate(commitSha: string, isoDate: string): void;
   setCommitMessage(commitSha: string, message: string): void;
+  // Plugin-js mtime tie-break — the LAST-CHANGE date (ms) of `path` at `ref`.
+  setLatestCommitDateForPath(ref: string, path: string, ms: number): void;
   setCompareResult(
     base: string,
     head: string,
@@ -82,6 +84,8 @@ function makeFakeClient(): Sync2Client & {
     treeShaByCommit: new Map<string, string>(),
     commitDateByCommit: new Map<string, string>(),
     commitMessageByCommit: new Map<string, string>(),
+    // `${ref}::${path}` → ms. Plugin-js "theirs" last-change date.
+    latestCommitDateByPathRef: new Map<string, number>(),
     compareByPair: new Map<
       string,
       {
@@ -126,6 +130,9 @@ function makeFakeClient(): Sync2Client & {
     },
     setCommitMessage(commitSha, message) {
       state.commitMessageByCommit.set(commitSha, message);
+    },
+    setLatestCommitDateForPath(ref, path, ms) {
+      state.latestCommitDateByPathRef.set(`${ref}::${path}`, ms);
     },
     setCompareResult(base, head, result) {
       state.compareByPair.set(`${base}...${head}`, result);
@@ -213,6 +220,12 @@ function makeFakeClient(): Sync2Client & {
         committer: { date: committedAt },
         message,
       };
+    },
+    async getLatestCommitDateForPath(args) {
+      calls.push({ op: "getLatestCommitDateForPath", args });
+      return (
+        state.latestCommitDateByPathRef.get(`${args.ref}::${args.path}`) ?? null
+      );
     },
     async getContentsAtRef(args) {
       calls.push({ op: "getContentsAtRef", args });
@@ -1014,6 +1027,77 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // No conflict registered — plugin-js semver wins all the way
       // down (2.0.0 > 1.5.0).
       expect(f.manager["conflictStore"]?.getAll() ?? []).toEqual([]);
+    });
+
+    it("plugin-js mtime tie-break uses the file's LAST-CHANGE date, NOT the branch HEAD (SYNC2 §7 regression)", async () => {
+      // The bug: theirsMtime was the branch-HEAD commit date. When HEAD advanced PAST
+      // the plugin file (a later unrelated commit), the remote bundle looked "newer"
+      // than a genuinely newer local build → the engine pulled the stale remote over
+      // local (spurious self-update / downgrade). One-way sync (this device → GitHub)
+      // could thus "update" the plugin from an OLDER remote. Fix: theirsMtime = the
+      // commit that last touched THE FILE (getLatestCommitDateForPath).
+      const manifestPath = ".obsidian/plugins/test-plugin/manifest.json";
+      const mainJsPath = ".obsidian/plugins/test-plugin/main.js";
+      // SAME version on both sides → semver ties → mtime decides.
+      const sameManifest = JSON.stringify({ id: "test-plugin", version: "1.0.0", name: "P" });
+      const baseManifest = JSON.stringify({ id: "test-plugin", version: "0.9.0", name: "P" });
+      const oursMainJs = "module.exports={LABEL:'LOCAL'};";
+      const theirsMainJs = "module.exports={LABEL:'REMOTE'};";
+      const baseMainJs = "module.exports={LABEL:'BASE'};";
+
+      writeVaultFile(f.root, manifestPath, sameManifest);
+      writeVaultFile(f.root, mainJsPath, oursMainJs);
+
+      // Three timestamps that ONLY the fix distinguishes:
+      const tLocal = Date.parse("2026-06-30T12:00:00Z"); // local main.js mtime
+      const tFileChange = Date.parse("2026-06-30T11:00:00Z"); // remote main.js LAST CHANGED (earlier → ours newer)
+      const tHead = Date.parse("2026-06-30T13:00:00Z"); // branch HEAD moved later (the bug's source)
+      // Force the local file's mtime (recorded into batch.fileMtimes at enqueue).
+      fs.utimesSync(path.join(f.root, mainJsPath), tLocal / 1000, tLocal / 1000);
+
+      // Snapshot mtime 0 (≠ the file's tLocal) so the change-detector sees a LOCAL
+      // modification and enqueues main.js with fileMtimes[main.js] = tLocal (the
+      // oursMtime the reconcile reads). A matching snapshot mtime would mark it
+      // unchanged → a remote-only pull, which never exercises the tie-break.
+      f.store.set(manifestPath, { path: manifestPath, remoteSha: await shaOf(baseManifest), mtime: 0, size: sameManifest.length });
+      f.store.set(mainJsPath, { path: mainJsPath, remoteSha: await shaOf(baseMainJs), mtime: 0, size: oursMainJs.length });
+      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      f.client.setBranchHead("NEW_HEAD");
+      f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
+      f.client.setContentAtRef("BASE_HEAD", manifestPath, baseManifest);
+      f.client.setContentAtRef("NEW_HEAD", manifestPath, sameManifest); // remote manifest same version
+      f.client.setContentAtRef("BASE_HEAD", mainJsPath, baseMainJs);
+      f.client.setContentAtRef("NEW_HEAD", mainJsPath, theirsMainJs);
+      // The remote drifted: both files changed between BASE_HEAD and NEW_HEAD, so the
+      // reconcile actually processes main.js (without this, compare reports no remote
+      // change → ours is pushed directly and plugin-js never runs).
+      f.client.setCompareResult("BASE_HEAD", "NEW_HEAD", {
+        status: "diverged",
+        files: [
+          { filename: mainJsPath, status: "modified", sha: await shaOf(theirsMainJs) },
+          { filename: manifestPath, status: "modified", sha: await shaOf(sameManifest) },
+        ],
+      });
+      // HEAD date is LATE (would make theirs win under the bug); the FILE's last-change
+      // date is EARLY (makes ours win under the fix).
+      f.client.setCommitDate("NEW_HEAD", new Date(tHead).toISOString());
+      f.client.setLatestCommitDateForPath("NEW_HEAD", mainJsPath, tFileChange);
+
+      await expect(f.manager.syncAll()).resolves.not.toThrow();
+
+      // OURS won: the local bundle is untouched (NOT overwritten with REMOTE), and no
+      // conflict registered. Under the bug this would read 'REMOTE' (theirs pulled).
+      expect(fs.readFileSync(path.join(f.root, mainJsPath), "utf8")).toContain("LOCAL");
+      expect(fs.readFileSync(path.join(f.root, mainJsPath), "utf8")).not.toContain("REMOTE");
+      expect(f.manager["conflictStore"]?.getAll() ?? []).toEqual([]);
+      // The fix actually consulted the file's last-change date (not just getCommit).
+      expect(
+        f.client.calls.some(
+          (c) =>
+            c.op === "getLatestCommitDateForPath" &&
+            (c.args as { path: string }).path === mainJsPath,
+        ),
+      ).toBe(true);
     });
 
     it("register-conflict path also keeps in-memory batch.files in sync with disk", async () => {

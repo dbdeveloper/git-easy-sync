@@ -1287,6 +1287,44 @@ genuine delete is omitted from the next `allFiles` and emitted then.
 Non-missing errors still rethrow. Test:
 `change-detector.test.ts` "ENOENT mid-walk … skips it, sync survives".
 
+### 7.8 plugin-js tie-break pulled a STALE remote bundle over a newer local one (2026-06-30)
+
+**Symptom.** A device-tester on a SINGLE machine (one-way sync, Macbook →
+GitHub) saw the plugin self-update (`BRAT-style reload`) DOWNGRADE its own
+`main.js` to an older remote build during a normal `[Sync]`. Impossible on
+its face: the remote can never be "newer" than the only writer. The log
+showed `reconcile path bytes-resident main.js oursBytes:274041
+theirsBytes:268105` (local NEWER + bigger) yet the engine wrote `theirs`.
+
+**Cause.** `isAtomicPluginFile` paths resolve by semver, falling back to
+mtime on a tie (§6 `resolvePluginJs`). With the plugin at an unbumped
+`2.0.2-beta` on both sides, `compareSemver` strips the pre-release tag →
+TIE → mtime. The "theirs" timestamp was `getCommit(HEAD).committer.date` —
+the **branch HEAD** commit date, NOT when `main.js` was last changed. The
+tester's conflict-resolution + unrelated commits had advanced HEAD *past*
+the commit that last touched `main.js`, so `theirsMtime` (recent HEAD) >
+`oursMtime` (the local build's file mtime) → the resolver chose `theirs`
+and pulled the stale remote bundle. The existing E4 integration test never
+caught it because its remote tweak always made `main.js` the HEAD commit
+(HEAD date == file date), so the bug was invisible.
+
+**Fix.** New `GithubClient.getLatestCommitDateForPath({path, ref})` →
+`GET /commits?path=&sha=&per_page=1` → the committer date of the LATEST
+commit that touched THAT FILE. Both `readPluginJsContext` sites (pull-side
+and push-side reconcile) use it for `theirsMtime` instead of the HEAD date.
+`null` (no commit / fetch error) → `0` (epoch) → OURS wins — the safe
+direction (never pull a remote bundle over local on uncertainty); never
+throws. The cross-device intent is unchanged: whichever side's bundle was
+*built/committed* more recently wins. Tests (DETERMINISTIC unit only —
+**no integration guard**: GitHub's commits-listing `?path=` is eventually
+consistent, so an integration test that commits then immediately queries is
+inherently flaky, and a flaky regression test gets disabled; production
+remote commits are settled, so the lag is not a real concern):
+`github-client-large-file.test.ts` (the client method — parse / author-date
+fallback / empty→null / error→null) and `sync2-manager.test.ts` "plugin-js
+mtime tie-break uses the file's LAST-CHANGE date" (the resolver — proven to
+fail on the old HEAD-date code, pass with the fix).
+
 ---
 
 ## 8. Worker Orchestra

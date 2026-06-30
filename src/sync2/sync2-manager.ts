@@ -160,6 +160,19 @@ export interface Sync2Client {
     // authored a conflict's "theirs" side.
     message: string;
   }>;
+  // The committer date (ms since epoch) of the LATEST commit that touched
+  // `path` at/under `ref` — i.e. when that file was last changed on the
+  // remote, NOT when the branch HEAD last moved. Used as the plugin-js
+  // mtime tie-break's "theirs" timestamp (SYNC2 §7): comparing against the
+  // branch HEAD date wrongly favoured the remote whenever HEAD advanced
+  // past the file (a later unrelated commit). Returns null on no commit /
+  // error — a best-effort heuristic, never throws.
+  // GET /repos/{o}/{r}/commits?path={path}&sha={ref}&per_page=1.
+  getLatestCommitDateForPath(args: {
+    path: string;
+    ref: string;
+    retry?: boolean;
+  }): Promise<number | null>;
   // Fetches the base64-encoded blob content for `path` at a specific
   // commit `ref`. Returns null on 404 (path not present at that
   // commit, or commit GC'd after force-push). Used for both base
@@ -2159,17 +2172,17 @@ export class Sync2Manager {
         decodeBase64String(remoteManifest.content),
       );
     }
-    let theirsMtime = 0;
-    try {
-      const headCommit = await this.client.getCommit({
-        sha: headRef,
+    // theirs mtime = when `path` was LAST CHANGED on the remote, NOT the branch
+    // HEAD date. Using the HEAD date wrongly favoured the remote whenever HEAD moved
+    // past the file (a later unrelated commit made the remote bundle look "newer" than
+    // a genuinely newer local build → spurious self-update/downgrade). SYNC2 §7. null →
+    // 0 (epoch) → ours wins on uncertainty (the safe direction).
+    const theirsMtime =
+      (await this.client.getLatestCommitDateForPath({
+        path,
+        ref: headRef,
         retry: true,
-      });
-      const parsed = Date.parse(headCommit.committer.date);
-      if (!Number.isNaN(parsed)) theirsMtime = parsed;
-    } catch {
-      // best-effort — leave at 0
-    }
+      })) ?? 0;
     return { oursVersion, theirsVersion, oursMtime, theirsMtime };
   }
 
@@ -3947,17 +3960,15 @@ export class Sync2Manager {
       );
     }
 
-    let theirsMtime = 0;
-    try {
-      const headCommit = await this.client.getCommit({
-        sha: currentHead,
+    // theirs mtime = when `path` was LAST CHANGED on the remote (NOT the branch HEAD
+    // date — that wrongly favours the remote when HEAD moved past the file). SYNC2 §7.
+    // null → 0 (epoch) → ours wins on uncertainty (the safe direction).
+    const theirsMtime =
+      (await this.client.getLatestCommitDateForPath({
+        path,
+        ref: currentHead,
         retry: true,
-      });
-      const parsed = Date.parse(headCommit.committer.date);
-      if (!Number.isNaN(parsed)) theirsMtime = parsed;
-    } catch {
-      // best-effort
-    }
+      })) ?? 0;
 
     return { oursVersion, theirsVersion, oursMtime, theirsMtime };
   }

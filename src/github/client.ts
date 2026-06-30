@@ -400,6 +400,73 @@ export default class GithubClient {
   }
 
   /**
+   * The committer date (ms since epoch) of the LATEST commit that
+   * touched `path` at/under `ref`. Used by the plugin-js mtime
+   * tie-break (SYNC2 §7) as the "theirs" timestamp — i.e. when the
+   * remote file was last *changed*, NOT when the branch HEAD last
+   * moved. The list-commits endpoint returns matching commits
+   * newest-first; `per_page=1` gives just the most recent.
+   *
+   * Best-effort: returns null on no matching commit (empty array),
+   * a non-2xx response, a malformed payload, or a network failure.
+   * The caller treats null as "unknown" and falls back to epoch (0),
+   * which makes OURS win the tie — the safe direction (never pull a
+   * remote bundle over the local one on uncertainty). Never throws.
+   *
+   * GET /repos/{o}/{r}/commits?path={path}&sha={ref}&per_page=1.
+   */
+  async getLatestCommitDateForPath({
+    path,
+    ref,
+    retry = false,
+    maxRetries = 5,
+  }: {
+    path: string;
+    ref: string;
+    retry?: boolean;
+    maxRetries?: number;
+  }): Promise<number | null> {
+    try {
+      const query =
+        `path=${encodeURIComponent(path)}` +
+        `&sha=${encodeURIComponent(ref)}&per_page=1`;
+      const response = await retryUntil(
+        async () => {
+          return this.timed(
+            {
+              url: `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/commits?${query}`,
+              headers: this.headers(),
+              throw: false,
+            },
+            "commits-for-path",
+          );
+        },
+        (res) => !isRetriableStatus(res.status),
+        retry ? maxRetries : 0,
+      );
+      if (response.status < 200 || response.status >= 400) {
+        this.logger.warn(
+          `getLatestCommitDateForPath ${path}@${ref}: status ${response.status}`,
+        );
+        return null;
+      }
+      const arr = response.json as Array<{
+        commit?: { committer?: { date?: string }; author?: { date?: string } };
+      }>;
+      const date =
+        arr?.[0]?.commit?.committer?.date ?? arr?.[0]?.commit?.author?.date;
+      if (!date) return null;
+      const ms = Date.parse(date);
+      return Number.isNaN(ms) ? null : ms;
+    } catch (err) {
+      this.logger.warn(
+        `getLatestCommitDateForPath ${path}@${ref} failed: ${String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
    * Fetch the base64-encoded blob content at a specific commit ref.
    * Sync2 uses this for both base (lastSyncCommitSha) and theirs
    * (currentHead) sides of a 3-way merge during conflict

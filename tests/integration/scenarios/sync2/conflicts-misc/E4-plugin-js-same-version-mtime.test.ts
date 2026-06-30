@@ -183,5 +183,17 @@ describe.skipIf(!integrationEnabled())(
       },
       240_000,
     );
+
+    // NB (SYNC2 §7, 2026-06-30): the plugin-js mtime tie-break's "theirs" timestamp is
+    // now the FILE's last-change commit date (getLatestCommitDateForPath), not the
+    // branch HEAD date — so an unrelated commit advancing HEAD past main.js no longer
+    // makes a stale remote bundle win. NO integration test guards this: GitHub's
+    // commits-listing (`?path=`) is eventually-consistent, so querying microseconds
+    // after a rapid test commit returns stale/HEAD-ish results → inherently flaky (and
+    // not a production concern — real remote commits are settled). The regression is
+    // pinned DETERMINISTICALLY by unit tests: github-client-large-file.test.ts (the
+    // endpoint: parse / author-date / empty→null / error→null) and sync2-manager.test.ts
+    // "plugin-js mtime tie-break uses the file's LAST-CHANGE date" (the resolver — proven
+    // to fail on the old HEAD-date code).
   },
 );

@@ -328,3 +328,86 @@ describe("GithubClient.getContentsAtRef — large-file fallback", () => {
     expect(getBlobCalls).toBe(1);
   });
 });
+
+describe("GithubClient.getLatestCommitDateForPath — plugin-js mtime source (SYNC2 §7)", () => {
+  let cleanup: () => void;
+  afterEach(() => {
+    installRequestFaultInjector(null);
+    if (cleanup) cleanup();
+  });
+
+  const mainJs = ".obsidian/plugins/foo/main.js";
+
+  it("returns the committer date (ms) of the FIRST (latest) commit touching the path", async () => {
+    const setup = makeClient();
+    cleanup = setup.cleanup;
+    let url = "";
+    installRequestFaultInjector({
+      intercept(u): FakeResponse | null {
+        if (u.includes("/repos/test-owner/test-repo/commits?")) {
+          url = u;
+          // GitHub returns matching commits newest-first; per_page=1 → one entry.
+          return {
+            status: 200,
+            body: JSON.stringify([
+              { commit: { committer: { date: "2026-06-30T11:00:00Z" } } },
+            ]),
+          };
+        }
+        return null;
+      },
+    });
+
+    const ms = await setup.client.getLatestCommitDateForPath({ path: mainJs, ref: "abc123" });
+    expect(ms).toBe(Date.parse("2026-06-30T11:00:00Z"));
+    // The query carries the path + ref + per_page=1 (path is URL-encoded).
+    expect(url).toContain(`path=${encodeURIComponent(mainJs)}`);
+    expect(url).toContain("sha=abc123");
+    expect(url).toContain("per_page=1");
+  });
+
+  it("falls back to the author date when committer date is absent", async () => {
+    const setup = makeClient();
+    cleanup = setup.cleanup;
+    installRequestFaultInjector({
+      intercept(u): FakeResponse | null {
+        if (u.includes("/commits?")) {
+          return {
+            status: 200,
+            body: JSON.stringify([{ commit: { author: { date: "2026-01-02T03:04:05Z" } } }]),
+          };
+        }
+        return null;
+      },
+    });
+    expect(await setup.client.getLatestCommitDateForPath({ path: mainJs, ref: "r" })).toBe(
+      Date.parse("2026-01-02T03:04:05Z"),
+    );
+  });
+
+  it("returns null on an empty array (path never committed) → caller falls back to epoch (ours wins)", async () => {
+    const setup = makeClient();
+    cleanup = setup.cleanup;
+    installRequestFaultInjector({
+      intercept(u): FakeResponse | null {
+        if (u.includes("/commits?")) return { status: 200, body: "[]" };
+        return null;
+      },
+    });
+    expect(await setup.client.getLatestCommitDateForPath({ path: mainJs, ref: "r" })).toBeNull();
+  });
+
+  it("returns null on a non-2xx response (best-effort, never throws)", async () => {
+    const setup = makeClient();
+    cleanup = setup.cleanup;
+    installRequestFaultInjector({
+      intercept(u): FakeResponse | null {
+        if (u.includes("/commits?")) return { status: 404, body: "Not Found" };
+        return null;
+      },
+    });
+    await expect(
+      setup.client.getLatestCommitDateForPath({ path: mainJs, ref: "r" }),
+    ).resolves.toBeNull();
+  });
+});

@@ -8,10 +8,16 @@
 // produces incoherent garbage that can crash Obsidian on load. Both
 // the legacy plugin and sync2 (after porting this in) special-case
 // `.js` files inside a plugin folder: pull-side conflicts are
-// resolved atomically by the plugin's semver, falling back to file
-// mtime when semvers tie or can't be parsed.
+// resolved atomically by the plugin's semver, falling back to mtime
+// when semvers tie or can't be parsed. The mtime tie-break compares
+// the LOCAL file's mtime against the remote file's LAST-CHANGE commit
+// date (the commit that last touched that file) — NOT the branch HEAD
+// date, which would wrongly favour the remote whenever HEAD advanced
+// past the file (SYNC2 §7).
 //
-// Pure functions only — no I/O. Tested in plugin-js.test.ts.
+// Pure functions only — no I/O. Tested in plugin-js.test.ts. (The
+// timestamps are gathered by readPluginJsContext in sync2-manager.ts,
+// which calls client.getLatestCommitDateForPath for the "theirs" side.)
 
 /**
  * Returns true if `path` lives inside the Obsidian plugins/<id>/
