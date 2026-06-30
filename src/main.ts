@@ -46,8 +46,10 @@ import { TrashWatcher } from "./diff2/trash-watcher";
 import { sweepOnload as trashSweepOnload } from "./diff2/trash-recovery";
 import { recoverAutosaveDirs } from "./diff2/onload-recovery";
 import { setAutosaveRoot } from "./diff2/autosave-store";
-import { DiffEditView, DIFF2_EDIT_VIEW_TYPE } from "./diff2/diff-edit-view";
-import { findAllConflicts } from "./diff2/synthetic-detector";
+import { DiffEditView, DIFF2_EDIT_VIEW_TYPE, type DiffEditViewDeps } from "./diff2/diff-edit-view";
+import { DiffEditorView, DIFF2_EDITOR_VIEW_TYPE } from "./diff2/diff-editor-view";
+import type { EditorTabState } from "./diff2/editor-tabs";
+import { findAllConflicts, type ConflictEntry } from "./diff2/synthetic-detector";
 import { TokenExpiredModal } from "./sync2/views/token-expired-modal";
 import { CancelSyncModal } from "./sync2/views/cancel-sync-modal";
 import { AuthError } from "./errors";
@@ -401,28 +403,15 @@ export default class GitHubSyncPlugin extends Plugin {
       // instantiate it; dependencies (vault, conflictStore,
       // conflictCounter) passed via closure since the view needs
       // them to populate the list and react to changes.
+      // Panel host (singleton, list↔detail) and the multi-tab editor host
+      // (one per base:sibling pair, S3) share the SAME dependency object.
       this.registerView(
         DIFF2_EDIT_VIEW_TYPE,
-        (leaf) =>
-          new DiffEditView(leaf, {
-            vault: this.app.vault,
-            conflictStore: this.conflictStore,
-            conflictCounter: this.conflictCounter,
-            // §5.0.e one-side-silent exit logs here instead of a Notice.
-            logger: this.logger,
-            // Live-read so the user can change deviceLabel in settings
-            // and the next view-open / re-render picks up the new
-            // value. Same pattern Sync2Manager uses for commit
-            // messages.
-            localDeviceLabel: () =>
-              this.settings.deviceLabel ?? "Obsidian",
-            // §2.2.14 — live-read the Touch mode setting at each view open.
-            touchOnly: () => this.settings.diffEditorTouchMode ?? false,
-            // Diff highlight mode: "words" → word-level, else char-level (default).
-            diffWordLevel: () => this.settings.diffEditorDiffMode === "words",
-            // §2.2.15 Auto-focus default (toggleable per-document in the toolbar).
-            autoFocus: () => this.settings.diffEditorAutoFocus ?? true,
-          }),
+        (leaf) => new DiffEditView(leaf, this.diffViewDeps()),
+      );
+      this.registerView(
+        DIFF2_EDITOR_VIEW_TYPE,
+        (leaf) => new DiffEditorView(leaf, this.diffViewDeps()),
       );
       this.addCommand({
         id: "open-diff-edit",
@@ -448,6 +437,21 @@ export default class GitHubSyncPlugin extends Plugin {
         id: "diff-edit-show-history",
         name: "Show history of active file",
         callback: () => this.activateDiffEditView(),
+      });
+      // S3 TEMP smoke command — opens the first conflict in a `diff2-editor-view`
+      // tab. S4 replaces this with the conflicts-list row-click + open-guard;
+      // remove this command then.
+      this.addCommand({
+        id: "diff2-open-first-conflict-editor",
+        name: "Open first conflict in editor (S3 smoke)",
+        callback: () => {
+          const { entries } = findAllConflicts(this.app.vault, this.conflictStore);
+          if (entries.length === 0) {
+            new Notice("No conflicts to open.");
+            return;
+          }
+          void this.openEditorForPair(entries[0]);
+        },
       });
 
       this.logger.info(
@@ -527,11 +531,14 @@ export default class GitHubSyncPlugin extends Plugin {
       }
       this.trashWatcher = null;
     }
-    // Detach any open Diff-Edit view leaves so they don't linger in
-    // a broken state after the plugin disables. Obsidian would
+    // Detach any open Diff-Edit / Diff-Editor view leaves so they don't
+    // linger in a broken state after the plugin disables. Obsidian would
     // eventually GC them but explicit cleanup keeps the workspace
-    // state-store tidy.
+    // state-store tidy. (1A: editors are ephemeral — detaching here removes
+    // them from the serialized layout so they don't restore empty on reload;
+    // 1B drops the editor detach and adds getState-restore.)
     this.app.workspace.detachLeavesOfType(DIFF2_EDIT_VIEW_TYPE);
+    this.app.workspace.detachLeavesOfType(DIFF2_EDITOR_VIEW_TYPE);
     // Terminate Worker pool — each Worker holds Blob URLs + a thread
     // that the OS would otherwise keep alive until process exit.
     this.workerClient?.terminate();
@@ -1879,6 +1886,45 @@ export default class GitHubSyncPlugin extends Plugin {
       leaf = workspace.getLeaf("tab");
       await leaf.setViewState({ type: DIFF2_EDIT_VIEW_TYPE, active: true });
     }
+    workspace.revealLeaf(leaf);
+  }
+
+  // The dependency object both diff2 hosts take. Live-reads settings via thunks so
+  // a deviceLabel / Touch-mode / diff-mode change is picked up on the next view
+  // open (same pattern Sync2Manager uses for commit messages).
+  private diffViewDeps(): DiffEditViewDeps {
+    return {
+      vault: this.app.vault,
+      conflictStore: this.conflictStore,
+      conflictCounter: this.conflictCounter,
+      // §5.0.e one-side-silent exit logs here instead of a Notice.
+      logger: this.logger,
+      localDeviceLabel: () => this.settings.deviceLabel ?? "Obsidian",
+      // §2.2.14 — live-read the Touch mode setting at each view open.
+      touchOnly: () => this.settings.diffEditorTouchMode ?? false,
+      // Diff highlight mode: "words" → word-level, else char-level (default).
+      diffWordLevel: () => this.settings.diffEditorDiffMode === "words",
+      // §2.2.15 Auto-focus default (toggleable per-document in the toolbar).
+      autoFocus: () => this.settings.diffEditorAutoFocus ?? true,
+    };
+  }
+
+  // Open a `diff2-editor-view` tab for one conflict pair (S3). S4 adds the open-guard
+  // (focus an already-open same pair / dialog on a partial write-set overlap) over
+  // `getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE)`; for now it always opens a fresh tab.
+  async openEditorForPair(entry: ConflictEntry): Promise<void> {
+    const { workspace } = this.app;
+    const leaf = workspace.getLeaf("tab");
+    const state: EditorTabState = {
+      origin: "conflict",
+      basePath: entry.basePath,
+      siblingPath: entry.siblingPath,
+    };
+    await leaf.setViewState({
+      type: DIFF2_EDITOR_VIEW_TYPE,
+      state: state as unknown as Record<string, unknown>,
+      active: true,
+    });
     workspace.revealLeaf(leaf);
   }
 

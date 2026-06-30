@@ -7,17 +7,32 @@
 // dialog / create-leaf; this module is everything that can be unit-tested
 // without a workspace.
 //
-// EditorTabState (the getState/setState shape) is deliberately NOT defined here:
-// nothing in S1 consumes it, and its minimal-for-conflict shape crystallizes at
-// S3 where setState first reads it (history/deleted fields layer on later). See
-// §12 / advisor 2026-06-30.
-
 import { normalizePath } from "obsidian";
 
 // §8 / §10 — where a diff2-editor came from. Routes `[←]` navigation (R-D) and
 // selects the write-set (below). Phase 1 only ever constructs `conflict`; the
 // other three are forward-design (cost nothing now, no rewrite when they land).
 export type DiffEditorOrigin = "conflict" | "compare" | "history" | "deleted";
+
+// The getState/setState shape for a `diff2-editor-view` leaf (S3 — the first
+// consumer is `DiffEditorView.setState`). Deliberately MINIMAL: the sibling path
+// is the identity key, and the full `ConflictEntry` (deviceLabel / isoTimestamp /
+// kind / record) is RE-DERIVED from it via `entryFromSibling` at mount — so it
+// never drifts from the live ConflictStore (R-C minimal-state principle).
+// `basePath` is the R-D navigation anchor (= base for a conflict; S5 reads it).
+// History/Deleted/Compare layer their own fields on later; for Phase 1 every
+// state is `origin: "conflict"`.
+//
+// NB it is `getState`-serialized (so an in-session leaf-move preserves the tab);
+// 1B adds restart-restore. Any consumer that rebuilds from this MUST treat
+// `siblingPath` as untrusted (Obsidian rebuilds a moved leaf via `setState({})`
+// before the real state lands) — guard `typeof siblingPath === "string"` before
+// `parseSiblingFilename`, which throws on a non-string.
+export interface EditorTabState {
+  origin: DiffEditorOrigin;
+  basePath: string;
+  siblingPath: string;
+}
 
 // The vault files a diff2-editor WRITES when its `[←]` commits (§3 / §10 table).
 // Paths are normalized so the open-guard's string compare can never miss a real

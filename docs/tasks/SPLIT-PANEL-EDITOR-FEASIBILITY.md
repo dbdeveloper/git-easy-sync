@@ -654,10 +654,27 @@ back-stack із 3 кроків / 3 view-types**:
   > `refreshHeader()`/`updateHeader()`-хак ВИКИНУТИ — кожен view має СТАТИЧНИЙ title (панель =
   > "Diff Panel"; editor = свій `base · device @ date`, фіксований на час життя). Це робиться в
   > S3 (editor getDisplayText) + S6 (panel getDisplayText, прибрати refreshHeader).
-- **S3 — `DiffEditorView` (multi-tab).** Новий ItemView на контролері; mount одного
-  `ConflictEntry`, origin="conflict"; register `diff2-editor-view`; host →
-  `onExitComplete = commit-вже-зроблено → leaf.detach()`. Smoke через тимчасову команду
-  (можна злити в S4).
+- **S3 — `DiffEditorView` (multi-tab). ✅ DONE (2026-06-30).** Новий `src/diff2/diff-editor-view.ts`
+  `DiffEditorView extends ItemView implements DiffDetailHost` (view-type `diff2-editor-view`),
+  тримає власний `DiffDetailController` — **контролер НЕ змінено** (advisor-guardrail = доказ
+  правильного S2-шва; S2 seam-тест лишився зеленим). Host-callbacks: `onLeaveDetail`/`onCommitExit`
+  → `this.leaf.detach()` (S5 спеціалізує commit-exit на detach+reveal+scroll); `isStillTargeting`
+  → match по одному entry. `EditorTabState {origin,basePath,siblingPath}` (editor-tabs.ts) —
+  siblingPath = identity, повний entry RE-DERIVED через `entryFromSibling` (R-C minimal, drift-free).
+  `setState`+`onOpen` → `tryMount` (both-ready guard; **untrusted-state guard** `typeof siblingPath
+  === "string"` — `parseSiblingFilename` THROWS на не-string при leaf-move-rebuild `setState({})`,
+  advisor-caught); `getState()` РЕАЛІЗОВАНО (in-session leaf-move зберігає пару — окрема дрібніша
+  потреба, НЕ 1B-restart-restore). **СТАТИЧНИЙ** `getDisplayText` (title-спрощення стартує тут, без
+  refreshHeader-хака). escScope + Mod+F дубльовані per-host (ратифіковано — НЕ shared chrome
+  helper), БЕЗ ConflictCounter (editor не list). main.ts: deps зведено в `diffViewDeps()` (спільне
+  для обох hosts), register `diff2-editor-view`, unload детачить ОБИДВА типи (1A ephemeral), TEMP
+  smoke-команда «Open first conflict in editor (S3 smoke)» → `openEditorForPair(entry)` (БЕЗ guard
+  — guard у S4; команда видаляється/замінюється row-click у S4). tsc clean + повний unit **1617
+  green** (новий surface = Obsidian ItemView-glue, не unit-testable без ItemView-harness, якого в
+  проєкті нема — як і `DiffEditView`; покриття = host-agnostic controller seam-тест).
+  > **DEVICE-SMOKE (deferred, додати до S5-checklist):** (1) команда → resolve → `[←]` закриває таб;
+  > (2) **multi-tab:** відкрити 2 editor-tabs, перемикати фокус → ESC-swallow + Mod+F діють лише на
+  > сфокусований таб; (3) leaf-move (drag таб у split) зберігає пару (getState).
 - **S4 — wire + open-guard.** main.ts `openEditorForPair(entry)`: write-set → `openGuard`
   над `getLeavesOfType("diff2-editor-view")` → focus-existing | діалог
   [Перемкнутись]/[Cancel] | новий leaf (`setViewState(EditorTabState)`). `conflicts-list`
