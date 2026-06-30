@@ -46,7 +46,7 @@ import { TrashWatcher } from "./diff2/trash-watcher";
 import { sweepOnload as trashSweepOnload } from "./diff2/trash-recovery";
 import { recoverAutosaveDirs } from "./diff2/onload-recovery";
 import { setAutosaveRoot } from "./diff2/autosave-store";
-import { DiffEditView, DIFF2_EDIT_VIEW_TYPE, type DiffEditViewDeps } from "./diff2/diff-edit-view";
+import { DiffPanelView, DIFF2_EDIT_VIEW_TYPE, type DiffEditViewDeps } from "./diff2/diff-edit-view";
 import { DiffEditorView, DIFF2_EDITOR_VIEW_TYPE } from "./diff2/diff-editor-view";
 import {
   alignOpenDescs,
@@ -419,7 +419,7 @@ export default class GitHubSyncPlugin extends Plugin {
       // (one per base:sibling pair, S3) share the SAME dependency object.
       this.registerView(
         DIFF2_EDIT_VIEW_TYPE,
-        (leaf) => new DiffEditView(leaf, this.diffViewDeps()),
+        (leaf) => new DiffPanelView(leaf, this.diffViewDeps()),
       );
       this.registerView(
         DIFF2_EDITOR_VIEW_TYPE,
@@ -1899,7 +1899,7 @@ export default class GitHubSyncPlugin extends Plugin {
     );
     const nav = planBackNav(origin, anchorPath, baseHasConflicts);
     const leaf = await this.activateDiffEditView();
-    if (leaf.view instanceof DiffEditView) leaf.view.applyBackNav(nav);
+    if (leaf.view instanceof DiffPanelView) leaf.view.applyBackNav(nav);
   }
 
   // The dependency object both diff2 hosts take. Live-reads settings via thunks so

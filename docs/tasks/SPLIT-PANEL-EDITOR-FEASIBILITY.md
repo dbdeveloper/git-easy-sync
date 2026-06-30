@@ -731,11 +731,25 @@ back-stack із 3 кроків / 3 view-types**:
   > singleton (інакше `[←]` не знає куди вертатись) — docs коректні, поведінка була ні.
   > **OPEN (user-ask):** «split → закривати ПОПЕРЕДНІЙ (=move editor у новий stack)?» — бажано, але
   > безпечний move потребує session-handoff (2 owners на 1 autosave-dir = write-race); зараз = safe
-  > refuse. Рішення винесено користувачу.
-- **S6 — slim panel + cleanup.** Клас `DiffEditView`→`DiffPanelView` (рядок `diff2-edit-view`
-  СТАЛИЙ); видалити мертвий detail-код (renderDetail/mountDiffPane/exitDetailView — уже в
-  контролері); register обидва типи; `activateDiffEditView`→reveal singleton-панель;
-  **editors детачаться на unload (ephemeral).** Acceptance = повний manual-checklist.
+  > refuse. **РІШЕННЯ (user 2026-06-30): handoff-move робимо через (a) replay-з-диску** (shutdown
+  > старого: drainHistory+dispose; startup нового: silent resume-mount, БЕЗ модалки) — надійно, хай і
+  > повільно; рідко використовується; при переносі показувати модалку **"moving…"**. memory→memory
+  > (перенос живого `EditorState` doc+Ranges+undo через reconfigure) = майбутня оптимізація (заодно
+  > закриє recovery-replay perf із TODO), АЛЕ ризик тихого псування undo → не зараз. relocate-API (B1)
+  > ВІДКИНУТО: Obsidian 1.7.2 не має `moveLeaf`/`setParent` (тільки `moveLeafToPopout`). **Handoff =
+  > ОКРЕМА сесія ПІСЛЯ S6** (/advisor + device-тести; failure-mode = втрата даних).
+- **S6 — slim panel + cleanup. ✅ DONE (2026-06-30).** Клас `DiffEditView`→**`DiffPanelView`** (рядок
+  `diff2-edit-view` СТАЛИЙ; main.ts import/registerView/instanceof оновлено). Панель тепер ЧИСТО
+  list-view: видалено мертвий detail-код — `DiffDetailController` поле + усі 3 `DiffDetailHost`-
+  callback-и (isStillTargeting/onLeaveDetail/onCommitExit) + Mod+F-hook + escScope/syncEscScope +
+  dynamic `getDisplayText`-flip + `refreshHeader`-hack + detail-гілка `render()` + detail-варіант
+  viewState (тепер `PanelViewState{tab}`). Лишилось: singleton-guard, ConflictCounter-subscribe,
+  renderHeader/renderListBody (row-click→`openEditor`), `applyBackNav`+`scrollToBase` (S5). Static
+  `getDisplayText`="Diff Panel" (title-спрощення завершено). Контролер живе далі (юзає лише editor) —
+  байт-незмінний через УСІ 5 стейджів. Stale comment-refs `DiffEditView`→`DiffPanelView` (current-
+  tense) виправлено; historical лишені. tsc + **1624 green**, mobile-safe. Acceptance manual-checklist
+  = device (deferred). **🎉 PHASE-1A split COMPLETE (S1–S6).** Лишилось: 1B (persistence), handoff-move
+  (окремо), History/Compare/Deleted фази.
 
 **Manual parity-checklist (писати в S2, ганяти на S2 ДО/ПІСЛЯ + як S6-acceptance):**
 1. open → resolve групи → `[←]` → повертає в список (S2: у той самий таб; S5+: detach+панель).

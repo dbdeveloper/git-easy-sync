@@ -21,7 +21,7 @@ import { formatConflictTimestamp } from "./strip-conflict-suffix";
 
 export interface ConflictsListCallbacks {
   // Fires when user clicks a sibling row. Receives base + sibling
-  // paths so the caller (DiffEditView) can push detail-view state.
+  // paths so the caller (DiffPanelView) can open a diff2-editor tab for the pair.
   onEntryClick: (entry: ConflictEntry) => void;
 }
 

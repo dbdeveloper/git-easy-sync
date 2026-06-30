@@ -2,7 +2,7 @@
 // docs/tasks/SPLIT-PANEL-EDITOR-FEASIBILITY.md §12).
 //
 // One `diff2-editor-view` leaf per `base:sibling` pair (Option A, R-A). It reuses
-// the SAME `DiffDetailController` as the singleton panel host (`DiffEditView`) —
+// the SAME `DiffDetailController` as the singleton panel host (`DiffPanelView`) —
 // the proof the S2 seam was right is that this host needs ZERO controller changes:
 // the only difference is the navigation callbacks. Where the panel host renders a
 // list on `[←]` / cancel, this host DETACHES its leaf (the editor is pure detail —
