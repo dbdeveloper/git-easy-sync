@@ -174,58 +174,66 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     }
     this.mounting = true;
 
-    const entry = entryFromSibling(this.deps.conflictStore, siblingPath);
-    if (!entry) {
-      // Not a `*.conflict-from-*` sibling (stale / hand-edited state) — nothing to
-      // resolve. Detach so a dead tab doesn't linger.
-      new Notice("This diff-editor tab points at a file that is no longer a conflict.");
-      this.leaf.detach();
-      return;
-    }
+    // The async portion (an adapter.exists check) is wrapped so an unexpected rejection
+    // detaches the leaf rather than leaving a stuck blank editor (mounting=true, never
+    // mounted, never closed). The intentional detach-return paths below are unaffected.
+    try {
+      const entry = entryFromSibling(this.deps.conflictStore, siblingPath);
+      if (!entry) {
+        // Not a `*.conflict-from-*` sibling (stale / hand-edited state) — nothing to
+        // resolve. Detach so a dead tab doesn't linger.
+        new Notice("This diff-editor tab points at a file that is no longer a conflict.");
+        this.leaf.detach();
+        return;
+      }
 
-    // 1B — the conflict may have been RESOLVED between sessions: a crash mid-`[←]`-commit
-    // is finished by onload recoverCommit (sibling removed) BEFORE this restored tab
-    // mounts, so a restored editor can point at a now-gone conflict. Close cleanly rather
-    // than rendering a "Failed to load diff" error body. (Absent BASE is legit — a
-    // delete-vs-modify conflict; mount reads "" for it. Only an absent SIBLING means
-    // "resolved → gone".)
-    if (!(await this.deps.vault.adapter.exists(siblingPath))) {
-      this.leaf.detach();
-      return;
-    }
+      // 1B — the conflict may have been RESOLVED between sessions: a crash mid-`[←]`-commit
+      // is finished by onload recoverCommit (sibling removed) BEFORE this restored tab
+      // mounts, so a restored editor can point at a now-gone conflict. Close cleanly rather
+      // than rendering a "Failed to load diff" error body. (Absent BASE is legit — a
+      // delete-vs-modify conflict; mount reads "" for it. Only an absent SIBLING means
+      // "resolved → gone".)
+      if (!(await this.deps.vault.adapter.exists(siblingPath))) {
+        this.leaf.detach();
+        return;
+      }
 
-    // DUPLICATE guard for a full-state clone (split/open-in-new-window): scan for a LIVE
-    // editor already holding this pair (same autosaveId — the key the open-guard uses) and,
-    // if found, this leaf is the clone → close it and focus the original. The original is
-    // already mounted (never re-runs tryMount), so there is no mutual-suicide. MUST run
-    // before controller.mount touches the shared dir. (On a restart, restored editors have
-    // UNIQUE pairs → no false match.)
-    const autosaveId = autosaveIdForEntry(entry);
-    const original = this.app.workspace
-      .getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE)
-      .find(
-        (l) =>
-          l !== this.leaf &&
-          l.view instanceof DiffEditorView &&
-          l.view.openDesc()?.autosaveId === autosaveId,
-      );
-    if (original) {
-      new Notice("This conflict is already open in another diff-editor tab.");
-      this.leaf.detach();
-      this.app.workspace.revealLeaf(original);
-      if (original.view instanceof DiffEditorView) original.view.focusEditor();
-      return;
-    }
+      // DUPLICATE guard for a full-state clone (split/open-in-new-window): scan for a LIVE
+      // editor already holding this pair (same autosaveId — the key the open-guard uses)
+      // and, if found, this leaf is the clone → close it and focus the original. The
+      // original is already mounted (never re-runs tryMount), so there is no mutual-suicide.
+      // MUST run before controller.mount touches the shared dir. (On a restart, restored
+      // editors have UNIQUE pairs → no false match.)
+      const autosaveId = autosaveIdForEntry(entry);
+      const original = this.app.workspace
+        .getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE)
+        .find(
+          (l) =>
+            l !== this.leaf &&
+            l.view instanceof DiffEditorView &&
+            l.view.openDesc()?.autosaveId === autosaveId,
+        );
+      if (original) {
+        new Notice("This conflict is already open in another diff-editor tab.");
+        this.leaf.detach();
+        this.app.workspace.revealLeaf(original);
+        if (original.view instanceof DiffEditorView) original.view.focusEditor();
+        return;
+      }
 
-    this.entry = entry;
-    this.mounted = true;
-    const container = this.contentEl;
-    container.empty();
-    container.addClass("diff2-edit-view-root");
-    // R-C2 — a restored leaf carries no `openMode` (getState strips it) → silent resume;
-    // a user-reopen has `openMode:"user"` → the ResumeRecoveryModal.
-    const silentResume = !this.state.openMode;
-    void this.controller.mount(container, entry, { silentResume });
+      this.entry = entry;
+      this.mounted = true;
+      const container = this.contentEl;
+      container.empty();
+      container.addClass("diff2-edit-view-root");
+      // R-C2 — a restored leaf carries no `openMode` (getState strips it) → silent resume;
+      // a user-reopen has `openMode:"user"` → the ResumeRecoveryModal.
+      const silentResume = !this.state.openMode;
+      void this.controller.mount(container, entry, { silentResume });
+    } catch (err) {
+      this.deps.logger?.info("diff2 editor tryMount failed — detaching", { err: String(err) });
+      this.leaf.detach();
+    }
   }
 
   async onClose(): Promise<void> {

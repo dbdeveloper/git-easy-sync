@@ -821,6 +821,17 @@ back-stack із 3 кроків / 3 view-types**:
   (Absent BASE = legit delete-vs-modify. async tryMount → `mounting`-flag проти double-mount race.)
 - **DEFER:** R3.7 last-editor-leaf-close→`resetLifts` — стосується лише Compare/Deleted (Phase 8/9b,
   ще не рендеряться); для conflict-only немає lifts → no-op. Закласти на тих фазах.
+- **🔴 LOAD-BEARING SAFETY VERIFIED (advisor, code-read):** silent-resume безпечний ТІЛЬКИ якщо
+  `recoverAutosaveDirs` НЕ свайпає здоровий parked dir (інакше invisible data-loss). Перевірено в
+  коді: `classifySweep` (autosave-cleanup.ts) для здорового dir (meta + ≥1 trustworthy edit + cursor-
+  слот + snapshots + inputs present + base≠sibling) → **`{action:"keep"}`** (жодна з 7 sweep-умов не
+  спрацьовує). `startSession` сідить `cursor-a` seq0 при створенні → cond-3 (no-cursor) ніколи не
+  свайпає живу сесію. Свайпаються лише нецінні (0 edits / corrupt-snapshot / input-missing / self-
+  resolved) = fresh-equivalent, без втрат. ⇒ restored editor знаходить dir цілим → replay → НЕМА
+  втрати даних.
+- **2 robustness-фікси (advisor):** (1) async `tryMount` обгорнуто try/catch → unexpected reject
+  (adapter.exists) → detach (а не stuck blank editor з mounting=true). (2) silent-path коментар:
+  НЕ wipe-ить fully-corrupt log (mount-ить snapshots, без втрат на clean restart; stale не lossy).
 
 **DEVICE-SMOKE (1B, deferred):** quit з N editors → restart → кожен SILENT resume (без модалки) з
 курсором; restart з кількома editors → усі restore, не refuse-detach один одного; close-x→reopen

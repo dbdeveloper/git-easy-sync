@@ -475,6 +475,9 @@ export class DiffDetailController {
             // the dry-run too (we don't display a count). Straight to mountReplayed, which
             // safely handles an empty/corrupt log (stop-at-error → safe prefix) and 0 edits
             // (snapshots == the unchanged vault). Halves the restart replay cost.
+            // NB: unlike the modal path, this does NOT wipe a fully-corrupt (0-recoverable)
+            // log — it mounts the snapshots (no loss on a clean restart) but leaves the bad
+            // log to be re-hit next restart. Stale, not lossy; acceptable for a rare crash.
             if (opts?.silentResume) {
               this.deps.logger?.info("diff2 resume → silent (restore)", { base: entry.basePath });
               await mountReplayed(sess, action.meta);
