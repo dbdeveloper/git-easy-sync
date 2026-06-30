@@ -479,16 +479,20 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
             this.plugin.restartSyncInterval();
           }),
       );
-    intervalSettings.setDisabled(
-      this.plugin.settings.syncStrategy !== "interval",
-    );
+    // "Sync interval" only makes sense for the interval strategy — HIDE it (not just
+    // grey it out) under "Manually", and reveal it when "On Interval" is chosen (or was
+    // already set). Toggled here on initial render + in the strategy dropdown's onChange.
+    const setIntervalVisible = (show: boolean) => {
+      intervalSettings.settingEl.style.display = show ? "" : "none";
+    };
+    setIntervalVisible(this.plugin.settings.syncStrategy === "interval");
 
     uploadStrategySetting.addDropdown((dropdown) =>
       dropdown
         .addOptions(syncStrategies)
         .setValue(this.plugin.settings.syncStrategy)
         .onChange(async (value: keyof typeof syncStrategies) => {
-          intervalSettings.setDisabled(value !== "interval");
+          setIntervalVisible(value === "interval");
           this.plugin.settings.syncStrategy = value;
           await this.plugin.saveSettings();
           if (value === "interval") {
