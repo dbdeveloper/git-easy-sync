@@ -4,6 +4,7 @@ import {
   openGuard,
   openDescFor,
   alignOpenDescs,
+  planBackNav,
   type OpenEditorDesc,
 } from "../../src/diff2/editor-tabs";
 
@@ -138,6 +139,32 @@ describe("alignOpenDescs (index-alignment invariant)", () => {
     expect(openGuard(open, { autosaveId: "pB", writeSet: b.writeSet })).toEqual({
       action: "focus",
       which: 2,
+    });
+  });
+});
+
+describe("planBackNav (S5 `[←]` routing, R-D)", () => {
+  it("conflict + base still has siblings → panel:conflicts, scroll to the base group", () => {
+    expect(planBackNav("conflict", "Notes/a.md", true)).toEqual({
+      kind: "panel",
+      tab: "conflicts",
+      scrollToBase: "Notes/a.md",
+    });
+  });
+
+  it("conflict + last sibling resolved → panel:conflicts, no scroll (just focus)", () => {
+    expect(planBackNav("conflict", "Notes/a.md", false)).toEqual({
+      kind: "panel",
+      tab: "conflicts",
+      scrollToBase: null,
+    });
+  });
+
+  it("deleted → panel:deleted (forward-design; never scrolls a base group)", () => {
+    expect(planBackNav("deleted", "Notes/a.md", true)).toEqual({
+      kind: "panel",
+      tab: "deleted",
+      scrollToBase: null,
     });
   });
 });

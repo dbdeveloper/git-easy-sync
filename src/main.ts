@@ -52,6 +52,8 @@ import {
   alignOpenDescs,
   openDescFor,
   openGuard,
+  planBackNav,
+  type DiffEditorOrigin,
   type EditorTabState,
 } from "./diff2/editor-tabs";
 import { EditorBusyModal } from "./diff2/recovery-dialog";
@@ -1874,7 +1876,7 @@ export default class GitHubSyncPlugin extends Plugin {
   // leaf if one is already open (single-view model — R2.0). Standard
   // Obsidian pattern: query workspace.getLeavesOfType, fall back to
   // getLeaf("tab") + setViewState. Returns once the leaf is revealed.
-  async activateDiffEditView(): Promise<void> {
+  async activateDiffEditView(): Promise<WorkspaceLeaf> {
     const { workspace } = this.app;
     let leaf = workspace.getLeavesOfType(DIFF2_EDIT_VIEW_TYPE)[0];
     if (!leaf) {
@@ -1882,6 +1884,22 @@ export default class GitHubSyncPlugin extends Plugin {
       await leaf.setViewState({ type: DIFF2_EDIT_VIEW_TYPE, active: true });
     }
     workspace.revealLeaf(leaf);
+    return leaf;
+  }
+
+  // S5 — the editor's `[←]` committed: navigate back to the singleton panel and scroll
+  // to the resolved base group (R-D). `baseHasConflicts` is read AFTER the commit, so a
+  // base whose last sibling was just resolved → no scroll (planBackNav returns null).
+  private async onEditorCommitted(
+    origin: DiffEditorOrigin,
+    anchorPath: string,
+  ): Promise<void> {
+    const baseHasConflicts = findAllConflicts(this.app.vault, this.conflictStore).byBasePath.has(
+      anchorPath,
+    );
+    const nav = planBackNav(origin, anchorPath, baseHasConflicts);
+    const leaf = await this.activateDiffEditView();
+    if (leaf.view instanceof DiffEditView) leaf.view.applyBackNav(nav);
   }
 
   // The dependency object both diff2 hosts take. Live-reads settings via thunks so
@@ -1904,6 +1922,8 @@ export default class GitHubSyncPlugin extends Plugin {
       // S4 — the panel's conflicts-list routes a row-click here instead of its own
       // (now-bypassed, S6-deleted) detail-mode.
       openEditor: (entry) => void this.openEditorForPair(entry),
+      // S5 — the editor's `[←]` routes here to navigate back to the panel.
+      onEditorCommitted: (origin, anchorPath) => void this.onEditorCommitted(origin, anchorPath),
     };
   }
 

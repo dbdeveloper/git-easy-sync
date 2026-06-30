@@ -8,6 +8,7 @@
 // without a workspace.
 //
 import { normalizePath } from "obsidian";
+import type { DiffEditSubTab } from "./events";
 
 // §8 / §10 — where a diff2-editor came from. Routes `[←]` navigation (R-D) and
 // selects the write-set (below). Phase 1 only ever constructs `conflict`; the
@@ -64,6 +65,39 @@ export function writeSetFor(
     case "compare":
       return [base, sibling]; // provisional — Compare phase revisits (edit-target only)
   }
+}
+
+// ── `[←]` back-navigation (R-D, S5) ─────────────────────────────────────────
+// Where the editor's `[←]` lands after a commit, by origin. Pure — main.ts computes
+// `baseHasConflicts` (impure, via findAllConflicts) and EXECUTES the result (reveal
+// the panel leaf + sub-tab + scroll).
+
+export interface BackNav {
+  // Phase 1's only target: the singleton diff-panel. (history → diff2-history /
+  // compare → a file tab will add their own BackNav kinds when those phases land.)
+  kind: "panel";
+  tab: DiffEditSubTab;
+  // The base group to scroll to (conflict origin, base still has siblings), or null
+  // → just focus the list (the last sibling was resolved, the row is gone).
+  scrollToBase: string | null;
+}
+
+export function planBackNav(
+  origin: DiffEditorOrigin,
+  anchorPath: string,
+  baseHasConflicts: boolean,
+): BackNav {
+  if (origin === "deleted") return { kind: "panel", tab: "deleted", scrollToBase: null };
+  // conflict (Phase 1) → panel:Conflicts, scroll to the base group if it still has
+  // siblings (R-D), else just focus.
+  // 🔴 history/compare MUST add their own branch here (compare → a normal file tab,
+  // history → diff2-history per the R-D table) — this conflicts-panel fallback is
+  // WRONG for them; it is only safe because Phase 1 never constructs those origins.
+  return {
+    kind: "panel",
+    tab: "conflicts",
+    scrollToBase: baseHasConflicts ? anchorPath : null,
+  };
 }
 
 // ── open-guard core (R-B) ───────────────────────────────────────────────────

@@ -696,11 +696,28 @@ back-stack із 3 кроків / 3 view-types**:
   > (user device-bug 2026-06-30) — `revealLeaf` на вже-відкритий таб активує таб, але НЕ ставить
   > caret у текст (треба було клікати мишкою); `DiffEditorView.focusEditor()` (rAF-deferred
   > `getView().focus()`) + `revealAndFocusEditor` у focus+switch гілках.
-- **S5 — `[←]` close+navigate.** `onExitComplete` (editor host) після успіху: **null
-  `activeSession` ПЕРЕД `detach()`** (бо `detach()`→`onClose`→`disposeOwner` має побачити
-  no-session і пропустити abandon-wipe — commit уже прибрав dir), тоді `leaf.detach()` +
-  reveal `diff2-edit-view` панель + скрол на base-групу (+ правило «зник останній sibling →
-  просто фокус панелі»).
+- **S5 — `[←]` close+navigate. ✅ DONE (2026-06-30).** Pure `planBackNav(origin,anchorPath,
+  baseHasConflicts)` (editor-tabs.ts, +3 tests): conflict→`{panel,conflicts,scrollToBase:
+  hasConflicts?anchor:null}`, deleted→`{panel,deleted,null}` (history/compare = TODO-гілка, fallback
+  WRONG для них, safe бо Phase-1 не конструює). Editor `onCommitExit(entry)`: capture origin зі state
+  → `leaf.detach()` → `deps.onEditorCommitted(origin, entry.basePath)`. activeSession контролер УЖЕ
+  нулить перед host-callback (S2) → detach→dispose пропускає abandon-wipe (verified, не дублюю null).
+  Panel `applyBackNav(nav)` → set list+tab + render + `scrollToBase` (**rAF-deferred** — panel щойно
+  revealed/re-rendered, sync scrollIntoView no-op/mis-target; `row?.`=last-sibling-gone no-op).
+  main.ts: `activateDiffEditView` повертає leaf; `onEditorCommitted` рахує baseHasConflicts через
+  `findAllConflicts.byBasePath` → planBackNav → reveal panel → applyBackNav. Controller байт-незмінний.
+  tsc + **1624 green**.
+  > **🔴 DUP-GUARDS (device-bug, той самий блок) — split/clone дублювання НЕДОПУСТИМЕ:**
+  > (1) **editor:** `getState` override ВИКИНУТО (вертає Obsidian-default `{}`) → Obsidian "Split"/
+  > "Open in new window" серіалізує порожній стан у клон → `tryMount` unusable-state гілка тепер
+  > **DETACH+Notice** (а не silent return) → клон закривається, оригінал працює. Наслідок: leaf-MOVE
+  > теж втрачає пару (reopen з панелі) — прийнятно (no-dup = hard вимога, move-preservation = nicety).
+  > (2) **panel:** singleton guard у `onOpen` (scan `getLeavesOfType` → інший leaf → reveal original +
+  > detach self), `onClose` `controller?.dispose()` null-safe. User-ствердив: panel ОБОВ'ЯЗКОВО
+  > singleton (інакше `[←]` не знає куди вертатись) — docs коректні, поведінка була ні.
+  > **OPEN (user-ask):** «split → закривати ПОПЕРЕДНІЙ (=move editor у новий stack)?» — бажано, але
+  > безпечний move потребує session-handoff (2 owners на 1 autosave-dir = write-race); зараз = safe
+  > refuse. Рішення винесено користувачу.
 - **S6 — slim panel + cleanup.** Клас `DiffEditView`→`DiffPanelView` (рядок `diff2-edit-view`
   СТАЛИЙ); видалити мертвий detail-код (renderDetail/mountDiffPane/exitDetailView — уже в
   контролері); register обидва типи; `activateDiffEditView`→reveal singleton-панель;

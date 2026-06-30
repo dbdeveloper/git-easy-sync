@@ -74,15 +74,13 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     return `${e.basePath} · ${e.deviceLabel} @ ${formatConflictTimestamp(e.isoTimestamp)}`;
   }
 
-  // getState/setState — Obsidian serializes a leaf to workspace.json on every layout
-  // change and rebuilds it from that state on an in-session leaf-move (e.g. dragging
-  // the tab into a split). Returning the live state preserves the pair across such a
-  // move. (1B adds restart-restore by dropping the unload-detach + registering for
-  // restore; this in-session getState is the smaller, separable need.)
-  getState(): Record<string, unknown> {
-    return (this.state ?? {}) as unknown as Record<string, unknown>;
-  }
-
+  // NB: getState is INTENTIONALLY NOT overridden (it returns Obsidian's empty default).
+  // A diff-editor must never DUPLICATE a pair — two leaves on one autosave dir = the §3
+  // write-race. Obsidian's "Split right/down" / "Open in new window" clone a leaf by
+  // serializing getState() into a new leaf; with no real state to clone, the clone lands
+  // in tryMount's unusable-state branch and closes itself. The cost is that an in-session
+  // leaf-MOVE (drag) also loses the pair — accepted: the user reopens it from the panel
+  // (no-dup is the hard requirement, leaf-move-preservation was only a nicety).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async setState(state: any, result: unknown): Promise<void> {
     this.state = state as EditorTabState;
@@ -148,11 +146,18 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   // either entry point calls this and the mounted-guard makes the later one a no-op.
   private tryMount(): void {
     if (this.mounted || !this.controller || !this.state) return;
-    // Untrusted state: a moved leaf is rebuilt via setState({}) before the real state
-    // lands, so siblingPath may be missing — entryFromSibling → parseSiblingFilename
-    // THROWS on a non-string. Guard, then close cleanly if the pair is unusable.
+    // A present-but-unusable state = a CLONE: Obsidian "Split"/"Open in new window"
+    // serialize the (empty default) getState into a new leaf; a moved leaf rebuilds the
+    // same way. siblingPath is missing → entryFromSibling → parseSiblingFilename THROWS
+    // on a non-string anyway. A diff-editor must never duplicate a pair (§3 write-race),
+    // so refuse: close this leaf. (Initial opens go through openEditorForPair, which
+    // passes a full state via setViewState — they never hit this branch.)
     const siblingPath = this.state.siblingPath;
-    if (typeof siblingPath !== "string" || !siblingPath) return;
+    if (typeof siblingPath !== "string" || !siblingPath) {
+      new Notice("A diff-editor tab can't be split or duplicated. Reopen it from the Diff Panel.");
+      this.leaf.detach();
+      return;
+    }
 
     const entry = entryFromSibling(this.deps.conflictStore, siblingPath);
     if (!entry) {
@@ -219,10 +224,14 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     this.leaf.detach();
   }
 
-  // `[←]` committed → close the tab. S5 specializes this to detach + reveal the
-  // panel + scroll to the base group (origin-routed via this.state.origin); S3 just
-  // closes the editor.
-  onCommitExit(_entry: ConflictEntry): void {
+  // `[←]` committed → close the tab + navigate back (R-D, S5). Capture the origin
+  // BEFORE detach (this.leaf/state vanish); the host (main.ts) reveals the panel and
+  // scrolls to the base group. For a conflict the anchor is the base just committed.
+  // The controller already nulled its activeSession before calling this, so
+  // detach → onClose → dispose skips the §4.1 abandon-wipe (the commit removed the dir).
+  onCommitExit(entry: ConflictEntry): void {
+    const origin = this.state?.origin ?? "conflict";
     this.leaf.detach();
+    this.deps.onEditorCommitted?.(origin, entry.basePath);
   }
 }

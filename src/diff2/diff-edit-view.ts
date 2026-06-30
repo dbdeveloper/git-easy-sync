@@ -46,6 +46,7 @@ import {
   DiffDetailController,
   type DiffDetailHost,
 } from "./diff-detail-controller";
+import type { BackNav, DiffEditorOrigin } from "./editor-tabs";
 
 export const DIFF2_EDIT_VIEW_TYPE = "diff2-edit-view";
 
@@ -78,6 +79,10 @@ export interface DiffEditViewDeps {
   // detail-mode is bypassed (dead code until the S6 slim-down). Optional so test
   // fixtures / the editor host (which never lists) can omit it.
   openEditor?: (entry: ConflictEntry) => void;
+  // S5 — the editor host calls this on a committed `[←]` so the host (main.ts) can
+  // navigate back: reveal the singleton panel + scroll to the base group (R-D). origin
+  // routes the destination; anchorPath = base for a conflict.
+  onEditorCommitted?: (origin: DiffEditorOrigin, anchorPath: string) => void;
 }
 
 // Phase 1 owns the navigation state machine inside the view: which
@@ -151,6 +156,21 @@ export class DiffEditView extends ItemView implements DiffDetailHost {
   }
 
   async onOpen(): Promise<void> {
+    // Singleton (R-A): exactly ONE diff-panel per vault — the editor's `[←]` reveals
+    // "the" panel, so a second one would make back-navigation ambiguous. Obsidian
+    // "Split"/"Open in new window" clone the view into a new leaf; if another panel
+    // already exists, this leaf is the clone → reveal the original and close this one.
+    // (activateDiffEditView reveals-or-creates a single leaf, so this only fires on an
+    // Obsidian-initiated duplicate.)
+    const existing = this.app.workspace
+      .getLeavesOfType(DIFF2_EDIT_VIEW_TYPE)
+      .find((l) => l !== this.leaf);
+    if (existing) {
+      this.app.workspace.revealLeaf(existing);
+      this.leaf.detach();
+      return;
+    }
+
     // S2 — create the per-view detail engine before the first render (render() disposes
     // it at the top; on a list-mode open that is a no-op).
     this.controller = new DiffDetailController(this.app, this.deps, this);
@@ -246,7 +266,8 @@ export class DiffEditView extends ItemView implements DiffDetailHost {
       this.escScopePushed = false;
     }
     this.escScope = null;
-    this.controller.dispose();
+    // `?.` — a duplicate panel detached itself in onOpen before creating the controller.
+    this.controller?.dispose();
   }
 
   // ── DiffDetailHost — the navigation seam the controller calls back through ──
@@ -272,6 +293,30 @@ export class DiffEditView extends ItemView implements DiffDetailHost {
   onCommitExit(_entry: ConflictEntry): void {
     this.viewState = { mode: "list", tab: "conflicts" };
     this.render();
+  }
+
+  // S5 — execute a back-nav the editor host produced via planBackNav: switch to the
+  // sub-tab, re-render the (now-fresher) list, and scroll to the resolved base group.
+  applyBackNav(nav: BackNav): void {
+    this.viewState = { mode: "list", tab: nav.tab };
+    this.render();
+    if (nav.scrollToBase) this.scrollToBase(nav.scrollToBase);
+  }
+
+  // Scroll the conflicts list to a base group's first row. Deferred past layout: the
+  // panel was just revealed / re-rendered, so its geometry isn't measured yet and a
+  // synchronous scrollIntoView would no-op or mis-target (same reason the controller's
+  // auto-focus and the editor's focus-on-reveal defer). rAF also lets the ConflictCounter
+  // re-render settle first, so the scroll targets the final DOM. `row?.` covers "the base
+  // group is already gone" — the last-sibling-resolved path (planBackNav passed null, but
+  // a racing re-render can drop the row too) falls out as a no-op.
+  private scrollToBase(basePath: string): void {
+    requestAnimationFrame(() => {
+      const row = this.contentEl.querySelector<HTMLElement>(
+        `.diff2-conflicts-row[data-base-path="${CSS.escape(basePath)}"]`,
+      );
+      row?.scrollIntoView({ block: "center" });
+    });
   }
 
   // ── render dispatch ───────────────────────────────────────────────
