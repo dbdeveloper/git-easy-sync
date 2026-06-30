@@ -536,10 +536,12 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Auto-canonicalize text files")
       .setDesc(
-        "When ON, the plugin rewrites text files locally to " +
+        "When ON, the plugin rewrites your vault's text files locally to " +
           "LF line endings, strips UTF-8 BOM, and ensures a trailing " +
           "newline — both on pull (after fetching from GitHub) and on " +
           "commit (before snapshotting your edits into the queue). " +
+          "Applies ONLY to files you edit; Obsidian's own config under " +
+          ".obsidian/ is left byte-exact. " +
           "Turn OFF to preserve byte-exact text round-trips (e.g., for " +
           "a Windows-shared repo that expects CRLF, or files whose " +
           "exact trailing-newline matters).",

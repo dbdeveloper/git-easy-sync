@@ -3,9 +3,9 @@
 // AGPL-3.0 — see LICENSE.
 
 import { Vault } from "obsidian";
-import { calculateGitBlobSHA, hasTextExtension } from "../utils";
+import { calculateGitBlobSHA } from "../utils";
 import WorkerClient from "../worker/worker-client";
-import { normalizeText } from "./text-normalize";
+import { normalizeText, shouldCanonicalize } from "./text-normalize";
 import { newBatchId, parseTimestampId } from "./timestamp-id";
 import { FileChange, QueueBatch } from "./types";
 
@@ -75,6 +75,7 @@ export interface PushQueueDeps {
 export default class PushQueue {
   private readonly vault: Vault;
   private readonly queueRoot: string;
+  private readonly configDir: string;
   private readonly now: () => Date;
   private readonly autoCanonicalize: () => boolean;
   private readonly workerClient: WorkerClient;
@@ -88,6 +89,7 @@ export default class PushQueue {
   constructor(deps: PushQueueDeps) {
     this.vault = deps.vault;
     this.queueRoot = `${deps.configDir}/plugins/${deps.selfPluginId}/${QUEUE_DIRNAME}`;
+    this.configDir = deps.configDir;
     this.now = deps.now ?? (() => new Date());
     this.autoCanonicalize = deps.autoCanonicalize ?? (() => true);
     this.workerClient = deps.workerClient ?? new WorkerClient();
@@ -546,7 +548,7 @@ export default class PushQueue {
     const batchDir = `${this.queueRoot}/${id}`;
     const targetPath = `${batchDir}/${VAULT_SUBDIR}/${path}`;
     await this.ensureParentDir(targetPath);
-    if (hasTextExtension(path) && this.autoCanonicalize()) {
+    if (shouldCanonicalize(path, this.configDir) && this.autoCanonicalize()) {
       // Caller (Sync2Manager during cascade-rebase) hands us merged text
       // from a 3-way merge. Inputs to that merge come through the same
       // normalizeText pipeline, so the merge output is usually canonical
@@ -606,7 +608,7 @@ export default class PushQueue {
   ): Promise<void> {
     const target = `${batchDir}/${VAULT_SUBDIR}/${vaultPath}`;
     await this.ensureParentDir(target);
-    if (hasTextExtension(vaultPath) && this.autoCanonicalize()) {
+    if (shouldCanonicalize(vaultPath, this.configDir) && this.autoCanonicalize()) {
       // Text canonicalisation. Read live bytes, normalize to LF +
       // no-BOM + trailing-NL-iff-non-empty. The snapshot stores the
       // canonical form so TreeBuilder uploads canonical bytes to

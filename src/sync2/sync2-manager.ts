@@ -51,7 +51,7 @@ import { ConflictCounter } from "./conflict-counter";
 import { buildConflictBranchName } from "./conflict-branch";
 import { newBatchId } from "./timestamp-id";
 import type { TrashHooks } from "./trash-hooks";
-import { normalizeText } from "./text-normalize";
+import { normalizeText, shouldCanonicalize } from "./text-normalize";
 import { FileChange, QueueBatch } from "./types";
 
 // ── Skip-class taxonomy (SYNC2 §6 + §7.5) ─────────
@@ -1683,7 +1683,7 @@ export class Sync2Manager {
         // pretending they're user content — exactly the surprise
         // 96-file re-push reported on first Android setup.
         if (
-          hasTextExtension(filePath) &&
+          shouldCanonicalize(filePath, this.configDir) &&
           this.autoCanonicalize() &&
           (await this.canonicalMatchesLocal(filePath, item.sha, localSha))
         ) {
@@ -2549,7 +2549,12 @@ export class Sync2Manager {
         `Sync2 internal: writeRemoteText called with non-text path ${path}`,
       );
     }
-    const canonicalize = this.autoCanonicalize();
+    // hasTextExtension is already guaranteed by the routing guard above; the remaining
+    // decision is the setting AND the config-dir exclusion (this is the pull-side write
+    // — it MUST match the push-side path set in shouldCanonicalize, or a config file
+    // would oscillate between canonical (one side) and raw (the other) forever).
+    const canonicalize =
+      this.autoCanonicalize() && shouldCanonicalize(path, this.configDir);
     const { content: canonical, changed } = canonicalize
       ? normalizeText(content)
       : { content, changed: false };
