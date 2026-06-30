@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   writeSetFor,
   openGuard,
+  openDescFor,
+  alignOpenDescs,
   type OpenEditorDesc,
 } from "../../src/diff2/editor-tabs";
 
@@ -92,6 +94,50 @@ describe("openGuard", () => {
       action: "dialog",
       busyFile: "a.md",
       which: 0,
+    });
+  });
+});
+
+describe("openDescFor (the S4 write-set chokepoint)", () => {
+  it("builds the write-set via writeSetFor (normalized) and threads autosaveId", () => {
+    // Backslash input → normalized output (proves it goes through writeSetFor, not
+    // raw paths — the carry-flag the open-guard depends on).
+    expect(openDescFor("conflict", "Notes\\a.md", "Notes\\a.conflict-from-X.md", "id-7")).toEqual({
+      autosaveId: "id-7",
+      writeSet: ["Notes/a.md", "Notes/a.conflict-from-X.md"],
+    });
+  });
+
+  it("matches the bare writeSetFor for every origin (single source of truth)", () => {
+    for (const origin of ["conflict", "history", "deleted", "compare"] as const) {
+      expect(openDescFor(origin, "a.md", "b.md", "x").writeSet).toEqual(
+        writeSetFor(origin, "a.md", "b.md"),
+      );
+    }
+  });
+});
+
+describe("alignOpenDescs (index-alignment invariant)", () => {
+  it("keeps array length + indices (null → inert slot), NEVER drops", () => {
+    const a = openDescFor("conflict", "a.md", "a.conflict-from-X.md", "pA");
+    const b = openDescFor("conflict", "b.md", "b.conflict-from-Y.md", "pB");
+    const aligned = alignOpenDescs([a, null, b]);
+    expect(aligned).toHaveLength(3); // NOT 2 — the .filter(Boolean) trap
+    expect(aligned[0]).toBe(a);
+    expect(aligned[2]).toBe(b);
+    // The inert middle slot never matches anything.
+    expect(aligned[1]).toEqual({ autosaveId: "", writeSet: [] });
+  });
+
+  it("a request matching the LAST real desc resolves which against the aligned (un-filtered) array", () => {
+    const a = openDescFor("conflict", "a.md", "a.conflict-from-X.md", "pA");
+    const b = openDescFor("conflict", "b.md", "b.conflict-from-Y.md", "pB");
+    // Leaf 1 is mid-open (null). The guard's `which` must still point at leaf index 2,
+    // which is only true because alignOpenDescs preserved the slot.
+    const open = alignOpenDescs([a, null, b]);
+    expect(openGuard(open, { autosaveId: "pB", writeSet: b.writeSet })).toEqual({
+      action: "focus",
+      which: 2,
     });
   });
 });

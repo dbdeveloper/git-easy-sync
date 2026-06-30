@@ -48,8 +48,18 @@ import { recoverAutosaveDirs } from "./diff2/onload-recovery";
 import { setAutosaveRoot } from "./diff2/autosave-store";
 import { DiffEditView, DIFF2_EDIT_VIEW_TYPE, type DiffEditViewDeps } from "./diff2/diff-edit-view";
 import { DiffEditorView, DIFF2_EDITOR_VIEW_TYPE } from "./diff2/diff-editor-view";
-import type { EditorTabState } from "./diff2/editor-tabs";
-import { findAllConflicts, type ConflictEntry } from "./diff2/synthetic-detector";
+import {
+  alignOpenDescs,
+  openDescFor,
+  openGuard,
+  type EditorTabState,
+} from "./diff2/editor-tabs";
+import { EditorBusyModal } from "./diff2/recovery-dialog";
+import {
+  autosaveIdForEntry,
+  findAllConflicts,
+  type ConflictEntry,
+} from "./diff2/synthetic-detector";
 import { TokenExpiredModal } from "./sync2/views/token-expired-modal";
 import { CancelSyncModal } from "./sync2/views/cancel-sync-modal";
 import { AuthError } from "./errors";
@@ -437,21 +447,6 @@ export default class GitHubSyncPlugin extends Plugin {
         id: "diff-edit-show-history",
         name: "Show history of active file",
         callback: () => this.activateDiffEditView(),
-      });
-      // S3 TEMP smoke command — opens the first conflict in a `diff2-editor-view`
-      // tab. S4 replaces this with the conflicts-list row-click + open-guard;
-      // remove this command then.
-      this.addCommand({
-        id: "diff2-open-first-conflict-editor",
-        name: "Open first conflict in editor (S3 smoke)",
-        callback: () => {
-          const { entries } = findAllConflicts(this.app.vault, this.conflictStore);
-          if (entries.length === 0) {
-            new Notice("No conflicts to open.");
-            return;
-          }
-          void this.openEditorForPair(entries[0]);
-        },
       });
 
       this.logger.info(
@@ -1906,14 +1901,48 @@ export default class GitHubSyncPlugin extends Plugin {
       diffWordLevel: () => this.settings.diffEditorDiffMode === "words",
       // §2.2.15 Auto-focus default (toggleable per-document in the toolbar).
       autoFocus: () => this.settings.diffEditorAutoFocus ?? true,
+      // S4 — the panel's conflicts-list routes a row-click here instead of its own
+      // (now-bypassed, S6-deleted) detail-mode.
+      openEditor: (entry) => void this.openEditorForPair(entry),
     };
   }
 
-  // Open a `diff2-editor-view` tab for one conflict pair (S3). S4 adds the open-guard
-  // (focus an already-open same pair / dialog on a partial write-set overlap) over
-  // `getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE)`; for now it always opens a fresh tab.
+  // Open a `diff2-editor-view` tab for one conflict pair, behind the write-set
+  // open-guard (SPLIT-PANEL-EDITOR-FEASIBILITY.md §3 R-B):
+  //   - same pair already open → focus it (no new tab, no dialog);
+  //   - a DIFFERENT pair sharing a file → EditorBusyModal [Switch]/[Cancel];
+  //   - otherwise → a fresh tab.
+  // The descriptor array MUST stay index-aligned with `getLeavesOfType` so the
+  // guard's `which` resolves to the right leaf — `alignOpenDescs` enforces that
+  // (never `.filter`). Both the request and every open descriptor route through
+  // `openDescFor` so the overlap compare only ever sees normalized write-sets.
   async openEditorForPair(entry: ConflictEntry): Promise<void> {
     const { workspace } = this.app;
+    const leaves = workspace.getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE);
+    const open = alignOpenDescs(
+      leaves.map((l) => (l.view instanceof DiffEditorView ? l.view.openDesc() : null)),
+    );
+    const req = openDescFor(
+      "conflict",
+      entry.basePath,
+      entry.siblingPath,
+      autosaveIdForEntry(entry),
+    );
+    const result = openGuard(open, req);
+
+    if (result.action === "focus") {
+      workspace.revealLeaf(leaves[result.which]);
+      return;
+    }
+    if (result.action === "dialog") {
+      const choice = await new EditorBusyModal(this.app, result.busyFile).prompt();
+      // Between building `open[]` and the click the target leaf could be closed;
+      // revealLeaf on a detached leaf is a benign Obsidian no-op.
+      if (choice === "switch") workspace.revealLeaf(leaves[result.which]);
+      return;
+    }
+
+    // result.action === "open"
     const leaf = workspace.getLeaf("tab");
     const state: EditorTabState = {
       origin: "conflict",

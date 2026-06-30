@@ -1,9 +1,15 @@
-// Recovery / exit-TOCTOU dialogs (DIFF-EDITOR.md §3.2 / §3.2.a / §5.0.e).
+// Diff-editor dialogs.
 //
+// Recovery / exit-TOCTOU (DIFF-EDITOR.md §3.2 / §3.2.a / §5.0.e):
 // ResumeRecoveryModal — interrupted-session resume (§3.2, reused by §3.2.a).
 // SaveToAltModal       — both vault inputs changed under the session, on `[←]`
 //                        exit (§5.0.e): save the resolution under a fresh name
 //                        (fail-closed on a colliding name) or discard.
+//
+// Open-guard (SPLIT-PANEL-EDITOR-FEASIBILITY.md §3 R-B, S4):
+// EditorBusyModal      — opening a pair whose write-set partially overlaps an
+//                        already-open diff-editor (a shared file): switch to that
+//                        tab, or cancel. The new tab is never opened either way.
 //
 // Both follow the proven `prompt(): Promise<choice>` pattern
 // (PreSyncConflictModal): the promise resolves on `onClose`, default choice is
@@ -73,6 +79,48 @@ export class EmptyDeleteModal extends Modal {
       const keep = row.createEl("button", { text: "Keep empty", cls: "mod-cta" });
       keep.addEventListener("click", () => {
         this.choice = "keep";
+        this.close();
+      });
+      const cancel = row.createEl("button", { text: "Cancel" });
+      cancel.addEventListener("click", () => {
+        this.choice = "cancel";
+        this.close();
+      });
+
+      this.open();
+    });
+  }
+}
+
+// §3 R-B (S4) — opening a pair that shares a file with an already-open diff-editor.
+export type EditorBusyChoice = "switch" | "cancel";
+
+export class EditorBusyModal extends Modal {
+  private choice: EditorBusyChoice = "cancel";
+
+  constructor(
+    app: App,
+    private readonly busyFile: string,
+  ) {
+    super(app);
+  }
+
+  prompt(): Promise<EditorBusyChoice> {
+    return new Promise((resolve) => {
+      this.onClose = () => resolve(this.choice);
+      const c = this.contentEl;
+      this.titleEl.setText("File already open in a diff-editor");
+      c.empty();
+
+      c.createEl("p").setText(
+        `"${this.busyFile}" is being resolved in another diff-editor tab. ` +
+          "Finish there first, or switch to it now.",
+      );
+
+      const row = c.createDiv({ cls: "modal-button-container" });
+      const sw = row.createEl("button", { text: "Switch to that tab", cls: "mod-cta" });
+      sw.addEventListener("click", () => {
+        this.choice = "switch";
         this.close();
       });
       const cancel = row.createEl("button", { text: "Cancel" });

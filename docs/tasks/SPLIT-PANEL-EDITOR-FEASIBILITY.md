@@ -672,13 +672,23 @@ back-stack із 3 кроків / 3 view-types**:
   — guard у S4; команда видаляється/замінюється row-click у S4). tsc clean + повний unit **1617
   green** (новий surface = Obsidian ItemView-glue, не unit-testable без ItemView-harness, якого в
   проєкті нема — як і `DiffEditView`; покриття = host-agnostic controller seam-тест).
-  > **DEVICE-SMOKE (deferred, додати до S5-checklist):** (1) команда → resolve → `[←]` закриває таб;
-  > (2) **multi-tab:** відкрити 2 editor-tabs, перемикати фокус → ESC-swallow + Mod+F діють лише на
-  > сфокусований таб; (3) leaf-move (drag таб у split) зберігає пару (getState).
-- **S4 — wire + open-guard.** main.ts `openEditorForPair(entry)`: write-set → `openGuard`
-  над `getLeavesOfType("diff2-editor-view")` → focus-existing | діалог
-  [Перемкнутись]/[Cancel] | новий leaf (`setViewState(EditorTabState)`). `conflicts-list`
-  row-click → `openEditorForPair`. Detail-mode панелі обходиться.
+  > **DEVICE-SMOKE (deferred, у S5-checklist; вхід тепер = panel row-click, НЕ команда):**
+  > (1) row-click → resolve → `[←]` закриває таб; (2) **multi-tab:** 2 editor-tabs, фокус →
+  > ESC-swallow + Mod+F діють лише на сфокусований; (3) leaf-move (drag у split) зберігає пару
+  > (getState); (4) tab-title може показати "Diff editor" замість файлу = косметичний S6-фікс.
+- **S4 — wire + open-guard. ✅ DONE (2026-06-30).** main.ts `openEditorForPair(entry)` за
+  open-guard: `alignOpenDescs(leaves.map(openDesc))` (index-aligned, **НІКОЛИ `.filter`** — інакше
+  `which`→wrong-tab) → `req = openDescFor("conflict",base,sibling,autosaveIdForEntry)` → `openGuard`:
+  focus→`revealLeaf` | dialog→`EditorBusyModal` [Switch]/[Cancel]→reveal-or-noop | open→новий leaf
+  `setViewState(EditorTabState)`. **🔴 carry-flag closed:** ОБИДВА site-и (req + кожен open `openDesc`)
+  будують write-set через `openDescFor`→`writeSetFor` (нормалізовано) — новий pure chokepoint у
+  editor-tabs.ts. `DiffEditorView.openDesc()` (зі state, доступний до async-mount). `conflicts-list`
+  row-click → `deps.openEditor(entry)` (**єдиний роутинг**, panel detail-mode обходиться, fallback
+  ВИКИНУТО — viewState ніколи не "detail"; renderDetail/mountDiffPane лишаються мертві до S6).
+  `EditorBusyModal` (recovery-dialog.ts, prompt→"switch"|"cancel"). TEMP smoke-команда ВИДАЛЕНА.
+  Tests: `editor-tabs.test.ts` +4 (openDescFor normalize/per-origin; alignOpenDescs length+index-no-drop;
+  + guard-which-on-aligned-array). tsc + повний unit **1621 green**. Controller байт-у-байт незмінний
+  (guardrail held). Adapter-dispatch (map→guard→reveal/modal/leaf) = workspace-glue → device-smoke.
 - **S5 — `[←]` close+navigate.** `onExitComplete` (editor host) після успіху: **null
   `activeSession` ПЕРЕД `detach()`** (бо `detach()`→`onClose`→`disposeOwner` має побачити
   no-session і пропустити abandon-wipe — commit уже прибрав dir), тоді `leaf.detach()` +

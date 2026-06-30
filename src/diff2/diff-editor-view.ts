@@ -27,8 +27,9 @@ import {
   type DiffDetailHost,
 } from "./diff-detail-controller";
 import type { DiffEditViewDeps } from "./diff-edit-view";
-import type { EditorTabState } from "./editor-tabs";
+import { openDescFor, type EditorTabState, type OpenEditorDesc } from "./editor-tabs";
 import {
+  autosaveIdForEntry,
   entryFromSibling,
   type ConflictEntry,
 } from "./synthetic-detector";
@@ -177,6 +178,19 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     }
     this.escScope = null;
     this.controller?.dispose();
+  }
+
+  // S4 open-guard — this editor's descriptor for `openGuard` (the autosaveId
+  // same-pair key + the write-set it would commit). Built through `openDescFor` so
+  // the write-set is normalized (the carry-flag). Available from the STATE before
+  // the async mount completes (a rapid double-open is caught), and null when the
+  // state is missing / not a real conflict sibling.
+  openDesc(): OpenEditorDesc | null {
+    const s = this.state;
+    if (!s || typeof s.siblingPath !== "string" || !s.siblingPath) return null;
+    const entry = this.entry ?? entryFromSibling(this.deps.conflictStore, s.siblingPath);
+    if (!entry) return null;
+    return openDescFor(s.origin, entry.basePath, entry.siblingPath, autosaveIdForEntry(entry));
   }
 
   // ── DiffDetailHost — the navigation seam ──────────────────────────────────

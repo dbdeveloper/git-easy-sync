@@ -73,6 +73,11 @@ export interface DiffEditViewDeps {
   // nagging the user with a Notice (no-op when logging is disabled). Optional
   // in test fixtures.
   logger?: Logger;
+  // S4 — open a dedicated `diff2-editor-view` tab for a conflict (behind the
+  // open-guard). The panel routes a conflicts-list row-click here; its own
+  // detail-mode is bypassed (dead code until the S6 slim-down). Optional so test
+  // fixtures / the editor host (which never lists) can omit it.
+  openEditor?: (entry: ConflictEntry) => void;
 }
 
 // Phase 1 owns the navigation state machine inside the view: which
@@ -323,10 +328,11 @@ export class DiffEditView extends ItemView implements DiffDetailHost {
         this.deps.conflictStore,
       );
       renderConflictsList(body, entries, {
-        onEntryClick: (entry) => {
-          this.viewState = { mode: "detail", entry, tab };
-          this.render();
-        },
+        // S4 — a row-click opens a dedicated diff2-editor tab (behind the
+        // open-guard in main). The panel's own detail-mode is bypassed — single
+        // routing only, so viewState never becomes "detail" (the dead detail code
+        // is removed in S6). Production always wires openEditor via diffViewDeps.
+        onEntryClick: (entry) => this.deps.openEditor?.(entry),
       });
       return;
     }

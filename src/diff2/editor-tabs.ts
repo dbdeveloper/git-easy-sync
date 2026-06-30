@@ -94,6 +94,39 @@ export type OpenGuardResult =
   | { action: "focus"; which: number } // same pair already open → reveal it
   | { action: "dialog"; busyFile: string; which: number }; // partial overlap → [Switch]/[Cancel]
 
+// ── S4 adapter helpers (pure — the Obsidian leaf glue around them is not) ─────
+
+// Build the OpenEditorDesc / OpenRequest for a pair. The SINGLE chokepoint that
+// produces a write-set, so BOTH call sites (the request being opened AND every
+// already-open editor's descriptor) route through `writeSetFor` — the open-guard's
+// overlap compare can then never be fed raw, un-normalized paths (S1 forward-flag).
+// `autosaveId` is threaded in: its derivation (`autosaveIdForEntry`) lives in
+// synthetic-detector, which depends on the ConflictStore — kept out of this pure module.
+export function openDescFor(
+  origin: DiffEditorOrigin,
+  basePath: string,
+  siblingPath: string,
+  autosaveId: string,
+): OpenEditorDesc {
+  return { autosaveId, writeSet: writeSetFor(origin, basePath, siblingPath) };
+}
+
+// An "inert" descriptor for a leaf whose pair can't be resolved (mid-open, or a
+// stale/hand-edited state): the empty autosaveId never equals a real one and the
+// empty write-set shares no file, so openGuard treats it as no-match — while KEEPING
+// the slot so the array stays index-aligned with getLeavesOfType.
+const INERT_DESC: OpenEditorDesc = { autosaveId: "", writeSet: [] };
+
+// Map per-leaf descriptors (null = unresolvable) to an index-ALIGNED OpenEditorDesc[].
+// 🔴 NEVER `.filter(Boolean)` this: openGuard's `which` indexes back into the SAME
+// getLeavesOfType array, so dropping a slot would focus / "switch to" the WRONG tab.
+// The inert placeholder keeps indices honest.
+export function alignOpenDescs(
+  perLeaf: readonly (OpenEditorDesc | null)[],
+): OpenEditorDesc[] {
+  return perLeaf.map((d) => d ?? INERT_DESC);
+}
+
 export function openGuard(
   open: readonly OpenEditorDesc[],
   req: OpenRequest,
