@@ -120,7 +120,18 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
             this.plugin.settings.githubToken = value.trim();
             await this.plugin.saveSettings();
             this.refreshTokenHelp();
-          }).inputEl.type = "password";
+          });
+        text.inputEl.type = "password";
+        // Select the whole (old) token whenever the field gains focus, so a click +
+        // Ctrl/Cmd+V (or right-click → Paste) replaces it in one go — the common token-
+        // renewal flow. Deferred past the focusing click's OWN caret placement (which
+        // fires after `focus` and would otherwise collapse the selection to the click
+        // point). A second click while ALREADY focused doesn't re-fire `focus`, so the
+        // user can still position a caret to hand-edit. Works regardless of the eye
+        // toggle (select() applies to a password field too).
+        text.inputEl.addEventListener("focus", () => {
+          requestAnimationFrame(() => text.inputEl.select());
+        });
         tokenInput = text;
       });
 
