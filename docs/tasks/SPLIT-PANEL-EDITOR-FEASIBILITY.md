@@ -765,11 +765,17 @@ back-stack із 3 кроків / 3 view-types**:
 4. commit-fail (підкинути помилку) → лишається в editor, робота не втрачена.
 5. (S4+) та сама пара вже відкрита → focus; частковий перетин → діалог; різні пари → N табів.
 
-### 🔴 PHASE-1A DEVICE PASS (S1–S6 code-complete, 0 device-verified — advisor 2026-06-30)
+### ✅ PHASE-1A DEVICE PASS — VERIFIED (user, 2026-06-30)
 
-> Уся Obsidian-glue (S3+) НІКОЛИ не бігала в Obsidian; unit/tsc/grep перевіряють лише pure-logic
-> + типи. Обидва баги цієї сесії (focus-on-reveal, split-clone) жили САМЕ тут. **Прогнати ОДИН
-> device-pass ПЕРЕД 1B/handoff** — foundational-баг тут інвалідує роботу через кілька стейджів.
+> **ПРОЙДЕНО на device, помилок не знайдено.** Підтверджено: editor відкривається в окремому табі;
+> `[←]` → diff-panel; **split панелі присікається мовчки, split editor → Notice** (= крок-0
+> timing-assumption `getLeavesOfType` бачить in-flight leaf ✓ — основа 3 guard-ів тримається);
+> другий конфлікт того ж base → busy-dialog «вже редагується, перейти?» → switch працює (=partial
+> write-set overlap ✓); курсори в editor проініціалізовані; повторне відкриття пари → focus наявного
+> табу з активним каретом (=focus-on-reveal fix ✓). Блокер «0 device-verified» ЗНЯТО.
+>
+> (Історична нота: до цього вся Obsidian-glue S3+ ніколи не бігала; обидва баги сесії — focus-on-
+> reveal, split-clone — жили саме тут, тож device-pass був обов'язковим перед 1B/handoff.)
 
 **0. (НАЙПЕРШЕ — Obsidian-timing assumption, на якій стоять 3 guard-и):** `getLeavesOfType`
    повертає in-flight leaf на `onOpen`/`tryMount`. → Split панель (Cmd+split) → має лишитись **1**
