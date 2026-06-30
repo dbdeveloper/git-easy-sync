@@ -168,6 +168,32 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       return;
     }
 
+    // Belt-and-suspenders DUPLICATE guard for a FULL-state clone: the empty-state branch
+    // above assumes Obsidian hands a split-clone the empty default getState — but if any
+    // Obsidian path/version clones the full state instead, that assumption is bypassed and
+    // two editors would mount on one autosave dir (the §3 write-race, silent corruption).
+    // So scan for a LIVE editor already holding this pair (same autosaveId, the same key
+    // the open-guard uses) and, if found, this leaf is the clone → close it and focus the
+    // original. The original is already mounted (never re-runs tryMount), so there is no
+    // mutual-suicide. This MUST run before controller.mount touches the shared dir. The
+    // same pattern the panel uses for its singleton guard.
+    const autosaveId = autosaveIdForEntry(entry);
+    const original = this.app.workspace
+      .getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE)
+      .find(
+        (l) =>
+          l !== this.leaf &&
+          l.view instanceof DiffEditorView &&
+          l.view.openDesc()?.autosaveId === autosaveId,
+      );
+    if (original) {
+      new Notice("This conflict is already open in another diff-editor tab.");
+      this.leaf.detach();
+      this.app.workspace.revealLeaf(original);
+      if (original.view instanceof DiffEditorView) original.view.focusEditor();
+      return;
+    }
+
     this.entry = entry;
     this.mounted = true;
     const container = this.contentEl;

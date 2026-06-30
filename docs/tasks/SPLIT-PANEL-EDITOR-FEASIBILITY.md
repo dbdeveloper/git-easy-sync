@@ -33,15 +33,20 @@ disk-safe і recovery-safe. Обмеження «один tab» — це **UI/st
 > Усі ратифіковані правила в одному місці. Розгорнуте обґрунтування — у секціях нижче.
 
 **R-A. View-types (Option A).** Поточний split = **два** view-types; History (§10)
-додає **третій** у власному back-stack-ланцюжку:
-- `diff2-panel` — **ОДИН на Vault** (singleton). Sub-tabs **Conflicts / Deleted /
-  History** живуть ТУТ. History-sub-tab = дерево каталогів Vault (§10).
-- `diff2-editor` — **багато табів, по одному на пару `base:sibling`** (звідки б пара не
-  походила: конфлікт із панелі, контекст-меню, Compare-any-two, чи History-версія).
-- `diff2-history` *(§10, History-флоу)* — **singleton** view-type: список GitHub-версій
-  одного файлу + toolbar-фільтр; вхід прямо з context-menu на файлі. `[←]` → дерево
-  panel:History.
-- Клік по рядку панелі (конфлікт АБО History-версія) → відкриває новий `diff2-editor` таб.
+додає **третій**. **🔑 УНІФІКОВАНИЙ ІНВАРІАНТ УНІКАЛЬНОСТІ (user 2026-06-30): КОЖЕН diff2-таб
+унікальний за своїм ключем** — дублювання (через Obsidian "Split"/clone) НЕДОПУСТИМЕ для всіх
+трьох; guard = «на mount, якщо інший leaf мого view-type з моїм ключем уже існує → я клон →
+detach self + reveal original»:
+- `diff2-panel` — **ОДИН на Vault** (singleton; ключ = view-type, 1 дозволено). Sub-tabs =
+  **тільки Conflicts / Deleted** (як зараз). **History-sub-tab ВИКИНУТО (user 2026-06-30):**
+  не дублюємо Obsidian-file-tree у панелі.
+- `diff2-history` *(§10)* — **singleton** view-type (ключ = view-type, 1 leaf, reused per file
+  через setState). Вхід **ТІЛЬКИ** через пункт **"History" контекст-меню файлу в Obsidian
+  file-tree** (не через дерево в панелі). Список GitHub-версій файлу + toolbar-фільтр.
+- `diff2-editor` — **багато табів, унікальний за парою `base:sibling`** (ключ = `autosaveId`;
+  звідки б пара не походила: конфлікт із панелі, контекст-меню, Compare, чи History-версія).
+- Клік по рядку панелі (конфлікт) АБО по History-версії → відкриває `diff2-editor` таб (за
+  open-guard).
 
 **R-B. Open-guard (write-set intersection) — уніфіковане правило (2026-06-29).**
 - Кожен відкритий редактор має write-set (conflict `{base,sibling}`; history
@@ -327,12 +332,15 @@ Option B (один view-type, кілька leaf, один «вважається
 ```
 diff2-editor ─[←]→ diff2-panel:Conflicts            (conflict — 1 крок)
 diff2-editor ─[←]→ diff2-panel:Deleted              (deleted  — 1 крок)
-diff2-editor ─[←]→ diff2-history ─[←]→ panel:History-tree   (history — 2 кроки)
+diff2-editor ─[←]→ diff2-history (список версій файлу)    (history — 1 крок; далі [←]→ закрити, file-tree завжди в sidebar)
 diff2-editor ─[←]→ (звичайний таб base-файлу)       (compare  — 1 крок)
 ```
 
-History має 2 кроки, бо це 2-рівнева навігація (дерево + список версій файлу);
-Conflicts/Deleted — плоскі списки в панелі (1 крок).
+**ОНОВЛЕНО (user 2026-06-30):** History-дерево в панелі ВИКИНУТО → history-ланцюжок тепер
+1 крок (editor → `diff2-history` список версій); вхід у `diff2-history` = пункт "History"
+контекст-меню файлу в Obsidian file-tree (а не дерево в панелі), `[←]` з `diff2-history`
+просто закриває таб (file-tree завжди доступне в sidebar). Conflicts/Deleted — плоскі списки в
+панелі (1 крок).
 
 - **`conflict`** (пара-конфлікт, є запис у `diff2-panel`; anchor = `basePath`):
   - Відкрити/сфокусувати `diff2-panel:Conflicts` і **проскролити на base-групу**.
@@ -391,11 +399,17 @@ recovery прибрав, на committed-результаті класифіку�
 за порядком — **ствердити тестом**, не припускати. І: масове відновлення табів
 **обходить** `openEditorForPair`-guard (вони були неконфліктними при створенні).
 
-## 10. VISION — History sub-tab (розширює R2.3 / R7.9b / Phase 7)
+## 10. VISION — History (розширює R2.3 / R7.9b / Phase 7)
 
 > Vision користувача (2026-06-29). Ще один драйвер split-у (окремий `diff2-history`
 > view-type). Будувати ПІСЛЯ split-у І за новим one-sided recovery; узгодити з R2.3
 > (не форкати). **НЕ «free reuse» — див. point 1.**
+>
+> **🔴 СПРОЩЕНО (user 2026-06-30): крок-1 (History-дерево в `diff2-panel`) ВИКИНУТО.** Не
+> дублюємо Obsidian-file-tree. Вхід у History = **пункт "History" контекст-меню файлу в
+> Obsidian file-tree** → відкриває `diff2-history` (singleton) ОДРАЗУ для цього файлу. Тобто
+> нижче «крок 1 = дерево» НЕ актуальний; лишаються 2 рівні: `diff2-history` (список версій) →
+> `diff2-editor` (версія). `diff2-panel` має ТІЛЬКИ Conflicts/Deleted sub-tabs (як зараз).
 
 **Що хоче користувач (переглянуто 2026-06-29 — back-stack замість 2-panel):**
 

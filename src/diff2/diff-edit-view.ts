@@ -162,6 +162,11 @@ export class DiffEditView extends ItemView implements DiffDetailHost {
     // already exists, this leaf is the clone → reveal the original and close this one.
     // (activateDiffEditView reveals-or-creates a single leaf, so this only fires on an
     // Obsidian-initiated duplicate.)
+    // ⚠️ 1B note: if two panel leaves' onOpen ever fire in the SAME tick (only reachable
+    // once 1B makes panels restart-persistent → a saved pair restored together), each
+    // finds the other and BOTH detach → zero panels. Unreachable in 1A (unload detaches
+    // panels, nothing restores). When 1B lands, dedup once at layout-ready / keep-by-leaf-
+    // order instead of each onOpen racing.
     const existing = this.app.workspace
       .getLeavesOfType(DIFF2_EDIT_VIEW_TYPE)
       .find((l) => l !== this.leaf);
