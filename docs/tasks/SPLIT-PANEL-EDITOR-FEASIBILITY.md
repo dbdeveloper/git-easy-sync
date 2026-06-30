@@ -738,6 +738,13 @@ back-stack із 3 кроків / 3 view-types**:
   > закриє recovery-replay perf із TODO), АЛЕ ризик тихого псування undo → не зараз. relocate-API (B1)
   > ВІДКИНУТО: Obsidian 1.7.2 не має `moveLeaf`/`setParent` (тільки `moveLeafToPopout`). **Handoff =
   > ОКРЕМА сесія ПІСЛЯ S6** (/advisor + device-тести; failure-mode = втрата даних).
+  > **🔴 FORWARD-LANDMINE (advisor): handoff НЕ суто additive.** Щойно повернеш `getState` (клон має
+  > отримати реальну пару) — editor scan-guard стає LIVE (клони приходять з повним станом → доходять
+  > до scan), а його ПОТОЧНА дія = `detach self + reveal original` = **REFUSE** — це ПРОТИЛЕЖНЕ до
+  > handoff (=MOVE). Тож handoff-сесія МУСИТЬ перевернути цю гілку refuse→handoff (shutdown original +
+  > silent startup self); empty-state-detach гілка тоді засинає (клони більше не порожні). Інакше
+  > next-session поверне getState, побачить «клони refuse-and-vanish» і дебажитиме самоінфліктнутий
+  > регрес.
 - **S6 — slim panel + cleanup. ✅ DONE (2026-06-30).** Клас `DiffEditView`→**`DiffPanelView`** (рядок
   `diff2-edit-view` СТАЛИЙ; main.ts import/registerView/instanceof оновлено). Панель тепер ЧИСТО
   list-view: видалено мертвий detail-код — `DiffDetailController` поле + усі 3 `DiffDetailHost`-
@@ -757,6 +764,29 @@ back-stack із 3 кроків / 3 view-types**:
 3. open → нічого не змінив → close-x → reopen → fresh (0-edit wipe).
 4. commit-fail (підкинути помилку) → лишається в editor, робота не втрачена.
 5. (S4+) та сама пара вже відкрита → focus; частковий перетин → діалог; різні пари → N табів.
+
+### 🔴 PHASE-1A DEVICE PASS (S1–S6 code-complete, 0 device-verified — advisor 2026-06-30)
+
+> Уся Obsidian-glue (S3+) НІКОЛИ не бігала в Obsidian; unit/tsc/grep перевіряють лише pure-logic
+> + типи. Обидва баги цієї сесії (focus-on-reveal, split-clone) жили САМЕ тут. **Прогнати ОДИН
+> device-pass ПЕРЕД 1B/handoff** — foundational-баг тут інвалідує роботу через кілька стейджів.
+
+**0. (НАЙПЕРШЕ — Obsidian-timing assumption, на якій стоять 3 guard-и):** `getLeavesOfType`
+   повертає in-flight leaf на `onOpen`/`tryMount`. → Split панель (Cmd+split) → має лишитись **1**
+   панель. Split editor → має лишитись **1** editor-таб (інший collapse/Notice), оригінал з
+   caret+edits. Якщо це НЕ так — уся dup-guard-стратегія під питанням.
+1. **conflict-open:** панель (ribbon/status/команда) → клік по рядку → editor-таб; resolve групи →
+   `[←]` → таб закривається + панель revealed + scroll на base-групу (multi-sibling base) / просто
+   focus (останній sibling).
+2. **open-guard:** та сама пара ще раз → focus наявного табу + **caret стає активним** (bug fixed);
+   2 siblings 1 base → busy-dialog [Switch]/[Cancel]; double-click по рядку → НЕ 2 таби.
+3. **multi-tab:** 2 editor-таби різних пар → ESC-swallow + Mod+F (search) діють лише на сфокусований.
+4. **recovery:** правка → close-x (хрестик) → reopen → ResumeModal; 0-правок close-x → fresh.
+5. **TOCTOU/commit-fail:** як у parity-checklist 1–4 вище.
+6. **title:** editor tab показує файл (або тимчасово "Diff editor" = косметичний known-issue);
+   панель = "Diff Panel".
+7. **drag-move (поточна поведінка):** drag editor-таб в інший split → ЗАРАЗ зникає з Notice (no
+   getState) — це очікувано до handoff-сесії (не баг).
 
 ### Phase 1B — persistence (окремо, після зеленої 1A)
 
