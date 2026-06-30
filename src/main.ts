@@ -1787,26 +1787,32 @@ export default class GitHubSyncPlugin extends Plugin {
     if (now - this.lastAuthModalShownMs < ONE_HOUR) return;
     this.lastAuthModalShownMs = now;
     try {
-      const modal = new TokenExpiredModal(this.app, () => {
-        // Reveal the plugin's settings tab. Obsidian's
-        // setting.open + openTabById API gives us the deep link.
-        const setting = (
-          this.app as unknown as {
-            setting: {
-              open(): void;
-              openTabById(id: string): void;
-            };
+      const modal = new TokenExpiredModal(
+        this.app,
+        () => {
+          // Reveal the plugin's settings tab. Obsidian's
+          // setting.open + openTabById API gives us the deep link.
+          const setting = (
+            this.app as unknown as {
+              setting: {
+                open(): void;
+                openTabById(id: string): void;
+              };
+            }
+          ).setting;
+          try {
+            setting.open();
+            setting.openTabById(manifest.id);
+          } catch {
+            // Best effort — older Obsidian versions may not expose
+            // openTabById. The modal still ran, the user can open
+            // settings manually.
           }
-        ).setting;
-        try {
-          setting.open();
-          setting.openTabById(manifest.id);
-        } catch {
-          // Best effort — older Obsidian versions may not expose
-          // openTabById. The modal still ran, the user can open
-          // settings manually.
-        }
-      });
+        },
+        // E1 — auto-dismiss when the token is renewed (flag clears on the next
+        // successful auth: a sync or the Settings connection-probe).
+        () => this.tokenExpiredFlag?.isExpiredCached() ?? false,
+      );
       modal.open();
     } catch (modalErr) {
       this.logger?.warn("TokenExpiredModal open failed", {

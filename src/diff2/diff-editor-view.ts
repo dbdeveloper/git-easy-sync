@@ -75,12 +75,25 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   }
 
   getDisplayText(): string {
-    // Static for the leaf's lifetime — the file being resolved. Obsidian reads this
-    // after setState (its standard onOpen→setState order), by which point `entry` is
-    // set. No `refreshHeader`/`updateHeader` hack (that was the panel's dynamic flip).
+    // The file being resolved, fixed once `entry` lands. Since 1B made tryMount ASYNC
+    // (a sibling-exists check), `entry` is set AFTER setState returns — so Obsidian's
+    // post-setState read of getDisplayText sees `null` → "Diff editor". `refreshHeader()`
+    // (called once when entry lands) forces a re-read. This is a ONE-TIME title set, not
+    // the panel's per-nav dynamic flip.
     if (!this.entry) return "Diff editor";
     const e = this.entry;
     return `${e.basePath} · ${e.deviceLabel} @ ${formatConflictTimestamp(e.isoTimestamp)}`;
+  }
+
+  // Force Obsidian to re-read getDisplayText() — the TAB title (undocumented
+  // `updateHeader`) + the centered VIEW-HEADER title (direct DOM, scoped to this leaf).
+  // Called ONCE when the entry lands (tryMount is async since 1B). Best-effort.
+  private refreshHeader(): void {
+    (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
+    const headerTitle = this.contentEl
+      .closest(".workspace-leaf-content")
+      ?.querySelector(".view-header-title");
+    if (headerTitle) headerTitle.textContent = this.getDisplayText();
   }
 
   // 1B persistence — Obsidian serializes this leaf to workspace.json (every layout change
@@ -222,6 +235,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       }
 
       this.entry = entry;
+      this.refreshHeader(); // entry just landed (async) → make Obsidian re-read getDisplayText
       this.mounted = true;
       const container = this.contentEl;
       container.empty();

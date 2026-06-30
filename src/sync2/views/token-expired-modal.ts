@@ -28,9 +28,15 @@ import { GITHUB_TOKENS_URL, PLUGIN_README_URL } from "./token-help";
 // destinations.
 
 export class TokenExpiredModal extends Modal {
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
+
   constructor(
     app: App,
     private readonly openSettings: () => void,
+    // E1 — auto-dismiss: poll the token-expired flag and close the modal once it clears
+    // (the user renewed the token and a sync / the Settings connection-probe succeeded), so
+    // it doesn't linger after the problem is fixed. Optional (older callers / tests omit it).
+    private readonly isExpired?: () => boolean,
   ) {
     super(app);
   }
@@ -91,5 +97,22 @@ export class TokenExpiredModal extends Modal {
           this.openSettings();
         }),
       );
+
+    // Auto-dismiss once the token is renewed (the flag clears on the next successful
+    // auth). Poll every 1.5s; close when no longer expired. `close()` → onClose clears
+    // the timer, so an [x]/ESC dismissal also tears it down.
+    if (this.isExpired) {
+      this.pollTimer = setInterval(() => {
+        if (!this.isExpired?.()) this.close();
+      }, 1500);
+    }
+  }
+
+  onClose(): void {
+    if (this.pollTimer !== null) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+    this.contentEl.empty();
   }
 }
