@@ -193,6 +193,16 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     return openDescFor(s.origin, entry.basePath, entry.siblingPath, autosaveIdForEntry(entry));
   }
 
+  // Focus the editor's CM6 view — used by the open-guard's focus/switch paths when
+  // they reveal THIS already-open tab. `revealLeaf` activates the tab but does NOT
+  // reliably put the caret in the editor (Obsidian's own focus management runs after
+  // our active-leaf-change handler, and a just-revealed view isn't measured yet), so
+  // the user otherwise has to click the text. Deferring past layout (same rAF pattern
+  // as the controller's auto-focus) lets focus() land.
+  focusEditor(): void {
+    requestAnimationFrame(() => this.controller?.getView()?.focus());
+  }
+
   // ── DiffDetailHost — the navigation seam ──────────────────────────────────
 
   // One pair per leaf, so this is effectively always true; the explicit compare is a

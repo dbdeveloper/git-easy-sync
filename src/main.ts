@@ -1907,6 +1907,13 @@ export default class GitHubSyncPlugin extends Plugin {
     };
   }
 
+  // Pairs whose `openEditorForPair` is mid-flight. `getLeavesOfType` can't see an
+  // in-flight leaf until its awaited `setViewState` resolves, so a fast double-click
+  // on a row would otherwise pass the guard twice → two editors on one autosave dir
+  // (the §3 write-race). Keyed on the SAME autosaveId the guard uses so the two
+  // layers agree.
+  private readonly openingPairs = new Set<string>();
+
   // Open a `diff2-editor-view` tab for one conflict pair, behind the write-set
   // open-guard (SPLIT-PANEL-EDITOR-FEASIBILITY.md §3 R-B):
   //   - same pair already open → focus it (no new tab, no dialog);
@@ -1917,44 +1924,57 @@ export default class GitHubSyncPlugin extends Plugin {
   // (never `.filter`). Both the request and every open descriptor route through
   // `openDescFor` so the overlap compare only ever sees normalized write-sets.
   async openEditorForPair(entry: ConflictEntry): Promise<void> {
-    const { workspace } = this.app;
-    const leaves = workspace.getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE);
-    const open = alignOpenDescs(
-      leaves.map((l) => (l.view instanceof DiffEditorView ? l.view.openDesc() : null)),
-    );
-    const req = openDescFor(
-      "conflict",
-      entry.basePath,
-      entry.siblingPath,
-      autosaveIdForEntry(entry),
-    );
-    const result = openGuard(open, req);
+    const autosaveId = autosaveIdForEntry(entry);
+    // Synchronous re-entrancy guard closing the check-then-act window across the
+    // `setViewState` await (double-click → two tabs → write-race).
+    if (this.openingPairs.has(autosaveId)) return;
+    this.openingPairs.add(autosaveId);
+    try {
+      const { workspace } = this.app;
+      const leaves = workspace.getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE);
+      const open = alignOpenDescs(
+        leaves.map((l) => (l.view instanceof DiffEditorView ? l.view.openDesc() : null)),
+      );
+      const req = openDescFor("conflict", entry.basePath, entry.siblingPath, autosaveId);
+      const result = openGuard(open, req);
 
-    if (result.action === "focus") {
-      workspace.revealLeaf(leaves[result.which]);
-      return;
-    }
-    if (result.action === "dialog") {
-      const choice = await new EditorBusyModal(this.app, result.busyFile).prompt();
-      // Between building `open[]` and the click the target leaf could be closed;
-      // revealLeaf on a detached leaf is a benign Obsidian no-op.
-      if (choice === "switch") workspace.revealLeaf(leaves[result.which]);
-      return;
-    }
+      if (result.action === "focus") {
+        this.revealAndFocusEditor(leaves[result.which]);
+        return;
+      }
+      if (result.action === "dialog") {
+        const choice = await new EditorBusyModal(this.app, result.busyFile).prompt();
+        // Between building `open[]` and the click the target leaf could be closed;
+        // revealLeaf on a detached leaf is a benign Obsidian no-op.
+        if (choice === "switch") this.revealAndFocusEditor(leaves[result.which]);
+        return;
+      }
 
-    // result.action === "open"
-    const leaf = workspace.getLeaf("tab");
-    const state: EditorTabState = {
-      origin: "conflict",
-      basePath: entry.basePath,
-      siblingPath: entry.siblingPath,
-    };
-    await leaf.setViewState({
-      type: DIFF2_EDITOR_VIEW_TYPE,
-      state: state as unknown as Record<string, unknown>,
-      active: true,
-    });
-    workspace.revealLeaf(leaf);
+      // result.action === "open"
+      const leaf = workspace.getLeaf("tab");
+      const state: EditorTabState = {
+        origin: "conflict",
+        basePath: entry.basePath,
+        siblingPath: entry.siblingPath,
+      };
+      await leaf.setViewState({
+        type: DIFF2_EDITOR_VIEW_TYPE,
+        state: state as unknown as Record<string, unknown>,
+        active: true,
+      });
+      workspace.revealLeaf(leaf);
+    } finally {
+      this.openingPairs.delete(autosaveId);
+    }
+  }
+
+  // Reveal an already-open editor leaf AND put the caret back in its text. revealLeaf
+  // alone activates the tab but leaves the editor un-focused (the user would have to
+  // click the text) — focusEditor defers the CM6 focus past Obsidian's own reveal
+  // focus handling.
+  private revealAndFocusEditor(leaf: WorkspaceLeaf): void {
+    this.app.workspace.revealLeaf(leaf);
+    if (leaf.view instanceof DiffEditorView) leaf.view.focusEditor();
   }
 
   // ── helpers ─────────────────────────────────────────────────────────

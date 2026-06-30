@@ -689,6 +689,13 @@ back-stack із 3 кроків / 3 view-types**:
   Tests: `editor-tabs.test.ts` +4 (openDescFor normalize/per-origin; alignOpenDescs length+index-no-drop;
   + guard-which-on-aligned-array). tsc + повний unit **1621 green**. Controller байт-у-байт незмінний
   (guardrail held). Adapter-dispatch (map→guard→reveal/modal/leaf) = workspace-glue → device-smoke.
+  > **2 FIXUP-и (S4-correctness, той самий комміт-блок):** (a) 🔴 **TOCTOU re-entrancy** (advisor
+  > done-check) — `getLeavesOfType` НЕ бачить in-flight leaf поки `setViewState` не зарезолвиться, тож
+  > швидкий double-click на рядку проходив guard двічі → 2 editors на 1 autosave-dir (§3 write-race);
+  > closed синхронним `openingPairs:Set<autosaveId>` навколо всього async-тіла. (b) **focus-on-reveal**
+  > (user device-bug 2026-06-30) — `revealLeaf` на вже-відкритий таб активує таб, але НЕ ставить
+  > caret у текст (треба було клікати мишкою); `DiffEditorView.focusEditor()` (rAF-deferred
+  > `getView().focus()`) + `revealAndFocusEditor` у focus+switch гілках.
 - **S5 — `[←]` close+navigate.** `onExitComplete` (editor host) після успіху: **null
   `activeSession` ПЕРЕД `detach()`** (бо `detach()`→`onClose`→`disposeOwner` має побачити
   no-session і пропустити abandon-wipe — commit уже прибрав dir), тоді `leaf.detach()` +
