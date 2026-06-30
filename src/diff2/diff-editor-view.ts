@@ -27,7 +27,12 @@ import {
   type DiffDetailHost,
 } from "./diff-detail-controller";
 import type { DiffEditViewDeps } from "./diff-edit-view";
-import { openDescFor, type EditorTabState, type OpenEditorDesc } from "./editor-tabs";
+import {
+  openDescFor,
+  persistedEditorState,
+  type EditorTabState,
+  type OpenEditorDesc,
+} from "./editor-tabs";
 import {
   autosaveIdForEntry,
   entryFromSibling,
@@ -46,6 +51,10 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   private state: EditorTabState | null = null;
   private entry: ConflictEntry | null = null;
   private mounted = false;
+  // tryMount is now async (a sibling-exists check). Set synchronously at the top of the
+  // one call that has both controller+state ready, so a second setState landing during
+  // its first await can't double-mount.
+  private mounting = false;
   // TODO #8 — ESC-swallowing scope (Obsidian's default ESC jumps focus to the last
   // markdown editor). Pushed only while THIS leaf is active. Duplicated from the
   // panel host per the §12 per-host-chrome decision.
@@ -74,18 +83,24 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     return `${e.basePath} · ${e.deviceLabel} @ ${formatConflictTimestamp(e.isoTimestamp)}`;
   }
 
-  // NB: getState is INTENTIONALLY NOT overridden (it returns Obsidian's empty default).
-  // A diff-editor must never DUPLICATE a pair — two leaves on one autosave dir = the §3
-  // write-race. Obsidian's "Split right/down" / "Open in new window" clone a leaf by
-  // serializing getState() into a new leaf; with no real state to clone, the clone lands
-  // in tryMount's unusable-state branch and closes itself. The cost is that an in-session
-  // leaf-MOVE (drag) also loses the pair — accepted: the user reopens it from the panel
-  // (no-dup is the hard requirement, leaf-move-preservation was only a nicety).
+  // 1B persistence — Obsidian serializes this leaf to workspace.json (every layout change
+  // + on quit) so it restores on restart. We persist only the pair IDENTITY, and STRIP
+  // `openMode`: a restored leaf therefore never carries openMode → its mount is SILENT (a
+  // continuation, R-C2), while a user-reopen (openEditorForPair injects `openMode:"user"`)
+  // shows the ResumeRecoveryModal.
+  //
+  // Duplicate safety still holds: a "Split"/"Open in new window" clone gets the FULL state
+  // (so it reaches tryMount's scan-guard, which refuses it — exactly as before). The
+  // empty-state branch is now a defensive fallback for a genuinely corrupt/empty state.
+  getState(): Record<string, unknown> {
+    return (this.state ? persistedEditorState(this.state) : {}) as unknown as Record<string, unknown>;
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async setState(state: any, result: unknown): Promise<void> {
     this.state = state as EditorTabState;
     await super.setState(state, result as never);
-    this.tryMount();
+    void this.tryMount();
   }
 
   async onOpen(): Promise<void> {
@@ -125,7 +140,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     );
     this.syncEscScope(this.app.workspace.activeLeaf ?? null);
 
-    this.tryMount();
+    void this.tryMount();
   }
 
   // TODO #8 — push the ESC scope iff this leaf is active; pop otherwise. Idempotent.
@@ -141,23 +156,23 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     }
   }
 
-  // Mount the detail editor once BOTH the controller (onOpen) and the state
-  // (setState) are ready — Obsidian's call order between them is not guaranteed, so
-  // either entry point calls this and the mounted-guard makes the later one a no-op.
-  private tryMount(): void {
-    if (this.mounted || !this.controller || !this.state) return;
-    // A present-but-unusable state = a CLONE: Obsidian "Split"/"Open in new window"
-    // serialize the (empty default) getState into a new leaf; a moved leaf rebuilds the
-    // same way. siblingPath is missing → entryFromSibling → parseSiblingFilename THROWS
-    // on a non-string anyway. A diff-editor must never duplicate a pair (§3 write-race),
-    // so refuse: close this leaf. (Initial opens go through openEditorForPair, which
-    // passes a full state via setViewState — they never hit this branch.)
+  // Mount the detail editor once BOTH the controller (onOpen) and the state (setState)
+  // are ready — Obsidian's call order between them is not guaranteed. Only ONE call ever
+  // has both ready (the other returns early), so there is no concurrent-proceed; the
+  // `mounting` flag guards the narrower case of a second setState landing during the
+  // sibling-exists await.
+  private async tryMount(): Promise<void> {
+    if (this.mounted || this.mounting || !this.controller || !this.state) return;
+    // Defensive: a genuinely corrupt/empty state (siblingPath missing). With 1B's getState
+    // a clone carries the full state and is caught by the scan-guard below instead, so this
+    // is now a rare fallback. parseSiblingFilename would THROW on a non-string anyway.
     const siblingPath = this.state.siblingPath;
     if (typeof siblingPath !== "string" || !siblingPath) {
       new Notice("A diff-editor tab can't be split or duplicated. Reopen it from the Diff Panel.");
       this.leaf.detach();
       return;
     }
+    this.mounting = true;
 
     const entry = entryFromSibling(this.deps.conflictStore, siblingPath);
     if (!entry) {
@@ -168,15 +183,23 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       return;
     }
 
-    // Belt-and-suspenders DUPLICATE guard for a FULL-state clone: the empty-state branch
-    // above assumes Obsidian hands a split-clone the empty default getState — but if any
-    // Obsidian path/version clones the full state instead, that assumption is bypassed and
-    // two editors would mount on one autosave dir (the §3 write-race, silent corruption).
-    // So scan for a LIVE editor already holding this pair (same autosaveId, the same key
-    // the open-guard uses) and, if found, this leaf is the clone → close it and focus the
-    // original. The original is already mounted (never re-runs tryMount), so there is no
-    // mutual-suicide. This MUST run before controller.mount touches the shared dir. The
-    // same pattern the panel uses for its singleton guard.
+    // 1B — the conflict may have been RESOLVED between sessions: a crash mid-`[←]`-commit
+    // is finished by onload recoverCommit (sibling removed) BEFORE this restored tab
+    // mounts, so a restored editor can point at a now-gone conflict. Close cleanly rather
+    // than rendering a "Failed to load diff" error body. (Absent BASE is legit — a
+    // delete-vs-modify conflict; mount reads "" for it. Only an absent SIBLING means
+    // "resolved → gone".)
+    if (!(await this.deps.vault.adapter.exists(siblingPath))) {
+      this.leaf.detach();
+      return;
+    }
+
+    // DUPLICATE guard for a full-state clone (split/open-in-new-window): scan for a LIVE
+    // editor already holding this pair (same autosaveId — the key the open-guard uses) and,
+    // if found, this leaf is the clone → close it and focus the original. The original is
+    // already mounted (never re-runs tryMount), so there is no mutual-suicide. MUST run
+    // before controller.mount touches the shared dir. (On a restart, restored editors have
+    // UNIQUE pairs → no false match.)
     const autosaveId = autosaveIdForEntry(entry);
     const original = this.app.workspace
       .getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE)
@@ -199,7 +222,10 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     const container = this.contentEl;
     container.empty();
     container.addClass("diff2-edit-view-root");
-    void this.controller.mount(container, entry);
+    // R-C2 — a restored leaf carries no `openMode` (getState strips it) → silent resume;
+    // a user-reopen has `openMode:"user"` → the ResumeRecoveryModal.
+    const silentResume = !this.state.openMode;
+    void this.controller.mount(container, entry, { silentResume });
   }
 
   async onClose(): Promise<void> {

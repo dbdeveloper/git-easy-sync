@@ -214,7 +214,15 @@ export class DiffDetailController {
   // per detail open; S3's editor host gets identical DOM for free (no scaffold to
   // replicate). The async owner-load runs after the synchronous scaffold, so the
   // toolbar/body appear immediately (same as the old `void mountDiffPane`).
-  async mount(parent: HTMLElement, entry: ConflictEntry): Promise<void> {
+  // `opts.silentResume` (1B / R-C2): a restart-RESTORE is a continuation, not a crash —
+  // resume the recorded edits WITHOUT the ResumeRecoveryModal. Only affects the "resume"
+  // branch (a clean restart can't change the vault, so classifyReopen lands there); a
+  // user-reopen passes it false and gets the modal.
+  async mount(
+    parent: HTMLElement,
+    entry: ConflictEntry,
+    opts?: { silentResume?: boolean },
+  ): Promise<void> {
     const toolbar = parent.createDiv({ cls: "diff2-detail-toolbar" });
     this.renderToolbar(toolbar, entry);
     // §title (Screenshot-17): the file identity lives in the VIEW HEADER
@@ -463,6 +471,15 @@ export class DiffDetailController {
             // editCount = the trustworthy-prefix block count, i.e. exactly what
             // replayFrom will apply (so the dialog can't promise more than it restores).
             const sess = await readResumeSession(this.deps.vault, conflictId);
+            // 1B (R-C2) — a silent restart-restore is a continuation: NO modal, and skip
+            // the dry-run too (we don't display a count). Straight to mountReplayed, which
+            // safely handles an empty/corrupt log (stop-at-error → safe prefix) and 0 edits
+            // (snapshots == the unchanged vault). Halves the restart replay cost.
+            if (opts?.silentResume) {
+              this.deps.logger?.info("diff2 resume → silent (restore)", { base: entry.basePath });
+              await mountReplayed(sess, action.meta);
+              break;
+            }
             // §3.5 + bug-56 pre-flight: a dry-run replay (stops safely) tells us how many
             // edits would ACTUALLY recover. 0 → nothing to resume (empty OR a fully
             // un-replayable / corrupt log) → skip the pointless modal, start fresh (wipe

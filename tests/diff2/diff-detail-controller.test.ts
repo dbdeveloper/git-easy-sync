@@ -32,7 +32,8 @@ import {
   autosaveIdForEntry,
   type ConflictEntry,
 } from "../../src/diff2/synthetic-detector";
-import { autosaveDir } from "../../src/diff2/autosave-store";
+import { autosaveDir, startSession } from "../../src/diff2/autosave-store";
+import { DiffPaneOwner } from "../../src/diff2/diff-pane-owner";
 
 const enc = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
 const dec = (b: ArrayBuffer) => new TextDecoder().decode(b);
@@ -196,5 +197,46 @@ describe("DiffDetailController host seam (S2)", () => {
       ctl.dispose();
     }).not.toThrow();
     expect(ctl.getView()).toBeNull();
+  });
+
+  it("1B silentResume: a restart-restore REPLAYS the recorded edit with NO modal", async () => {
+    const base = "a\nMINE\nc\n";
+    const sibling = "a\nTHEIRS\nc\n";
+    const { basePath, siblingPath, entry, conflictId } = await writeInputs(base, sibling);
+
+    // Build a resumable session on disk (the glue-test pattern): start a session, drive a
+    // recorded edit through a real owner, drain it to history.jsonl, dispose. The dir is now
+    // a mid-session (resumable) state — exactly what a restored leaf finds at restart.
+    await startSession(fx.vault, conflictId, basePath, siblingPath);
+    const setupEl = document.createElement("div");
+    document.body.appendChild(setupEl);
+    const owner = new DiffPaneOwner(
+      fx.vault,
+      conflictId,
+      setupEl,
+      base,
+      sibling,
+      { localLabel: "local", remoteLabel: "Phone", date: "", isMarkdown: true },
+      0,
+    );
+    owner.getView().dispatch({ changes: { from: 0, insert: "Z" }, userEvent: "input.type" });
+    await owner.drainHistory();
+    owner.dispose();
+    setupEl.remove();
+
+    // Restore mount with silentResume — `{} as App` proves no ResumeRecoveryModal is even
+    // constructed (it would need a real App), and the resumed doc carries the "Z" edit (so it
+    // replayed, NOT silently started fresh — the bug a silentResume mis-wire would cause).
+    const host = recordingHost();
+    const ctl = new DiffDetailController({} as unknown as App, deps(), host);
+    await ctl.mount(container, entry, { silentResume: true });
+
+    const view = ctl.getView();
+    expect(view).not.toBeNull();
+    expect(view!.state.doc.toString()).toContain("Z");
+    expect(host.commitCount).toBe(0);
+    expect(host.leaveCount).toBe(0);
+    expect(await fx.vault.adapter.exists(autosaveDir(conflictId))).toBe(true); // resume KEEPS the dir
+    ctl.dispose();
   });
 });

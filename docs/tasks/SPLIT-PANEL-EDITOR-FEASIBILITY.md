@@ -794,14 +794,39 @@ back-stack із 3 кроків / 3 view-types**:
 7. **drag-move (поточна поведінка):** drag editor-таб в інший split → ЗАРАЗ зникає з Notice (no
    getState) — це очікувано до handoff-сесії (не баг).
 
-### Phase 1B — persistence (окремо, після зеленої 1A)
+### Phase 1B — persistence ✅ DONE (2026-06-30)
 
-getState/setState (`{origin, anchorPath, base, sibling, kind}`); silent-vs-modal через
-openMode (restored=тихо / user-open=modal); **прибрати детач editors на unload + 1 швидкий
-тест timing workspace-серіалізації**; register `diff2-editor-view` для restore; recovery
-(`recoverAutosaveDirs` до `layoutReady`) завершується ДО відновлення табів (assert тестом);
-restore обходить open-guard; R3.7 last-editor-leaf-close→`resetLifts`. Manual: відкрити N,
-рестарт → тихий replay; close-x+reopen → modal.
+Реалізовано (build+1627 green; controller тепер РОЗШИРЕНО — byte-identical guardrail закінчився на
+1B, як і планувалось):
+- **getState/setState (editor):** `getState()`=`persistedEditorState(state)`={origin,basePath,
+  siblingPath} — **СТРИПИТЬ transient `openMode`** (pure helper editor-tabs.ts, +2 tests). Restored
+  leaf → нема openMode → silent.
+- **silent-vs-modal (R-C2):** `EditorTabState.openMode?:"user"`; `openEditorForPair` ставить
+  `openMode:"user"` (user-open→modal); restore (Obsidian re-serialize getState)→нема→silent.
+  `tryMount` → `silentResume = !state.openMode` → `controller.mount(.,.,{silentResume})`. Controller
+  resume-гілка при silentResume: БЕЗ модалки, БЕЗ dry-run, одразу `mountReplayed` (halves restart
+  replay cost; mountReplayed safe на empty/corrupt log + 0 edits). Seam-test (controller): resumable
+  dir → silent mount REPLAYS правку ("Z" у doc), 0 nav, dir KEPT.
+- **Persist ОБИДВА views (R-C, advisor):** onunload БІЛЬШЕ НЕ детачить ні panel ні editor. Panel
+  singleton-guard тримає унікальність (тільки 1 panel існує → 1 зберігається → mutual-suicide
+  недосяжний). Editor restore → scan-guard (унікальні пари → no false refuse) + silent resume.
+- **register** — вже було (registerView в onload до layoutReady).
+- **recovery-before-layoutReady** — verified READING (не тестом): `await initSync2()`@332 (→
+  `recoverAutosaveDirs`@850) ЗАВЕРШУЄТЬСЯ до `registerView`@420 до `onLayoutReady`-callback-ів до
+  restore-mount. Структурна гарантія (не unit-testable без main-harness).
+- **restore обходить open-guard** — природно (restore = Obsidian setViewState, не openEditorForPair).
+- **🆕 resolved-between-sessions (advisor):** crash-mid-`[←]` → onload recoverCommit дорезолвлює
+  (sibling зник) ДО restore-mount → restored editor вказує на gone-конфлікт. `tryMount` тепер
+  **async** + `exists(siblingPath)` check → detach cleanly (а не "Failed to load" error-body).
+  (Absent BASE = legit delete-vs-modify. async tryMount → `mounting`-flag проти double-mount race.)
+- **DEFER:** R3.7 last-editor-leaf-close→`resetLifts` — стосується лише Compare/Deleted (Phase 8/9b,
+  ще не рендеряться); для conflict-only немає lifts → no-op. Закласти на тих фазах.
+
+**DEVICE-SMOKE (1B, deferred):** quit з N editors → restart → кожен SILENT resume (без модалки) з
+курсором; restart з кількома editors → усі restore, не refuse-detach один одного; close-x→reopen
+(НЕ restart) → модалка (openMode); resolved-between-sessions (crash-mid-`[←]`, або вручну видалити
+sibling+restart) → restored tab detach-cleanly; panel теж restore (1 шт); hot-reload (`pnpm dev`) →
+editor resume-иться чисто (broken-placeholder transient).
 
 ### Forward-design ЗАРАЗ (коштує нуль, не вимагає History/Deleted)
 `origin`-enum включає `history|deleted`; `openGuard`/write-set узагальнені; `onExitComplete`

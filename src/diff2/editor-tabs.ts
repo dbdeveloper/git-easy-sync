@@ -33,6 +33,17 @@ export interface EditorTabState {
   origin: DiffEditorOrigin;
   basePath: string;
   siblingPath: string;
+  // 1B (R-C2) — TRANSIENT, never persisted (see persistedEditorState). `openEditorForPair`
+  // sets it on a user-initiated open so the editor shows the ResumeRecoveryModal; a RESTORED
+  // leaf (Obsidian re-serializing getState) never carries it → its resume is SILENT.
+  openMode?: "user";
+}
+
+// The persisted shape of an editor leaf (1B getState). STRIPS the transient `openMode`, so
+// a restore is always a silent continuation — if openMode leaked into getState, every
+// restart would pop the resume modal. The single chokepoint for "what survives to disk".
+export function persistedEditorState(s: EditorTabState): EditorTabState {
+  return { origin: s.origin, basePath: s.basePath, siblingPath: s.siblingPath };
 }
 
 // The vault files a diff2-editor WRITES when its `[←]` commits (§3 / §10 table).

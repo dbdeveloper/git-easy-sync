@@ -528,14 +528,12 @@ export default class GitHubSyncPlugin extends Plugin {
       }
       this.trashWatcher = null;
     }
-    // Detach any open Diff-Edit / Diff-Editor view leaves so they don't
-    // linger in a broken state after the plugin disables. Obsidian would
-    // eventually GC them but explicit cleanup keeps the workspace
-    // state-store tidy. (1A: editors are ephemeral — detaching here removes
-    // them from the serialized layout so they don't restore empty on reload;
-    // 1B drops the editor detach and adds getState-restore.)
-    this.app.workspace.detachLeavesOfType(DIFF2_EDIT_VIEW_TYPE);
-    this.app.workspace.detachLeavesOfType(DIFF2_EDITOR_VIEW_TYPE);
+    // 1B persistence — do NOT detach the diff-panel or diff-editor leaves on unload.
+    // Both view-types persist (R-C): the panel restores trivially (its singleton guard
+    // keeps it unique), and each editor restores its pair via getState and silently
+    // resumes its autosave session (R-C2). The tradeoff is a broken-view placeholder
+    // between disable and re-enable on a hot-reload — transient (the editor resumes its
+    // pair on re-enable), not data loss; onunload can't tell disable from quit.
     // Terminate Worker pool — each Worker holds Blob URLs + a thread
     // that the OS would otherwise keep alive until process exit.
     this.workerClient?.terminate();
@@ -1976,6 +1974,9 @@ export default class GitHubSyncPlugin extends Plugin {
         origin: "conflict",
         basePath: entry.basePath,
         siblingPath: entry.siblingPath,
+        // 1B (R-C2) — a USER-initiated open gets the resume modal; getState strips this so
+        // a later restart-restore of the same leaf is silent.
+        openMode: "user",
       };
       await leaf.setViewState({
         type: DIFF2_EDITOR_VIEW_TYPE,

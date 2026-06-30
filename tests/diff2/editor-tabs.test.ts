@@ -5,6 +5,7 @@ import {
   openDescFor,
   alignOpenDescs,
   planBackNav,
+  persistedEditorState,
   type OpenEditorDesc,
 } from "../../src/diff2/editor-tabs";
 
@@ -166,5 +167,28 @@ describe("planBackNav (S5 `[←]` routing, R-D)", () => {
       tab: "deleted",
       scrollToBase: null,
     });
+  });
+});
+
+describe("persistedEditorState (1B getState — strips the transient openMode)", () => {
+  it("drops openMode so a restored leaf is always a silent resume", () => {
+    expect(
+      persistedEditorState({
+        origin: "conflict",
+        basePath: "Notes/a.md",
+        siblingPath: "Notes/a.conflict-from-X.md",
+        openMode: "user",
+      }),
+    ).toEqual({
+      origin: "conflict",
+      basePath: "Notes/a.md",
+      siblingPath: "Notes/a.conflict-from-X.md",
+    });
+  });
+
+  it("is a no-op shape when openMode is already absent", () => {
+    const s = { origin: "conflict" as const, basePath: "a.md", siblingPath: "a.conflict-from-Y.md" };
+    expect(persistedEditorState(s)).toEqual(s);
+    expect("openMode" in persistedEditorState(s)).toBe(false);
   });
 });
