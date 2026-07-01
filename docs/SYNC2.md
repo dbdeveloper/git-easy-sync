@@ -1362,9 +1362,16 @@ this is a crash *atomicity* gap in snapshot advancement — different mechanism)
 gitignored by the `plugins/*/*` recommended default, so no invariant-block entry
 is needed; `vault.adapter`-only → mobile-safe). Written `{newHead, newTreeSha,
 batchId}` (best-effort — a marker-write failure never aborts the push) *before*
-every tracked-branch `updateBranchHead` (main push + conflict-merge — the two sites that advance the
-tracked branch; conflict-*branch* pushes don't and are excluded), removed *after*
-`store.save()`. `Sync2Manager.recoverPushInflight()` runs BEFORE `findChanges` on
+the MAIN push's `updateBranchHead` (`processBatch`), removed *after* `store.save()`.
+**Scope: the main push ONLY.** The conflict-branch FINALIZE-MERGE has the same gap
+but is deliberately NOT marked — a crash there must also reconcile
+`deleteReference(conflict-branch)` + `clearConflictBranch()`, which the uniform
+"re-record lastSync" heal doesn't do (it would leave the store thinking a conflict
+branch is active while the snapshot says merged, and would SUPPRESS the reconcile
+that would otherwise sort it out — worse than not marking). Marking it, with its
+full cleanup, is a separate tested unit (deferred). Conflict-*branch* pushes never
+advance the tracked branch, so they need no marker.
+`Sync2Manager.recoverPushInflight()` runs BEFORE `findChanges` on
 every enqueue path (`syncAll`, `commitOnly`): if a marker is present it re-reads
 the real remote head; `realHead == marker.newHead` ⇒ our push landed but wasn't
 recorded ⇒ `setLastSync(newHead, tree)` + delete the completed batch, so the base

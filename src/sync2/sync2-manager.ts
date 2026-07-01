@@ -2584,12 +2584,14 @@ export class Sync2Manager {
       parents: [mainHead, cb.head],
       retry: true,
     });
-    // SYNC2 §7.9 — same push→record gap as the main push: this advances the TRACKED branch
-    // (to the merge commit) and then records. Mark in-flight before the ref-advance.
-    await writePushInflight(this.vault, this.selfPluginId, {
-      newHead: mergeCommit,
-      newTreeSha: mainTreeSha,
-    });
+    // SYNC2 §7.9 — this site ALSO has the push→record gap (it advances the tracked branch
+    // to the merge commit, then records), but it is NOT marked. Unlike the main push, a
+    // crash here must ALSO be reconciled against deleteReference(conflict-branch) +
+    // clearConflictBranch() below — the uniform "just re-record lastSync" heal would leave
+    // the store thinking a conflict branch is still active while the snapshot says merged,
+    // and would suppress the reconcile that would otherwise sort it out. Marking it is a
+    // separate, tested unit (its full cleanup). Descoped for now (advisor); a crash here
+    // keeps today's pre-existing behavior, unchanged.
     await this.client.updateBranchHead({ sha: mergeCommit, retry: true });
     await this.client.deleteReference({
       ref: `heads/${cb.name}`,
@@ -2599,7 +2601,6 @@ export class Sync2Manager {
     this.store.clearConflictBranch();
     this.store.setLastSync(mergeCommit, mainTreeSha);
     await this.store.save();
-    await clearPushInflight(this.vault, this.selfPluginId); // snapshot persisted; window closed
     this.logger.info("Sync2 conflict-branch finalized", {
       branch: cb.name,
       mergeCommit,
