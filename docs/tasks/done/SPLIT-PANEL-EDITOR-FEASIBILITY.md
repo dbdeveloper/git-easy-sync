@@ -1,5 +1,16 @@
 # Feasibility: розділення diff-panel і diff-editor по різних табах
 
+> **🏁 DONE / ЗАКРИТО (user-accepted 2026-07-02).** Split реалізовано (Phase-1A S1–S6 +
+> Phase-1B persistence), device-verified. **Фінальне рішення щодо розташування вікон:**
+> (1) **panel** переїжджає у split/нове вікно, лишаючись singleton (onOpen-guard інвертовано:
+> detach старих, keep `this.leaf`); (2) **editor → нове вікно (drag)** — безшовний reparent
+> ТОГО САМОГО об'єкта через Obsidian `moveLeafToPopout` (нуль `constructed`/`onClose`, undo
+> цілий; instanceId-лог довів) → нема handoff/write-race; (3) **editor → in-window split**
+> свідомо ЗАБОРОНЕНО (duplicate-guard, Notice «вже відкритий в іншому вікні») — це був би
+> write-race. handoff-move лишається відкладеним, потрібен ЛИШЕ для рідкісного in-window
+> split-move. Тема закрита — далі проблем не намічається. Коміти: `38fcd43` (panel-move),
+> `51a1a21` (instanceId-діагностика), `f60c4a2` (doc). Нижче — історичний research/build-log.
+>
 > Research note (2026-06-29, branch `fix-diff-editor`). Дослідження можливості +
 > **ратифіковані рішення користувача** (Option A, persistent, open-guard, `[←]`).
 > Це ще НЕ план імплементації — план у окремій сесії (§9).
