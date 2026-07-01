@@ -31,6 +31,7 @@
 
 import { normalizePath, type Vault } from "obsidian";
 import { calculateGitBlobSHA } from "../utils";
+import { detectEol, toLf, commonEol } from "./eol";
 import { atomicWriteFile } from "../sync2/atomic-write";
 import { buildModel, serializeModel } from "./diff-model";
 
@@ -149,6 +150,12 @@ export interface AutosaveMeta {
   // resolved-empty ⇒ deletion; present-0-byte base + resolved-empty ⇒ keep the
   // 0-byte file. DIFF2 R3.3 (2026-06-18).
   baseExistedAtStart: boolean;
+  // bug-59 — the single session EOL, `commonEol(baseEol, siblingEol)` (absent base →
+  // sibling's). The model works in `\n`; write-back restores THIS. Snapshots + SHAs
+  // stay byte-exact/raw. Optional for back-compat: an old meta (pre-fix) parses with
+  // `eol` undefined → treated as "lf" (a resumed old session writes `\n`, matching the
+  // engine default).
+  eol?: import("./eol").EolStyle;
 }
 
 const utf8 = (s: string): ArrayBuffer =>
@@ -199,10 +206,14 @@ export async function startSession(
   const siblingBytes = await vault.adapter.readBinary(siblingPath);
   const baseShaAtStart = await calculateGitBlobSHA(baseBytes);
   const siblingShaAtStart = await calculateGitBlobSHA(siblingBytes);
-  const joinedDocSha = await joinedDocShaV2(
-    utf8Decode(baseBytes),
-    utf8Decode(siblingBytes),
-  ); // V2 buildModel never throws (no sentinels) — see joinedDocShaV2
+  // bug-59 — EOL is detected on the RAW decoded strings, then the model works in `\n`.
+  // Session EOL = commonEol of the two sides (absent base → the sibling's, the content
+  // source). joinedDocSha is computed on the NORMALIZED strings so replay reproduces it.
+  const baseStr = utf8Decode(baseBytes);
+  const siblingStr = utf8Decode(siblingBytes);
+  const siblingEol = detectEol(siblingStr);
+  const eol = baseExistedAtStart ? commonEol(detectEol(baseStr), siblingEol) : siblingEol;
+  const joinedDocSha = await joinedDocShaV2(toLf(baseStr), toLf(siblingStr)); // §2.5 — normalized
 
   await ensureDir(vault, autosaveDir(conflictId)); // step 1 (idempotent), after buildModel
 
@@ -234,6 +245,7 @@ export async function startSession(
     siblingShaAtStart,
     joinedDocSha,
     baseExistedAtStart,
+    eol,
   };
   await atomicWriteFile(vault, metaPath(conflictId), utf8(JSON.stringify(meta))); // step 10 — COMMIT POINT
   return meta;
@@ -336,9 +348,11 @@ export async function classifyReopen(
   // shifts the fingerprint and classifies as `vault-changed`, not `sentinel`.
   let currentJoinedSha: string;
   try {
+    // bug-59 — normalize to `\n` to match the stored (normalized) meta.joinedDocSha; a
+    // CRLF file must not shift the replay-validity fingerprint on its own.
     currentJoinedSha = await joinedDocShaV2(
-      utf8Decode(baseBytes),
-      utf8Decode(siblingBytes),
+      toLf(utf8Decode(baseBytes)),
+      toLf(utf8Decode(siblingBytes)),
     );
   } catch {
     return { kind: "sentinel", meta };
@@ -380,8 +394,9 @@ export async function readResumeSession(
     ? await vault.adapter.read(hp)
     : "";
   return {
-    base: utf8Decode(baseBytes),
-    sibling: utf8Decode(siblingBytes),
+    // bug-59 — snapshots are byte-exact (may be CRLF); the model works in `\n`.
+    base: toLf(utf8Decode(baseBytes)),
+    sibling: toLf(utf8Decode(siblingBytes)),
     jsonl,
   };
 }

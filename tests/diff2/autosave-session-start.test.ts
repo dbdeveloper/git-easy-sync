@@ -97,6 +97,49 @@ describe("startSession — §2.5.a", () => {
     expect(meta.siblingShaAtStart).toBe(await calculateGitBlobSHA(sibSnap));
   });
 
+  // bug-59 — EOL wiring (Option B): snapshots + SHAs stay byte-exact/raw; meta.eol is
+  // commonEol; joinedDocSha is computed on the NORMALIZED (\n) model.
+  it("CRLF base + CRLF sibling → meta.eol='crlf', snapshots byte-exact (raw \\r kept), joinedDocSha normalized", async () => {
+    await fx.vault.adapter.writeBinary("base.md", enc("a\r\nb\r\n"));
+    await fx.vault.adapter.writeBinary("sibling.md", enc("a\r\nB\r\n"));
+    const meta = await startSession(fx.vault, "crlf-both", "base.md", "sibling.md", NOW);
+    expect(meta.eol).toBe("crlf");
+    const dir = autosaveDir("crlf-both");
+    // Snapshots stay BYTE-EXACT (Option B — the raw \r is preserved on disk).
+    const baseSnap = await fx.vault.adapter.readBinary(`${dir}/base.snapshot`);
+    expect(Buffer.from(baseSnap).toString()).toBe("a\r\nb\r\n");
+    expect(meta.baseShaAtStart).toBe(await calculateGitBlobSHA(baseSnap)); // raw SHA
+    // joinedDocSha is on the NORMALIZED (\n) model, so replay reproduces it.
+    expect(meta.joinedDocSha).toBe(
+      await calculateGitBlobSHA(enc(serializeModel(buildModel("a\nb\n", "a\nB\n")))),
+    );
+  });
+
+  it("CRLF base + LF sibling → meta.eol='lf' (LF wins the tie)", async () => {
+    await fx.vault.adapter.writeBinary("base.md", enc("a\r\nb\r\n"));
+    await fx.vault.adapter.writeBinary("sibling.md", enc("a\nB\n"));
+    const meta = await startSession(fx.vault, "crlf-lf", "base.md", "sibling.md", NOW);
+    expect(meta.eol).toBe("lf");
+  });
+
+  it("ABSENT base + CRLF sibling → meta.eol='crlf' (falls back to the sibling's EOL)", async () => {
+    await fx.vault.adapter.remove("base.md");
+    await fx.vault.adapter.writeBinary("sibling.md", enc("a\r\nB\r\n"));
+    const meta = await startSession(fx.vault, "abs-crlf", "base.md", "sibling.md", NOW);
+    expect(meta.eol).toBe("crlf");
+  });
+
+  it("reopening an UNCHANGED CRLF session → 'resume' (replay-validity gate is normalized)", async () => {
+    await fx.vault.adapter.writeBinary("base.md", enc("a\r\nb\r\n"));
+    await fx.vault.adapter.writeBinary("sibling.md", enc("a\r\nB\r\n"));
+    await startSession(fx.vault, "crlf-reopen", "base.md", "sibling.md", NOW);
+    // Files unchanged (still CRLF) → classifyReopen must reproduce the stored (normalized)
+    // joinedDocSha → resume, NOT a spurious vault-changed from the raw \r.
+    expect(
+      (await classifyReopen(fx.vault, "crlf-reopen", "base.md", "sibling.md")).kind,
+    ).toBe("resume");
+  });
+
   it("cursor-a.json initialises to (seq 0, 0,0,0); cursor-b absent; history empty", async () => {
     await startSession(fx.vault, id, "base.md", "sibling.md", NOW);
     const dir = autosaveDir(id);

@@ -287,6 +287,24 @@ describe("classifyToctou — §5.0 Step 1.5 detection", () => {
     expect(Buffer.from(await fx.vault.adapter.readBinary(BASE)).toString()).toBe("remote\n");
     expect(await fx.vault.adapter.exists(SIB)).toBe(false);
   });
+
+  it("bug-59 — CRLF session: commit7Step restores CRLF on write-back (model is \\n)", async () => {
+    await fx.vault.adapter.writeBinary(BASE, enc("a\r\nb\r\n"));
+    await fx.vault.adapter.writeBinary(SIB, enc("a\r\nB\r\n"));
+    const meta = await startSession(fx.vault, ID, BASE, SIB, NOW);
+    expect(meta.eol).toBe("crlf");
+    // The model works in `\n`; the user resolved both sides to "a\nB\n".
+    const res = await commit7Step(
+      fx.vault,
+      ID,
+      meta,
+      { base: "a\nB\n", sibling: "a\nB\n" },
+      { now: NOW },
+    );
+    expect(res.siblingRemoved).toBe(true);
+    // Written back byte-exact in the session EOL (CRLF), NOT the model's `\n`.
+    expect(Buffer.from(await fx.vault.adapter.readBinary(BASE)).toString()).toBe("a\r\nB\r\n");
+  });
 });
 
 describe("commitOrDiscardExit — §4.1 zero-edit invariant + §5.0 exit decision", () => {

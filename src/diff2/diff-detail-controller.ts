@@ -22,6 +22,7 @@ import { closeSearchPanel, openSearchPanel, searchPanelOpen } from "@codemirror/
 import type { EditorView } from "@codemirror/view";
 import { DiffPaneOwner, resolvedFromView } from "./diff-pane-owner";
 import { type DiffViewConfig, mountDiffPaneV2 } from "./diff-pane-v2";
+import { toLf } from "./eol";
 import { isMarkdownPath } from "./conflict-merge-all";
 import {
   autosaveDir,
@@ -232,12 +233,14 @@ export class DiffDetailController {
 
     const adapter = this.deps.vault.adapter;
     try {
+      // bug-59 — the model hardcodes `\n` (and CM6 strips `\r`). Normalize the live
+      // files' EOL to `\n` for the model; write-back restores the session EOL (meta.eol).
       let ours = "";
       const baseExists = await adapter.exists(entry.basePath);
       if (baseExists) {
-        ours = await adapter.read(entry.basePath);
+        ours = toLf(await adapter.read(entry.basePath));
       }
-      const theirs = await adapter.read(entry.siblingPath);
+      const theirs = toLf(await adapter.read(entry.siblingPath));
 
       // Stale-state guard: bail if the user switched away during await.
       if (!this.host.isStillTargeting(entry) || !body.isConnected) {
@@ -754,6 +757,7 @@ export class DiffDetailController {
         resolved,
         entry.deviceLabel,
         Date.now(),
+        session.meta.eol ?? "lf", // bug-59 — session EOL restored on the alt write
       );
       const suffix = res.siblingPath ? ` (+ ${res.siblingPath})` : "";
       new Notice(`Saved your resolution as ${res.basePath}${suffix}`);

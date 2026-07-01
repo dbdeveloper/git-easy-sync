@@ -39,6 +39,7 @@
 
 import { normalizePath, TFile, type Vault } from "obsidian";
 import { atomicWriteFile, stagingPathFor } from "../sync2/atomic-write";
+import { restoreEol } from "./eol";
 import { safeRename } from "../sync2/cross-platform";
 import { buildSiblingPath } from "../sync2/conflict-store";
 import { calculateGitBlobSHA } from "../utils";
@@ -88,7 +89,10 @@ export function baseCommitAction(
   meta: AutosaveMeta,
   confirmedDelete = false,
 ): { delete: boolean; bytes: ArrayBuffer } {
-  if (resolvedBase !== "") return { delete: false, bytes: utf8(resolvedBase) };
+  // bug-59 — the model is `\n`; restore the session EOL (meta.eol) on the way to disk.
+  // Old meta (pre-fix) has eol undefined → "lf" (writes `\n`, the engine default).
+  if (resolvedBase !== "")
+    return { delete: false, bytes: utf8(restoreEol(resolvedBase, meta.eol ?? "lf")) };
   const del =
     !meta.baseExistedAtStart ||
     (confirmedDelete && meta.baseShaAtStart !== GIT_EMPTY_BLOB_SHA);
@@ -225,7 +229,7 @@ export async function commit7Step(
       ? resolved.base === ""
         ? baseAction.bytes
         : emptyRepBytes(meta, opts.confirmedDelete)
-      : utf8(resolved.sibling);
+      : utf8(restoreEol(resolved.sibling, meta.eol ?? "lf")); // bug-59 — same EOL as base
   // expectedBaseSha is the empty-blob SHA for a delete — it keeps Step 6.5's
   // equality check working and lets recovery recognise the delete via meta.
   const expectedBaseSha = await calculateGitBlobSHA(baseBytes);
@@ -449,7 +453,12 @@ export async function commitUnchangedSide(
   // §5.0.e is a single write (no commit7Step delete machinery, no recoverCommit
   // roll-forward) — keep the empty→"\n" guard so an emptied side stays a benign
   // 1-byte file rather than a §2.9-resurrectable 0-byte one.
-  await atomicWriteFile(vault, writtenPath, utf8(guardEmpty(writeStr)));
+  // bug-59 — restore the session EOL (empty→"\n" marker kept via guardEmpty AFTER).
+  await atomicWriteFile(
+    vault,
+    writtenPath,
+    utf8(guardEmpty(restoreEol(writeStr, meta.eol ?? "lf"))),
+  );
   await vault.adapter.rmdir(autosaveDir(autosaveId), true);
   return { writtenPath };
 }
@@ -486,6 +495,7 @@ export async function commitToAlt(
   resolved: ResolvedSides,
   deviceLabel: string,
   ts: number,
+  eol: import("./eol").EolStyle = "lf", // bug-59 — session EOL, restored on write
 ): Promise<{ basePath: string; siblingPath?: string }> {
   // Single disk boundary — the user's typed name must be normalizePath'd before
   // it touches the adapter (CLAUDE.md path rule; mobile pastes stray slashes).
@@ -510,10 +520,15 @@ export async function commitToAlt(
     }
   }
 
-  // base FIRST — a crash leaves the named file, not an orphan sibling.
-  await atomicWriteFile(vault, target, utf8(guardEmpty(resolved.base)));
+  // base FIRST — a crash leaves the named file, not an orphan sibling. bug-59 — restore
+  // the session EOL (guardEmpty AFTER, so an emptied side stays a benign "\n" marker).
+  await atomicWriteFile(vault, target, utf8(guardEmpty(restoreEol(resolved.base, eol))));
   if (siblingPath) {
-    await atomicWriteFile(vault, siblingPath, utf8(guardEmpty(resolved.sibling)));
+    await atomicWriteFile(
+      vault,
+      siblingPath,
+      utf8(guardEmpty(restoreEol(resolved.sibling, eol))),
+    );
   }
   await vault.adapter.rmdir(autosaveDir(autosaveId), true);
   return { basePath: target, siblingPath };
