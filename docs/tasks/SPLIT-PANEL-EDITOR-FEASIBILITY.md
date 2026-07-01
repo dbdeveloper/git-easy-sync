@@ -746,6 +746,13 @@ back-stack із 3 кроків / 3 view-types**:
   > закриє recovery-replay perf із TODO), АЛЕ ризик тихого псування undo → не зараз. relocate-API (B1)
   > ВІДКИНУТО: Obsidian 1.7.2 не має `moveLeaf`/`setParent` (тільки `moveLeafToPopout`). **Handoff =
   > ОКРЕМА сесія ПІСЛЯ S6** (/advisor + device-тести; failure-mode = втрата даних).
+  > **🟢 ПІДТВЕРДЖЕНО (2026-07-02, device + instanceId-лог): drag редактора в НОВЕ ВІКНО вже працює
+  > безшовно — Obsidian переносить ЖИВИЙ leaf через `moveLeafToPopout` (той САМИЙ об'єкт: нуль
+  > `constructed`/`onClose`, undo/стан цілі) → нема handoff/resume-з-диску/write-race, повністю
+  > безпечно.** Лише IN-WINDOW **split** клонує (нема `moveLeaf`) → duplicate-guard відмовляє
+  > (`constructed→onClose`, hadOwner:false, Notice «вже відкритий в іншому вікні»). Тож handoff-сесія
+  > потрібна ЛИШЕ для in-window split-move (рідкісний), не для popout. Діагностика: `diff2 editor view
+  > constructed/onClose {instanceId}` (per-construction id — reparent не інкрементить).
   > **🔴 FORWARD-LANDMINE (advisor): handoff НЕ суто additive.** Щойно повернеш `getState` (клон має
   > отримати реальну пару) — editor scan-guard стає LIVE (клони приходять з повним станом → доходять
   > до scan), а його ПОТОЧНА дія = `detach self + reveal original` = **REFUSE** — це ПРОТИЛЕЖНЕ до
