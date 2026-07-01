@@ -1325,6 +1325,58 @@ fallback / empty→null / error→null) and `sync2-manager.test.ts` "plugin-js
 mtime tie-break uses the file's LAST-CHANGE date" (the resolver — proven to
 fail on the old HEAD-date code, pass with the fix).
 
+### 7.9 "conflict with yourself" on a single-writer vault — the push→record crash gap (2026-07-01)
+
+**Symptom.** A one-device vault (no other writers, one-way device → GitHub)
+registered a `modify-vs-modify` conflict on a file against *itself*. This is
+physically impossible with a correct snapshot: a conflict needs the remote to
+have diverged from the recorded `base` INDEPENDENTLY of the local edit, and on a
+single writer the remote only moves when *we* push — after which *we* record it.
+
+**Cause.** The push flow in `processBatch` (and the conflict-branch finalize
+merge) advances the tracked branch and THEN persists the snapshot, with **no
+atomicity across the window**:
+
+```
+updateBranchHead(commitSha)   ← REMOTE HEAD ADVANCES (point of no return)
+...
+setLastSync(commitSha, tree)  ← snapshot updated in memory
+store.save()                  ← snapshot PERSISTED to disk
+```
+
+A crash (kill Obsidian) between the ref-advance and `store.save()` leaves the
+remote advanced but the on-disk snapshot frozen at the OLD head — a **stale
+base**. A plain crash SELF-HEALS on the next drain (the reconcile's
+`ours == theirs` convergence records the snapshot). But if the user EDITS the
+file after the interrupted push (the "…and then make local changes" moment), the
+next reconcile 3-ways `ours=v2` against `base=v0` (stale) and `theirs=v1` (our
+own pushed content) — both "changed" the same region relative to the stale base
+→ a false conflict with ourselves. Proven deterministically in
+`sync2-manager.test.ts` "REPRO: crash between updateBranchHead and recordSync".
+Orthogonal to §7.8 (that is a file-vs-HEAD *date* confusion in the tie-break;
+this is a crash *atomicity* gap in snapshot advancement — different mechanism).
+
+**Fix (crash-recovery marker).** `push-inflight.ts`: a per-device
+`.push-inflight.json` marker in the plugin's OWN folder
+(`<configDir>/plugins/<id>/`, alongside `.push-queue`/`.conflicts` — already
+gitignored by the `plugins/*/*` recommended default, so no invariant-block entry
+is needed; `vault.adapter`-only → mobile-safe). Written `{newHead, newTreeSha,
+batchId}` (best-effort — a marker-write failure never aborts the push) *before*
+every tracked-branch `updateBranchHead` (main push + conflict-merge — the two sites that advance the
+tracked branch; conflict-*branch* pushes don't and are excluded), removed *after*
+`store.save()`. `Sync2Manager.recoverPushInflight()` runs BEFORE `findChanges` on
+every enqueue path (`syncAll`, `commitOnly`): if a marker is present it re-reads
+the real remote head; `realHead == marker.newHead` ⇒ our push landed but wasn't
+recorded ⇒ `setLastSync(newHead, tree)` + delete the completed batch, so the base
+is correct before the change-detector measures against it. Any other `realHead`
+(ref never landed / another device moved it) ⇒ just drop the marker and let the
+normal drift reconcile handle it. A `getBranchHeadSha` failure LEAVES the marker
+(retry next drain); a corrupt/failed marker degrades to today's
+self-heal-or-conflict (never worse). Tests: `push-inflight.test.ts` (marker
+fault-tolerance), `sync2-manager.test.ts` "crash gap WITHOUT a post-crash edit
+SELF-HEALS", "REPRO …" (no marker → the false conflict), and "FIX: crash gap WITH
+the push-inflight marker → recovery re-records the base, NO conflict".
+
 ---
 
 ## 8. Worker Orchestra

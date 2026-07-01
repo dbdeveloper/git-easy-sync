@@ -52,6 +52,11 @@ import { buildConflictBranchName } from "./conflict-branch";
 import { newBatchId } from "./timestamp-id";
 import type { TrashHooks } from "./trash-hooks";
 import { normalizeText, shouldCanonicalize } from "./text-normalize";
+import {
+  writePushInflight,
+  readPushInflight,
+  clearPushInflight,
+} from "./push-inflight";
 import { FileChange, QueueBatch } from "./types";
 
 // ── Skip-class taxonomy (SYNC2 §6 + §7.5) ─────────
@@ -655,6 +660,9 @@ export class Sync2Manager {
       // bootstrapIfNeeded returns null in O(1) — every subsequent click
       // is pure-local.
       await this.bootstrapIfNeeded(progress);
+      // Crash-recovery (SYNC2 §7.9): heal a push→record gap BEFORE findChanges, so the
+      // base is correct before the change-detector enqueues anything against it.
+      await this.recoverPushInflight();
       if (this.invariants) await this.invariants.enforce();
       // Sanitize vault filenames containing Windows-forbidden ASCII
       // chars (`< > : " | ? * \`) BEFORE findChanges so the rename
@@ -838,6 +846,11 @@ export class Sync2Manager {
   async commitOnly(): Promise<void> {
     this.logger.info("Sync2 commitOnly start");
     await this.reconcileRemoteIdentity();
+    // Crash-recovery (SYNC2 §7.9) — same reason as syncAll: correct the base before the
+    // change-detector enqueues, or a post-crash commit would carry a stale parent that the
+    // later drain 3-way-conflicts. Network only if a marker is present (rare); a plain
+    // commit stays local.
+    await this.recoverPushInflight();
     if (this.invariants) await this.invariants.enforce();
     await this.sanitizeForbiddenFilenames();
     const changes = await this.detector.findChanges();
@@ -980,6 +993,49 @@ export class Sync2Manager {
   // Removals: delete-vs-modify races route through the same conflict
   // path (kind="delete-vs-modify"), so the user explicitly picks
   // keep-delete vs accept-remote-version via the sibling-file UI.
+  // Crash-recovery for the push→record gap (SYNC2 §7.9). The push flow advances the
+  // tracked branch (updateBranchHead) and THEN persists the snapshot (store.save); a crash
+  // between the two leaves a `.push-inflight` marker + a remote that moved without the
+  // snapshot recording it. On a single-writer vault that stale base is the ONLY way a
+  // modify-vs-modify "conflict with yourself" can arise (after a post-crash edit). This
+  // runs BEFORE findChanges on every enqueue path so the base is corrected first. Cheap: an
+  // exists() when no marker; one getBranchHeadSha only when a marker is present (rare).
+  private async recoverPushInflight(): Promise<void> {
+    const marker = await readPushInflight(this.vault, this.selfPluginId);
+    if (!marker) return;
+    let realHead: string;
+    try {
+      realHead = await this.client.getBranchHeadSha({ retry: true });
+    } catch {
+      // Offline / transient — LEAVE the marker so a later drain retries the heal. Clearing
+      // it here would forfeit the correction and re-expose the false conflict.
+      return;
+    }
+    if (realHead === marker.newHead) {
+      // Our push DID land but the snapshot wasn't recorded. Record it now so `base` reflects
+      // the remote → pullIfNeeded sees no drift → a post-crash edit pushes cleanly onto this
+      // head instead of 3-way-conflicting against a stale base. Delete the completed batch
+      // (its content already landed) so it doesn't re-push.
+      this.store.setLastSync(marker.newHead, marker.newTreeSha);
+      await this.store.save();
+      if (marker.batchId) await this.queue.delete(marker.batchId);
+      this.logger.info("Sync2 push-inflight recovered (push landed; snapshot re-recorded)", {
+        newHead: marker.newHead,
+        batchId: marker.batchId,
+      });
+    } else {
+      // realHead == the OLD head → the ref-advance never landed (crash before/during it);
+      // the batch is still valid and re-pushes normally. OR another device moved the head
+      // after our crash → the normal drift reconcile (same safe multi-device path) handles
+      // it. Either way just drop the marker.
+      this.logger.info("Sync2 push-inflight cleared (push did not land / head moved)", {
+        newHead: marker.newHead,
+        realHead,
+      });
+    }
+    await clearPushInflight(this.vault, this.selfPluginId);
+  }
+
   private async pullIfNeeded(
     sharedProgress: ProgressHandle | null = null,
   ): Promise<string | null> {
@@ -2528,6 +2584,12 @@ export class Sync2Manager {
       parents: [mainHead, cb.head],
       retry: true,
     });
+    // SYNC2 §7.9 — same push→record gap as the main push: this advances the TRACKED branch
+    // (to the merge commit) and then records. Mark in-flight before the ref-advance.
+    await writePushInflight(this.vault, this.selfPluginId, {
+      newHead: mergeCommit,
+      newTreeSha: mainTreeSha,
+    });
     await this.client.updateBranchHead({ sha: mergeCommit, retry: true });
     await this.client.deleteReference({
       ref: `heads/${cb.name}`,
@@ -2537,6 +2599,7 @@ export class Sync2Manager {
     this.store.clearConflictBranch();
     this.store.setLastSync(mergeCommit, mainTreeSha);
     await this.store.save();
+    await clearPushInflight(this.vault, this.selfPluginId); // snapshot persisted; window closed
     this.logger.info("Sync2 conflict-branch finalized", {
       branch: cb.name,
       mergeCommit,
@@ -3404,6 +3467,14 @@ export class Sync2Manager {
           parent: batch.parentCommitSha ?? undefined,
           retry: true,
         });
+        // SYNC2 §7.9 — mark the push in-flight BEFORE advancing the tracked branch. A crash
+        // between this ref-advance and store.save() below leaves the remote ahead of the
+        // snapshot; recoverPushInflight() heals it on the next drain. Cleared after persist.
+        await writePushInflight(this.vault, this.selfPluginId, {
+          newHead: commitSha,
+          newTreeSha,
+          batchId: id,
+        });
         await this.client.updateBranchHead({
           sha: commitSha,
           retry: true,
@@ -3453,6 +3524,8 @@ export class Sync2Manager {
       this.store.setLastSync(commitSha, newTreeSha);
       this.store.setLastCommitMtime(this.now());
       await this.store.save();
+      // SYNC2 §7.9 — snapshot persisted; the push→record window is closed.
+      await clearPushInflight(this.vault, this.selfPluginId);
 
       await this.queue.delete(id);
       // SYNC2 §4.3: queue depth dropped after successful push.

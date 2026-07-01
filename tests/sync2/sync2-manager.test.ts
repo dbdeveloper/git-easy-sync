@@ -21,6 +21,7 @@ import TreeBuilder from "../../src/sync2/tree-builder";
 import ConflictStoreNew from "../../src/sync2/conflict-store";
 import GI from "../../src/gi";
 import { Vault } from "../../mock-obsidian";
+import { writePushInflight, readPushInflight } from "../../src/sync2/push-inflight";
 import { calculateGitBlobSHA } from "../../src/utils";
 import { NewTreeRequestItem } from "../../src/github/client";
 
@@ -1112,10 +1113,10 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // the reconcile 3-ways a stale base against BOTH sides → a conflict with OURSELVES,
       // which is otherwise physically impossible on a single-writer vault.
       //
-      // This test reconstructs that post-crash state directly and asserts the false
-      // conflict. It LOCKS IN the current (buggy) behaviour — the marker-recovery fix will
-      // flip this assertion to "no conflict" (the fix re-reads the real remote HEAD at
-      // onload and records the snapshot before the change-detector runs).
+      // This test reconstructs that post-crash state WITHOUT a push-inflight marker — the
+      // FALLBACK case (the §7.9 marker write itself failed, or a crash before it). With no
+      // marker, recoverPushInflight is a no-op → the stale base survives → the false
+      // conflict. The companion test below adds the marker and shows the recovery heals it.
       const X = "Notes/x.md";
       const baseV0 = "alpha\nbeta\ngamma\n"; // STALE snapshot base (pre-interrupted-push)
       const theirsV1 = "alpha\nBETA-remote\ngamma\n"; // OUR OWN pushed content (crash landed it on the remote)
@@ -1146,6 +1147,81 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       const conflicts = f.manager["conflictStore"]?.getAll() ?? [];
       expect(conflicts.some((c) => c.vaultPath === X)).toBe(true);
       expect(conflicts.find((c) => c.vaultPath === X)?.kind).toBe("modify-vs-modify");
+    });
+
+    it("crash gap WITHOUT a post-crash edit SELF-HEALS (ours==theirs convergence, no conflict)", async () => {
+      // Same crash gap as the repro above, but the user did NOT edit after the interrupted
+      // push — the vault still holds exactly what was pushed (v1). On restart the reconcile
+      // sees ours(v1) == theirs(v1) → no-op convergence → records the snapshot, no conflict.
+      // This scopes the marker-recovery fix (advisor #1): the plain crash is already
+      // handled; the marker only needs to cover the crash + edit-before-next-sync window.
+      const X = "Notes/x.md";
+      const baseV0 = "alpha\nbeta\ngamma\n"; // stale snapshot base
+      const theirsV1 = "alpha\nBETA-remote\ngamma\n"; // our pushed content = current vault (NO post-edit)
+
+      writeVaultFile(f.root, X, theirsV1);
+      f.store.set(X, { path: X, remoteSha: await shaOf(baseV0), mtime: 0, size: baseV0.length });
+      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      f.client.setBranchHead("NEW_HEAD");
+      f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
+      f.client.setContentAtRef("BASE_HEAD", X, baseV0);
+      f.client.setContentAtRef("NEW_HEAD", X, theirsV1);
+      f.client.setCompareResult("BASE_HEAD", "NEW_HEAD", {
+        status: "diverged",
+        files: [{ filename: X, status: "modified", sha: await shaOf(theirsV1) }],
+      });
+
+      await expect(f.manager.syncAll()).resolves.not.toThrow();
+
+      // No conflict — ours == theirs, so the reconcile converges and records the snapshot.
+      const conflicts = f.manager["conflictStore"]?.getAll() ?? [];
+      expect(conflicts.some((c) => c.vaultPath === X)).toBe(false);
+    });
+
+    it("FIX: crash gap WITH the push-inflight marker → recovery re-records the base, NO conflict (SYNC2 §7.9)", async () => {
+      // Same crash gap + post-crash edit as the REPRO above, but the interrupted push left a
+      // .push-inflight marker (which the fix writes before every updateBranchHead). On the
+      // next sync, recoverPushInflight (before findChanges) sees the real remote head ==
+      // marker.newHead → our push landed → records the snapshot at that head. The post-crash
+      // edit then measures against the CORRECT base → clean push, no false self-conflict.
+      const X = "Notes/x.md";
+      const baseV0 = "alpha\nbeta\ngamma\n"; // stale snapshot base
+      const theirsV1 = "alpha\nBETA-remote\ngamma\n"; // our pushed content, on the remote
+      const oursV2 = "alpha\nBETA-local\ngamma\n"; // post-crash local edit
+
+      writeVaultFile(f.root, X, oursV2);
+      f.store.set(X, { path: X, remoteSha: await shaOf(baseV0), mtime: 0, size: baseV0.length });
+      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      f.client.setBranchHead("NEW_HEAD");
+      f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
+      f.client.setContentAtRef("BASE_HEAD", X, baseV0);
+      f.client.setContentAtRef("NEW_HEAD", X, theirsV1);
+      f.client.setCompareResult("BASE_HEAD", "NEW_HEAD", {
+        status: "diverged",
+        files: [{ filename: X, status: "modified", sha: await shaOf(theirsV1) }],
+      });
+      // The crashed push left this marker — newHead is the real remote head (the push landed).
+      await writePushInflight(
+        f.vault as unknown as import("obsidian").Vault,
+        SELF_PLUGIN_ID,
+        { newHead: "NEW_HEAD", newTreeSha: "NEW_TREE" },
+      );
+
+      await expect(f.manager.syncAll()).resolves.not.toThrow();
+
+      // Recovery corrected the base → NO false conflict (contrast the REPRO above).
+      const conflicts = f.manager["conflictStore"]?.getAll() ?? [];
+      expect(conflicts.some((c) => c.vaultPath === X)).toBe(false);
+      // The snapshot is no longer the stale BASE_HEAD — recovery healed it to NEW_HEAD and
+      // then the post-crash edit (v2) pushed cleanly on top, advancing it further.
+      expect(f.store.getLastSyncCommitSha()).not.toBe("BASE_HEAD");
+      // The marker was consumed by the recovery (and the v2 push's own marker cleared too).
+      expect(
+        await readPushInflight(
+          f.vault as unknown as import("obsidian").Vault,
+          SELF_PLUGIN_ID,
+        ),
+      ).toBeNull();
     });
 
     it("register-conflict path also keeps in-memory batch.files in sync with disk", async () => {
