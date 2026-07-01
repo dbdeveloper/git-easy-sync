@@ -729,6 +729,14 @@ back-stack із 3 кроків / 3 view-types**:
   > (2) **panel:** singleton guard у `onOpen` (scan `getLeavesOfType` → інший leaf → reveal original +
   > detach self), `onClose` `controller?.dispose()` null-safe. User-ствердив: panel ОБОВ'ЯЗКОВО
   > singleton (інакше `[←]` не знає куди вертатись) — docs коректні, поведінка була ні.
+  > **🟢 UPDATE (2026-07-02): panel тепер ПЕРЕЇЖДЖАЄ (move, не clone).** Guard ІНВЕРТОВАНО: onOpen
+  > детачить СТАРІ панелі й лишає `this.leaf` (щойно-відкритий = drag-target) → панель рухається у нове
+  > вікно/split, лишаючись singleton. `this.leaf` (а не `getLeavesOfType` ORDER) → нема tree-traversal
+  > припущення (advisor: «keep-last» помилкове для in-window split, бо новий leaf не завжди останній).
+  > Панель stateless (нема autosave/write-target), тож переїзд безпечний — на відміну від editor-а, який
+  > лишається safe-refuse (write-race, handoff відкладено). ⚠️ старий «два onOpen→zero panels» race
+  > РЕТИРОВАНО: collapse-on-open тримає інваріант (будь-який open → одна панель) → 2-panels-at-restart
+  > недосяжно. Device-verified (не unit — leaf-drag happy-dom не симулює).
   > **OPEN (user-ask):** «split → закривати ПОПЕРЕДНІЙ (=move editor у новий stack)?» — бажано, але
   > безпечний move потребує session-handoff (2 owners на 1 autosave-dir = write-race); зараз = safe
   > refuse. **РІШЕННЯ (user 2026-06-30): handoff-move робимо через (a) replay-з-диску** (shutdown

@@ -112,24 +112,20 @@ export class DiffPanelView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
-    // Singleton (R-A): exactly ONE diff-panel per vault — the editor's `[←]` reveals
-    // "the" panel, so a second one would make back-navigation ambiguous. Obsidian
-    // "Split"/"Open in new window" clone the view into a new leaf; if another panel
-    // already exists, this leaf is the clone → reveal the original and close this one.
-    // (activateDiffEditView reveals-or-creates a single leaf, so this only fires on an
-    // Obsidian-initiated duplicate.)
-    // ⚠️ 1B note: if two panel leaves' onOpen ever fire in the SAME tick (only reachable
-    // once 1B makes panels restart-persistent → a saved pair restored together), each
-    // finds the other and BOTH detach → zero panels. Unreachable in 1A (unload detaches
-    // panels, nothing restores). When 1B lands, dedup once at layout-ready / keep-by-leaf-
-    // order instead of each onOpen racing.
-    const existing = this.app.workspace
+    // Singleton via MOVE, not clone (R-A): exactly ONE diff-panel — the editor's `[←]`
+    // reveals "the" panel, so a second would make back-nav ambiguous. Obsidian's
+    // drag-to-split / "Open in new window" spawns a 2nd leaf whose onOpen fires HERE.
+    // THIS leaf is the just-opened one (the drag target), so KEEP it and detach any
+    // older panel(s) — the panel MOVES to where the user put it instead of snapping back.
+    // Using `this.leaf` (not getLeavesOfType ORDER) means no tree-traversal assumption →
+    // correct for both in-window split and popout. The collapse-on-open holds the
+    // invariant (any open → exactly one panel), so only one is ever persisted; the old
+    // "two onOpens race to zero panels" case is thus unreachable (no layout-ready dedup
+    // needed), and even if it somehow occurred it's recoverable by reopening.
+    for (const l of this.app.workspace
       .getLeavesOfType(DIFF2_EDIT_VIEW_TYPE)
-      .find((l) => l !== this.leaf);
-    if (existing) {
-      this.app.workspace.revealLeaf(existing);
-      this.leaf.detach();
-      return;
+      .filter((l) => l !== this.leaf)) {
+      l.detach();
     }
 
     // ConflictCounter notifies on any sibling-event vault change → re-render the list.
