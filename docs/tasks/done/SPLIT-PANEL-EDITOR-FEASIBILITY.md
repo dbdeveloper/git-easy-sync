@@ -9,7 +9,8 @@
 > свідомо ЗАБОРОНЕНО (duplicate-guard, Notice «вже відкритий в іншому вікні») — це був би
 > write-race. handoff-move лишається відкладеним, потрібен ЛИШЕ для рідкісного in-window
 > split-move. Тема закрита — далі проблем не намічається. Коміти: `38fcd43` (panel-move),
-> `51a1a21` (instanceId-діагностика), `f60c4a2` (doc). Нижче — історичний research/build-log.
+> `51a1a21` (instanceId-діагностика — довела reparent, згодом ПРИБРАНА за непотрібністю),
+> `f60c4a2` (doc). Нижче — історичний research/build-log.
 >
 > Research note (2026-06-29, branch `fix-diff-editor`). Дослідження можливості +
 > **ратифіковані рішення користувача** (Option A, persistent, open-guard, `[←]`).
@@ -762,8 +763,9 @@ back-stack із 3 кроків / 3 view-types**:
   > `constructed`/`onClose`, undo/стан цілі) → нема handoff/resume-з-диску/write-race, повністю
   > безпечно.** Лише IN-WINDOW **split** клонує (нема `moveLeaf`) → duplicate-guard відмовляє
   > (`constructed→onClose`, hadOwner:false, Notice «вже відкритий в іншому вікні»). Тож handoff-сесія
-  > потрібна ЛИШЕ для in-window split-move (рідкісний), не для popout. Діагностика: `diff2 editor view
-  > constructed/onClose {instanceId}` (per-construction id — reparent не інкрементить).
+  > потрібна ЛИШЕ для in-window split-move (рідкісний), не для popout. (Доведено тимчасовою
+  > `diff2 editor view constructed/onClose {instanceId}` діагностикою — reparent не інкрементив id;
+  > ПРИБРАНА після того, як довела свою тезу.)
   > **🔴 FORWARD-LANDMINE (advisor): handoff НЕ суто additive.** Щойно повернеш `getState` (клон має
   > отримати реальну пару) — editor scan-guard стає LIVE (клони приходять з повним станом → доходять
   > до scan), а його ПОТОЧНА дія = `detach self + reveal original` = **REFUSE** — це ПРОТИЛЕЖНЕ до
