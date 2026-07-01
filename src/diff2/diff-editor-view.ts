@@ -41,8 +41,15 @@ import {
 
 export const DIFF2_EDITOR_VIEW_TYPE = "diff2-editor-view";
 
+// Monotonic per-construction id — proves object identity across a window move. A
+// same-instance leaf reparent NEVER re-runs the `(leaf) => new DiffEditorView(...)`
+// factory, so no new id is logged; a clone/recreate logs a fresh id. This is the
+// definitive "is it the same editor?" signal (also makes editor opens visible in logs).
+let diffEditorViewSeq = 0;
+
 export class DiffEditorView extends ItemView implements DiffDetailHost {
   private readonly deps: DiffEditViewDeps;
+  private readonly instanceId = ++diffEditorViewSeq;
   // S2 — the detail engine, shared verbatim with the panel host. Created per-view
   // in onOpen; mount/dispose cycle inside.
   private controller!: DiffDetailController;
@@ -64,6 +71,9 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   constructor(leaf: WorkspaceLeaf, deps: DiffEditViewDeps) {
     super(leaf);
     this.deps = deps;
+    // A NEW line here on a window move ⇒ the view was RECREATED; NO new line ⇒ the same
+    // object was reparented into the other window (see diffEditorViewSeq).
+    deps.logger?.info("diff2 editor view constructed", { instanceId: this.instanceId });
   }
 
   getViewType(): string {
@@ -251,6 +261,10 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   }
 
   async onClose(): Promise<void> {
+    // Fires only if the view is DESTROYED (tab close / recreate). A same-instance window
+    // reparent does NOT fire it — so a move with neither this nor a "constructed" line is
+    // proof the object was carried across intact.
+    this.deps.logger?.info("diff2 editor view onClose", { instanceId: this.instanceId });
     if (this.escScope && this.escScopePushed) {
       this.app.keymap.popScope(this.escScope);
       this.escScopePushed = false;
