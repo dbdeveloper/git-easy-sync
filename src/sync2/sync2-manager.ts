@@ -1530,14 +1530,18 @@ export class Sync2Manager {
     const { files, sha: treeSha } = await this.client.getRepoContent({
       retry: true,
     });
-    // One getCommit for the uniform remote "last touched" reference
-    // — beats N per-file lookups for adoption that already touches
-    // every entry once.
+    // getCommit gives us the HEAD tree sha for the final setLastSync below. It used to
+    // ALSO supply a single "remote last touched" date (headCommit.committer.date) reused
+    // as every file's freshness — but that was the SYNC2 §7.8 bug: the HEAD date is NOT
+    // when a given file was last changed, so a HEAD that advanced past a file made the
+    // remote look newer than a genuinely newer local edit → adoption could overwrite the
+    // user's local copy with an older remote one. The per-file last-change date is now
+    // fetched INSIDE the loop, only for files that actually differ (identical/canonical-
+    // match short-circuit before it), so the cost stays bounded.
     const headCommit = await this.client.getCommit({
       sha: currentHead,
       retry: true,
     });
-    const remoteHeadDateMs = Date.parse(headCommit.committer.date);
 
     // Pre-filter syncable paths so the progress notice's "N" matches
     // what the loop will actually touch. Without this, a 500-file
@@ -1702,7 +1706,19 @@ export class Sync2Manager {
 
         const stat = await this.vault.adapter.stat(filePath);
         const localMtimeMs = stat?.mtime ?? 0;
-        if (localMtimeMs >= remoteHeadDateMs) {
+        // theirs "freshness" = when THIS FILE was last changed on the remote (SYNC2 §7.8),
+        // NOT the branch HEAD date. Only reached for DIFFERING files (identical/canonical-
+        // match continue above), so the per-file lookup is bounded. null → 0 → local wins:
+        // adoption is local-authority-leaning ("I'm bringing my vault to this repo"), so on
+        // a failed date-fetch keep the user's working copy rather than pull a remote we
+        // can't date.
+        const remoteFileDateMs =
+          (await this.client.getLatestCommitDateForPath({
+            path: filePath,
+            ref: currentHead,
+            retry: true,
+          })) ?? 0;
+        if (localMtimeMs >= remoteFileDateMs) {
           // Local wins. Don't recordSync — findChanges will emit
           // the file as "added" (no snapshot entry) and the next push
           // will lift this local version onto the remote.

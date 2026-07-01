@@ -1100,6 +1100,54 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       ).toBe(true);
     });
 
+    it("REPRO: crash between updateBranchHead and recordSync → stale base → false SELF-conflict on one device", async () => {
+      // The bug (user-reported, one-device vault, no competing writers). The push flow
+      // in processBatch does, in order:
+      //   3407  updateBranchHead(commitSha)   ← REMOTE HEAD ADVANCES (point of no return)
+      //   3453  setLastSync(commitSha, tree)  ← snapshot recorded (in-memory)
+      //   3455  store.save()                  ← snapshot PERSISTED to disk
+      // A crash (kill Obsidian) BETWEEN 3407 and 3455 leaves the remote advanced but the
+      // on-disk snapshot frozen at the OLD head. On restart the recorded `base` is stale.
+      // If the user then edits the file (the "when it's time to make local changes" moment),
+      // the reconcile 3-ways a stale base against BOTH sides → a conflict with OURSELVES,
+      // which is otherwise physically impossible on a single-writer vault.
+      //
+      // This test reconstructs that post-crash state directly and asserts the false
+      // conflict. It LOCKS IN the current (buggy) behaviour — the marker-recovery fix will
+      // flip this assertion to "no conflict" (the fix re-reads the real remote HEAD at
+      // onload and records the snapshot before the change-detector runs).
+      const X = "Notes/x.md";
+      const baseV0 = "alpha\nbeta\ngamma\n"; // STALE snapshot base (pre-interrupted-push)
+      const theirsV1 = "alpha\nBETA-remote\ngamma\n"; // OUR OWN pushed content (crash landed it on the remote)
+      const oursV2 = "alpha\nBETA-local\ngamma\n"; // the post-crash local edit (on top of v1)
+
+      writeVaultFile(f.root, X, oursV2);
+      // Snapshot FROZEN at the old head with the old base bytes (the crash prevented the
+      // advance to NEW_HEAD/v1). mtime 0 ≠ the file's real mtime → change-detector sees the
+      // local edit and enqueues it.
+      f.store.set(X, { path: X, remoteSha: await shaOf(baseV0), mtime: 0, size: baseV0.length });
+      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      // Remote is ALREADY advanced (the interrupted push's commit landed): HEAD = NEW_HEAD,
+      // X = v1 there.
+      f.client.setBranchHead("NEW_HEAD");
+      f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
+      f.client.setContentAtRef("BASE_HEAD", X, baseV0);
+      f.client.setContentAtRef("NEW_HEAD", X, theirsV1);
+      f.client.setCompareResult("BASE_HEAD", "NEW_HEAD", {
+        status: "diverged",
+        files: [{ filename: X, status: "modified", sha: await shaOf(theirsV1) }],
+      });
+
+      await expect(f.manager.syncAll()).resolves.not.toThrow();
+
+      // The false self-conflict: base v0 vs ours v2 vs theirs v1 — both "changed" line 2
+      // relative to the stale base → 3-way registers a modify-vs-modify conflict. On a
+      // one-writer vault this is impossible EXCEPT via a stale snapshot base.
+      const conflicts = f.manager["conflictStore"]?.getAll() ?? [];
+      expect(conflicts.some((c) => c.vaultPath === X)).toBe(true);
+      expect(conflicts.find((c) => c.vaultPath === X)?.kind).toBe("modify-vs-modify");
+    });
+
     it("register-conflict path also keeps in-memory batch.files in sync with disk", async () => {
       // Generalisation of the previous test: ANY drop site in the
       // reconcile loop must splice batch.files. register-conflict
