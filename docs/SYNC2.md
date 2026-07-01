@@ -1356,33 +1356,48 @@ own pushed content) — both "changed" the same region relative to the stale bas
 Orthogonal to §7.8 (that is a file-vs-HEAD *date* confusion in the tie-break;
 this is a crash *atomicity* gap in snapshot advancement — different mechanism).
 
-**Fix (crash-recovery marker).** `push-inflight.ts`: a per-device
-`.push-inflight.json` marker in the plugin's OWN folder
-(`<configDir>/plugins/<id>/`, alongside `.push-queue`/`.conflicts` — already
-gitignored by the `plugins/*/*` recommended default, so no invariant-block entry
-is needed; `vault.adapter`-only → mobile-safe). Written `{newHead, newTreeSha,
-batchId}` (best-effort — a marker-write failure never aborts the push) *before*
-the MAIN push's `updateBranchHead` (`processBatch`), removed *after* `store.save()`.
-**Scope: the main push ONLY.** The conflict-branch FINALIZE-MERGE has the same gap
-but is deliberately NOT marked — a crash there must also reconcile
-`deleteReference(conflict-branch)` + `clearConflictBranch()`, which the uniform
-"re-record lastSync" heal doesn't do (it would leave the store thinking a conflict
-branch is active while the snapshot says merged, and would SUPPRESS the reconcile
-that would otherwise sort it out — worse than not marking). Marking it, with its
-full cleanup, is a separate tested unit (deferred). Conflict-*branch* pushes never
-advance the tracked branch, so they need no marker.
-`Sync2Manager.recoverPushInflight()` runs BEFORE `findChanges` on
-every enqueue path (`syncAll`, `commitOnly`): if a marker is present it re-reads
-the real remote head; `realHead == marker.newHead` ⇒ our push landed but wasn't
-recorded ⇒ `setLastSync(newHead, tree)` + delete the completed batch, so the base
-is correct before the change-detector measures against it. Any other `realHead`
-(ref never landed / another device moved it) ⇒ just drop the marker and let the
-normal drift reconcile handle it. A `getBranchHeadSha` failure LEAVES the marker
-(retry next drain); a corrupt/failed marker degrades to today's
-self-heal-or-conflict (never worse). Tests: `push-inflight.test.ts` (marker
-fault-tolerance), `sync2-manager.test.ts` "crash gap WITHOUT a post-crash edit
-SELF-HEALS", "REPRO …" (no marker → the false conflict), and "FIX: crash gap WITH
-the push-inflight marker → recovery re-records the base, NO conflict".
+**Fix — the MAIN push: a MANDATORY crash-recovery marker (bug ELIMINATED, not
+mitigated).** `push-inflight.ts`: a per-device `.push-inflight.json` marker in the
+plugin's OWN folder (`<configDir>/plugins/<id>/`, alongside `.push-queue`/
+`.conflicts` — already gitignored by the `plugins/*/*` recommended default, so no
+invariant-block entry is needed; `vault.adapter`-only → mobile-safe). Written
+`{newHead, newTreeSha, batchId}` **MANDATORILY** (it MUST resolve durably; if the
+write throws, the push ABORTS before `updateBranchHead` — the batch stays queued
+and the sync retries) *before* the main push's `updateBranchHead` (`processBatch`),
+removed *after* `store.save()`. Because the marker is written before every
+ref-advance and its failure aborts the advance, **"remote advanced without a
+recoverable marker" is UNREACHABLE** → the false conflict is *eliminated*, not
+reduced. (Honest bounds: this rests on the same write-durability `store.save()`
+already assumes — no weaker; a marker-write failure fails the sync as a normal
+retryable error, and the failure modes overlap anyway — if you can't write a tiny
+file to the plugin's own folder you can't push either.)
+`Sync2Manager.recoverPushInflight()` runs BEFORE `findChanges` on every enqueue
+path (`syncAll`, `commitOnly`): `realHead == marker.newHead` ⇒ our push landed but
+wasn't recorded ⇒ `setLastSync(newHead, tree)` + delete the completed batch, so the
+base is correct before the change-detector measures. Any other `realHead` (ref
+never landed / another device moved it) ⇒ drop the marker, normal drift reconcile
+handles it. A `getBranchHeadSha` failure LEAVES the marker (retry next drain).
+
+**The conflict-branch FINALIZE-MERGE has the same gap but is NOT the false-conflict
+bug and needs NO marker.** The merge commit's `tree == mainTreeSha` (a history
+merge — the user's resolutions already landed on main), so for every file
+`theirs@mergeCommit == base@snapshotHead`: a 3-way with `theirs == base` is "only
+local changed" → CLEAN. The merge cannot produce the false conflict (only a
+*content*-advancing push can). And `finalizeConflictBranchIfReady` is idempotent
+(`deleteReference` tolerates "already gone" → 422), so a crash there SELF-RECOVERS
+on the next drain: the reconcile records the stale snapshot (pure history-merge
+drift, no file changed) and re-finalize re-completes the merge (`clearConflictBranch`
++ re-`deleteReference`) — only cosmetic cost is a redundant merge commit. Marking
+it would ADD machinery to a problem already solved and would risk breaking that
+re-finalize; so it is deliberately unmarked. Conflict-*branch* pushes never advance
+the tracked branch → no marker either.
+
+Tests: `push-inflight.test.ts` (marker fault-tolerance / plugin-folder location);
+`sync2-manager.test.ts` "crash gap WITHOUT a post-crash edit SELF-HEALS", "REPRO …"
+(characterizes the stale-base mechanism the mandatory marker makes unreachable),
+"FIX: crash gap WITH the push-inflight marker → recovery re-records the base, NO
+conflict", and "finalize-merge crash SELF-RECOVERS via re-finalize" (proves the
+merge site: no conflict, cb cleared, snapshot advanced, second drain a no-op).
 
 ---
 

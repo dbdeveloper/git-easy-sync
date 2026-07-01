@@ -1113,10 +1113,13 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // the reconcile 3-ways a stale base against BOTH sides → a conflict with OURSELVES,
       // which is otherwise physically impossible on a single-writer vault.
       //
-      // This test reconstructs that post-crash state WITHOUT a push-inflight marker — the
-      // FALLBACK case (the §7.9 marker write itself failed, or a crash before it). With no
-      // marker, recoverPushInflight is a no-op → the stale base survives → the false
-      // conflict. The companion test below adds the marker and shows the recovery heals it.
+      // This reconstructs the stale-base state directly (bypassing the push) to
+      // CHARACTERIZE the underlying mechanism. In production this state is now UNREACHABLE
+      // for the main push: the §7.9 marker is written (MANDATORY) before every
+      // updateBranchHead, so a remote advance ALWAYS has a recoverable marker — and a
+      // marker-write failure aborts the push BEFORE advancing. So "stale base with no
+      // marker" can't arise. The FIX test below shows the recovery; this test is the
+      // "what the marker prevents" characterization.
       const X = "Notes/x.md";
       const baseV0 = "alpha\nbeta\ngamma\n"; // STALE snapshot base (pre-interrupted-push)
       const theirsV1 = "alpha\nBETA-remote\ngamma\n"; // OUR OWN pushed content (crash landed it on the remote)
@@ -1222,6 +1225,47 @@ describe("Sync2Manager.syncAll — basic flow", () => {
           SELF_PLUGIN_ID,
         ),
       ).toBeNull();
+    });
+
+    it("finalize-merge crash SELF-RECOVERS via re-finalize — NOT the false-conflict bug (SYNC2 §7.9, no marker)", async () => {
+      // The conflict-branch finalize-merge has the SAME push→record gap, but it is NOT the
+      // false-conflict bug and needs NO marker: (1) the merge commit's tree == main's tree
+      // (a history merge — resolutions already landed), so theirs@merge == base for every
+      // file → a post-crash edit 3-ways CLEAN; (2) finalizeConflictBranchIfReady is
+      // idempotent (deleteReference tolerates "already gone" 422) → re-finalize completes
+      // on the next drain. This reconstructs the post-crash state and proves all of it.
+      const X = "Notes/x.md";
+      const orig = "content\n";
+      const edited = "content edited\n"; // post-crash edit
+
+      // Post-crash state: the merge LANDED on the remote (MERGE_HEAD, tree == MAIN_TREE),
+      // but the snapshot froze at MAIN_HEAD and the conflict-branch bookkeeping is still set.
+      writeVaultFile(f.root, X, edited);
+      f.store.set(X, { path: X, remoteSha: await shaOf(orig), mtime: 0, size: orig.length });
+      f.store.setLastSync("MAIN_HEAD", "MAIN_TREE");
+      f.store.setConflictBranch({ name: "gc-conflicts-Device-1", head: "CB_HEAD" });
+      // conflictStore empty (all resolved) → finalize is "ready".
+      f.client.setBranchHead("MERGE_HEAD");
+      f.client.setTreeShaForCommit("MERGE_HEAD", "MAIN_TREE"); // merge tree == main tree
+      f.client.setContentAtRef("MAIN_HEAD", X, orig);
+      f.client.setContentAtRef("MERGE_HEAD", X, orig); // history merge — content unchanged
+      // The drift is a pure history merge: no FILE changed between MAIN_HEAD and MERGE_HEAD.
+      f.client.setCompareResult("MAIN_HEAD", "MERGE_HEAD", { status: "diverged", files: [] });
+
+      await expect(f.manager.syncAll()).resolves.not.toThrow();
+
+      // (a) NO false conflict (merge tree == main tree → theirs == base for the edited file).
+      expect((f.manager["conflictStore"]?.getAll() ?? []).some((c) => c.vaultPath === X)).toBe(false);
+      // (b) conflict-branch bookkeeping cleared — re-finalize completed.
+      expect(f.store.getConflictBranch()).toBeNull();
+      // (c) snapshot advanced past the stale MAIN_HEAD.
+      expect(f.store.getLastSyncCommitSha()).not.toBe("MAIN_HEAD");
+
+      // (d) a SECOND drain is a no-op — cb stays cleared, no runaway re-merge.
+      const before = f.store.getLastSyncCommitSha();
+      await f.manager.syncAll();
+      expect(f.store.getConflictBranch()).toBeNull();
+      expect(f.store.getLastSyncCommitSha()).toBe(before);
     });
 
     it("register-conflict path also keeps in-memory batch.files in sync with disk", async () => {

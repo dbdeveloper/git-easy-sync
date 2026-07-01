@@ -2584,14 +2584,14 @@ export class Sync2Manager {
       parents: [mainHead, cb.head],
       retry: true,
     });
-    // SYNC2 §7.9 — this site ALSO has the push→record gap (it advances the tracked branch
-    // to the merge commit, then records), but it is NOT marked. Unlike the main push, a
-    // crash here must ALSO be reconciled against deleteReference(conflict-branch) +
-    // clearConflictBranch() below — the uniform "just re-record lastSync" heal would leave
-    // the store thinking a conflict branch is still active while the snapshot says merged,
-    // and would suppress the reconcile that would otherwise sort it out. Marking it is a
-    // separate, tested unit (its full cleanup). Descoped for now (advisor); a crash here
-    // keeps today's pre-existing behavior, unchanged.
+    // SYNC2 §7.9 — this site ALSO has the push→record gap, but it is NOT the false-conflict
+    // bug and needs NO marker (proven: test "finalize-merge crash SELF-RECOVERS"). The merge
+    // tree == mainTreeSha (a history merge — resolutions already landed on main), so for
+    // every file theirs@mergeCommit == base → a post-crash edit 3-ways CLEAN (only a
+    // content-advancing push can cause the false conflict). And this whole method is
+    // idempotent (deleteReference tolerates "already gone"), so a crash here self-recovers
+    // via re-finalize on the next drain (cosmetic cost: a redundant merge commit). Marking
+    // it would add machinery to an already-solved problem and risk breaking that re-finalize.
     await this.client.updateBranchHead({ sha: mergeCommit, retry: true });
     await this.client.deleteReference({
       ref: `heads/${cb.name}`,

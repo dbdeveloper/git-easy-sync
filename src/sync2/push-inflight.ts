@@ -48,30 +48,33 @@ const markerPath = (vault: Vault, selfPluginId: string): string =>
     `${vault.configDir}/plugins/${selfPluginId}/${PUSH_INFLIGHT_FILE_NAME}`,
   );
 
-// Record "about to advance the tracked branch to newHead". BEST-EFFORT: a
-// marker-write failure must NOT abort the push — it degrades to today's
-// self-heal-or-conflict (never worse), so a disk hiccup here can't block a sync.
+// Record "about to advance the tracked branch to newHead". MANDATORY, and MUST
+// resolve (bytes durably on disk) BEFORE the caller issues updateBranchHead. If
+// this THROWS the caller must NOT advance the remote — that is what makes "remote
+// advanced without a recoverable marker" UNREACHABLE, so the §7.9 false conflict
+// is eliminated, not merely mitigated. It rests on the same write-durability
+// `store.save()` already relies on (no weaker); a failure here fails the sync as a
+// normal retryable error (the batch stays queued) — correct for a correctness-first
+// stance, and the failure modes overlap anyway (if we can't write a tiny file to
+// the plugin's own folder, we can't push either).
+//
 // The plugin's own folder always exists in production; the segment-by-segment
 // ensureDir covers tests / an unexpectedly-missing dir (adapter.mkdir is
-// non-recursive on some platforms).
+// non-recursive on some platforms). NO try/catch: a failure MUST propagate.
 export async function writePushInflight(
   vault: Vault,
   selfPluginId: string,
   marker: PushInflightMarker,
 ): Promise<void> {
-  try {
-    const dir = normalizePath(`${vault.configDir}/plugins/${selfPluginId}`);
-    if (!(await vault.adapter.exists(dir))) {
-      let acc = "";
-      for (const part of dir.split("/")) {
-        acc = acc === "" ? part : `${acc}/${part}`;
-        if (!(await vault.adapter.exists(acc))) await vault.adapter.mkdir(acc);
-      }
+  const dir = normalizePath(`${vault.configDir}/plugins/${selfPluginId}`);
+  if (!(await vault.adapter.exists(dir))) {
+    let acc = "";
+    for (const part of dir.split("/")) {
+      acc = acc === "" ? part : `${acc}/${part}`;
+      if (!(await vault.adapter.exists(acc))) await vault.adapter.mkdir(acc);
     }
-    await vault.adapter.write(markerPath(vault, selfPluginId), JSON.stringify(marker));
-  } catch {
-    // Swallow — see above. The recovery treats "no marker" as today's behaviour.
   }
+  await vault.adapter.write(markerPath(vault, selfPluginId), JSON.stringify(marker));
 }
 
 // null when absent or unparseable (a corrupt marker degrades to "no marker" =
