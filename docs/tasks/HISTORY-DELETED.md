@@ -69,9 +69,12 @@ read-only-сторони. Тому спільну машинерію опису�
 ### 1.2 Local trash (Deleted-only, локальне, session-scoped)
 - `.trash/<id>/vault/<originalPath>` = **переміщений** (move, не copy — R3.2) видалений
   файл. `<id>` — 17-цифровий timestamp (як `.conflicts/`, `.push-queue/`).
-- **Session-scoped (R2.4):** запис живе **тільки до наступного Sync**. Після того, як sync
+- **Session-scoped (R2.4):** запис живе **тільки до наступного Sync**. Після того як sync
   підтвердив видалення на GitHub, запис вичищається (TTL, R3.5). Далі відновити можна лише
   з GitHub. Файл, створений і видалений **в одному** sync-циклі, втрачається незворотно.
+  Файл, який знаходиться в `.gitignore` потрапляє в `.trash/` при видаленні, і буде остаточно
+  вичищатись після наступного Sync (TTL, R3.5), як і інші файли, після чого втрачається 
+  незворотно, бо не має збережених версій в GitHub repo.
 - **Data-шар вже реалізований** (R3.8 — детально §5.2 + §7).
 
 ### 1.3 GitHub repo (обидва режими, віддалене, «глибоке»)
@@ -89,12 +92,12 @@ read-only-сторони. Тому спільну машинерію опису�
 режимі. `base` = ver1 = «−» (видалене/старіше), `sibling` = ver2 = «+»
 (додане/новіше).
 
-| Режим | `base` (ver1, «−») | `sibling` (ver2, «+») | пишемо у vault | read-only сторона | `[←]`-якір веде в |
-|---|---|---|---|---|---|
-| `conflict` | поточний vault-файл (`note.md`) | remote `.conflict-from-*` (theirs) | base **і** sibling (pair-atomic) | — (обидві editable) | **base** → `panel:Conflicts` |
-| `history` | **історична версія** (нема у vault, read-only) | **поточний файл** (current) | тільки **sibling** | **base** (історія) | **sibling** → `diff2-history` |
-| `deleted` | **порожньо** = поточний відсутній стан (`originalPath`) | **вміст із `.trash`** (read-only) | тільки **base** | **sibling** (trash) | **base** → `panel:Deleted` |
-| `compare` | файл A | файл B | редагований файл (write-set за edit-target) | опційно (toggle) | base-файл (звич. таб) |
+| Режим | `base` (ver1, «−») | `sibling` (ver2, «+») | пишемо у vault                                                               | read-only сторона | `[←]`-якір веде в |
+|---|---|---|------------------------------------------------------------------------------|---|---|
+| `conflict` | поточний vault-файл (`note.md`) | remote `.conflict-from-*` (theirs) | base **і** sibling (pair-atomic)                                             | — (обидві editable) | **base** → `panel:Conflicts` |
+| `history` | **історична версія** (нема у vault, read-only) | **поточний файл** (current) | тільки **sibling**                                                           | **base** (історія) | **sibling** → `diff2-history` |
+| `deleted` | **порожньо** = поточний відсутній стан (`originalPath`) | **вміст із `.trash`** (read-only) | тільки **base**                                                              | **sibling** (trash) | **base** → `panel:Deleted` |
+| `compare` | файл A | файл B | файл A **i** файл B (pair-atomic) |  — (обидві editable)  | base-файл (звич. таб) |
 
 **Дзеркальність History ↔ Deleted (найважливіше):**
 - **History:** read-only = **base** (стара версія); пишемо **sibling** (поточний файл).
@@ -358,6 +361,50 @@ dedup: GitHub-версії лише якщо trash порожній по цьо�
 5. **Last-detail-tab-close hook** → `trashStore.resetLifts()` (R3.7 invariant; метод уже є).
 6. Жодної кнопки масової очистки (`Empty trash`) — TTL чистить сам (R2.4).
 
+### 5.8 Deleted × Conflict — redirect, навігація, що показуємо (✅ SETTLED 2026-07-03)
+
+> Повний тред (2 advisor-раунди + code-audit + grep, `diff2@a0b14d0`). **Engine-коду НЕ додаємо** —
+> це наявні властивості рушія (§6) + ОДНЕ нове UI-правило (redirect у `deleted-list`).
+
+**Правило redirect (ключуємо на `findAllConflicts`, НЕ на ConflictStore-record).** І
+Conflicts-список, і лічильник будуються зі скану vault-siblings (`findAllConflicts`,
+`synthetic-detector.ts:104`; `conflict-counter.ts:49-50`), а не з `ConflictStore.list()`. Тож для
+рядка Deleted-списку з відсутнім path P:
+
+| Стан P | Дія кліку |
+|---|---|
+| є live `*.conflict-from-*` sibling (findAllConflicts бачить P) | **redirect у conflict-editor** (origin `conflict`; base=`""`/sibling=remote). Restore-з-trash окремо НЕ пропонуємо — розв'язуй конфлікт (`[Apply remote]`=restore, `[Keep local]`=лишити видаленим). |
+| sibling відсутній | **plain trash-restore** (звичайне видалення АБО обидва файли видалені). Застарілий ConflictStore-record (якщо є) self-heal-иться на Phase A — phantom-а нема, бо списки скануть siblings, не store. |
+
+Чиста лінія: локальний trash-вміст як «третій варіант» доступний **саме коли sibling зник**; поки
+sibling живий — редиректимо в конфлікт (виправдовує вибір (a)).
+
+**Навігація `[←]` — origin (семантика) ≠ returnTab (навігація).** Редиректований редактор має
+**origin `conflict`** (commit = pair-atomic `commit7Step`, **НЕ** write-or-skip!), але повертати
+його треба у **вкладку, звідки клікнули**. Тож редактор несе явний `returnTo` (виставлений на
+запуску; персиститься в `getState`): Deleted-launched конфлікт → `[←]` → `panel:Deleted`;
+Conflicts-launched → `panel:Conflicts`; file-menu/ribbon/status → природний дім (Conflicts);
+History → `diff2-history`. `planBackNav` читає `returnTo`, не виводить із origin.
+
+**Що показуємо в Deleted-списку: ✅ ВСІ записи, включно з sibling-ами** (`*.conflict-from-*`)
+(рішення користувача 2026-07-03: їх небагато + вони все одно зникають при Sync). Тобто
+path-only-when-empty фільтр sibling-и НЕ відсіює. Наслідок: restore sibling із trash = «передумати»
+(R3.2) — повертає **сторону розв'язку**, не base; семантика — див. §6 tracked-інваріант.
+
+**Повний перелік варіантів (вісь = джерело restore):**
+
+| # | Стан | Джерело / дія |
+|---|---|---|
+| 1 | видалено, до sync, без конфлікту | `.trash` |
+| 2 | видалено, sync зроблено, без конфлікту | GitHub (trash змело) |
+| 3 | base видалено, **sibling присутній** (конфлікт) | **redirect у конфлікт** → restore з sibling (`[Apply remote]`) |
+| 4 | base+sibling видалено (resolve→delete файл-оп.), до sync | sibling зник → **plain `.trash`-restore**; engine-safe (§6) |
+| 5 | **gitignored** файл | `.trash`-only → після sweep зникає **назавжди**, конфлікт неможливий |
+| 6 | **Variant-B** (path пере-зайнятий) | Deleted-фільтр (path present) **ховає**; restore = collision-rename |
+| 7 | **multi-entry** (delete→recreate→delete) | кілька trash-записів, restore обирає конкретний |
+| 8 | видалене **БУЛО sibling-ом** | restore повертає **сторону розв'язку**, не base (§6 tracked-інваріант) |
+| 9 | **delete-vs-delete** (обидва видалили) | конфлікту нема; лише GitHub |
+
 ---
 
 ## 6. Суміжне: delete-vs-modify (R2.5) — уже working, не плутати
@@ -379,6 +426,39 @@ dedup: GitHub-версії лише якщо trash порожній по цьо�
 Deleted-режим (§5) від цього відрізняється: там sibling = trash (локальне, read-only), а не
 remote conflict-from; і writable = base, а не pair.
 
+### 6.1 Restore-while-conflict-pending = engine-safe (наявна властивість, нуль нового коду)
+
+Якщо path у стані «resolved-toward-delete» (base+sibling видалено файл-операціями), а користувач
+відновлює його **до** розв'язувального Sync:
+
+- **restore ДО будь-якого Sync** (нормальний випадок): Phase B на drain-і читає **живий** стан
+  vault → base присутній → `enqueueSynthetic` несе **вміст** (не `null`), merge-tree
+  (`finalizeConflictBranchIfReady`) включає його. Batch-видалення з `content:null` не постає;
+  merge-commit, коли постане в кінці drain-у, кодує **відновлення**. `sync2-manager.ts:2505-2526`/`:2562-2600`.
+- **restore ПІСЛЯ того, як side-batch-видалення вже в черзі** (рідше): re-target
+  (`sync2-manager.ts:3252-3260`) — видалення пушиться, P пере-додається на новий HEAD (той самий
+  кінцевий стан, через delete-then-re-add churn).
+- Обидва проходять `validateDeletionsAgainstHead`/SHA-reconcile, як будь-який push. **«Що робити з
+  merge-commit?» → нічого** — рушій обробляє коректно.
+
+### 6.2 🔑 Tracked-record інваріант (видалення файлів ≠ закриття tracked-конфлікту)
+
+`ConflictWatcher` — **READ-ONLY** (`conflict-watcher.ts:15-17`): record дропається **лише** на
+Phase A при drain (`conflict-classifier.ts:235`, `!siblingExists → store.delete`). Тому:
+
+- **restore sibling до розв'язувального Sync → конфлікт лишається TRACKED** (record ніколи не
+  дропався; «повертати» нічого не треба — він не зникав).
+- **Co-terminous:** record (Phase A, drain-start) і sibling-trash (layer 1b `confirmResolved`,
+  `trash-store.ts:194`) вмирають в ОДНОМУ розв'язувальному drain-і → до нього обидва є (restore =
+  tracked), після — обох нема (restore з trash неможливий). Тож «restore → synthetic» у нормі
+  **недосяжний**.
+- **Edge (чесно):** aborted drain — Phase A дропнув record, push впав **до** layer 1b → record нема,
+  trash є → restore = **synthetic** (все ще повністю розв'язується diff2; втрати даних нема —
+  conflict-branch коміти вже на remote через `pushConflictPathsToBranch` при реєстрації).
+- ⚠️ **UX-наслідок:** після видалення ОБОХ файлів (до Sync) tracked-record живий, але **невидимий
+  в обох вкладках** (обидві скануть vault-siblings, яких у vault нема) — «передумати» доступне ЛИШЕ
+  через restore з `.trash`. Це і є причина показувати sibling-и в Deleted-списку (§5.8, вибір (i)).
+
 ---
 
 ## 7. Реальний стан коду — що є / чого нема
@@ -394,7 +474,7 @@ remote conflict-from; і writable = base, а не pair.
 | **2. Push-queue reader** | 🟢 FUNCTIONAL | layout `.push-queue/<id>/vault/`; `list()`, `read(id)`, **`readFile(id, path)`**, `peekPathSha(path)`, `collectAllPaths()` | нічого нового — staging-area вистачає для History-локального шару; це НЕ history-log (лише pending-батчі) |
 | **3. TrashStore (`.trash`)** | 🟢 **COMPLETE** | повний клас + `intercept/list/get/subscribe/lift/return/resetLifts/confirm*/sweep*/asHooks`; 3-layer TTL; R3.7 shield; recovery-sweep; sync2-wire | — (data-шар готовий; лишилось `restore(id)` — це UI-фаза 9b, не data) |
 | **4. View-types / origin** | 🟡 PARTIAL | `diff2-edit-view` (панель), `diff2-editor-view` (editor); **`DiffEditorOrigin` = `conflict\|compare\|history\|deleted`** (всі 4!); `DiffEditSubTab = conflicts\|deleted`; write-set routing для всіх origin-ів | `diff2-history` view-type; History/Compare entry-points |
-| **5. Commit / autosave-meta** | 🟡 PARTIAL | `baseCommitAction` (4 empty-кейси + delete), `commitUnchangedSide`, `commitToAlt`, `classifyToctou`, `commit7Step`, `AutosaveMeta.baseExistedAtStart`, `GIT_EMPTY_BLOB_SHA` | **`resolveOrDeleteUnchangedSide`** (0 входжень у `src/` — лише в специфікаціях); `deriveAutosaveId` НЕ приймає `history\|deleted` (тільки `synthetic\|compare`, `autosave-store.ts:100`); meta без version-SHA (History) / trashId (Deleted) |
+| **5. Commit / autosave-meta** | 🟡 PARTIAL | `baseCommitAction` (4 empty-кейси + delete), `commitUnchangedSide`, `commitToAlt`, `classifyToctou`, `commit7Step`, `AutosaveMeta.baseExistedAtStart`, `GIT_EMPTY_BLOB_SHA` | **write-or-skip factoring** `finalizeUnchangedSide` (0 входжень у `src/` — settled §3.2, назва замінила misnomer `resolveOrDeleteUnchangedSide`); `deriveAutosaveId` НЕ приймає `history\|deleted` (тільки `synthetic\|compare`, `autosave-store.ts:100`); meta без version-SHA (History) / trashId (Deleted) |
 | **6. UI** | 🔴 MINIMAL | Deleted sub-tab = **placeholder-текст** «Deleted-mode UI lands in Phase 9b»; forward-design (`planBackNav` deleted-гілка, `persistedEditorState`) | Deleted list/detail/restore; вся History UI; Compare picker |
 
 ### 7.1 Data-джерела — стан по кожному (пряма відповідь на питання користувача)
@@ -474,8 +554,9 @@ remote conflict-from; і writable = base, а не pair.
 - **Phase 8 — Compare.** `liftForCompare`/`returnFromCompare` (API вже є з Phase 9a, PR-6) +
   UI hook (compare-with-trashed).
 - **Phase 9b — Deleted UI + restore.** Data-шар (R3) вже є. Лишилось: `TrashStore.restore`,
-  `deleted-list.ts`, `toolbar-deleted.ts`, delete-capable commit factoring
-  (`resolveOrDeleteUnchangedSide`), one-sided recovery detection, `resetLifts`-hook.
+  `deleted-list.ts` (+ **redirect-правило** §5.8), `toolbar-deleted.ts`, **write-or-skip** commit
+  factoring `finalizeUnchangedSide(…, emptyPolicy)` (§3.2 SETTLED; НЕ delete-capable), one-sided
+  recovery detection, `resetLifts`-hook, `returnTo`-навігація (§5.8).
 - **Залежність:** Phase 9b GitHub-restore залежить від Phase 7 (`listCommitsForPath`).
   **Scope-cut:** 9b можна ship-нути **local-trash-only** до Phase 7 (GitHub-restore —
   post-7 patch, R3.13).
