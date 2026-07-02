@@ -9,6 +9,14 @@
 > `fix-diff-editor`, pushed @ `1a928e3`, device-verified). Conflict-view UX перероблено повністю:
 > CM6 DiffPane (V2-модель — terminal-`\n` per ver-block + Inclusive RangeSet), уся interaction
 > (DIFF-EDITOR-V2.md §2.2.x), touch-only, toolbar-редизайн, fault-tolerant recovery (bug-56).
+>
+> **DIFF-EDITOR V2 — це ЄДИНИЙ, офіційний, повністю реалізований diff-editor у `diff2`.**
+> Рання "§1"/"V1" модель (flat CM6-документ + `Segment[]` + `\0`/`\1`-sentinel joined-doc з
+> `build()`/`split()`) була **відкинута гілка** — повністю прибрана з `src/` і `tests/` і замінена
+> на V2 (`diff-model.ts` / `diff-structure.ts` / `diff-pane-v2.ts` / ... — див. CLAUDE.md).
+> Канонічна специфікація моделі + взаємодії — [`docs/tasks/DIFF-EDITOR-V2.md`](./tasks/DIFF-EDITOR-V2.md);
+> commit/recovery/autosave-шар (representation-independent, перенесений як є) — DIFF-EDITOR.md.
+>
 > **Фічі заморожено** (баги ще шукаємо). Цей PLAN — переважно ІСТОРИЧНИЙ (фазування R9.1 описує
 > елаборатну, НЕ shipped-послідовність). Поточний статус: CLAUDE.md (рядок «✅✅ DIFF-EDITOR V2
 > FEATURE-COMPLETE») + memory `project-diff2-resume-point`. Open (не фічі): recovery-replay perf
@@ -288,7 +296,7 @@ TODO: дослідити чи розгашування Vault за межами S
 (✏️ toggle перемикає у Edit). Per-chunk `[apply]/[remove]` доступні в Edit mode (для тих хто хоче синхронізувати один
 файл з іншим). Marker block-widgets (`<<<<</=====/>>>>>`) тут **не рендеряться** — нема "conflict context", просто
 кольорове
-підсвічення diff-chunks + word-level highlight.
+підсвічення diff-блоків + word-level highlight.
 
 **R2.2. Conflicts list (повноширокий, list view).** Список `*.conflict-from-*` siblings, **наявних у vault**, і містить
 **дві категорії**:
@@ -1054,7 +1062,7 @@ callbacks); `sync2` ніколи не імпортує з `diff2`. Це прод
 Diff-Edit-у користувач розрізняє джерела (вище це вже відмічалось - це зроблено для того, щоб
 показувати спочатку для швидкості тільки файли з `.trash/<id>/`, підвантажувати файли з GitHub history тільки за
 вимогою (якщо є локальні видалення), з кешу (якщо вже вантажились з GitHub history), чи автоматично (якщо локальних
-видалень нема взагалі)). Список будується так:
+видалень нема взагалі)). Список формується так:
 
 1. Усі поточні `.trash/<id>/` записи (свіжі, до sync).
 2. Видалення з GitHub history (з локального кешу чи з GitHub history після кліку користувача по
@@ -1594,8 +1602,8 @@ ConflictStore відбувається на drain-start через `evaluateConf
    обов'язкові, якщо шляхи містять пробіли."
 4. Очікувати на `exit`. Якщо `Read result back === true` — перечитати tmp `ours`, обчислити
    SHA, якщо змінився — записати назад у vault через `writeResolved` (Path A
-   `atomicWriteFile`, SYNC2 §2.3). Потім — **той самий exit-protocol з proactive
-   sibling cleanup, що й для internal editor `[←]`** (R7.11): якщо
+   `atomicWriteFile`, SYNC2 §2.3). Потім — **той самий `[←]` commit-протокол з proactive
+   sibling cleanup, що й для internal editor** (R7.11): якщо
    `SHA(base) == SHA(siblingN)`, diff2 видаляє siblingN одразу. Phase A на наступному drain
    спрацює резервно через "sibling was deleted by user" гілку.
 5. Cleanup `.tmp/<id>/` після виходу процесу.
@@ -1733,51 +1741,40 @@ diff (наприклад через `diff` або `diff-match-patch` npm-пак�
 
 **R7.7. Resolve-step undo для пари `(base, sibling)` з crash-survival.**
 
-> **Канонічна специфікація — [`docs/tasks/DIFF-EDITOR.md`](./tasks/DIFF-EDITOR.md).**
+> **Канонічна специфікація моделі + взаємодії — [`docs/tasks/DIFF-EDITOR-V2.md`](./tasks/DIFF-EDITOR-V2.md);**
+> commit/recovery/autosave-шар — [`docs/tasks/DIFF-EDITOR.md`](./tasks/DIFF-EDITOR.md).
 > Усе нижче в R7.7 / R7.7.a / R7.7.b — короткий референс для cross-subsystem
 > контексту (директорійна розкладка, що переживає crash, які події тригерять
-> cleanup). Документ-модель (вибір роздільника, normal-line vs diff-line,
-> ver-блоки, правила виділення, plain caret navigation), деталі формату
-> `history_<ts>.jsonl`, контракти `meta.json` + `cursor.json`, mobile coalesce
-> window, replay algorithm, cleanup conditions — у DIFF-EDITOR.md. Inconsistency
-> між цим коротким референсом і DIFF-EDITOR.md — це регресія документу;
-> правда — у DIFF-EDITOR.md.
+> cleanup). Документ-модель (ver-блоки, правила виділення, caret navigation) — у
+> DIFF-EDITOR-V2.md; деталі формату `history_<ts>.jsonl`, контракти `meta.json` +
+> `cursor.json`, mobile coalesce window, replay algorithm, cleanup conditions — у
+> DIFF-EDITOR.md. Inconsistency між цим коротким референсом і цими двома документами
+> — це регресія документу; правда — у них.
 
-**Короткий референс — документ-модель.** DiffPane оперує одним віртуальним
-документом, який є full-join базового файлу і sibling-у по рядкам. Внутрішнє
-представлення — текст, термінований `\x00` per-рядок, з `\x01` як роздільником
-між двома "ver-блоками" у diff-рядку. Звичайні рядки (без `\x01`) — спільні
-для обох файлів; diff-рядки (з рівно одним `\x01`) — мають дві версії, які
-розв'язуються кнопками `[apply]/[remove]` зверху, знизу і посередині (з
-hotkey-аналогами `Ctrl+Enter`/`Ctrl+Backspace` + Shift-варіантами).
-
-**Колізія роздільника** (`\x01` уже у вхідному файлі) — fail-closed: показуємо
-`Notice` і не відкриваємо DiffPane (детальніше — DIFF-EDITOR.md §1.3).
+**Короткий референс — документ-модель.** DiffPane оперує одним CM6-документом,
+який є full-join базового файлу і sibling-у по рядкам. Модель V2 — це
+**"text + Ranges"**: чистий CM6-документ з захищеним термінальним `\n` per
+ver-блок + Inclusive RangeSet `{ver,group}` (жодних sentinel-символів у тексті).
+Звичайні рядки — спільні для обох файлів; diff-рядки мають дві версії (ver1/ver2),
+які розв'язуються кнопками `[apply]/[remove]` зверху, знизу і посередині (з
+hotkey-аналогами `Ctrl+Enter`/`Ctrl+Backspace` + Shift-варіантами). Повна модель
+— DIFF-EDITOR-V2.md.
 
 **Побудова joined-документу** — `diff.diffLines()` з npm-пакету `diff` (та
-сама бібліотека, що для R7.4 word-level). Round-trip інваріант
-`split(build(base, sibling)) === (base, sibling)` byte-exact фіксується
-unit-тестом (DIFF-EDITOR.md §1.5).
+сама бібліотека, що для R7.4 word-level). Деталі — DIFF-EDITOR-V2.md.
 
-**Селекція vs plain caret:** виділення (Shift+arrows / mouse drag) ховається
-під diff-рядком — не можна змішати normal-рядки з ver-блоками. Plain caret
-(arrows без Shift) натомість ВХОДИТЬ у diff-рядки крок-за-кроком (normal →
-ver1 → ver2 → normal). Деталі — DIFF-EDITOR.md §1.7–§1.8.
+**Селекція vs plain caret:** виділення (Shift+arrows / mouse drag) легалізується
+навколо diff-групи; plain caret (arrows без Shift) входить у diff-рядки
+крок-за-кроком (normal → ver1 → ver2 → normal). Деталі — DIFF-EDITOR-V2.md.
 
-
-_(Конкретний приклад побудови joined-документу з file1+file2 — DIFF-EDITOR.md §1.1.)_
-
-**Внутрішнє представлення** — `\x00`-термінований текст з `\x01` як роздільником
-між ver-блоками. Detail — DIFF-EDITOR.md §1.2.
-
-**Чотири операції резолюції diff-рядка** (`<ver1>\1<ver2>\0`):
+**Чотири операції резолюції diff-рядка** (ver1 = base-сторона, ver2 = sibling-сторона):
 
 | Кнопка                                | Результат                       |
 |---------------------------------------|---------------------------------|
-| `[apply ↓]` верхнього / `[remove ↑]` нижнього | `<ver1>\0` (вибрати base-сторону) |
-| `[apply ↑]` нижнього / `[remove ↓]` верхнього | `<ver2>\0` (вибрати sibling-сторону) |
-| `[apply both ↓↑]` середнього          | `<ver1><ver2>\0` (об'єднати)    |
-| `[remove both ↓↑]` середнього         | (повне видалення diff-рядка)    |
+| `[apply ↓]` верхнього / `[remove ↑]` нижнього | вибрати base-сторону (ver1) |
+| `[apply ↑]` нижнього / `[remove ↓]` верхнього | вибрати sibling-сторону (ver2) |
+| `[apply both ↓↑]` середнього          | об'єднати (ver1 + ver2)    |
+| `[remove both ↓↑]` середнього         | повне видалення diff-рядка    |
 | `[join (remote)]` (md only)           | wrap ver2 у `> blockquote`-секцію |
 
 Plain caret navigation (без Shift) входить у ver-блоки крок-за-кроком; selection
@@ -1787,8 +1784,8 @@ Plain caret navigation (без Shift) входить у ver-блоки крок-
 **`[← back]` algorithm** (Phase 4 ship; деталі — DIFF-EDITOR.md §5.0):
 
 1. Flush pending history-queue (autosave §2.8 у DIFF-EDITOR.md).
-2. `(baseBytes, siblingBytes) = split(currentEditorDoc)` — зворотня операція до
-   `build()` (DIFF-EDITOR.md §1.4). Normal-рядки → в обидва виходи; кожен
+2. `(baseBytes, siblingBytes)` — витягуються з поточного CM6-документа через
+   structure-ranges (DIFF-EDITOR-V2.md). Normal-рядки → в обидва виходи; кожен
    diff-рядок дає ver1 у base-вихід, ver2 у sibling-вихід.
 3. `atomicWriteFile(basePath, baseBytes)` — стандартний 5-step protocol
    (SYNC2 §2.3 — Path A `atomicWriteFile`).
@@ -2255,6 +2252,17 @@ constructor-injection; `diff2` (`TrashStore`) надає їх при wire-up у 
 
 #### R9.1. Phase table
 
+> **✅ ІСТОРИЧНЕ — це був план розгортання; V2 shipped, §1 прибрано; збережено як
+> rationale, читати як історію.** Ця таблиця описує елаборатну §1→V2 послідовність,
+> яка НЕ співпадає з тим, як воно фактично зайшло: MVP (Phases 0–6) реалізовано вже
+> V2-моделлю (не §1), а §1-файли з клітинок (`diff-pane.ts`, `diff-chunks.ts`,
+> `markers.ts`, `decorations.ts`, `exit-protocol.ts`, `split-builder.ts`,
+> `session-start.ts`, `snapshot-mismatch-modal.ts`, non-`-v2` `history-*.ts` тощо)
+> **не існують у `src/`** — їх замінили V2-файли (`diff-model.ts` / `diff-structure.ts`
+> / `diff-pane-v2.ts` / `history-log-v2.ts` / ... — див. верхній банер + CLAUDE.md).
+> **Пізніші режими лишаються нереалізованими** (History / Compare / Deleted / external
+> diff tool — див. верхній банер); клітинки таблиці НЕ означають, що вони shipped.
+
 | #  | Status                                | Scope                                                                               | R-coverage                                                                | Key files (new + edits)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Acceptance                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 |----|---------------------------------------|-------------------------------------------------------------------------------------|---------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | 0  | infra                                 | Module scaffolding                                                                  | —                                                                         | `src/diff2/{diff-edit-view.ts, events.ts}` (new); `src/diff2/types.ts` (extend with DiffEditView/DiffPaneState/etc; trash types already there from Phase 9a); `src/main.ts` (edits: registerView, 4 stub commands)                                                                                                                                                                                                                                                                                                                                                                                                                                 | `pnpm build` clean; `Open Diff-Edit` command opens empty view tab; existing unit + integration tests pass unchanged                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -2323,9 +2331,13 @@ diff lib name (decision-at-impl-time), фaза-ordering у 6–11 (orthogonal).
 
 ### R12. Remaining work — sequencing and dependencies
 
-> **Стан:** Phase 9a (data layer) ✅ shipped. Phases 0–8 + 9b + 10–11
-> залишаються. Цей розділ — runbook для виконання R9.1 well: критичний
-> шлях, паралельні треки, що з чим перетинається.
+> **✅ ІСТОРИЧНЕ (застаріле планування — читати як історію).** Стан на момент
+> написання: Phase 9a (data layer) ✅ shipped, решта — заплановано. **Фактично:**
+> conflict-resolve MVP (те, що покривали Phases 0–6) вже shipped **V2-моделлю**
+> (не §1), тож секвенсинг нижче не відображає реальний хід. **Реально лишаються
+> нереалізованими** (див. верхній банер): History (Phase 7) / Compare (Phase 8) /
+> Deleted (Phase 9b) режими, external diff tool (Phase 10), entry-points E4/E5/E6.
+> Нижче — збережено як runbook-rationale (критичний шлях, паралельні треки).
 
 #### R12.0. Pre-implementation spikes — ✅ COMPLETED
 

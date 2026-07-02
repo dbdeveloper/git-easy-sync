@@ -1,5 +1,15 @@
 # DIFF-EDITOR-V2 — інтеракційні фічі (✅ MILESTONE ЗАВЕРШЕНО 2026-06-20)
 
+> **DIFF-EDITOR-V2 — ЄДИНА, офіційна, повністю реалізована модель diff-редактора в підсистемі `diff2`.**
+> Ранню «§1»/V1-модель (`editor-model.ts`, `joined-doc.ts` з `\0`/`\1`-сентінелами й `Segment[]`, старі
+> `diff-pane.ts`/`decorations.ts`/`markers.ts`, `history-log.ts`/`history-replay.ts`, `exit-protocol.ts`,
+> `diff-chunks.ts`) відкинуто як тупикову гілку — її ПОВНІСТЮ видалено з `src/` і `tests/` і замінено на V2
+> (`diff-model.ts`, `diff-structure.ts`, `diff-pane-v2.ts`, `diff-decorations.ts`, `diff-edits.ts`,
+> `diff-selection.ts`, `diff-resolve.ts`, `diff-pane-owner.ts`, `history-log-v2.ts`, `history-replay-v2.ts`,
+> `history-feed.ts`, `diff-auto-resolve.ts`, `diff-clipboard.ts` + представлення-незалежний
+> commit/recovery/autosave-шар `exit-commit.ts`/`autosave-store.ts`/`cursor-*`). Канонічна специфікація моделі й
+> взаємодії — [`DIFF-EDITOR-V2.md`](./DIFF-EDITOR-V2.md).
+
 > **✅✅ ОНОВЛЕННЯ (2026-06-27): DIFF-EDITOR V2 FEATURE-COMPLETE, фічі заморожено** (pushed @
 > `1a928e3`). Після milestone нижче додано й device-verified: touch-only (§2.2.14), toolbar-редизайн
 > (§2.2.15), char-level diff (bug-8), trailing-`↵` diff (bug-50/51), назва файлу → view-header, і
@@ -25,7 +35,7 @@
 > Усі fixes пройшли gate-спайк + /advisor done-check; **diff2 988 unit-тестів зелені, tsc чисто.** Решта документа —
 > запис РІШЕНЬ і АРХІТЕКТУРИ цього milestone (модель «text + Ranges», context-dispatch, caret-правила, gate).
 > Залишок (НЕ блокуючий): toolbar-редизайн, History/Compare/Deleted режими, entry-points E4/E5/E6 — поза цим
-> milestone. Історія міграції §1→V2 (Minimal-bridge, gate-спайки 1a/1b, фази 0–5) ВИКОНАНА, тут не дублюється.
+> milestone.
 
 ---
 
@@ -55,8 +65,8 @@ paste/edit  ─►  merge-check (суміжні групи?) ─► merge (conca
 **Наслідок:** 2.2.13 (re-diff) — спільний фінальний крок каскаду; 2.2.12 (merge) — середня ланка; paste (2.2.7) —
 вхід. → **2.2.13 = фундамент, 2.2.12 = його споживач, paste = вхід каскаду.**
 
-`diff2()` тут — той самий `buildModel`/jsdiff, що вже використовується для початкового порівняння (детермінований;
-library-drift уже ловиться `joinedDocSha`-gate). Тобто «re-diff групи» = взяти ver1-контент + ver2-контент
+`diff2()` тут — той самий `buildModel`/jsdiff, що вже використовується для початкового порівняння
+(детермінований). Тобто «re-diff групи» = взяти ver1-контент + ver2-контент
 ураженого регіону → `diff2()` → нове розбиття RangeSet для цього регіону.
 
 ---
@@ -203,7 +213,7 @@ B. paste-diff-group-між-двома-групами → КАСКАД (merge-che
 - **каскад (live) термінує** — re-diff після merge не тригерить нескінченний merge-check; структура
   стабілізується за 1 прохід (фікс-пойнт). Це властивість LIVE-обчислення, не replay.
 
-Інструмент: vitest (модель-рівень) + при потребі real-Chromium harness для геометрії (як 1a/1b). Файли:
+Інструмент: vitest (модель-рівень) + при потребі real-Chromium harness для геометрії. Файли:
 `tests/diff2/spikes/v2-restructure-replay-spike.test.ts`.
 
 ---
