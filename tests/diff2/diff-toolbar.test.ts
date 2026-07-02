@@ -43,6 +43,26 @@ describe("diff-toolbar", () => {
     expect(btnByTitle(c, "Redo").disabled).toBe(true);
   });
 
+  it("action buttons preventDefault mousedown (keep editor focus) — but the toggle does NOT", () => {
+    // bug: clicking a toolbar button (even a DISABLED nav button) blurred the CM6 editor →
+    // caret vanished + hotkeys died. Fix = mousedown preventDefault on the action buttons, so
+    // a disabled button is a true no-op and an enabled one acts with the caret intact.
+    const c = document.createElement("div");
+    const h = renderDiffToolbar(c, initial, cbs());
+    h.update({ conflictCount: 3, hasPrev: false, hasNext: true, canUndo: true, canRedo: false });
+    for (const title of ["Previous conflict", "Next conflict", "Undo", "Redo", "Keep"]) {
+      const b = btnByTitle(c, title);
+      const md = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      b.dispatchEvent(md);
+      expect(md.defaultPrevented).toBe(true);
+    }
+    // a checkbox toggle needs focus to operate → its mousedown must NOT be prevented.
+    const cb = c.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    const cbMd = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    cb.dispatchEvent(cbMd);
+    expect(cbMd.defaultPrevented).toBe(false);
+  });
+
   it("markdown → Join button present; non-markdown (onJoinAll omitted) → absent", () => {
     const md = document.createElement("div");
     renderDiffToolbar(md, initial, cbs());

@@ -53,10 +53,21 @@ export interface DiffToolbarHandle {
   update(state: DiffToolbarState): void;
 }
 
+// mousedown→preventDefault keeps the CM6 editor focused when a toolbar action button is
+// clicked: without it, the mousedown moves focus off the editor DOM → the caret vanishes
+// and hotkeys die (the selection is untouched, so an empty ver-block doesn't even collapse).
+// A DISABLED button then becomes a true no-op (click never fires, focus never leaves); an
+// enabled button runs its action with the caret intact. NOT applied to the toggles/select
+// (a checkbox/dropdown needs focus to operate).
+function keepEditorFocus(b: HTMLElement): void {
+  b.addEventListener("mousedown", (e) => e.preventDefault());
+}
+
 function iconButton(parent: HTMLElement, icon: string, title: string, onClick: () => void): HTMLButtonElement {
   const b = parent.appendChild(document.createElement("button"));
   b.className = "diff2-tb-icon";
   b.title = title;
+  keepEditorFocus(b);
   b.addEventListener("click", onClick);
   setIcon?.(b, icon); // stubbed in tests
   return b;
@@ -67,6 +78,7 @@ function textButton(parent: HTMLElement, cls: string, text: string, title: strin
   b.className = `diff2-btn ${cls}`;
   b.textContent = text;
   b.title = title;
+  keepEditorFocus(b);
   b.addEventListener("click", onClick);
   return b;
 }
