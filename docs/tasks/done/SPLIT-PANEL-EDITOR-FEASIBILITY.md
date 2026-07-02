@@ -413,6 +413,10 @@ recovery прибрав, на committed-результаті класифіку�
 
 ## 10. VISION — History (розширює R2.3 / R7.9b / Phase 7)
 
+> ⤴ **SUPERSEDED для History/Deleted → [`docs/tasks/HISTORY-DELETED.md`](../HISTORY-DELETED.md).**
+> Канонічна зведена спека обох режимів — там (data-джерела, дзеркало History↔Deleted, стан коду,
+> sequencing). Цей розділ лишається як історична візія; за розбіжності істина — у HISTORY-DELETED.md.
+
 > Vision користувача (2026-06-29). Ще один драйвер split-у (окремий `diff2-history`
 > view-type). Будувати ПІСЛЯ split-у І за новим one-sided recovery; узгодити з R2.3
 > (не форкати). **НЕ «free reuse» — див. point 1.**
@@ -533,6 +537,9 @@ back-stack із 3 кроків / 3 view-types**:
 (`listCommitsForPath` + push-queue fallback), History — його новий UI.
 
 ## 11. VISION — Deleted sub-tab (розширює R2.4 / R3.6; ЧАСТКОВИЙ reuse absent-base)
+
+> ⤴ **SUPERSEDED для History/Deleted → [`docs/tasks/HISTORY-DELETED.md`](../HISTORY-DELETED.md).**
+> Канонічна зведена спека — там. Цей розділ лишається як історична візія.
 
 > Vision-нотатка (2026-06-29, advisor-reviewed). `diff2-panel:Deleted` — це **sub-tab у
 > панелі** (як Conflicts/History), НЕ окремий view-type. Плоский список → клік →

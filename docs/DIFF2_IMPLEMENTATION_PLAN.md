@@ -374,6 +374,8 @@ sibling` (SYNC2 §1) — лиш виконаний у момент editor-exit �
 Кожен елемент списку клікабельний → перехід у **detail view** з DiffPane (R7), де є додатковий top-toolbar з тими ж
 операціями, але для одного файлу (R7.9-onepan).
 
+> ⤴ **SUPERSEDED → [`docs/tasks/HISTORY-DELETED.md`](./tasks/HISTORY-DELETED.md)** — канонічна зведена спека History-режиму (data-джерела, view-types, стан коду). R2.3 лишається як data-шар-довідка.
+
 **R2.3. File history** — для довільного файлу з vault показати історію його змін. Джерела:
 
 1. **Push queue fallback** — якщо немає мережі або клієнт у `bare` стані, показати локальні pending-батчі (читання
@@ -394,6 +396,8 @@ sibling` (SYNC2 §1) — лиш виконаний у момент editor-exit �
 Кожен елемент історії клікабельний → відкриває DiffPane (current vs selected-version). У DiffPane при перегляді
 історії `theirsReadOnly: true` (вже передбачено у DiffPane API). Кнопка "Restore this version" у footer DiffPane —
 перезаписує current vault file байтами обраної версії.
+
+> ⤴ **SUPERSEDED → [`docs/tasks/HISTORY-DELETED.md`](./tasks/HISTORY-DELETED.md)** — канонічна зведена спека Deleted-режиму. R2.4 + R3 лишаються як data-шар-довідка (TrashStore).
 
 **R2.4. Deleted files (Recently deleted)** — той самий single-pane shell (R2.0), що й Conflicts mode, але **спрощений
 detail view**.
