@@ -6,8 +6,8 @@
 > Поза цією спекою додатково зроблено: char-level intra-chunk diff (bug-8), trailing-`↵` diff
 > (bug-50/51), назву файлу винесено у view-header, і **fault-tolerant recovery** (bug-56:
 > replay зупиняється безпечно, не брикає resume; pre-flight дає чесний "NNN edits saved").
-> **Єдина узгоджена майбутня фіча:** search-панель (`Ctrl+F`, reuse `@codemirror/search`;
-> прості слова + фраза в кавичках/дужках; обережно з `selectionLegalizeFilter` на match-selection).
+> **DONE**: search-панель (`Ctrl+F`): reuse `@codemirror/search`; фрагменти слів|цілі слова|casesensetive on/off|regexp 
+> plus replace.
 > **Open (не фічі):** recovery-replay perf (див. `TODO.md`), entry-points E4/E5/E6,
 > History/Compare/Deleted режими. Поточний live-pointer статусу — memory `project-diff2-resume-point`.
 
