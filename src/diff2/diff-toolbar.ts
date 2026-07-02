@@ -63,6 +63,14 @@ function keepEditorFocus(b: HTMLElement): void {
   b.addEventListener("mousedown", (e) => e.preventDefault());
 }
 
+// VISUAL-only disabled: greys the button + marks it for a11y, but keeps it CLICKABLE so its
+// handler still fires (and refocuses the editor). See the update() comment for why the HTML
+// `disabled` attribute is the bug.
+function setOff(b: HTMLElement, off: boolean): void {
+  b.classList.toggle("diff2-tb-off", off);
+  b.setAttribute("aria-disabled", String(off));
+}
+
 function iconButton(parent: HTMLElement, icon: string, title: string, onClick: () => void): HTMLButtonElement {
   const b = parent.appendChild(document.createElement("button"));
   b.className = "diff2-tb-icon";
@@ -170,10 +178,14 @@ export function renderDiffToolbar(
     update(s: DiffToolbarState) {
       countEl.textContent = String(s.conflictCount);
       colCount.classList.toggle("is-zero", s.conflictCount === 0); // green at 0, red otherwise
-      prevBtn.disabled = !s.hasPrev;
-      nextBtn.disabled = !s.hasNext;
-      undoBtn.disabled = !s.canUndo;
-      redoBtn.disabled = !s.canRedo;
+      // NOT the HTML `disabled` attribute: a disabled <button> fires NO events, so its click
+      // can't refocus the editor and the browser shifts focus off it → caret vanishes, hotkeys
+      // die. Instead a VISUAL-only "off" state; the button stays clickable and its handler
+      // (owner.navPrev/navNext/undo/redo) refocuses the editor + no-ops at the boundary.
+      setOff(prevBtn, !s.hasPrev);
+      setOff(nextBtn, !s.hasNext);
+      setOff(undoBtn, !s.canUndo);
+      setOff(redoBtn, !s.canRedo);
     },
   };
 }

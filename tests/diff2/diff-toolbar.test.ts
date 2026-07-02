@@ -32,15 +32,31 @@ const btnByTitle = (c: HTMLElement, prefix: string) =>
   Array.from(c.querySelectorAll("button")).find((b) => b.title.startsWith(prefix))!;
 
 describe("diff-toolbar", () => {
-  it("update() patches the count + nav/undo/redo disabled states", () => {
+  it("update() patches the count + nav/undo/redo VISUAL-off states (NOT html-disabled)", () => {
     const c = document.createElement("div");
     const h = renderDiffToolbar(c, initial, cbs());
     h.update({ conflictCount: 3, hasPrev: false, hasNext: true, canUndo: true, canRedo: false });
     expect(c.querySelector(".diff2-tb-count")!.textContent).toBe("3");
-    expect(btnByTitle(c, "Previous conflict").disabled).toBe(true);
-    expect(btnByTitle(c, "Next conflict").disabled).toBe(false);
-    expect(btnByTitle(c, "Undo").disabled).toBe(false);
-    expect(btnByTitle(c, "Redo").disabled).toBe(true);
+    const off = (t: string) => btnByTitle(c, t).classList.contains("diff2-tb-off");
+    expect(off("Previous conflict")).toBe(true);
+    expect(off("Next conflict")).toBe(false);
+    expect(off("Undo")).toBe(false);
+    expect(off("Redo")).toBe(true);
+    // CRITICAL: an "off" button is NOT html-disabled — it stays clickable so its handler can
+    // refocus the editor (a real `disabled` button fires no events → the caret/hotkey bug).
+    expect(btnByTitle(c, "Previous conflict").disabled).toBe(false);
+    expect(btnByTitle(c, "Previous conflict").getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("an OFF (visually-disabled) nav button STILL fires its handler (so it can no-op + refocus)", () => {
+    const c = document.createElement("div");
+    let prevCalls = 0;
+    const h = renderDiffToolbar(c, initial, { ...cbs(), onPrev: () => (prevCalls += 1) });
+    h.update({ conflictCount: 3, hasPrev: false, hasNext: true, canUndo: true, canRedo: false });
+    const prev = btnByTitle(c, "Previous conflict");
+    expect(prev.classList.contains("diff2-tb-off")).toBe(true);
+    prev.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(prevCalls).toBe(1); // fires → controller no-ops nav at boundary + refocuses editor
   });
 
   it("action buttons preventDefault mousedown (keep editor focus) — but the toggle does NOT", () => {

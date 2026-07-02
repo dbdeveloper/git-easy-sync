@@ -123,10 +123,12 @@ export class DiffPaneOwner {
     this.view.focus();
   }
   navPrev(): void {
-    gotoAdjacentConflict(this.view, false);
+    gotoAdjacentConflict(this.view, false); // no-op at the first conflict
+    this.view.focus(); // toolbar click must return focus to the editor (caret + hotkeys)
   }
   navNext(): void {
-    gotoAdjacentConflict(this.view, true);
+    gotoAdjacentConflict(this.view, true); // no-op at the last conflict
+    this.view.focus();
   }
 
   // Auto-focus: scroll to the FIRST remaining conflict (caret at its ver1.from). No-op if none.

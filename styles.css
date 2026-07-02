@@ -248,9 +248,15 @@
 .diff2-tb-icon:hover {
     background: var(--background-modifier-hover);
 }
-.diff2-tb-icon:disabled {
+/* Visual-only "disabled" — the button stays CLICKABLE (its handler no-ops + refocuses the
+ * editor); the HTML `disabled` attribute is NOT used (a disabled <button> fires no events, so
+ * the browser shifts focus off it → caret vanishes, hotkeys die). */
+.diff2-tb-icon.diff2-tb-off {
     opacity: 0.4;
     cursor: default;
+}
+.diff2-tb-icon.diff2-tb-off:hover {
+    background: var(--background-secondary); /* no hover affordance when "off" */
 }
 .diff2-tb-count {
     font-weight: 600;
