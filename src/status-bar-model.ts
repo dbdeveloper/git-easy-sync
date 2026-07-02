@@ -67,6 +67,11 @@ export interface StatusMenuItem {
   label: string;
   // draw a separator BEFORE this item.
   separatorBefore?: boolean;
+  // a real ACTION item that is currently disabled (greyed, non-clickable) —
+  // e.g. "Commit current file" when there is no active file. Distinct from a
+  // key===null heading: the key is kept for identity; only the click is
+  // suppressed. The renderer disables on (key===null || disabled).
+  disabled?: boolean;
 }
 
 export interface StatusMenuInput {
@@ -74,6 +79,11 @@ export interface StatusMenuInput {
   pluginName: string;
   queueDepth: number;
   conflictCount: number;
+  // Is there an active file to act on? Gates the current-file-bound items
+  // (commit-current, and later show-history) → disabled/grey when false, so a
+  // click can't fall through to a "No active file" Notice. Computed fresh on
+  // each menu open (the menu rebuilds per click).
+  hasActiveFile: boolean;
 }
 
 // "(1 open conflict)" / "(N open conflicts)" / "" — §7 open-diff suffix.
@@ -89,7 +99,7 @@ function pullPushLabel(queueDepth: number): string {
 }
 
 export function buildStatusMenu(input: StatusMenuInput): StatusMenuItem[] {
-  const { state, pluginName, queueDepth, conflictCount } = input;
+  const { state, pluginName, queueDepth, conflictCount, hasActiveFile } = input;
   const items: StatusMenuItem[] = [];
 
   // Heading (greyed, disabled) for the error states only.
@@ -105,7 +115,13 @@ export function buildStatusMenu(input: StatusMenuInput): StatusMenuItem[] {
     const headed = state === "token-expired";
     items.push({ key: "sync-all", label: "Sync All", separatorBefore: headed });
     items.push({ key: "commit-all", label: "Commit all changed files" });
-    items.push({ key: "commit-current", label: "Commit current file" });
+    // current-file-bound → greyed when there is no active file (instead of
+    // clicking through to a "No active file to commit" Notice).
+    items.push({
+      key: "commit-current",
+      label: "Commit current file",
+      disabled: !hasActiveFile,
+    });
     items.push({ key: "pull-push", label: pullPushLabel(queueDepth) });
     items.push({
       key: "open-diff",

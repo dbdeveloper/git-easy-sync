@@ -693,6 +693,17 @@ unresolved-конфліктів):
 відкриває view за default-sub-tab-правилом (R2.7.5). `Sync All` / `Commit all` /
 `Commit current` / `Pull+push` мапляться на наявні команди main.ts.
 
+> **📌 Доповнення (2026-07-03, канонічно у [`docs/tasks/HISTORY-DELETED.md`](../docs/tasks/HISTORY-DELETED.md) §4.1).**
+> Додати пункт **`Show history of current file`** (поряд із `Commit current file`) — History
+> current-file-bound entry зі status-bar (спростовує рання «History не має глобальних поверхонь»:
+> нема глобального СПИСКУ/badge, але current-file-bound пункт легітимний). **Гейт `hasActiveFile`
+> (сіримо, не ховаємо):** `buildStatusMenu` зараз пушить `commit-current` безумовно, а null-перевірка
+> лише на кліку (Notice «No active file to commit») → при активному diff2-view (ItemView, не
+> MarkdownView) пункт клікабельний, але падає в Notice. Виправити уніфіковано: `StatusMenuInput.hasActiveFile`
+> (= `activeFilePath() !== null`) гейтить **обидва** file-bound пункти (`commit-current` + `show-history`)
+> → **disabled/сірий** (як greyed `key:null`-heading), БЕЗ імені файлу в лейблі (довгі імена). Побічно
+> лагодить наявну commit-current-ваду. Деталі — HISTORY-DELETED.md §4.1.
+
 #### R2.7.3.a. `.token_expired` persistent-мітка (TODO.md §5) — підмурок під §7
 
 Файл-мітка `.token_expired` у каталозі плагіна

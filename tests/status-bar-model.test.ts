@@ -62,6 +62,7 @@ describe("buildStatusMenu — §7 three states", () => {
       pluginName: "GitHub Easy Sync",
       queueDepth: 0,
       conflictCount: 0,
+      hasActiveFile: true,
     });
     expect(keys(m)).toEqual([null, "settings"]);
     expect(m[0].label).toBe("GitHub Easy Sync: Uninitialized");
@@ -74,6 +75,7 @@ describe("buildStatusMenu — §7 three states", () => {
       pluginName: "GitHub Easy Sync",
       queueDepth: 3,
       conflictCount: 2,
+      hasActiveFile: true,
     });
     expect(keys(m)).toEqual([
       null,
@@ -95,6 +97,7 @@ describe("buildStatusMenu — §7 three states", () => {
       pluginName: "GitHub Easy Sync",
       queueDepth: 0,
       conflictCount: 0,
+      hasActiveFile: true,
     });
     expect(keys(m)).toEqual([
       "sync-all",
@@ -108,18 +111,31 @@ describe("buildStatusMenu — §7 three states", () => {
   });
 
   it("pull-push label shows '(N)' only when N > 0", () => {
-    const zero = buildStatusMenu({ state: "normal", pluginName: "x", queueDepth: 0, conflictCount: 0 });
+    const zero = buildStatusMenu({ state: "normal", pluginName: "x", queueDepth: 0, conflictCount: 0, hasActiveFile: true });
     expect(labelOf(zero, "pull-push")).toBe("Pull from repo and push stored commits");
-    const some = buildStatusMenu({ state: "normal", pluginName: "x", queueDepth: 3, conflictCount: 0 });
+    const some = buildStatusMenu({ state: "normal", pluginName: "x", queueDepth: 3, conflictCount: 0, hasActiveFile: true });
     expect(labelOf(some, "pull-push")).toBe("Pull from repo and push stored (3) commits");
   });
 
   it("open-diff label is conflict-count aware (singular/plural/none)", () => {
     const mk = (c: number) =>
-      labelOf(buildStatusMenu({ state: "normal", pluginName: "x", queueDepth: 0, conflictCount: c }), "open-diff");
+      labelOf(buildStatusMenu({ state: "normal", pluginName: "x", queueDepth: 0, conflictCount: c, hasActiveFile: true }), "open-diff");
     expect(mk(0)).toBe("Open diff-panel");
     expect(mk(1)).toBe("Open diff-panel (1 open conflict)");
     expect(mk(5)).toBe("Open diff-panel (5 open conflicts)");
+  });
+
+  it("commit-current is greyed (disabled) exactly when there is no active file", () => {
+    const item = (hasActiveFile: boolean) =>
+      buildStatusMenu({ state: "normal", pluginName: "x", queueDepth: 0, conflictCount: 0, hasActiveFile })
+        .find((i) => i.key === "commit-current");
+    // present in both cases (never hidden) — only the disabled flag flips.
+    expect(item(true)?.disabled).toBeFalsy();
+    expect(item(false)?.disabled).toBe(true);
+    // no active file also holds in the token-expired state.
+    const expired = buildStatusMenu({ state: "token-expired", pluginName: "x", queueDepth: 0, conflictCount: 0, hasActiveFile: false })
+      .find((i) => i.key === "commit-current");
+    expect(expired?.disabled).toBe(true);
   });
 });
 

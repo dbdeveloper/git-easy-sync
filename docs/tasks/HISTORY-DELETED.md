@@ -228,12 +228,32 @@ vault-файл** — інакше вони затруть правки одне 
 
 ## 4. History mode (Phase 7)
 
-### 4.1 Вхід (entry-points, R2.7.2)
+### 4.1 Вхід (entry-points, R2.7.2 — уточнено 2026-07-03)
 - **Контекст-меню файлу** в Obsidian file-explorer → **`Show history`** / «GitHub History»
   → відкриває `diff2-history` **одразу** для цього файлу.
 - **Command palette:** `Show history of active file`.
-- Глобальних entry-points (ribbon/status-bar) для History **нема** — це context-bound
-  операція (R2.7.2).
+- **Status-bar меню:** пункт **`Show history of current file`** (поряд із `Commit current
+  file`, R2.7.3) — той самий command-palette-запис, винесений у меню; відкриває `diff2-history`
+  для активного файлу.
+
+**Уточнення до R2.7.2 «History file-bound → жодних глобальних поверхонь».** Правильна межа:
+нема глобального **списку/badge** для History (на відміну від Conflicts/Deleted, у History
+**нема що рахувати** — жодного числа на ribbon-іконці чи в тексті status-bar). **АЛЕ**
+current-file-bound **пункт меню** легітимний — він resolve-иться з активного файлу
+(`activeFilePath()` через `getActiveViewOfType(MarkdownView)`, `main.ts:2020`), як `Commit
+current file`. Нема empty-state «виберіть файл».
+
+**Гейт `hasActiveFile` (сіримо, не ховаємо).** Зараз `buildStatusMenu` (`status-bar-model.ts:91`)
+пушить `commit-current` **безумовно**, а null-перевірка — лише на кліку (Notice «No active file
+to commit», `main.ts:1701`) → при активному diff2-view (ItemView, не MarkdownView →
+`activeFilePath()===null`) пункт клікабельний, але падає в Notice. Виправляємо **уніфіковано**:
+- додати в `StatusMenuInput` прапорець `hasActiveFile` (= `activeFilePath() !== null`,
+  обчислюється в main.ts перед `buildStatusMenu`; меню будується заново на кожен клік → стан
+  свіжий);
+- у `buildStatusMenu` гейтити **обидва** file-bound пункти (`commit-current` **і**
+  `show-history`) цим прапорцем → **сірий/disabled** (як наявний greyed-heading `key:null`), НЕ
+  ховати. **Без імені файлу в лейблі** (імена бувають дуже довгі).
+- Побічно **лагодить наявну ваду** commit-current (always-shown→Notice → тепер коректно сірий).
 
 ### 4.2 View-types і навігація (2-рівнева модель)
 

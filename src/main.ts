@@ -1453,12 +1453,15 @@ export default class GitHubSyncPlugin extends Plugin {
       pluginName: manifest.name,
       queueDepth: this.currentQueueDepth,
       conflictCount: this.conflictCounter?.getValue() ?? 0,
+      hasActiveFile: this.activeFilePath() !== null,
     });
     for (const item of items) {
       if (item.separatorBefore) menu.addSeparator();
       menu.addItem((mi) => {
         mi.setTitle(item.label);
-        if (item.key === null) {
+        // key===null = a grey heading; disabled = a greyed action item
+        // (current-file-bound with no active file). Both: no click.
+        if (item.key === null || item.disabled) {
           mi.setDisabled(true);
           return;
         }
