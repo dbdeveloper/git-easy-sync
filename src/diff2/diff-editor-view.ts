@@ -22,6 +22,7 @@
 
 import { ItemView, Notice, Scope, WorkspaceLeaf } from "obsidian";
 import { formatConflictTimestamp } from "./strip-conflict-suffix";
+import { historyIsoTimestamp } from "./history-versions";
 import {
   DiffDetailController,
   type DiffDetailHost,
@@ -176,6 +177,12 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   // sibling-exists await.
   private async tryMount(): Promise<void> {
     if (this.mounted || this.mounting || !this.controller || !this.state) return;
+    // 7a.3 — a History editor has no conflict sibling to parse; it mounts a read-only
+    // version against currentFile. Branch before the conflict-sibling machinery below.
+    if (this.state.origin === "history") {
+      await this.tryMountHistory();
+      return;
+    }
     // Defensive: a genuinely corrupt/empty state (siblingPath missing). With 1B's getState
     // a clone carries the full state and is caught by the scan-guard below instead, so this
     // is now a rare fallback. parseSiblingFilename would THROW on a non-string anyway.
@@ -250,6 +257,90 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     }
   }
 
+  // 7a.3 — the synthetic ConflictEntry for a history editor: base===sibling===
+  // currentFile (=basePath), the version's label/date, and its sha as the autosaveId
+  // discriminator. Pure (state-only) so openDesc can build it before the async mount.
+  private historyEntryFromState(state: EditorTabState): ConflictEntry | null {
+    const v = state.historyVersion;
+    if (!v || typeof state.basePath !== "string" || !state.basePath) return null;
+    return {
+      basePath: state.basePath,
+      siblingPath: state.basePath,
+      deviceLabel: v.deviceLabel,
+      isoTimestamp: historyIsoTimestamp(v.date),
+      kind: "synthetic",
+      historyVersionSha: v.id,
+    };
+  }
+
+  // 7a.3 — mount a read-only historical version against currentFile. Mirrors the
+  // conflict tryMount (dup-guard, exists-check, mounting flag) but builds a synthetic
+  // entry and passes the lazy bytes-fetcher through to the controller's fresh path.
+  private async tryMountHistory(): Promise<void> {
+    const state = this.state!;
+    const entry = this.historyEntryFromState(state);
+    if (!entry) {
+      new Notice("This history tab is missing its version — reopen it from the file's history.");
+      this.leaf.detach();
+      return;
+    }
+    const currentFile = entry.basePath;
+    const version = state.historyVersion!;
+    this.mounting = true;
+    try {
+      // currentFile deleted between sessions → nothing to diff against. Close cleanly.
+      if (!(await this.deps.vault.adapter.exists(currentFile))) {
+        new Notice("The file no longer exists — closing its history editor.");
+        this.leaf.detach();
+        return;
+      }
+      // DUPLICATE guard (split / restored clone): another editor already holds this
+      // exact version (same autosaveId) → this leaf is the clone, close it + focus original.
+      const autosaveId = autosaveIdForEntry(entry);
+      const original = this.app.workspace
+        .getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE)
+        .find(
+          (l) =>
+            l !== this.leaf &&
+            l.view instanceof DiffEditorView &&
+            l.view.openDesc()?.autosaveId === autosaveId,
+        );
+      if (original) {
+        new Notice("This version is already open in another tab.");
+        this.leaf.detach();
+        this.app.workspace.revealLeaf(original);
+        if (original.view instanceof DiffEditorView) original.view.focusEditor();
+        return;
+      }
+      if (!this.deps.fetchHistoryVersionBytes) {
+        new Notice("History editing isn't available (GitHub sync not configured).");
+        this.leaf.detach();
+        return;
+      }
+
+      this.entry = entry;
+      this.refreshHeader();
+      this.mounted = true;
+      const container = this.contentEl;
+      container.empty();
+      container.addClass("diff2-edit-view-root");
+      const silentResume = !state.openMode;
+      void this.controller.mount(container, entry, {
+        silentResume,
+        history: {
+          versionSha: version.id,
+          fetchBytes: () =>
+            this.deps.fetchHistoryVersionBytes!(currentFile, version),
+        },
+      });
+    } catch (err) {
+      this.deps.logger?.info("diff2 history tryMount failed — detaching", {
+        err: String(err),
+      });
+      this.leaf.detach();
+    }
+  }
+
   async onClose(): Promise<void> {
     if (this.escScope && this.escScopePushed) {
       this.app.keymap.popScope(this.escScope);
@@ -266,7 +357,14 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   // state is missing / not a real conflict sibling.
   openDesc(): OpenEditorDesc | null {
     const s = this.state;
-    if (!s || typeof s.siblingPath !== "string" || !s.siblingPath) return null;
+    if (!s) return null;
+    // 7a.3 — history entry is built from state (no conflict sibling to parse).
+    if (s.origin === "history") {
+      const entry = this.entry ?? this.historyEntryFromState(s);
+      if (!entry) return null;
+      return openDescFor("history", entry.basePath, entry.siblingPath, autosaveIdForEntry(entry));
+    }
+    if (typeof s.siblingPath !== "string" || !s.siblingPath) return null;
     const entry = this.entry ?? entryFromSibling(this.deps.conflictStore, s.siblingPath);
     if (!entry) return null;
     return openDescFor(s.origin, entry.basePath, entry.siblingPath, autosaveIdForEntry(entry));

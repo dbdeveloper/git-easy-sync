@@ -407,10 +407,214 @@ wholeWord}` (та сама, що вже у проєкті для in-editor Ctrl+
 дзеркало CM6-search-панелі, без replace-рядка. Reuse = **query-модель + UI-тумблери**; сам пошук іде
 не по відкритому документу, а по вмісту версій у worker-і (cpu-worker будує matcher із цих параметрів).
 
-### 4.5 Commit / Recovery
-- Commit: `commitUnchangedSide("base")` (§3.2) — пише лише sibling (поточний файл), base не
-  торкає. `guardEmpty`→`"\n"` доречний (History не видаляє файл).
-- Recovery: one-sided (§3.1) — base зі snapshot immutable; detection перевіряє лише sibling.
+### 4.5 Життєвий цикл сеансу редагування + збереження (History та Deleted)
+
+> Узгоджено з користувачем 2026-07-03 у діалозі; кожен факт про поведінку Obsidian
+> **підтверджений логами** (проби `onClose`/`onunload`/`onLayoutReady`), не припущенням.
+> Ця модель — **спільна** для History (Phase 7) і Deleted (Phase 9b): машинерія одна,
+> різниця лише в тому, яку сторону diff-у пишемо (див. кінець розділу).
+
+#### 4.5.1 Чому History/Deleted — «ефемерні» (на відміну від конфлікту)
+
+Конфлікт **реальний і живе на диску**: є два файли-сіблінги, і поки їх не вирішено, конфлікт
+існує «вічно». Тому його тека сеансу `.diff2-autosave/<id>/` **навмисно переживає** будь-яке
+закриття — це crash-recovery для реального конфлікту.
+
+History/Deleted-редактор — це **тимчасовий перегляд**: жодного постійного конфлікту на диску
+нема. Тому його тека сеансу **не повинна переживати свідоме закриття** — інакше при перегляді
+багатьох версій багатьох файлів теки накопичувались би на диску без обмежень. Отже цикл життя
+такого сеансу — **ефемерний, строго обмежений**.
+
+#### 4.5.2 Один сеанс на файл
+
+Тека сеансу іменується **за vault-файлом** (`deriveAutosaveId("history"|"deleted", currentFile,
+currentFile)`) — **без номера версії**. На один файл — **рівно одна пара** «версія ↔ поточний
+файл» у будь-який момент. Номер версії живе лише в стані вкладки (щоб знати, що показувати й
+звідки тягнути байти), але **не** в імені теки.
+
+#### 4.5.3 Життєвий цикл теки `.diff2-autosave/` (ефемерний)
+
+> **Уся ця механіка — на емпіричних фактах, кожен рядок «(лог)» підтверджений пробами
+> 2026-07-03 на реальному Obsidian.** Ключові факти:
+> - `onClose` спрацьовує на `[x]` і disable, **НЕ** на quit / закриття-вікна / крах (лог).
+> - `onunload` біжить на disable й **встигає записати на диск** (процес живий; на quit — ні) (лог).
+> - на момент `onunload` таби **вже закриті** — `getLeavesOfType`=0 (лог) → перелічити їх там **не можна**.
+> - **але in-memory поле плагіна ЖИВЕ в `onunload`** (`probeMountedEditors=[synthetic-…]`, лог) —
+>   GC забирає екземпляр лише **після** `onunload` → список можна записати у файл.
+> - `reloadPlugin` на десктопі **відсутній** → self-reload = `disable`+`enable` = **руйнує** таби (лог).
+> - **Force Reload / quit / рестарт** = таби виживають (Obsidian відновлює сам, `restored=1`, лог).
+
+Головний принцип: **тека `.diff2-autosave/<id>/` йде за вкладкою**. Оскільки `onClose` **не розрізняє**
+`[x]` від disable (обидва його викликають, і *до* `onunload`), ми не покладаємось на нього для рішення
+«зберегти чи стерти». Натомість — **власна персистентність сеансу** (наш «міні-workspace»):
+
+**1. In-memory список відкритих редакторів.** Плагін тримає масив `{autosaveId, стан}` — редактор
+додається на mount (verified: цей список живий у `onunload`).
+
+**2. `onClose` → forget-таймер (≈500 мс), НЕ миттєве витирання.** Закриття таба планує «забути» цей
+сеанс (прибрати зі списку + стерти теку) через 500 мс. Список поки **не чіпаємо**. *(`[←]`-commit сам
+стирає/комітить теку — там forget = no-op.)*
+
+**3. `onunload` (disable/quit): вбити forget-таймери + записати ознаку + `detach`.** Позаяк таймери
+вбиті, in-memory список **цілий** → пишемо його у **файл-ознаку** `{timestamp, список}`; тоді
+`detachLeavesOfType` (це і фікс падіння, §4.5.8). На quit запис може не встигнути flush — але там
+Obsidian відновлює таби сам, ознака не потрібна.
+
+**4. `onload` (enable/рестарт): reopen ПЕРЕД sweep.**
+   - Читаємо ознаку. **Свіжа** (`now − timestamp < ~30 с` = це був reload/self-update/BRAT) → **самі
+     пере-відкриваємо** таби зі списку (`await`), тоді видаляємо ознаку. **Стара** (свідомий disable,
+     потім enable через хвилини/місяць) → видаляємо ознаку, **чистий старт**.
+   - **Sweep — ПІСЛЯ `layoutReady` І ПІСЛЯ `await` нашого reopen** (щоб і рідно-відновлені Obsidian-ом,
+     і наші таби вже стояли): перелічуємо відкриті редактори → їхні `autosaveId` = «зберегти» →
+     **решту History/Deleted-тек зносимо**. Conflict-теки sweep **не чіпає** (за префіксом
+     `history-`/`deleted-` vs `tracked-`/`synthetic-`).
+
+**5. Forget-таймер спрацював** (тобто `onunload` його НЕ вбив) = це було свідоме `[x]` → прибрати зі
+списку + стерти теку (майже миттєво).
+
+**Багато таймерів + edge `[x]`-then-disable.** Кожен закритий таб має свій forget-таймер → тримаємо
+колекцію (Map за `autosaveId`). `onClose` пише `closedAt = now`. У `onunload` **розрізняємо за часом:**
+таби, закриті в «пачці» disable (останні ~50 мс перед `onunload`), — у ознаку (відновити); таби,
+`[x]`-закриті **раніше** (старший `closedAt`, їхній таймер ще висів), — **НЕ зберігаємо**, а
+**виконуємо їхній forget** (прибрати зі списку + стерти теку). Надійно, бо людина не встигне `[x]` і
+disable за 50 мс — disable завжди на сотні мс пізніше. (Без цього швидке `[x]`+disable у вікні помилково
+відновило б `[x]`-закритий таб і воскресило викинуту чернетку.)
+
+**⚠️ Два ОКРЕМІ концерни — не плутати:**
+
+- **(A) Відновлення вкладок (ознака/reopen)** стосується **ВСІХ трьох наших view-типів**, щоб
+  зберігався весь наш «робочий стан»: `diff2-edit-view` (panel, singleton; стан = активний sub-tab),
+  `diff2-editor-view` (editor, багатотабовий; стан = origin+base+sibling+версія), `diff2-history`
+  (per-file список; стан = path). In-memory список і файл-ознака тримають **усі** відкриті наші
+  вкладки, і `onload` пере-відкриває **всі**. *(Проба 2026-07-03 чіпляла лише editor — тому в лозі не
+  було panel; реальна реалізація реєструє всі три типи на open, forget-таймер — на close.)*
+- **(B) Життєвий цикл теки `.diff2-autosave/`** (стерти/зберегти) стосується **ЛИШЕ `diff2-editor-view`** —
+  бо тільки редактор має сеанс-теку з чернеткою. **Panel і history тек НЕ мають** (це списки, що
+  перечитують вміст із ConflictStore / GitHub) → їм forget-таймер лише **прибирає зі списку**, теку
+  стирати нема чого. Sweep History/Deleted-тек — теж лише про editor-теки.
+
+Тобто один список/ознака покриває відновлення всіх вкладок (A); а витирання тек — підмножина лише для
+editor-сеансів (B).
+
+**Порядок гарантує race-free поведінку** (не везіння). Розкладка по подіях:
+
+| Подія | Механізм | Результат |
+|---|---|---|
+| **`[x]`** | `onunload` не біг → forget-таймер спрацював | тека стерта (~500 мс), зі списку прибрано |
+| **Авто self-update** (disable+enable) | `onunload` вбив таймер + записав ознаку → `onload` бачить свіжу → reopen | **таб і чернетка ВИЖИЛИ** (defer **не потрібен**) |
+| **BRAT / dev disable→enable** (швидко) | те саме | виживають |
+| **Свідомий disable, enable пізніше** | ознака **стара** → чистий старт | теки прибрані, як задумано |
+| **Quit / рестарт / Force Reload** | `onClose` не біг; Obsidian відновлює сам | таби виживають; на mount знову в списку → sweep зберігає |
+| **Крах / kill** | нічого не біжить | тека жива → відновлення / sweep |
+
+Це **уніфікований** механізм: один «reopen-then-sweep + ознака-TTL» покриває всі reload-шляхи, прибирає
+потребу в окремому *defer self-reload*, і не втрачає даних у жодному не-свідомому кейсі.
+
+#### 4.5.4 Збереження `[←]`
+
+База (версія) — **заморожена, read-only**, її ніколи не пишемо. Пишемо тільки редаговану сторону
+через наявний `commitUnchangedSide` (без `commit7Step`/`done.json`). **Порядок перевірок:**
+
+1. **Правок не було** (користувач лише подивився) → **нічого не пишемо** (щоб не «торкнути» файл
+   і не породити зайвий коміт синхронізації), теку прибираємо, повертаємось у History-таб.
+2. **Поточний файл змінився ЗЗОВНІ** під час перегляду (напр., синхронізація з іншого пристрою) →
+   **діалог на 3 кнопки:**
+   - **Підвантажити нову версію** — новий вміст поточного файлу записуємо в `sibling.snapshot`,
+     редактор **перезапускається** (та сама стара версія проти оновленого файлу);
+   - **Перезаписати** — наші зміни пишуться поверх (семантика «відновити версію = перезаписати»);
+   - **Скасувати** — лишаємось у редакторі; хочеш вийти без запису — тисни `[x]`.
+3. **Інакше** → пишемо результат.
+
+Що саме пишемо (єдина відмінність History vs Deleted):
+- **History** → праву сторону (`normal-рядки + ver2-блоки`) у **поточний файл**;
+- **Deleted** → ліву сторону (`normal-рядки + ver1-блоки`) у **початковий шлях**.
+
+`guardEmpty`→`"\n"` доречний в обох (жоден із режимів **не видаляє** файл).
+
+#### 4.5.5 «Файл уже редагується» (open-guard, крос-режимно)
+
+Перевірка «чи файл зайнятий» — **за vault-файлом, а не за режимом**. Використовуємо наявний
+open-guard (перетин write-set по vault-файлу). Тому:
+- відкрити версію файлу F, коли F **уже** відкрито в редакторі (байдуже — інша версія історії
+  **чи взагалі конфлікт** F), → **класичний діалог «файл редагується — [Перемкнутись]/[Скасувати]»**;
+- поруч можуть співіснувати лише редактори **різних** файлів.
+
+**Без порівняння версій між собою.** Робочий цикл: History-таб → клік по версії → редактор
+(поточний ↔ версія) → `[←]` (редактор закривається, фокус вертається в той самий History-таб) →
+клік по іншій версії → і так по колу. У нормальному циклі діалог «зайнято» **не зʼявляється**
+(кожен `[←]` звільняє файл); він — лише запобіжник, якщо редактор лишили відкритим.
+
+#### 4.5.6 Інваріант: History ⟂ Deleted по одному шляху
+
+Для одного шляху History-редактор і Deleted-редактор **ніколи не співіснують**: якщо файл є в
+History — він **існує** (не видалений); якщо видалений — History для нього нема (нема з чого
+будувати). Тобто вони взаємовиключні за фактом існування файлу — цілий клас крайових випадків
+відпадає сам собою.
+
+#### 4.5.7 Recovery
+- **One-sided** (§3.1): base зі snapshot **immutable**; detection (`classifyReopen(ignoreBase)`)
+  перевіряє **лише** sibling (поточний файл). `resume` → replay зі snapshot-ів; будь-який інший
+  вихід (файл змінився/бібліотека/пошкодження) → **fresh** (перечитуємо версію проти оновленого
+  файлу — restore-гілка конфлікту тут писала б версію на currentFile = clobber, тому не вживається).
+
+#### 4.5.8 Модалка Settings закривається при disable з відкритим diff-editor — BENIGN, НЕ наш баг
+
+**Розслідувано покроково на пристрої (2026-07-03, проби + 5-с паузи + бінарний пошук причини):**
+- **НЕ crash** — у консолі **жодного винятку**; teardown відпрацьовує чисто до кінця.
+- Модалка зникає **на першому `disposeOwner`** — тобто в `DiffDetailController.dispose()` рівно на
+  `this.owner?.dispose()`, а це = `DiffPaneOwner.dispose()` = `cursorScheduler.stop()` + **`view.destroy()`**
+  (знищення CM6 EditorView).
+- **НЕ escScope** (виключено: вимкнули push/pop — модалка все одно закривається).
+- Наш `dispose()` **мінімальний і коректний** (нема focus/blur/workspace-викликів) — тобто це **побічний
+  ефект `CM6 EditorView.destroy()`**, що закриває Obsidian-модалку, а не наш баг.
+
+**Рішення: ПРИЙНЯТО як benign Obsidian/CM6-поведінка.** Жодного crash / втрати даних; кусає лише «disable,
+поки відкрита модалка Settings» (рідко). Для dev-циклу — **Force Reload** (там проблеми нема). Спроба фіксу
+через `detachLeavesOfType` + `workspace.on("quit")` (стадія C) **відкочена** — не допомагала (модалка
+закривається до onunload, на `owner.dispose`), а disable й так = discard (Obsidian сам прибирає вкладки,
+`restored=0`). **Не чіпаємо.**
+
+**Симптом-супутник (не критичний):** `onClose` нашого редактора спрацьовує **двічі** при teardown-і —
+idempotent `dispose()` це гасить (2-й `disposeOwner` = `hadOwner:false`), даних не псує; лишаємо як є.
+
+#### 4.5.9 Самооновлення плагіна (self-update) — покривається §4.5.3, окремий defer НЕ потрібен
+
+> **⚠️ Рання ідея «defer self-reload» ЗАМІНЕНА механізмом ознаки §4.5.3.** Лишаю опис проблеми як
+> контекст, але фікс тепер інший (простіший і повніший).
+
+**Проблема (давня, підтверджена логами 2026-07-03).** У кінці кожного успішного sync-у
+`handlePluginsAffectedReload` (`main.ts:1776`) перезавантажує зачеплені плагіни — **включно з собою** —
+через `reloadPluginById` (500 мс після drain). `app.plugins.reloadPlugin` на десктопі **відсутній**, тож
+скрізь падає в `disablePlugin`+`enablePlugin`, що **руйнує** відкриті diff-editor. Тобто фонове
+самооновлення може автоматично знести відкритий редактор.
+
+**Розв'язок — той самий механізм §4.5.3:** self-update = `disable`+`enable` **швидко** (< поріг TTL) →
+`onunload` запише ознаку → `enable` побачить свіжу → **пере-відкриє таби з чернетками**. Тобто
+self-update **автоматично зберігає** редактори через ознаку, як і BRAT/dev-reload. **Окремий defer НЕ
+потрібен** (і не робимо). *(Якщо колись захочеться уникнути навіть блимання перевідкриття — можна додати
+gate «не self-reload-итись, поки відкритий diff-editor» як полиск, але це необов'язково.)*
+
+#### 4.5.10 Стан вкладок для персистентності (що зберігаємо в ознаці / `getState`)
+
+Механізм §4.5.3 незмінний — просто **payload стану** кожної вкладки багатший за ідентичність і
+**росте разом із 7b**. Що зберігаємо, за фазами:
+
+| View-тип | 7a (мінімум) | 7b (додається) |
+|---|---|---|
+| **`diff2-editor-view`** (editor) | `origin`, `basePath`, `siblingPath`, `historyVersion` (для history) | *(курсор/скрол уже персистяться окремо — `cursor.json` у сеанс-теці)* |
+| **`diff2-edit-view`** (panel) | активний sub-tab (`conflicts`\|`deleted`) | позиція скролу, вибраний рядок |
+| **`diff2-history`** (per-file список) | `path` | діапазон дат (`day`…`year`), пошукова фраза, позиція скролу, підсвічений рядок (клавіші-стрілки) |
+| **`diff2-deleted`** (Phase 9b) | `path`/ідентичність | діапазон дат, фраза-фільтр **по назві файлу** (відсіяти видалені файли за назвою, коли їх багато), скрол, вибраний рядок |
+
+**`.history-cache` прив'язаний до життя вкладки** (§4.4): поки `diff2-history`-таб на екрані — кеш
+цього файлу **не чистимо**; закриття таба → `rm .history-cache/<F>/`; onload → повний wipe (сесійний
+backstop). **⚠️ Взаємодія з відновленням (7b-деталь, не 7a):** якщо на reload ми відновлюємо
+`diff2-history`-таб, його кеш або має пережити reload (не потрапити під onload-wipe), або таб
+**пере-fetch-ить** (прийнятно на reload — рідко). Точну політику вирішимо в 7b, коли буде кеш.
+
+**Для 7a — усе просте:** editor носить `{origin,base,sibling,version}`, panel — `{tab}`, history —
+`{path}`. Фільтр/пошук/скрол/selected-row — 7b, і вони просто **дописуються** в той самий стан, коли
+з'являються. Механізм ознаки/reopen готовий їх нести з першого дня.
 
 ### 4.6 Backlog (окремі фази)
 - **Крос-версійний пошук БІЛЬШЕ НЕ backlog** — він тепер **частина фільтра** (§4.4:
@@ -540,20 +744,44 @@ unit).** Файли: NEW `src/diff2/diff-history-view.ts` + `editor-tabs.ts` (`f
   **Acceptance (pending device):** список per-file; десятки різних файлів = десятки табів; split=move.
   ✅ build + **1718 unit** зелені.
 
-**7a.3 — версія → `diff2-editor` origin=history.**
-- main.ts `openHistoryVersion(path, versionSha)`: fetch base bytes (`getContentsAtRef`
-  `client.ts:499-547`) → **decode base64** (cpu-worker `decode-base64`) → **нормалізувати EOL на вході
-  в модель** (`eol.ts` `detectEol`/`toLf`, як conflict-base — bug-59, щоб CRLF-версія не зламала
-  модель); відкрити editor через `openDescFor("history", currentFile, currentFile,
-  deriveAutosaveId("history",path,sha))` → `openGuard` (write-set `["sibling"]`) →
-  `EditorTabState{origin:"history", …, returnTo}`.
-- `DiffEditorView.tryMount` → controller.mount з `readOnlyBase`+`ignoreBase`. Commit `[←]` = reuse
-  `commitUnchangedSide(changedSide:"base")` → пише sibling(currentFile) → `planBackNav`→`diff2-history`.
-  **`[←]`-reopen:** якщо origin-таб `diff2-history` уже закритий → `[←]` відкриває **СВІЖИЙ** для
-  `currentFile` (per-file dup-guard 7a.2 сфокусує наявний, якщо є). *(На відміну від conflict, що
-  вертає в singleton-панель, яка завжди існує — history-target per-file й може бути закритий.)*
-- **Tests:** unit `openDescFor("history")`/`writeSetFor`; harness (open→resolve→`[←]`→history).
-  **Acceptance:** правка старої версії пишеться в currentFile; `[←]` вертає в список.
+**7a.3 — версія → `diff2-editor` origin=history. 🔴 ПЕРЕРОБЛЯЄТЬСЯ за §4.5 (2026-07-03).** Перша
+редакція (нижче) закомічена (`ad226dd`+наступні), АЛЕ модель життєвого циклу переглянута з
+користувачем — канонічна тепер **§4.5**. Що міняється проти опису нижче: (1) ключ теки — **на файл**,
+без `versionSha` (прибрати з `autosaveIdForEntry`); (2) lifecycle — **ефемерний**: витирання в
+`onClose` + `onload`-sweep, а не «persist як conflict»; (3) `exitHistory` — обрізати, + TOCTOU-діалог
+на 3 кнопки (§4.5.4); (4) один сеанс на файл + «файл зайнятий»-діалог (§4.5.5); (5) окремо — фікс
+падіння disable (§4.5.8). Виживає: відкриття версії, fetch байтів, монтування, сам `commitUnchangedSide`.
+
+**Перша редакція (частково застаріла — див. §4.5): 🟡 CODE-COMPLETE (2026-07-03) — HARNESS-gate
+pending (getResolved-maps-to-intent).** Файли: `synthetic-detector.ts` (ConflictEntry.historyVersionSha
++ autosaveIdForEntry branch) + `diff-detail-controller.ts` (mount opts.history + exitHistory) +
+`diff-editor-view.ts` (tryMountHistory + openDesc) + `editor-tabs.ts` (EditorTabState.historyVersion) +
+`diff-edit-view.ts` (deps.fetchHistoryVersionBytes) + `history-versions.ts` (historyIsoTimestamp) +
+`main.ts`. Tests: `history-seams.test.ts` (+4: autosaveIdForEntry GATE, persistedEditorState).
+- main.ts `openHistoryVersion(path, version)`: build synthetic `ConflictEntry{base===sibling===currentFile,
+  historyVersionSha:version.id}` → `openGuard` (mirror openEditorForPair; write-set `[currentFile]` → 2
+  versions=busy-dialog, same=focus) → open leaf `EditorTabState{origin:"history", historyVersion}`
+  (`openMode:"user"`; getState persists historyVersion). **Bytes fetched LAZILY** (`fetchHistoryVersionBytes`:
+  local→`queue.readFile(batchId,path)` / GitHub→`getContentsAtRef`+cpu-worker `decodeBase64`) — RAW, EOL
+  нормалізується в моделі (bug-59), consumed ТІЛЬКИ на fresh-path (resume читає snapshots → offline-clean).
+- **🔑 autosaveId GATE (advisor):** `autosaveIdForEntry` бранчить на `historyVersionSha` → 3 call-sites
+  (mount/openDesc/dup-guard) дають `deriveAutosaveId("history",currentFile,versionSha)` — 2 версії одного
+  файлу = 2 dir-и (unit-locked). Version-identity в id/dirname, НЕ в meta.
+- **Mount:** `controller.mount(opts.history{versionSha,fetchBytes})` → `ours`=version (не vault),
+  `classifyReopen(ignoreBase)`, `startSession(readOnlyBase)`. **History switch = resume→replay,
+  все-інше→fresh** (restore-гілка писала б version на currentFile = clobber). +fetch-guard
+  `!body.isConnected` (advisor — network-fetch widens close-mid-mount ghost-editor window).
+- **Commit `[←]` = `exitHistory`** (session.isHistory): (a) zero-edit→discard (rmdir, no write, no
+  mtime-bump→spurious sync); (b) **never-clobber** — currentFile SHA ≠ siblingShaAtStart → Notice+stay
+  (§5.0.e invariant); (c) `commitUnchangedSide("base")` → пише resolved.sibling→currentFile (guardEmpty→"\n",
+  restoreEol). НІКОЛИ commit7Step/baseCommitAction (History не видаляє). `[←]`→`planBackNav`→
+  `openHistoryView` (reveal наявний per-file / open свіжий).
+- **Tests:** unit `autosaveIdForEntry(history)` GATE + `persistedEditorState(history)` + `writeSetFor("history")`
+  (вже). **🔴 HARNESS-GATE (не unit-provable, = 1-й пункт «DEVICE-VERIFY 7a»):** `getResolved().sibling`
+  несе намір користувача — (i) правка sibling(currentFile)-боку → `getResolved().sibling`==правка;
+  (ii) «restore version» → apply/join рухає base→sibling → `getResolved().sibling`==version. Без цього
+  claim «правка старої версії пишеться в currentFile» неперевірений. ✅ build + **1722 unit** зелені
+  (1718 pre-existing незмінні = conflict байт-у-байт).
 
 **7a.4 — entry-points.**
 - Розстабити команду `diff-edit-show-history` (`main.ts:459`, зараз → `activateDiffEditView`) →

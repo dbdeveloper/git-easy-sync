@@ -21,7 +21,8 @@ import {
   autosaveDir,
   deriveAutosaveId,
 } from "../../src/diff2/autosave-store";
-import { planBackNav } from "../../src/diff2/editor-tabs";
+import { planBackNav, persistedEditorState, type EditorTabState } from "../../src/diff2/editor-tabs";
+import { autosaveIdForEntry, type ConflictEntry } from "../../src/diff2/synthetic-detector";
 
 const NOW = "2026-07-03T12:00:00.000Z";
 const enc = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
@@ -35,27 +36,26 @@ function fixture() {
   return { root, vault: new MockVault(root) as unknown as Vault };
 }
 
-// ── Seam 1: deriveAutosaveId += "history" + the GATE (version discriminator) ──
-describe("deriveAutosaveId — history kind (7a.1 GATE)", () => {
+// ── Seam 1: deriveAutosaveId += "history" kind ───────────────────────────────
+describe("deriveAutosaveId — history kind", () => {
   const CF = "Folder/note.md";
 
   it("accepts the 'history' kind and prefixes the id", () => {
-    expect(deriveAutosaveId("history", CF, "sha-abc")).toMatch(/^history-/);
+    expect(deriveAutosaveId("history", CF, CF)).toMatch(/^history-/);
   });
 
-  // THE GATE: two versions of the SAME file must get DIFFERENT ids. This works
-  // only because the version-sha (not the equal paths) is the discriminator —
-  // so "no new AutosaveMeta field" holds: identity lives in the id/dirname, not
-  // in baseShaAtStart (which is the content blob-sha, ≠ the commit-sha).
-  it("two versions of the same file → distinct ids (preserve-all-commits)", () => {
-    expect(deriveAutosaveId("history", CF, "sha1")).not.toBe(
-      deriveAutosaveId("history", CF, "sha2"),
+  // §4.5.2 (A1) — History is keyed PER-FILE (currentFile passed twice); the id is
+  // stable/deterministic per file. (Per-version keying was DROPPED — see
+  // autosaveIdForEntry.)
+  it("per-file: same currentFile → same id (deterministic)", () => {
+    expect(deriveAutosaveId("history", CF, CF)).toBe(
+      deriveAutosaveId("history", CF, CF),
     );
   });
 
   it("history id is distinct from a same-file synthetic id (kind prefix)", () => {
-    expect(deriveAutosaveId("history", CF, "x")).not.toBe(
-      deriveAutosaveId("synthetic", CF, "x"),
+    expect(deriveAutosaveId("history", CF, CF)).not.toBe(
+      deriveAutosaveId("synthetic", CF, CF),
     );
   });
 });
@@ -167,6 +167,78 @@ describe("classifyReopen/startSession — conflict path unchanged (default-off)"
     expect((await classifyReopen(fx.vault, id, "base.md", "sibling.md")).kind).toBe(
       "resume",
     );
+  });
+});
+
+// ── 7a.3: autosaveIdForEntry for a history entry (the version-discriminator GATE) ──
+describe("autosaveIdForEntry — history entry", () => {
+  const histEntry = (path: string, sha: string): ConflictEntry => ({
+    basePath: path,
+    siblingPath: path, // history: base===sibling===currentFile
+    deviceLabel: "phone",
+    isoTimestamp: "2026-07-03T00-00-00Z",
+    kind: "synthetic",
+    historyVersionSha: sha,
+  });
+
+  // §4.5.2 (A1) — PER-FILE keying: two versions of ONE file share ONE session id
+  // (opening another version lands on the same session → the "file busy" open-guard).
+  it("keys PER-FILE — two versions of one file → SAME id", () => {
+    expect(autosaveIdForEntry(histEntry("F.md", "sha1"))).toBe(
+      autosaveIdForEntry(histEntry("F.md", "sha2")),
+    );
+  });
+
+  it("different files → different ids", () => {
+    expect(autosaveIdForEntry(histEntry("A.md", "sha1"))).not.toBe(
+      autosaveIdForEntry(histEntry("B.md", "sha1")),
+    );
+  });
+
+  it("history id is distinct from a same-file synthetic conflict id (no sha)", () => {
+    const hist = autosaveIdForEntry(histEntry("F.md", "sha1"));
+    const synthetic = autosaveIdForEntry({
+      basePath: "F.md",
+      siblingPath: "F.md",
+      deviceLabel: "phone",
+      isoTimestamp: "2026-07-03T00-00-00Z",
+      kind: "synthetic",
+    });
+    expect(hist).not.toBe(synthetic);
+    expect(hist).toMatch(/^history-/);
+  });
+});
+
+// ── 7a.3: persistedEditorState keeps historyVersion, drops openMode ──────────
+describe("persistedEditorState — history", () => {
+  it("persists historyVersion (survives restart → re-fetch) but strips openMode", () => {
+    const state: EditorTabState = {
+      origin: "history",
+      basePath: "F.md",
+      siblingPath: "F.md",
+      openMode: "user",
+      historyVersion: { local: false, date: 123, id: "sha1", deviceLabel: "phone" },
+    };
+    expect(persistedEditorState(state)).toEqual({
+      origin: "history",
+      basePath: "F.md",
+      siblingPath: "F.md",
+      historyVersion: { local: false, date: 123, id: "sha1", deviceLabel: "phone" },
+    });
+  });
+
+  it("a conflict state has no historyVersion key", () => {
+    const state: EditorTabState = {
+      origin: "conflict",
+      basePath: "a.md",
+      siblingPath: "a.conflict-from-X.md",
+      openMode: "user",
+    };
+    expect(persistedEditorState(state)).toEqual({
+      origin: "conflict",
+      basePath: "a.md",
+      siblingPath: "a.conflict-from-X.md",
+    });
   });
 });
 

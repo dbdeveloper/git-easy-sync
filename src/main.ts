@@ -53,7 +53,7 @@ import {
   DIFF2_HISTORY_VIEW_TYPE,
   type DiffHistoryViewDeps,
 } from "./diff2/diff-history-view";
-import type { HistoryVersion } from "./diff2/history-versions";
+import { historyIsoTimestamp, type HistoryVersion } from "./diff2/history-versions";
 import {
   alignOpenDescs,
   findExistingHistoryLeaf,
@@ -560,12 +560,13 @@ export default class GitHubSyncPlugin extends Plugin {
       }
       this.trashWatcher = null;
     }
-    // 1B persistence — do NOT detach the diff-panel or diff-editor leaves on unload.
-    // Both view-types persist (R-C): the panel restores trivially (its singleton guard
-    // keeps it unique), and each editor restores its pair via getState and silently
-    // resumes its autosave session (R-C2). The tradeoff is a broken-view placeholder
-    // between disable and re-enable on a hot-reload — transient (the editor resumes its
-    // pair on re-enable), not data loss; onunload can't tell disable from quit.
+    // Diff2 leaves: do NOT detach on unload. On QUIT Obsidian saves them to
+    // workspace.json and restores them on next start (verified: quit → onClose never
+    // fires, restored=1). On DISABLE Obsidian removes them itself (verified: enable →
+    // restored=0 = discard), and the Settings modal closes as a side effect of that
+    // teardown — a BENIGN Obsidian behavior (device-checked 2026-07-03: NO exception in
+    // the console, teardown runs clean), not a crash and not our bug to fix. Detaching
+    // ourselves neither prevents the modal-close nor is needed for discard, so we don't.
     // Terminate Worker pool — each Worker holds Blob URLs + a thread
     // that the OS would otherwise keep alive until process exit.
     this.workerClient?.terminate();
@@ -1972,15 +1973,87 @@ export default class GitHubSyncPlugin extends Plugin {
     workspace.revealLeaf(leaf);
   }
 
-  // 7a.2 STUB — clicking a version row lands the diff2-editor open in 7a.3. Kept a
-  // no-op-with-notice so the list is manually clickable now without a dead handler.
-  private openHistoryVersion(path: string, version: HistoryVersion): void {
-    this.logger.info("diff2 history version clicked (7a.3 will open the editor)", {
+  // 7a.3 — open a historical version in a diff2-editor tab (origin=history), behind
+  // the SAME write-set open-guard as conflicts (openEditorForPair). Two versions of one
+  // file share the write-set [currentFile] → different autosaveId → "busy" dialog (you
+  // can't merge two versions into one file at once); the SAME version reopened → focus.
+  async openHistoryVersion(path: string, version: HistoryVersion): Promise<void> {
+    const entry: ConflictEntry = {
+      basePath: path,
+      siblingPath: path, // history: base===sibling===currentFile
+      deviceLabel: version.deviceLabel,
+      isoTimestamp: historyIsoTimestamp(version.date),
+      kind: "synthetic",
+      historyVersionSha: version.id,
+    };
+    const autosaveId = autosaveIdForEntry(entry);
+    if (this.openingPairs.has(autosaveId)) return;
+    this.openingPairs.add(autosaveId);
+    try {
+      const { workspace } = this.app;
+      const leaves = workspace.getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE);
+      const open = alignOpenDescs(
+        leaves.map((l) => (l.view instanceof DiffEditorView ? l.view.openDesc() : null)),
+      );
+      const req = openDescFor("history", path, path, autosaveId);
+      const result = openGuard(open, req);
+      // §4.5.5 — one History session per file. If F is ALREADY being edited (this
+      // file's History session, a DIFFERENT version, OR even a conflict on F — the
+      // write-set overlaps on F), show the "file already being edited" dialog rather
+      // than silently focusing. Only a truly free F opens a fresh tab. (Unlike the
+      // conflict open-path, History always dialogs when busy — you must close the
+      // current session before viewing another version; the [←] cycle frees it.)
+      if (result.action === "focus" || result.action === "dialog") {
+        const busyFile = result.action === "dialog" ? result.busyFile : path;
+        const choice = await new EditorBusyModal(this.app, busyFile).prompt();
+        if (choice === "switch") this.revealAndFocusEditor(leaves[result.which]);
+        return;
+      }
+      const leaf = workspace.getLeaf("tab");
+      const state: EditorTabState = {
+        origin: "history",
+        basePath: path,
+        siblingPath: path,
+        historyVersion: version,
+        openMode: "user", // user-initiated → resume modal; restart-restore is silent
+      };
+      await leaf.setViewState({
+        type: DIFF2_EDITOR_VIEW_TYPE,
+        state: state as unknown as Record<string, unknown>,
+        active: true,
+      });
+      workspace.revealLeaf(leaf);
+    } finally {
+      this.openingPairs.delete(autosaveId);
+    }
+  }
+
+  // 7a.3 — fetch a version's RAW bytes: a local (unpushed) version comes from the
+  // push-queue snapshot (queue.readFile); a GitHub version from the Contents API at its
+  // commit-sha (getContentsAtRef, base64-decoded). RAW (no EOL normalization — the model
+  // normalizes; startSession keeps the snapshot byte-exact). Throws if sync isn't
+  // configured or the fetch fails (the controller's fresh path surfaces it).
+  private async fetchHistoryVersionBytes(
+    path: string,
+    version: HistoryVersion,
+  ): Promise<ArrayBuffer> {
+    const mgr = this.sync2Manager as unknown as
+      | { client: GithubClient; queue: PushQueue }
+      | undefined;
+    if (!mgr) throw new Error("GitHub sync is not configured");
+    if (version.local) {
+      return await mgr.queue.readFile(version.id, path);
+    }
+    const contents = await mgr.client.getContentsAtRef({
       path,
-      local: version.local,
-      id: version.id,
+      ref: version.id,
+      retry: true,
     });
-    new Notice("Opening a historical version lands in the next step (7a.3).");
+    if (contents === null) {
+      throw new Error(`Version ${version.id} of ${path} not found on GitHub`);
+    }
+    // content is base64 (Contents API / Blobs-API fallback) → decode on the cpu-worker.
+    return await this.workerClient.decodeBase64(contents.content);
   }
 
   // S5 — the editor's `[←]` committed: navigate back to the singleton panel and scroll
@@ -1994,11 +2067,11 @@ export default class GitHubSyncPlugin extends Plugin {
       anchorPath,
     );
     const nav = planBackNav(origin, anchorPath, baseHasConflicts);
-    // 7a.1 — a history back-nav targets the per-file diff2-history view, NOT the
-    // panel. Wiring lands in 7a.3; unreachable here (no history origin is constructed
-    // until then), so fail LOUD rather than silently no-op if 7a.3 forgets to wire it.
+    // 7a.3 — a history `[←]` returns to the per-file diff2-history list (reveal existing
+    // via the per-file dup-guard, or open a fresh one — the origin tab may be closed).
     if (nav.kind === "history") {
-      throw new Error("planBackNav history branch not wired (7a.3)");
+      await this.openHistoryView(nav.anchorPath);
+      return;
     }
     const leaf = await this.activateDiffEditView();
     if (leaf.view instanceof DiffPanelView) leaf.view.applyBackNav(nav);
@@ -2026,6 +2099,9 @@ export default class GitHubSyncPlugin extends Plugin {
       openEditor: (entry) => void this.openEditorForPair(entry),
       // S5 — the editor's `[←]` routes here to navigate back to the panel.
       onEditorCommitted: (origin, anchorPath) => void this.onEditorCommitted(origin, anchorPath),
+      // 7a.3 — lazy version-bytes fetch for a history editor's fresh mount.
+      fetchHistoryVersionBytes: (path, version) =>
+        this.fetchHistoryVersionBytes(path, version),
     };
   }
 

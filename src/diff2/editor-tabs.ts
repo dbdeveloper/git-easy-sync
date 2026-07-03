@@ -9,6 +9,7 @@
 //
 import { normalizePath } from "obsidian";
 import type { DiffEditSubTab } from "./events";
+import type { HistoryVersion } from "./history-versions";
 
 // §8 / §10 — where a diff2-editor came from. Routes `[←]` navigation (R-D) and
 // selects the write-set (below). Phase 1 only ever constructs `conflict`; the
@@ -37,13 +38,23 @@ export interface EditorTabState {
   // sets it on a user-initiated open so the editor shows the ResumeRecoveryModal; a RESTORED
   // leaf (Obsidian re-serializing getState) never carries it → its resume is SILENT.
   openMode?: "user";
+  // 7a.3 (History) — present ONLY when origin === "history". The version this editor
+  // shows (base===sibling===currentFile === basePath). PERSISTED (unlike openMode) so a
+  // restart re-fetches the version's bytes from its `id` (commit-sha / batchId).
+  historyVersion?: HistoryVersion;
 }
 
 // The persisted shape of an editor leaf (1B getState). STRIPS the transient `openMode`, so
 // a restore is always a silent continuation — if openMode leaked into getState, every
 // restart would pop the resume modal. The single chokepoint for "what survives to disk".
 export function persistedEditorState(s: EditorTabState): EditorTabState {
-  return { origin: s.origin, basePath: s.basePath, siblingPath: s.siblingPath };
+  return {
+    origin: s.origin,
+    basePath: s.basePath,
+    siblingPath: s.siblingPath,
+    // History identity must survive a restart (re-fetch by id); openMode must not.
+    ...(s.historyVersion ? { historyVersion: s.historyVersion } : {}),
+  };
 }
 
 // The vault files a diff2-editor WRITES when its `[←]` commits (§3 / §10 table).

@@ -48,6 +48,20 @@ export interface HistoryVersion {
 /** Raw shape returned by `GithubClient.listCommitsForPath`. */
 export type GithubCommit = { sha: string; date: string; message: string };
 
+/**
+ * 7a.3 — format a version's epoch-ms into the 20-char conflict-timestamp shape
+ * ("YYYY-MM-DDTHH-MM-SSZ") that `formatConflictTimestamp` renders. Used for a
+ * history editor's display fields (tab title + diff-marker date); display-only,
+ * not part of any id. Both entry builders (main.ts open + the view's remount)
+ * call this so the title can't drift.
+ */
+export function historyIsoTimestamp(ms: number): string {
+  return new Date(ms)
+    .toISOString()
+    .replace(/\.\d+Z$/, "Z")
+    .replace(/T(\d{2}):(\d{2}):(\d{2})/, "T$1-$2-$3");
+}
+
 /** Minimal PushQueue surface this module reads — `list()` + `read(id)`. */
 export interface QueueVersionSource {
   list(): Promise<string[]>;

@@ -52,6 +52,11 @@ export interface ConflictEntry {
   kind: ConflictEntryKind;
   // Present only when kind === "tracked".
   record?: ConflictRecord;
+  // 7a.3 (History) — the version's identity (commit-sha or push-queue batchId).
+  // Present ONLY for a history entry (base===sibling===currentFile); it is the
+  // discriminator that gives each VERSION of one file its own autosave dir (two
+  // versions must not share a session — the 7a.1 GATE). Absent for conflicts.
+  historyVersionSha?: string;
 }
 
 // The autosave id for a conflict entry — the key for its
@@ -63,6 +68,16 @@ export interface ConflictEntry {
 // this), but a view that re-derives the id for the SAME entry must land on the
 // same dir. DIFF-EDITOR.md §2.4 / §2.4.1.
 export function autosaveIdForEntry(entry: ConflictEntry): string {
+  // §4.5.2 (A1) — a History session is keyed PER-FILE, NOT per-version: one session
+  // per currentFile, so opening a different version of the same file lands on the
+  // same session (→ the "file already being edited" open-guard, §4.5.5). The version
+  // does NOT discriminate the dir. `historyVersionSha` stays on the entry only as the
+  // "this is a History entry" marker (set solely for History) + to fetch bytes; it is
+  // NOT part of the id. Checked BEFORE the path-pair branch. The "history" kind-prefix
+  // keeps it distinct from a same-file synthetic conflict.
+  if (entry.historyVersionSha !== undefined) {
+    return deriveAutosaveId("history", entry.basePath, entry.basePath);
+  }
   return entry.kind === "tracked" && entry.record
     ? trackedAutosaveId(entry.record.id)
     : deriveAutosaveId("synthetic", entry.basePath, entry.siblingPath);

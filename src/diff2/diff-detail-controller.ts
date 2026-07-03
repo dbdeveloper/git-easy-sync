@@ -56,6 +56,7 @@ import {
 } from "./synthetic-detector";
 import { type DiffToolbarHandle, renderDiffToolbar } from "./diff-toolbar";
 import type { DiffEditViewDeps } from "./diff-edit-view";
+import { calculateGitBlobSHA } from "../utils";
 
 // The navigation seam. Composition, NOT a base class: the controller asks the host
 // to perform the parts that differ between the single-tab panel host and the
@@ -94,7 +95,15 @@ export class DiffDetailController {
   // with zero net edits is wiped; a resumed one is kept for crash recovery (its prior
   // edits aren't in the owner's in-memory writer).
   private activeSession:
-    | { conflictId: string; meta: AutosaveMeta; hadPriorEdits: boolean }
+    | {
+        conflictId: string;
+        meta: AutosaveMeta;
+        hadPriorEdits: boolean;
+        // 7a.3 — a History session commits via commitUnchangedSide("base") (writes
+        // only currentFile, never the read-only version), NOT commit7Step. Hung on
+        // the session so exit() can't desync it from the session lifecycle.
+        isHistory?: boolean;
+      }
     | null = null;
   // Step-0 (§5.0) — re-entrancy guard for the `[←]` commit. Set true on entry to
   // exit(), reset in its finally. A second click while a commit (or its §5.0.e modal)
@@ -222,8 +231,18 @@ export class DiffDetailController {
   async mount(
     parent: HTMLElement,
     entry: ConflictEntry,
-    opts?: { silentResume?: boolean },
+    opts?: {
+      silentResume?: boolean;
+      // 7a.3 (History) — when set, `entry` is a history session (base===sibling===
+      // currentFile). The base is a READ-ONLY historical version fetched LAZILY
+      // (`fetchBytes`, consumed ONLY on the fresh path — resume reads snapshots, so
+      // a resume works offline). `classifyReopen`/`startSession` get ignoreBase/
+      // readOnlyBase; commit routes to commitUnchangedSide. Absent ⇒ conflict path
+      // is textually today's code.
+      history?: { versionSha: string; fetchBytes: () => Promise<ArrayBuffer> };
+    },
   ): Promise<void> {
+    const history = opts?.history;
     const toolbar = parent.createDiv({ cls: "diff2-detail-toolbar" });
     this.renderToolbar(toolbar, entry);
     // §title (Screenshot-17): the file identity lives in the VIEW HEADER
@@ -235,10 +254,15 @@ export class DiffDetailController {
     try {
       // bug-59 — the model hardcodes `\n` (and CM6 strips `\r`). Normalize the live
       // files' EOL to `\n` for the model; write-back restores the session EOL (meta.eol).
+      // History: base (ours) is the read-only version, fetched lazily inside
+      // startFreshAndMount (NOT from vault — basePath is currentFile, i.e. the sibling
+      // side). `theirs` (currentFile) is read from the vault for both.
       let ours = "";
-      const baseExists = await adapter.exists(entry.basePath);
-      if (baseExists) {
-        ours = toLf(await adapter.read(entry.basePath));
+      if (!history) {
+        const baseExists = await adapter.exists(entry.basePath);
+        if (baseExists) {
+          ours = toLf(await adapter.read(entry.basePath));
+        }
       }
       const theirs = toLf(await adapter.read(entry.siblingPath));
 
@@ -277,6 +301,7 @@ export class DiffDetailController {
           conflictId,
           entry.basePath,
           entry.siblingPath,
+          history !== undefined, // Contract A — History base is snapshot-only.
         ),
       );
       this.deps.logger?.info("diff2 reopenAction", { kind: action.kind, base: entry.basePath, hasToolbar: !!this.toolbarHandle });
@@ -299,18 +324,40 @@ export class DiffDetailController {
       const startFreshAndMount = async (): Promise<void> => {
         const tFresh = performance.now();
         if (await adapter.exists(dir)) await adapter.rmdir(dir, true);
+        // History — fetch the read-only version bytes ONLY here (the fresh path).
+        // RAW bytes: startSession recomputes baseShaAtStart + normalizes internally;
+        // `ours` (the model's base side) is the \n-normalized decode.
+        let readOnlyBase: { bytes: ArrayBuffer } | undefined;
+        if (history) {
+          const bytes = await history.fetchBytes();
+          // The version fetch is a (multi-second) network call — the ONLY guard ran
+          // before it. Re-check here so closing the tab mid-fetch doesn't create a
+          // live owner/session into a detached body (a "ghost editor" + leaked dir).
+          // Return BEFORE startSession so no dir is created either.
+          if (!body.isConnected) return;
+          readOnlyBase = { bytes };
+          ours = toLf(new TextDecoder().decode(bytes));
+        }
         const meta = await startSession(
           this.deps.vault,
           conflictId,
           entry.basePath,
           entry.siblingPath,
+          undefined,
+          readOnlyBase,
         );
         this.deps.logger?.info("diff2 fresh-mount", {
           base: entry.basePath,
+          history: history !== undefined,
           docBytes: ours.length + theirs.length,
           ms: Math.round(performance.now() - tFresh),
         });
-        this.activeSession = { conflictId, meta, hadPriorEdits: false };
+        this.activeSession = {
+          conflictId,
+          meta,
+          hadPriorEdits: false,
+          isHistory: history !== undefined,
+        };
         this.owner = new DiffPaneOwner(
           this.deps.vault,
           conflictId,
@@ -368,7 +415,12 @@ export class DiffDetailController {
         if (cursor) {
           owner.setCursor(cursor.anchor, cursor.head, cursor.scrollTop);
         }
-        this.activeSession = { conflictId, meta, hadPriorEdits: true };
+        this.activeSession = {
+          conflictId,
+          meta,
+          hadPriorEdits: true,
+          isHistory: history !== undefined,
+        };
         this.owner = owner;
         this.refreshToolbar(); // §2.2.15 seed toolbar after replay mount
         // §2.2.15 — Auto-focus ON overrides the restored cursor: jump to the first
@@ -378,6 +430,22 @@ export class DiffDetailController {
       };
 
       try {
+        // §4.5.2/§4.5.7 (A1) — History mounts ALWAYS FRESH (never resume). Per-file
+        // keying means the session dir can't tell WHICH version it holds, so a stale
+        // dir (a prior version's crashed session for the same file) must NOT be resumed
+        // — that would mount the WRONG version's base. startFreshAndMount rmdirs the
+        // stale dir + startSession's the REQUESTED version. (Pre-B3 there is no marker-
+        // restore, so every History open is a fresh "show this version"; version-aware
+        // resume becomes valid only once B3's marker reopens the exact version.) Base is
+        // immutable anyway, so the conflict "restore" branch would clobber currentFile.
+        // Falls through to the shared `this.owner?.focus()` below like the normal cases.
+        if (history) {
+          this.deps.logger?.info("diff2 history mount → fresh", {
+            base: entry.basePath,
+            action: action.kind,
+          });
+          await startFreshAndMount();
+        } else
         switch (action.kind) {
           case "fresh":
           case "discard-fresh":
@@ -637,6 +705,14 @@ export class DiffDetailController {
         return;
       }
 
+      // 7a.3 — a History `[←]` is a single write to currentFile (commitUnchangedSide),
+      // never the pair-atomic commit7Step. Separate path so the conflict body stays
+      // byte-identical.
+      if (session.isHistory) {
+        await this.exitHistory(entry, owner, session);
+        return;
+      }
+
       try {
         // Step 1 (§5.0) — flush queued history before the commit. commit7Step Step 7
         // removes the dir on success; drainHistory awaits the serialized append chain.
@@ -701,6 +777,70 @@ export class DiffDetailController {
     } finally {
       this.committing = false;
     }
+  }
+
+  // 7a.3 — History `[←]`. The base is a read-only version; the ONLY writable target is
+  // currentFile (= meta.siblingPath). commitUnchangedSide("base") writes resolved.sibling
+  // there (guardEmpty→"\n"; restoreEol) and rmdir's the dir — never commit7Step, never
+  // baseCommitAction, so History can't delete the file. Two guards precede it:
+  //   - ZERO net edits (the user only browsed) → discard (rmdir, no write, no mtime bump
+  //     that would spawn a spurious sync commit), then navigate back like a commit.
+  //   - currentFile CHANGED externally under the session → REFUSE (never clobber a
+  //     changed original — §5.0.e's load-bearing invariant); stay in the editor. A full
+  //     symmetric-resolution modal is a carry-item; silent clobber is not acceptable.
+  // On any thrown write → "Failed to save" + stay (mirrors the conflict path).
+  private async exitHistory(
+    entry: ConflictEntry,
+    owner: DiffPaneOwner,
+    session: { conflictId: string; meta: AutosaveMeta; hadPriorEdits: boolean },
+  ): Promise<void> {
+    try {
+      await owner.drainHistory();
+      const jsonl = await readHistoryJsonl(this.deps.vault, session.conflictId);
+      const edits = assessHistoryV2(jsonl).edits;
+      const resolved = owner.getResolved();
+
+      if (edits === 0) {
+        // Browsed only — discard the session (no write), then navigate back.
+        await this.deps.vault.adapter
+          .rmdir(autosaveDir(session.conflictId), true)
+          .catch(() => {});
+        this.deps.logger?.info("diff2 history [←] no edits — discarded", {
+          base: entry.basePath,
+        });
+        this.activeSession = null;
+        this.host.onCommitExit(entry);
+        return;
+      }
+
+      // Never-clobber: currentFile must be byte-identical to session start.
+      const curBytes = await this.deps.vault.adapter.readBinary(entry.siblingPath);
+      const curSha = await calculateGitBlobSHA(curBytes);
+      if (curSha !== session.meta.siblingShaAtStart) {
+        new Notice(
+          `"${entry.basePath}" changed since you opened this version — not ` +
+            `overwriting. Reopen its history to try again.`,
+        );
+        this.deps.logger?.info("diff2 history [←] refused — currentFile changed", {
+          base: entry.basePath,
+        });
+        return; // stay in the editor
+      }
+
+      const { writtenPath } = await commitUnchangedSide(
+        this.deps.vault,
+        session.conflictId,
+        session.meta,
+        resolved,
+        "base", // write resolved.sibling → meta.siblingPath (= currentFile)
+      );
+      new Notice(`Saved ${writtenPath}`);
+    } catch (err) {
+      new Notice(`Failed to save ${entry.basePath}: ${String(err)}`);
+      return; // stay in the editor so the user doesn't lose work
+    }
+    this.activeSession = null;
+    this.host.onCommitExit(entry);
   }
 
   // §5.0.e — the vault changed under the session (classifyToctou → mismatch).

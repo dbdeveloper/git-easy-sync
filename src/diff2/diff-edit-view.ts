@@ -33,6 +33,7 @@ import {
   type ConflictEntry,
 } from "./synthetic-detector";
 import type { BackNav, DiffEditorOrigin } from "./editor-tabs";
+import type { HistoryVersion } from "./history-versions";
 
 export const DIFF2_EDIT_VIEW_TYPE = "diff2-edit-view";
 
@@ -71,6 +72,14 @@ export interface DiffEditViewDeps {
   // navigate back: reveal the singleton panel + scroll to the base group (R-D). origin
   // routes the destination; anchorPath = base for a conflict.
   onEditorCommitted?: (origin: DiffEditorOrigin, anchorPath: string) => void;
+  // 7a.3 (History) — fetch a version's RAW bytes (commit-sha → getContentsAtRef; local
+  // batchId → queue.readFile). Called LAZILY by the controller's fresh path only (a
+  // resume reads snapshots). Lives in main.ts (has client + queue). Optional (conflict-
+  // only hosts / test fixtures omit it).
+  fetchHistoryVersionBytes?: (
+    path: string,
+    version: HistoryVersion,
+  ) => Promise<ArrayBuffer>;
 }
 
 // Which sub-tab is active. (The pre-split list↔detail state machine is gone — the
