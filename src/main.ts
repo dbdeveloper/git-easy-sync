@@ -11,7 +11,6 @@ import {
   Plugin,
   WorkspaceLeaf,
   Notice,
-  normalizePath,
   setTooltip,
 } from "obsidian";
 import {
@@ -556,7 +555,7 @@ export default class GitHubSyncPlugin extends Plugin {
       window.clearTimeout(this.layoutCaptureTimer);
       this.layoutCaptureTimer = null;
     }
-    await this.saveDiff2Layout();
+    this.saveDiff2Layout(); // synchronous (localStorage)
     // 2.0.2-beta2 hardening (SYNC2-TODO "drain overlap spanning a
     // plugin reload"). Abort any in-flight drain on THIS (outgoing)
     // instance before teardown completes, so it can't keep pushing
@@ -2126,11 +2125,13 @@ export default class GitHubSyncPlugin extends Plugin {
 
   // ── §4.5.3 (B3) cross-fast-reload layout restore ─────────────────────────────
 
-  private diff2LayoutMarkerPath(): string {
-    return normalizePath(
-      `${this.app.vault.configDir}/plugins/${manifest.id}/.diff2-layout-restore.json`,
-    );
-  }
+  // The marker lives in per-vault localStorage, NOT a file. A file inside the plugin
+  // dir is fatal: BRAT (and hot-reload dev tooling) WATCH the plugin folder, so writing
+  // `.diff2-layout-restore.json` there on every onunload triggered a reload → onunload
+  // rewrites it → reload → an INFINITE ~2s reload loop (device-repro 2026-07-03, with
+  // ghost "plugin no longer active" tabs between reloads). localStorage is a non-file,
+  // synchronous, survives reload+quit, and no watcher sees it.
+  private static readonly LAYOUT_RESTORE_KEY = "diff2-layout-restore";
 
   private hasOpenDiff2Leaf(): boolean {
     const ws = this.app.workspace;
@@ -2157,16 +2158,17 @@ export default class GitHubSyncPlugin extends Plugin {
     }, 500);
   }
 
-  // onunload: persist the last stable snapshot (with our leaves) + a timestamp. Flushes
-  // on disable (app alive); on quit it may not, but quit doesn't need it (Obsidian
-  // restores workspace.json natively there).
-  private async saveDiff2Layout(): Promise<void> {
+  // onunload: persist the last stable snapshot (with our leaves) + a timestamp to
+  // localStorage. Synchronous → survives even a quit (unlike the async file write).
+  private saveDiff2Layout(): void {
     if (this.lastStableLayout === null) return;
     try {
-      await this.app.vault.adapter.write(
-        this.diff2LayoutMarkerPath(),
-        JSON.stringify({ savedAt: Date.now(), layout: this.lastStableLayout }),
-      );
+      (this.app as unknown as {
+        saveLocalStorage: (k: string, v: unknown) => void;
+      }).saveLocalStorage(GitHubSyncPlugin.LAYOUT_RESTORE_KEY, {
+        savedAt: Date.now(),
+        layout: this.lastStableLayout,
+      });
     } catch (err) {
       this.logger?.warn("saveDiff2Layout failed", { err: `${err}` });
     }
@@ -2176,19 +2178,23 @@ export default class GitHubSyncPlugin extends Plugin {
   // replay the saved layout so our windows return exactly where they were. The marker is
   // ALWAYS consumed (fresh → restore, stale → clean start). No-op when absent.
   private async restoreDiff2Layout(): Promise<void> {
-    const path = this.diff2LayoutMarkerPath();
     try {
-      if (!(await this.app.vault.adapter.exists(path))) return;
-      const raw = await this.app.vault.adapter.read(path);
-      await this.app.vault.adapter.remove(path); // one-shot: consume regardless
-      const { savedAt, layout } = JSON.parse(raw) as { savedAt: number; layout: unknown };
-      if (!isLayoutRestoreFresh(savedAt, Date.now(), GitHubSyncPlugin.LAYOUT_RESTORE_TTL_MS)) {
+      const app = this.app as unknown as {
+        loadLocalStorage: (k: string) => unknown;
+        saveLocalStorage: (k: string, v: unknown) => void;
+      };
+      const marker = app.loadLocalStorage(GitHubSyncPlugin.LAYOUT_RESTORE_KEY) as
+        | { savedAt: number; layout: unknown }
+        | null;
+      app.saveLocalStorage(GitHubSyncPlugin.LAYOUT_RESTORE_KEY, null); // one-shot: consume
+      if (!marker) return;
+      if (!isLayoutRestoreFresh(marker.savedAt, Date.now(), GitHubSyncPlugin.LAYOUT_RESTORE_TTL_MS)) {
         this.logger?.info("diff2 layout marker stale → clean start");
         return;
       }
       await (this.app.workspace as unknown as {
         changeLayout: (l: unknown) => Promise<void>;
-      }).changeLayout(layout);
+      }).changeLayout(marker.layout);
       this.logger?.info("diff2 layout restored (fast reload)");
     } catch (err) {
       this.logger?.warn("restoreDiff2Layout failed", { err: `${err}` });
