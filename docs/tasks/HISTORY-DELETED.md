@@ -434,6 +434,21 @@ currentFile)`) — **без номера версії**. На один файл 
 
 #### 4.5.3 Життєвий цикл теки `.diff2-autosave/` (ефемерний)
 
+> **✅ РЕАЛІЗОВАНО ІНАКШЕ (простіше) — `getLayout`/`changeLayout` (2026-07-03, device-verified):**
+> замість власного in-memory-списку + forget-таймерів + пер-leaf reopen (дизайн нижче) —
+> **`workspace.getLayout()`** знімає **весь** макет (усі вкладки + їхні позиції: спліти, popout,
+> sidebar), пише його у файл-ознаку `.diff2-layout-restore.json` в `onunload`, а `onload`
+> (layoutReady) робить **`changeLayout`**, якщо ознака **свіжа (TTL 3 с** = швидкий reload:
+> self-update/BRAT/disable+enable ≈ 1 с; НЕ свідомий довгий disable → інакше `changeLayout` затер би
+> перекладені юзером вікна). Знімок робиться **debounced на layout-change** (щоб `onunload`-мить, коли
+> наші вкладки вже закриті, не зіпсувала його). **Плюс:** `handlePluginsAffectedReload` тепер обгорнутий
+> save→reload→restore → при sync-driven reload-і **чужих** плагінів їхні вікна теж повертаються (self —
+> через ту саму ознаку). `src/diff2/history-deleted-lifecycle.ts` (pure `isLayoutRestoreFresh` +
+> `historyDeletedOrphans` для B1) + `main.ts`. **НЕ покрито цим:** in-progress **чернетка** history-редактора
+> (він монтується fresh) — окремий follow-up; вікно+позиція+версія відновлюються, чернетка — ні (для
+> conflict — переживає, він резюмить). **B1 orphan-sweep (нижче, прибирання ТЕК-сиріт) лишається** як
+> backstop. Опис нижче (in-memory список/forget-таймери) — **історичний**, як ми до цього йшли.
+
 > **Уся ця механіка — на емпіричних фактах, кожен рядок «(лог)» підтверджений пробами
 > 2026-07-03 на реальному Obsidian.** Ключові факти:
 > - `onClose` спрацьовує на `[x]` і disable, **НЕ** на quit / закриття-вікна / крах (лог).
@@ -568,11 +583,17 @@ History — він **існує** (не видалений); якщо видал
 - Наш `dispose()` **мінімальний і коректний** (нема focus/blur/workspace-викликів) — тобто це **побічний
   ефект `CM6 EditorView.destroy()`**, що закриває Obsidian-модалку, а не наш баг.
 
-**Рішення: ПРИЙНЯТО як benign Obsidian/CM6-поведінка.** Жодного crash / втрати даних; кусає лише «disable,
-поки відкрита модалка Settings» (рідко). Для dev-циклу — **Force Reload** (там проблеми нема). Спроба фіксу
-через `detachLeavesOfType` + `workspace.on("quit")` (стадія C) **відкочена** — не допомагала (модалка
-закривається до onunload, на `owner.dispose`), а disable й так = discard (Obsidian сам прибирає вкладки,
-`restored=0`). **Не чіпаємо.**
+**✅ ПІДТВЕРДЖЕНО як ВІДОМИЙ БАГ ЯДРА OBSIDIAN** (форум, 2026-02, знайдено 2026-07-03):
+[Settings modal closes when disabling a plugin's actively focused view](https://forum.obsidian.md/t/settings-modal-closes-when-disabling-a-plugins-actively-focused-view/111479)
+— репортер прямо каже, що відбувається **і з core-, і з community-плагінами** (отже Obsidian, не ми);
+модератор підтвердив; **workaround-у для розробників немає**. Наш diff-editor — це «actively focused
+view», тож потрапляє рівно під цей баг.
+
+**Рішення: ПРИЙНЯТО як benign Obsidian core-баг.** Жодного crash / втрати даних; кусає лише «disable,
+поки відкрита модалка Settings» (рідко). Для dev-циклу — **Force Reload** (там проблеми нема). Workaround-у
+не існує → ми нічого зробити не можемо. Спроба фіксу через `detachLeavesOfType` + `workspace.on("quit")`
+(стадія C) **відкочена** — не допомагала (модалка закривається до onunload, на `owner.dispose`), а disable
+й так = discard (Obsidian сам прибирає вкладки, `restored=0`). **Не чіпаємо.**
 
 **Симптом-супутник (не критичний):** `onClose` нашого редактора спрацьовує **двічі** при teardown-і —
 idempotent `dispose()` це гасить (2-й `disposeOwner` = `hadOwner:false`), даних не псує; лишаємо як є.

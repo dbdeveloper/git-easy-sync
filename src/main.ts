@@ -11,8 +11,10 @@ import {
   Plugin,
   WorkspaceLeaf,
   Notice,
+  normalizePath,
   setTooltip,
 } from "obsidian";
+import { isLayoutRestoreFresh } from "./diff2/history-deleted-lifecycle";
 import { GitHubSyncSettings, DEFAULT_SETTINGS } from "./settings/settings";
 import GitHubSyncSettingsTab from "./settings/tab";
 import Logger from "./logger";
@@ -229,6 +231,22 @@ export default class GitHubSyncPlugin extends Plugin {
   vaultDeleteListener: EventRef | null = null;
   vaultRenameListener: EventRef | null = null;
 
+  // §4.5.3 (B3) — cross-fast-reload layout restore. Obsidian removes our diff2 leaves
+  // on disable and does NOT restore them on enable (unlike a quit, where workspace.json
+  // restores everything). By the time onunload runs our leaves are ALREADY closed, so
+  // getLayout() there would miss them — instead we keep the last STABLE full-workspace
+  // snapshot (debounced on layout-change, so mid-teardown states are skipped) and write
+  // THAT in onunload. The next onload replays it iff FRESH.
+  //
+  // TTL is deliberately SMALL (3s). We restore the WHOLE workspace (changeLayout), so a
+  // stale restore after a DELIBERATE disable would CLOBBER any window rearranging the
+  // user did before re-enabling. The restore itself is INSTANT (changeLayout only lays
+  // out the windows; the heavy version-data loads AFTERWARDS, async, and doesn't affect
+  // this gap), so the onunload→onLayoutReady gap is ~1s and does NOT grow with vault
+  // size / data volume. 3s covers it with margin while keeping the clobber window tiny.
+  private static readonly LAYOUT_RESTORE_TTL_MS = 3_000;
+  private lastStableLayout: unknown | null = null;
+  private layoutCaptureTimer: number | null = null;
   // Auto-sync timer id (Window.setInterval handle). Retained for the
   // registerInterval() bookkeeping Obsidian wants on unload; the
   // tick + startup logic itself lives in IntervalScheduler.
@@ -340,6 +358,17 @@ export default class GitHubSyncPlugin extends Plugin {
       this.logger.info("Plugin onload: initSync2 done");
 
       this.app.workspace.onLayoutReady(() => {
+        // §4.5.3 (B3) — replay a fresh saved layout (fast reload) so our windows return
+        // in place; then start snapshotting the layout on every change so onunload has a
+        // current pre-teardown snapshot. Restore FIRST (its changeLayout fires a
+        // layout-change that the capture then records as the restored state).
+        void this.restoreDiff2Layout().finally(() => {
+          this.registerEvent(
+            this.app.workspace.on("layout-change", () => this.scheduleLayoutCapture()),
+          );
+          this.scheduleLayoutCapture(); // seed the initial snapshot
+        });
+
         if (this.settings.showStatusBarItem) this.showStatusBarItem();
         if (this.settings.showSyncRibbonButton) this.showSyncRibbonIcon();
         if (this.settings.showCommitRibbonButton)
@@ -514,6 +543,15 @@ export default class GitHubSyncPlugin extends Plugin {
   }
 
   async onunload(): Promise<void> {
+    // §4.5.3 (B3) — persist the last stable layout snapshot so a fast reload can restore
+    // our windows. FIRST thing: our leaves are already closed by now, but lastStableLayout
+    // holds the pre-teardown snapshot (with them). Cancel a pending capture so it can't
+    // overwrite it with a post-teardown state.
+    if (this.layoutCaptureTimer !== null) {
+      window.clearTimeout(this.layoutCaptureTimer);
+      this.layoutCaptureTimer = null;
+    }
+    await this.saveDiff2Layout();
     // 2.0.2-beta2 hardening (SYNC2-TODO "drain overlap spanning a
     // plugin reload"). Abort any in-flight drain on THIS (outgoing)
     // instance before teardown completes, so it can't keep pushing
@@ -1779,20 +1817,45 @@ export default class GitHubSyncPlugin extends Plugin {
       willReload.push(id);
     }
     if (willReload.length === 0) return;
-    for (const id of willReload) {
-      setTimeout(() => {
-        reloadPluginById(this.app, id)
-          .then(() => {
-            this.logger?.info("BRAT-style reload done", { id });
-          })
-          .catch((err) => {
-            this.logger?.error("reloadPlugin failed", {
-              id,
-              err: describeError(err),
-            });
-          });
-      }, 500);
-    }
+
+    // §4.5.3 — a reload (disable+enable) destroys the reloaded plugin's OPEN VIEWS. We
+    // preserve them across the workspace: snapshot the layout while every window is still
+    // present, reload the OTHER plugins, then changeLayout to bring their windows back in
+    // place. Our OWN reload (self) tears this instance down, so it can't restore inline —
+    // it is handled by the onunload→onload marker (which snapshots the ALREADY-restored
+    // layout, so it also carries the others' windows). Ordering matters: others →
+    // restore → self, so self captures the intact layout.
+    const others = willReload.filter((id) => id !== manifest.id);
+    const includesSelf = willReload.includes(manifest.id);
+    const layout = others.length > 0 ? this.app.workspace.getLayout() : null;
+    void (async () => {
+      // 500ms unwind so the drain stack frame that called us returns first.
+      await new Promise((r) => setTimeout(r, 500));
+      if (others.length > 0) {
+        await Promise.all(
+          others.map((id) =>
+            reloadPluginById(this.app, id).catch((err) =>
+              this.logger?.error("reloadPlugin failed", { id, err: describeError(err) }),
+            ),
+          ),
+        );
+        try {
+          await (this.app.workspace as unknown as {
+            changeLayout: (l: unknown) => Promise<void>;
+          }).changeLayout(layout);
+          this.logger?.info("BRAT-style reload + layout restore done", { ids: others });
+        } catch (err) {
+          this.logger?.warn("layout restore after plugin reload failed", { err: `${err}` });
+        }
+      }
+      // Self LAST — the layout is now intact, so self's onunload marker captures it.
+      // Don't await: reloadPluginById(self) unloads THIS instance.
+      if (includesSelf) {
+        void reloadPluginById(this.app, manifest.id).catch((err) =>
+          this.logger?.error("self-reload failed", { id: manifest.id, err: describeError(err) }),
+        );
+      }
+    })();
     const label =
       willReload.length === 1
         ? `Plugin "${willReload[0]}" updated`
@@ -2054,6 +2117,77 @@ export default class GitHubSyncPlugin extends Plugin {
     }
     // content is base64 (Contents API / Blobs-API fallback) → decode on the cpu-worker.
     return await this.workerClient.decodeBase64(contents.content);
+  }
+
+  // ── §4.5.3 (B3) cross-fast-reload layout restore ─────────────────────────────
+
+  private diff2LayoutMarkerPath(): string {
+    return normalizePath(
+      `${this.app.vault.configDir}/plugins/${manifest.id}/.diff2-layout-restore.json`,
+    );
+  }
+
+  private hasOpenDiff2Leaf(): boolean {
+    const ws = this.app.workspace;
+    return [DIFF2_EDIT_VIEW_TYPE, DIFF2_EDITOR_VIEW_TYPE, DIFF2_HISTORY_VIEW_TYPE].some(
+      (t) => ws.getLeavesOfType(t).length > 0,
+    );
+  }
+
+  // Debounced snapshot of the FULL workspace layout, taken only when the layout has been
+  // STABLE for a moment — so the rapid layout-changes during a disable teardown (our
+  // leaves closing one by one) never overwrite the good pre-teardown snapshot. Captured
+  // only while at least one diff2 leaf is open (nothing to restore otherwise).
+  private scheduleLayoutCapture(): void {
+    if (this.layoutCaptureTimer !== null) window.clearTimeout(this.layoutCaptureTimer);
+    this.layoutCaptureTimer = window.setTimeout(() => {
+      this.layoutCaptureTimer = null;
+      try {
+        this.lastStableLayout = this.hasOpenDiff2Leaf()
+          ? this.app.workspace.getLayout()
+          : null; // no diff2 window open → nothing to restore
+      } catch {
+        /* best-effort */
+      }
+    }, 500);
+  }
+
+  // onunload: persist the last stable snapshot (with our leaves) + a timestamp. Flushes
+  // on disable (app alive); on quit it may not, but quit doesn't need it (Obsidian
+  // restores workspace.json natively there).
+  private async saveDiff2Layout(): Promise<void> {
+    if (this.lastStableLayout === null) return;
+    try {
+      await this.app.vault.adapter.write(
+        this.diff2LayoutMarkerPath(),
+        JSON.stringify({ savedAt: Date.now(), layout: this.lastStableLayout }),
+      );
+    } catch (err) {
+      this.logger?.warn("saveDiff2Layout failed", { err: `${err}` });
+    }
+  }
+
+  // onload: if a FRESH marker exists (a fast reload — self-update / BRAT / disable+enable),
+  // replay the saved layout so our windows return exactly where they were. The marker is
+  // ALWAYS consumed (fresh → restore, stale → clean start). No-op when absent.
+  private async restoreDiff2Layout(): Promise<void> {
+    const path = this.diff2LayoutMarkerPath();
+    try {
+      if (!(await this.app.vault.adapter.exists(path))) return;
+      const raw = await this.app.vault.adapter.read(path);
+      await this.app.vault.adapter.remove(path); // one-shot: consume regardless
+      const { savedAt, layout } = JSON.parse(raw) as { savedAt: number; layout: unknown };
+      if (!isLayoutRestoreFresh(savedAt, Date.now(), GitHubSyncPlugin.LAYOUT_RESTORE_TTL_MS)) {
+        this.logger?.info("diff2 layout marker stale → clean start");
+        return;
+      }
+      await (this.app.workspace as unknown as {
+        changeLayout: (l: unknown) => Promise<void>;
+      }).changeLayout(layout);
+      this.logger?.info("diff2 layout restored (fast reload)");
+    } catch (err) {
+      this.logger?.warn("restoreDiff2Layout failed", { err: `${err}` });
+    }
   }
 
   // S5 — the editor's `[←]` committed: navigate back to the singleton panel and scroll
