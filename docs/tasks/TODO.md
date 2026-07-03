@@ -114,6 +114,12 @@
     справді не обов'язкове. Хоча на mobile його і так нема (принаймні я не ба. А від батареї я працюю дуже рідко. 
     Однак не я один користувач свого plugin, тому я б додав цю зупинку в Settings.
 
+15. F3 / Shift+F3 у diff-editor search. Зараз `diff-pane-v2.ts:787` вішає лише дефолтний
+    `searchKeymap` (`Mod+G`/`Shift+Mod+G` next/prev, `Mod+F`, `Esc`) — F3/Shift+F3 не прив'язані.
+    Додати `{key:"F3", run:findNext}` + `{key:"Shift-F3", run:findPrevious}`. Загальна фіча (усюди в
+    diff-editor); заодно потрібна для History-проброса пошукової фрази (див.
+    `docs/tasks/HISTORY-DELETED.md` §4.6).
+
 ---
 
 ## Оптимізація recovery-replay у diff-editor-v2 (perf) — на майбутнє

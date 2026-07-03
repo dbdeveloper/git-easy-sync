@@ -402,6 +402,15 @@ wholeWord}` (та сама, що вже у проєкті для in-editor Ctrl+
   worker-fetch вмісту версій + `SearchQuery`-matcher). Раніше (feasibility §10 п.4) був
   «окремою фазою»; тепер у скоупі Phase 7. Лишається **оцінити вартість API/worker** (N викликів
   `getContentsAtRef` у межах періоду) перед реалізацією — але це під-задача §4.4, не окрема фаза.
+- **🔮 Проброс пошукової фрази History → diff-editor** (nice-to-have, на майбутнє). Клік по версії,
+  відфільтрованій за текстовою фразою, має **передати цю фразу** в `diff2-editor`, який відкривається
+  **з уже відкритою search-панеллю (§2.2.17)**, з **пере-заповненим** search-edit-box тією фразою, щоб
+  одразу гортати збіги Next/Previous. `SearchQuery` уже спільна (§4.4) → пробросити її в editor +
+  програмно відкрити панель із заданим query.
+- **⌨️ F3 / Shift+F3 у diff-editor** (загальна фіча пошуку, НЕ лише History). Зараз `diff-pane-v2.ts:787`
+  вішає лише дефолтний `searchKeymap` (`Mod+G`/`Shift+Mod+G` next/prev, `Mod+F`, `Esc`) — **F3/Shift+F3
+  НЕ прив'язані**. Додати `{key:"F3", run:findNext}` + `{key:"Shift-F3", run:findPrevious}`. Корисно
+  скрізь у diff-editor (не тільки для History-проброса вище). Дубль-нотатка — у `docs/tasks/TODO.md`.
 
 ---
 
