@@ -97,7 +97,11 @@ export function fnv1a64(input: string): string {
 // Sort canonicalises (a,b)==(b,a); the `\0` delimiter prevents path-boundary
 // collisions ("foo"+"bar" vs "foob"+"ar"). Pure: no Date.now / mtime / random.
 export function deriveAutosaveId(
-  kind: "synthetic" | "compare",
+  // 7a.1 — "history" joins the non-tracked kinds. For History path1=currentFile,
+  // path2=versionSha: the paths are EQUAL (base is a version of the same file), so
+  // the version-sha is the sole discriminator (two versions → two ids), and the
+  // kind-prefix keeps a History id distinct from a same-file synthetic conflict.
+  kind: "synthetic" | "compare" | "history",
   path1: string,
   path2: string,
 ): string {
@@ -194,13 +198,27 @@ export async function startSession(
   basePath: string,
   siblingPath: string,
   nowIso: string = new Date().toISOString(),
+  // 7a.1 Contract B (History) — when set, the base is a READ-ONLY historical
+  // version supplied as raw bytes; it is NOT read from the vault (History has no
+  // vault file for "version V", and basePath===siblingPath===currentFile so the
+  // vault file holds the SIBLING side). `baseShaAtStart` is still RECOMPUTED from
+  // these bytes (never a trusted caller sha) — the base snapshot is written from
+  // them, so the sha MUST match or every reopen classifies corrupt→fresh. Bytes
+  // must be RAW (byte-exact, pre-EOL-normalization), like a vault read. Default-
+  // off ⇒ the conflict path below is textually unchanged.
+  readOnlyBase?: { bytes: ArrayBuffer },
 ): Promise<AutosaveMeta> {
   // Steps 2–5.5 — read inputs ONCE, derive every fingerprint from those bytes.
   // An ABSENT base is a legit delete-vs-modify input — read it as 0 bytes rather
   // than letting readBinary throw ENOENT (the bug that broke opening an absent-
   // base conflict). baseExistedAtStart records the distinction SHA("") can't.
-  const baseExistedAtStart = await vault.adapter.exists(basePath);
-  const baseBytes = baseExistedAtStart
+  // A History version always "existed" (History never deletes) ⇒ true.
+  const baseExistedAtStart = readOnlyBase
+    ? true
+    : await vault.adapter.exists(basePath);
+  const baseBytes = readOnlyBase
+    ? readOnlyBase.bytes
+    : baseExistedAtStart
     ? await vault.adapter.readBinary(basePath)
     : (new ArrayBuffer(0) as ArrayBuffer);
   const siblingBytes = await vault.adapter.readBinary(siblingPath);
@@ -308,6 +326,12 @@ export async function classifyReopen(
   conflictId: string,
   basePath: string,
   siblingPath: string,
+  // 7a.1 Contract A (History) — when true, the base side is the IMMUTABLE session
+  // snapshot (the historical version), never the vault file. For History basePath
+  // === siblingPath === currentFile, so reading base from the vault would pick up
+  // the SIBLING content and spuriously classify vault-changed. Only the sibling is
+  // re-checked against the vault. Default-off ⇒ the conflict path is unchanged.
+  ignoreBase: boolean = false,
 ): Promise<ReopenStatus> {
   const meta = await readMeta(vault, conflictId);
   if (!meta) return { kind: "fresh" };
@@ -328,7 +352,12 @@ export async function classifyReopen(
   let baseBytes: ArrayBuffer;
   let siblingBytes: ArrayBuffer;
   try {
-    baseBytes = (await vault.adapter.exists(basePath))
+    baseBytes = ignoreBase
+      ? // Contract A — base is the immutable snapshot (already verified to hash to
+        // meta.baseShaAtStart by the integrity check above), so currentBaseSha will
+        // equal meta.baseShaAtStart and only the sibling drives resume/vault-changed.
+        await vault.adapter.readBinary(baseSnapshotPath(conflictId))
+      : (await vault.adapter.exists(basePath))
       ? await vault.adapter.readBinary(basePath)
       : (new ArrayBuffer(0) as ArrayBuffer);
     siblingBytes = await vault.adapter.readBinary(siblingPath);

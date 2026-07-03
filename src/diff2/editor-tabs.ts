@@ -83,27 +83,31 @@ export function writeSetFor(
 // `baseHasConflicts` (impure, via findAllConflicts) and EXECUTES the result (reveal
 // the panel leaf + sub-tab + scroll).
 
-export interface BackNav {
-  // Phase 1's only target: the singleton diff-panel. (history → diff2-history /
-  // compare → a file tab will add their own BackNav kinds when those phases land.)
-  kind: "panel";
-  tab: DiffEditSubTab;
-  // The base group to scroll to (conflict origin, base still has siblings), or null
-  // → just focus the list (the last sibling was resolved, the row is gone).
-  scrollToBase: string | null;
-}
+export type BackNav =
+  // The singleton diff-panel (conflict / deleted origins).
+  | {
+      kind: "panel";
+      tab: DiffEditSubTab;
+      // The base group to scroll to (conflict origin, base still has siblings), or
+      // null → just focus the list (the last sibling was resolved, the row is gone).
+      scrollToBase: string | null;
+    }
+  // 7a.1 — the per-file `diff2-history` view (history origin). `[←]` reveals/opens
+  // the history list for `anchorPath` (= currentFile). NOT the panel: History is a
+  // separate view-type, and its target tab is per-file (may be closed). The executor
+  // wiring lands in 7a.3; compare → a normal file tab will add its own kind later.
+  | { kind: "history"; anchorPath: string };
 
 export function planBackNav(
   origin: DiffEditorOrigin,
   anchorPath: string,
   baseHasConflicts: boolean,
 ): BackNav {
+  if (origin === "history") return { kind: "history", anchorPath };
   if (origin === "deleted") return { kind: "panel", tab: "deleted", scrollToBase: null };
   // conflict (Phase 1) → panel:Conflicts, scroll to the base group if it still has
-  // siblings (R-D), else just focus.
-  // 🔴 history/compare MUST add their own branch here (compare → a normal file tab,
-  // history → diff2-history per the R-D table) — this conflicts-panel fallback is
-  // WRONG for them; it is only safe because Phase 1 never constructs those origins.
+  // siblings (R-D), else just focus. compare still falls through here (over-general,
+  // but Phase 1 never constructs it — it gets its own file-tab kind when it lands).
   return {
     kind: "panel",
     tab: "conflicts",

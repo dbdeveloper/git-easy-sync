@@ -360,7 +360,11 @@ current-file = sibling).
   Далі пошук — **локальний** (без мережі). Кеш **росте монотонно в межах сесії**: **звуження**
   періоду (місяць→тиждень) записів **НЕ видаляє**; **розширення** (тиждень→місяць) при пошуку
   **до-вантажує лише брак** (версії, яких ще нема в кеші). Клік по знайденому → читаємо **з диска**
-  (без fetch). **Cleanup:** вихід із History-таба для файлу F → видаляємо **лише**
+  (без fetch). **Клік БЕЗ пошуку теж кешує** (metadata-only показ, `commits.json`): перший клік по
+  рядку → fetch версії → **запис у `.history-cache/<F>/<commitSha>` ПЕРЕД відкриттям у diff-editor** →
+  повторний клік по тій самій версії → **з диска** (без fetch). Клікнуті версії **накопичуються на
+  диску** доти, доки відкритий таб `<F> history` (cleanup нижче). Тобто content-кеш наповнюють ОБИДВА
+  джерела — і пошук, і поодинокі кліки. **Cleanup:** вихід із History-таба для файлу F → видаляємо **лише**
   `.history-cache/<F>/`; onload плагіна (рестарт/крах) → `.history-cache/` **повністю** (backstop;
   сесійний, ніколи не переживає рестарт — як trash-recovery / atomic-write onload-sweep-и).
 - **Frugal / None:** fetch→search→**одразу забуваємо байти** (на диск не пишемо); у списку — лише
@@ -484,19 +488,31 @@ wholeWord}` (та сама, що вже у проєкті для in-editor Ctrl+
   integration (real GitHub) `listCommitsForPath` (пагінація + `since`) — **RAN green** (1 passed, не
   skipped). **Acceptance:** список версій будується з обох джерел. ✅ build + 1698 unit + 1 integration зелені.
 
-**7a.1 — 4 seams (усі default-off, conflict байт-у-байт).**
-- `deriveAutosaveId` union += `"history"` (`autosave-store.ts:99-106`).
-- `startSession(readOnlyBase?:{bytes,sha})` — якщо задано, base із `readOnlyBase`, не з vault
-  (`:198-208`). Contract B.
-- `classifyReopen(ignoreBase?)` — при true base зі snapshot, перевіряємо лише sibling (`:331-340`;
-  кастом vault-changed-гілка `:364-369`). Contract A.
-- `planBackNav` += history-гілка (`editor-tabs.ts:96-112`) → повертає в `diff2-history` (не panel);
-  потребує history nav-target у `events.ts` (додати, якщо нема).
-- **Tests:** unit кожної pure-зміни на CALL-SITE; **recovery-spike** (Contract A — History resume +
-  conflict незмінний). **Acceptance:** обидва spike-твердження зелені; повний suite зелений; **🔴 GATE
-  (Contract B): підтверджено, що ЖОДЕН code-path не трактує `basePath===siblingPath` як
-  degenerate/error, І нового `AutosaveMeta`-поля не треба — інакше план ПЕРЕВІДКРИВАЄТЬСЯ** (це checked
-  gate, не footnote).
+**7a.1 — 4 seams (усі default-off, conflict байт-у-байт). ✅ DONE (2026-07-03).**
+Файли: `src/diff2/autosave-store.ts` + `src/diff2/editor-tabs.ts` + `src/diff2/diff-edit-view.ts` +
+`src/main.ts`. Tests: `tests/diff2/history-seams.test.ts` (13 unit).
+- `deriveAutosaveId` union += `"history"` (`autosave-store.ts`).
+- `startSession(..., nowIso?, readOnlyBase?:{bytes})` — якщо задано, base із `readOnlyBase.bytes`, не з
+  vault; `baseExistedAtStart:true`; `baseShaAtStart` **РЕКОМП'ЮТИТЬСЯ** з bytes (не довіряємо переданій
+  sha — snapshot пишеться з цих же bytes, інакше кожен reopen → corrupt→fresh). ⇒ `readOnlyBase` = лише
+  `{bytes}` (deviate від spec-літери `{bytes,sha}` — сильніший контракт; GATE це не чіпає). RAW bytes
+  (байт-точно, до EOL-норм). Contract B. **Default-off ⇒ conflict-шлях текстово незмінний.**
+- `classifyReopen(..., ignoreBase?:boolean)` — при true base з `baseSnapshotPath` (immutable), sibling
+  усе ще з vault. Гілку `:364-369` НЕ додавали — не треба (spike довів: існуючі resume/vault-changed
+  гілки вже history-safe, бо `readResumeSession` і так читає base зі snapshot). Contract A.
+- `planBackNav` → `BackNav` тепер **union** `{kind:"panel",…} | {kind:"history",anchorPath}`; history-origin
+  → `{kind:"history"}`. Executor: `applyBackNav` звужено до `Extract<…,{kind:"panel"}>`; `main.ts`
+  `onEditorCommitted` — history-гілка **THROW-ить** (loud, unreachable у 7a.1, wire у 7a.3). Nav-target у
+  `events.ts` НЕ потрібен (History = окремий view-type, не subtab; BackNav-union достатньо).
+- **Tests:** 13 unit — `deriveAutosaveId("history")` GATE (version-discriminator) + `startSession`
+  readOnlyBase (Contract B) + **recovery-spike** (`ignoreBase=true`→resume; `=false`→MISCLASSIFY
+  vault-changed [доводить, що seam load-bearing]; sibling-mutation→vault-changed, base immune) + conflict
+  byte-identity echo + `planBackNav` history/conflict/deleted. **Acceptance:** обидва spike-твердження
+  зелені; **🟢 GATE (Contract B) PASSED:** grep `basePath===siblingPath` порожній (design гейтує через
+  explicit `ignoreBase`/`readOnlyBase`, НЕ через path-рівність); нового `AutosaveMeta`-поля НЕ треба —
+  version-identity живе в **autosaveId/dirname** (`deriveAutosaveId("history",cf,versionSha)`), а НЕ в
+  `baseShaAtStart` (= content blob-sha, ≠ commit-sha; unit-locked: 2 версії→2 id). ✅ build + **1711
+  unit** зелені (1698 pre-existing незмінні = conflict байт-у-байт).
 
 **7a.2 — `diff2-history` view-type (список версій).**
 - NEW `src/diff2/diff-history-view.ts` `DiffHistoryView extends ItemView` (view-type `diff2-history`),

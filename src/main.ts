@@ -1915,6 +1915,12 @@ export default class GitHubSyncPlugin extends Plugin {
       anchorPath,
     );
     const nav = planBackNav(origin, anchorPath, baseHasConflicts);
+    // 7a.1 — a history back-nav targets the per-file diff2-history view, NOT the
+    // panel. Wiring lands in 7a.3; unreachable here (no history origin is constructed
+    // until then), so fail LOUD rather than silently no-op if 7a.3 forgets to wire it.
+    if (nav.kind === "history") {
+      throw new Error("planBackNav history branch not wired (7a.3)");
+    }
     const leaf = await this.activateDiffEditView();
     if (leaf.view instanceof DiffPanelView) leaf.view.applyBackNav(nav);
   }

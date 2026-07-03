@@ -147,7 +147,9 @@ export class DiffPanelView extends ItemView {
 
   // S5 — execute a back-nav the editor host produced via planBackNav: switch to the
   // sub-tab, re-render the (now-fresher) list, and scroll to the resolved base group.
-  applyBackNav(nav: BackNav): void {
+  // Only PANEL back-navs reach the panel; a history back-nav is routed to the
+  // diff2-history view by the caller (7a.1 narrowing — the panel never renders it).
+  applyBackNav(nav: Extract<BackNav, { kind: "panel" }>): void {
     this.viewState = { tab: nav.tab };
     this.render();
     if (nav.scrollToBase) this.scrollToBase(nav.scrollToBase);
