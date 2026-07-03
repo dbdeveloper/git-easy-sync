@@ -79,7 +79,9 @@ read-only-сторони. Тому спільну машинерію опису�
   page?})` навколо `GET /repos/{owner}/{repo}/commits?path={path}&sha={branch}` (R2.3).
 - Для Deleted: `listCommitsForPath` + `compare()` для виявлення `status:"removed"` (R3.6
   п.2).
-- Кешується на диск у `.diff2` (щоб не бити GitHub повторно). Time-filter → `{since}`.
+- **Кеш (два кеші, §4.4):** metadata (commit-list) → `.history-cache/<path>/<file>/commits.json`
+  (щоб не бити GitHub повторно за списком); вміст версій → окремий content-кеш `<commitSha>`
+  (лише Disk-режим). Time-filter → `{since}`.
 
 ---
 
@@ -270,8 +272,8 @@ Close `diff2-history` tab (`[x]`) - просто закриває цей таб.
 наявний таб. **НЕ vault-singleton** (це виправляє раннє формулювання «singleton, перевикористовується
 на кожен файл» у feasibility §10).
 
-Панель (`diff2-panel`) лишається з **тільки** Conflicts/Deleted sub-tabs (History там
-НЕМАЄ!).
+Панель (`diff2-panel`, єдиний singleton tab в нашому проекті!) лишається з **тільки** Conflicts/Deleted sub-tabs 
+(History там НЕМАЄ!).
 
 ### 4.3 Data-flow (instant push-queue + фонове GitHub-завантаження)
 
@@ -365,19 +367,28 @@ current-file = sibling).
   рядок (метадані). Клік → **ре-fetch** тієї версії. **Нуль диска**, більше мережі. НЕ in-memory
   (на mobile 30×2 МБ у RAM = OOM-kill Capacitor-WebView).
 
-**Layout дискового кешу (Disk-режим).** Окремий каталог **`.history-cache/`** у
-`.obsidian/plugins/<id>/`, **gitignored** (як `.push-queue`/`.trash`; додати у `CONFIG_DIR_SEED`
-`gitignore-invariants.ts`). Структура **дзеркалить vault-шлях**, **ім'я файлу стає каталогом**,
-усередині — версії, названі за **commit-SHA**:
+**Layout кешу (два кеші під одним per-file каталогом).** Каталог **`.history-cache/`** у
+`.obsidian/plugins/<id>/`, ВЖЕ **gitignored** (весь вміст плагін-папки — `SELF_PLUGIN_GITIGNORE`,
+`gitignore-invariants.ts:80-85`; окремої правки НЕ треба). Структура **дзеркалить vault-шлях**,
+**ім'я файлу = каталог**; усередині — **два кеші** цього файлу:
 ```
 .history-cache/
   Folder1/
-    note.md/              ← ім'я файлу = каталог
-      <commitSha1>        ← байти версії 1 (raw; тип/EOL — за розширенням каталогу-файлу)
+    note.md/              ← ім'я файлу = каталог (per-file, self-contained)
+      commits.json        ← METADATA-кеш: commit-list файлу (потрібен завжди, і без фрази)
+      <commitSha1>        ← CONTENT-кеш: байти версії (лише Disk-режим; Frugal їх не пише)
       <commitSha2>
 ```
-Self-documenting (одразу видно, чиї версії кешовані — та сама логіка, що `.trash/<id>/vault/<path>`).
-Колізій із vault немає (окреме дерево).
+- **METADATA-кеш `commits.json`** — легкий (список `{sha,date,message}`); дає list без повторних
+  GitHub-викликів (це і був нечіткий «кеш у `.diff2`»). Потрібен у будь-якому режимі показу.
+- **CONTENT-кеш `<commitSha>`** — важкий (байти версій, raw; тип/EOL за розширенням каталогу-файлу);
+  пишеться **лише в Disk-режимі**; Frugal їх не матеріалізує.
+
+Self-documenting (та сама `vault/`-дзеркальність, що `.trash/<id>/vault/<path>` — лише ключ = сам
+vault-шлях, бо History per-file, не per-bundle; проміжний `vault/` зайвий, кеш тримає ЛИШЕ версії).
+Колізій нема (окреме дерево; `commits.json` + 40-hex-SHA-імена не конфліктують). **Cleanup спільний
+per-file** (див. Disk-bullet вище): закриття таба F → `rm .history-cache/<F-path>/<F-name>/` (метадані
++ content разом); onload → весь `.history-cache/`.
 
 **⚠️ Диск під навантаженням.** `diff2-history` — **per-file** (1 таб на файл, §4.2); користувач
 може тримати відкритими **десятки** таких табів паралельно — **кожен для ІНШОГО файлу** (двох на той
@@ -402,7 +413,7 @@ wholeWord}` (та сама, що вже у проєкті для in-editor Ctrl+
   worker-fetch вмісту версій + `SearchQuery`-matcher). Раніше (feasibility §10 п.4) був
   «окремою фазою»; тепер у скоупі Phase 7. Лишається **оцінити вартість API/worker** (N викликів
   `getContentsAtRef` у межах періоду) перед реалізацією — але це під-задача §4.4, не окрема фаза.
-- **🔮 Проброс пошукової фрази History → diff-editor** (nice-to-have, на майбутнє). Клік по версії,
+- **🔮 Проброс пошукової фрази History → diff-editor** (nice-to-have, на майбутнє). Клац по версії,
   відфільтрованій за текстовою фразою, має **передати цю фразу** в `diff2-editor`, який відкривається
   **з уже відкритою search-панеллю (§2.2.17)**, з **пере-заповненим** search-edit-box тією фразою, щоб
   одразу гортати збіги Next/Previous. `SearchQuery` уже спільна (§4.4) → пробросити її в editor +
@@ -411,6 +422,128 @@ wholeWord}` (та сама, що вже у проєкті для in-editor Ctrl+
   вішає лише дефолтний `searchKeymap` (`Mod+G`/`Shift+Mod+G` next/prev, `Mod+F`, `Esc`) — **F3/Shift+F3
   НЕ прив'язані**. Додати `{key:"F3", run:findNext}` + `{key:"Shift-F3", run:findPrevious}`. Корисно
   скрізь у diff-editor (не тільки для History-проброса вище). Дубль-нотатка — у `docs/tasks/TODO.md`.
+
+### 4.7 Phase 7 — implementation plan (walking skeleton: 7a → 7b)
+
+> **Ритм (як S1–S6 split-у):** кожна стадія лишає build зеленим (`pnpm build` + `pnpm test`);
+> pure-логіку unit-тестуємо на **CALL-SITE** (не лише чисту fn — [[feedback-doc-code-discipline]]);
+> UI = harness/manual checklist. /advisor перед стадією + done-check. Push лише на явне «пуш».
+> Code-seam file:line — з аудиту `diff2@cf02c45`. **Декомпозиція 7a/7b ратифікована (2026-07-03):**
+> спершу тонкий наскрізний зріз 7a (зачіпає ВСІ небезпечні seams мінімальною поверхнею, під
+> device-verify), далі важкий UX шарами 7b.
+
+#### 🔒 Два контракти (тримати перед очима всю Фазу 7)
+
+**(A) Recovery-guardrail — локалізація ризику.**
+- Нові параметри `startSession(readOnlyBase?)` + `classifyReopen(ignoreBase?)` — **default-off**;
+  conflict-шлях лишається **байт-у-байт незмінним** (та сама дисципліна, що controller-byte-identical
+  у split-і S2–S6).
+- **History НІКОЛИ не пише `done.json`** (single-write `commitUnchangedSide`, §3.2) → `commit7Step`/
+  `recoverCommit`/A–K-матриця для History **не вмикаються**. Ризик локалізований у `classifyReopen`
+  (`autosave-store.ts:306-370`) + `readResumeSession` (`:384-402`, уже snapshot-based) + `startSession`
+  (`:191-252`) — НЕ в pair-atomic-матриці.
+- **Spike/тест доводить обидва:** History-сесія resume-иться зі snapshot ✓, і conflict-сесія при
+  default-off незмінна (класифікація + байти).
+
+**(B) Read-only-base PATH-контракт.** Для History нема vault-файлу «версії V».
+- `meta.basePath = currentFile` (= `siblingPath`; base — це версія того ж F), розрізнення від
+  конфлікту через `deriveAutosaveId("history", currentFile, versionSha)`.
+- base матеріалізується **лише** з `base.snapshot`, **ніколи** з vault (звідси `readOnlyBase` у
+  `startSession` + `ignoreBase` у `classifyReopen`).
+- **Ймовірно БЕЗ нового `AutosaveMeta`-поля:** `baseShaAtStart` уже тримає version-sha
+  (`autosave-store.ts:130-159`); підтвердити на 7a.1, НЕ додавати поле «про запас».
+- **Верифікувати:** `commitUnchangedSide` `writtenPath` (`exit-commit.ts:449-450`) при
+  `changedSide:"base"` резолвиться в `siblingPath` (= currentFile) ✓; write-set `["sibling"]`
+  (`editor-tabs.ts:62-79`) → open-guard коректний.
+
+#### Phase 7a — тонкий наскрізний зріз (shippable, device-verifiable)
+
+**7a.0 — data-шар: `listCommitsForPath` + push-queue enumeration.**
+- NEW `GithubClient.listCommitsForPath(path, branch, {since?, perPage?, page?})` — обгортка над
+  `GET /commits?path=&sha=`, маршрут через `workerClient.httpRequest` (timed-патерн `client.ts:101-162`).
+  Повертає `[{sha, date, message}]`.
+- Pure `enumeratePushQueueVersions(path)` — `queue.list()`+`read(id)`+`readFile(id,path)`
+  (`push-queue.ts:211/221/493`) → локальні версії `{createdAt, sha, bytes}`.
+- Pure `mergeVersionList(local, github)` — dedup за sha, хронологічно.
+- **Tests:** unit `mergeVersionList` (dedup/order/локальні-новіші); integration (real GitHub)
+  `listCommitsForPath` (пагінація + `since`). **Acceptance:** список версій будується з обох джерел.
+
+**7a.1 — 4 seams (усі default-off, conflict байт-у-байт).**
+- `deriveAutosaveId` union += `"history"` (`autosave-store.ts:99-106`).
+- `startSession(readOnlyBase?:{bytes,sha})` — якщо задано, base із `readOnlyBase`, не з vault
+  (`:198-208`). Contract B.
+- `classifyReopen(ignoreBase?)` — при true base зі snapshot, перевіряємо лише sibling (`:331-340`;
+  кастом vault-changed-гілка `:364-369`). Contract A.
+- `planBackNav` += history-гілка (`editor-tabs.ts:96-112`) → повертає в `diff2-history` (не panel);
+  потребує history nav-target у `events.ts` (додати, якщо нема).
+- **Tests:** unit кожної pure-зміни на CALL-SITE; **recovery-spike** (Contract A — History resume +
+  conflict незмінний). **Acceptance:** обидва spike-твердження зелені; повний suite зелений; **🔴 GATE
+  (Contract B): підтверджено, що ЖОДЕН code-path не трактує `basePath===siblingPath` як
+  degenerate/error, І нового `AutosaveMeta`-поля не треба — інакше план ПЕРЕВІДКРИВАЄТЬСЯ** (це checked
+  gate, не footnote).
+
+**7a.2 — `diff2-history` view-type (список версій).**
+- NEW `src/diff2/diff-history-view.ts` `DiffHistoryView extends ItemView` (view-type `diff2-history`),
+  register у main.ts onload (`:430-437` патерн). **Per-file** dup-guard (1/file — reveal наявний; §4.2).
+  `getState/setState={path}` (persist restart).
+- Рендер списку версій (7a.0), звичайне «Loading…», клік по рядку → 7a.3. БЕЗ фільтра/skeleton/scroll.
+- ⚠️ **7a.2 не має власного входу до 7a.4** (єдиний спосіб відкрити `diff2-history` — entry-points
+  7a.4) → тимчасово відкриваємо через вже-stubbed команду (`main.ts:459`) АБО верифікуємо **спільно з
+  7a.4** (стадії не є незалежно-device-checkable поодинці).
+- **Tests:** harness/manual (render, per-file dup-guard, click). **Acceptance:** список per-file;
+  десятки різних файлів = десятки табів.
+
+**7a.3 — версія → `diff2-editor` origin=history.**
+- main.ts `openHistoryVersion(path, versionSha)`: fetch base bytes (`getContentsAtRef`
+  `client.ts:499-547`) → **decode base64** (cpu-worker `decode-base64`) → **нормалізувати EOL на вході
+  в модель** (`eol.ts` `detectEol`/`toLf`, як conflict-base — bug-59, щоб CRLF-версія не зламала
+  модель); відкрити editor через `openDescFor("history", currentFile, currentFile,
+  deriveAutosaveId("history",path,sha))` → `openGuard` (write-set `["sibling"]`) →
+  `EditorTabState{origin:"history", …, returnTo}`.
+- `DiffEditorView.tryMount` → controller.mount з `readOnlyBase`+`ignoreBase`. Commit `[←]` = reuse
+  `commitUnchangedSide(changedSide:"base")` → пише sibling(currentFile) → `planBackNav`→`diff2-history`.
+  **`[←]`-reopen:** якщо origin-таб `diff2-history` уже закритий → `[←]` відкриває **СВІЖИЙ** для
+  `currentFile` (per-file dup-guard 7a.2 сфокусує наявний, якщо є). *(На відміну від conflict, що
+  вертає в singleton-панель, яка завжди існує — history-target per-file й може бути закритий.)*
+- **Tests:** unit `openDescFor("history")`/`writeSetFor`; harness (open→resolve→`[←]`→history).
+  **Acceptance:** правка старої версії пишеться в currentFile; `[←]` вертає в список.
+
+**7a.4 — entry-points.**
+- Розстабити команду `diff-edit-show-history` (`main.ts:459`, зараз → `activateDiffEditView`) →
+  `showHistoryOfActiveFile()` (via `activeFilePath()` `:2022`).
+- File-menu «Show history» (`workspace.on('file-menu')`, TFile).
+- Status-bar `show-history` пункт (`status-bar-model.ts` MenuActionKey +=; гейт `hasActiveFile`
+  уже є `85c782e`; dispatch `main.ts:1475`).
+- **Tests:** unit `buildStatusMenu` show-history (гейтований `hasActiveFile`); manual (3 входи).
+  **Acceptance:** усі три входи відкривають `diff2-history` активного файлу.
+
+**→ DEVICE-VERIFY 7a end-to-end** (file-menu→список→версія→resolve→`[←]`; recovery close-x→reopen;
+per-file multi-tab). Push на «пуш».
+
+#### Phase 7b — важкий UX (кожен шар незалежний, shippable)
+
+- **7b.1 — період-фільтр.** UI-селектор `1d|week|month|year|all` → `listCommitsForPath({since})`;
+  зміна періоду → рестарт списку. Unit (period→since); manual.
+- **7b.2 — skeleton loading-UX.** Дихаючі CSS-плейсхолдери (§4.3; CSS у `styles.css`); cause-dependent empty-states
+  (`No matches found` / `No history in the selected period` / `No history for this file`). Harness
+  (render); unit (empty-state selector).
+- **7b.3 — infinite-scroll + refresh-on-top + metadata-кеш.** `page/perPage` пагінація; scroll-bottom
+  → next page; scroll-top-at-start → refresh; `commits.json` metadata-кеш (§4.4). Unit (paginator,
+  cache read/write/refresh); harness.
+- **7b.4 — phrase-search (streaming).** NEW cpu-worker task `phrase-search` (`worker/types.ts` +
+  `cpu-worker.ts` + fallback `worker-client.ts`); `SearchQuery`-matcher (reuse §2.2.17). ⚠️ **НЕ «один
+  worker робить усе»:** fetch = **network-worker** (HTTP тільки там), search = **cpu-worker**,
+  оркестрація послідовно з main → **incremental-render** кожного збігу; клік-під-час-пошуку. Unit
+  (matcher, streaming-reducer); integration (`getContentsAtRef`@sha); harness.
+- **7b.5 — content-кеш + Settings-toggle.** `.history-cache/` content-кеш (Disk: монотонний
+  period-bounded; Frugal: discard); Settings «History version cache: Disk/None» platform-aware
+  (`Platform.isMobile`); per-file cleanup на close + onload wipe (onload-recovery-патерн); disk-warning.
+  Unit (cache monotonic-growth + cleanup policy, mode toggle); manual (mobile=Frugal / desktop=Disk).
+
+#### Свідомі відкладання (не в 7a)
+- `finalizeUnchangedSide(writableSide, emptyPolicy)` факторинг — коли ляже **Deleted** (§7.3 Deleted
+  п.2); 7a **reuse `commitUnchangedSide`** як є (documented semantic-abuse `changedSide:"base"`).
+- Backlog §4.6 (проброс фрази History→editor + F3/Shift+F3) — post-7b.
 
 ---
 
