@@ -22,7 +22,6 @@
 
 import { ItemView, Notice, Scope, WorkspaceLeaf } from "obsidian";
 import { formatConflictTimestamp } from "./strip-conflict-suffix";
-import { historyIsoTimestamp } from "./history-versions";
 import {
   DiffDetailController,
   type DiffDetailHost,
@@ -31,6 +30,7 @@ import type { DiffEditViewDeps } from "./diff-edit-view";
 import {
   openDescFor,
   persistedEditorState,
+  historyEntryFromState,
   type EditorTabState,
   type OpenEditorDesc,
 } from "./editor-tabs";
@@ -257,28 +257,12 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     }
   }
 
-  // 7a.3 — the synthetic ConflictEntry for a history editor: base===sibling===
-  // currentFile (=basePath), the version's label/date, and its sha as the autosaveId
-  // discriminator. Pure (state-only) so openDesc can build it before the async mount.
-  private historyEntryFromState(state: EditorTabState): ConflictEntry | null {
-    const v = state.historyVersion;
-    if (!v || typeof state.basePath !== "string" || !state.basePath) return null;
-    return {
-      basePath: state.basePath,
-      siblingPath: state.basePath,
-      deviceLabel: v.deviceLabel,
-      isoTimestamp: historyIsoTimestamp(v.date),
-      kind: "synthetic",
-      historyVersionSha: v.id,
-    };
-  }
-
   // 7a.3 — mount a read-only historical version against currentFile. Mirrors the
   // conflict tryMount (dup-guard, exists-check, mounting flag) but builds a synthetic
   // entry and passes the lazy bytes-fetcher through to the controller's fresh path.
   private async tryMountHistory(): Promise<void> {
     const state = this.state!;
-    const entry = this.historyEntryFromState(state);
+    const entry = historyEntryFromState(state);
     if (!entry) {
       new Notice("This history tab is missing its version — reopen it from the file's history.");
       this.leaf.detach();
@@ -360,7 +344,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     if (!s) return null;
     // 7a.3 — history entry is built from state (no conflict sibling to parse).
     if (s.origin === "history") {
-      const entry = this.entry ?? this.historyEntryFromState(s);
+      const entry = this.entry ?? historyEntryFromState(s);
       if (!entry) return null;
       return openDescFor("history", entry.basePath, entry.siblingPath, autosaveIdForEntry(entry));
     }

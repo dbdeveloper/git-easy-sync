@@ -21,8 +21,14 @@ import {
   autosaveDir,
   deriveAutosaveId,
 } from "../../src/diff2/autosave-store";
-import { planBackNav, persistedEditorState, type EditorTabState } from "../../src/diff2/editor-tabs";
+import {
+  planBackNav,
+  persistedEditorState,
+  ephemeralAutosaveIdFromState,
+  type EditorTabState,
+} from "../../src/diff2/editor-tabs";
 import { autosaveIdForEntry, type ConflictEntry } from "../../src/diff2/synthetic-detector";
+import { historyDeletedOrphans } from "../../src/diff2/history-deleted-lifecycle";
 
 const NOW = "2026-07-03T12:00:00.000Z";
 const enc = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
@@ -239,6 +245,54 @@ describe("persistedEditorState — history", () => {
       basePath: "a.md",
       siblingPath: "a.conflict-from-X.md",
     });
+  });
+});
+
+// ── §4.5.3 C1/G1 — deferred-safe live-id from serialized state (orphan-sweep) ─
+describe("ephemeralAutosaveIdFromState (deferred-leaf orphan-sweep)", () => {
+  const histState = (basePath: string, id: string): EditorTabState => ({
+    origin: "history",
+    basePath,
+    siblingPath: basePath,
+    historyVersion: { local: false, date: 1, id, deviceLabel: "phone" },
+  });
+
+  it("history state → the SAME per-file id the view/entry path derives (state-only, no view)", () => {
+    // The whole point: identical to what openDesc → autosaveIdForEntry would produce —
+    // so a DEFERRED (view-less) leaf claims the same dir a loaded leaf would.
+    const fromState = ephemeralAutosaveIdFromState(histState("F.md", "sha1"));
+    const fromEntry = autosaveIdForEntry({
+      basePath: "F.md",
+      siblingPath: "F.md",
+      deviceLabel: "phone",
+      isoTimestamp: "x",
+      kind: "synthetic",
+      historyVersionSha: "sha1",
+    });
+    expect(fromState).toBe(fromEntry);
+    expect(fromState).toMatch(/^history-/);
+    // Per-file: any version of F.md resolves to the same live id.
+    expect(ephemeralAutosaveIdFromState(histState("F.md", "sha2"))).toBe(fromState);
+  });
+
+  it("conflict/compare/missing state → null (its dir isn't ephemeral)", () => {
+    expect(
+      ephemeralAutosaveIdFromState({ origin: "conflict", basePath: "a.md", siblingPath: "a.conflict-from-X.md" }),
+    ).toBeNull();
+    expect(ephemeralAutosaveIdFromState({ origin: "compare", basePath: "a.md", siblingPath: "b.md" })).toBeNull();
+    // history with no version (corrupt) → null.
+    expect(ephemeralAutosaveIdFromState({ origin: "history", basePath: "F.md", siblingPath: "F.md" })).toBeNull();
+  });
+
+  it("G1 regression: a DEFERRED history leaf's dir is NOT swept (state-derived id claims it)", () => {
+    // The dir on disk for F.md's history session:
+    const dirId = ephemeralAutosaveIdFromState(histState("F.md", "sha1"))!;
+    // A backgrounded (deferred) leaf yields no `view instanceof DiffEditorView`, but its
+    // STATE still yields the id → it must be in the live set → dir survives the sweep.
+    const live = new Set([ephemeralAutosaveIdFromState(histState("F.md", "sha1"))!]);
+    expect(historyDeletedOrphans([dirId], live)).toEqual([]); // kept
+    // Contrast: with no live tab (leaf truly closed), the same dir IS an orphan.
+    expect(historyDeletedOrphans([dirId], new Set())).toEqual([dirId]);
   });
 });
 

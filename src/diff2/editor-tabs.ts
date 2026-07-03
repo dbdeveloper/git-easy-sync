@@ -9,7 +9,8 @@
 //
 import { normalizePath } from "obsidian";
 import type { DiffEditSubTab } from "./events";
-import type { HistoryVersion } from "./history-versions";
+import { type HistoryVersion, historyIsoTimestamp } from "./history-versions";
+import { type ConflictEntry, autosaveIdForEntry } from "./synthetic-detector";
 
 // §8 / §10 — where a diff2-editor came from. Routes `[←]` navigation (R-D) and
 // selects the write-set (below). Phase 1 only ever constructs `conflict`; the
@@ -55,6 +56,40 @@ export function persistedEditorState(s: EditorTabState): EditorTabState {
     // History identity must survive a restart (re-fetch by id); openMode must not.
     ...(s.historyVersion ? { historyVersion: s.historyVersion } : {}),
   };
+}
+
+// 7a.3 — reconstruct a History ConflictEntry from a leaf's serialized state (base ===
+// sibling === currentFile === basePath; the version-sha is the discriminator). PURE
+// (state-only) so it works from BOTH the view (openDesc, before mount) AND off the raw
+// serialized state of a DEFERRED (background, view-less) leaf. Null when not a valid
+// history state.
+export function historyEntryFromState(state: EditorTabState): ConflictEntry | null {
+  const v = state.historyVersion;
+  if (!v || typeof state.basePath !== "string" || !state.basePath) return null;
+  return {
+    basePath: state.basePath,
+    siblingPath: state.basePath,
+    deviceLabel: v.deviceLabel,
+    isoTimestamp: historyIsoTimestamp(v.date),
+    kind: "synthetic",
+    historyVersionSha: v.id,
+  };
+}
+
+// The EPHEMERAL (history/deleted) autosaveId a leaf's serialized STATE claims — WITHOUT
+// touching the DiffEditorView. Under Obsidian 1.7.7+ a background editor leaf is a
+// DEFERRED stub (`leaf.view` is NOT a DiffEditorView → `instanceof` fails), but its state
+// is always present; the orphan-sweep (main.sweepHistoryDeletedOrphans) uses this so a
+// deferred history tab still CLAIMS its `.runtime/diff2-autosave/` dir and isn't wrongly
+// wiped. Null for a conflict/compare state — its dir isn't ephemeral, so the sweep (which
+// only touches history-/deleted- dirs) never needs it.
+export function ephemeralAutosaveIdFromState(state: EditorTabState): string | null {
+  if (state.origin === "history") {
+    const entry = historyEntryFromState(state);
+    return entry ? autosaveIdForEntry(entry) : null;
+  }
+  // (deleted origin — same pattern once Deleted mode lands.)
+  return null;
 }
 
 // The vault files a diff2-editor WRITES when its `[←]` commits (§3 / §10 table).

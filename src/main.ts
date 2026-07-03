@@ -62,6 +62,7 @@ import {
 import { historyIsoTimestamp, type HistoryVersion } from "./diff2/history-versions";
 import {
   alignOpenDescs,
+  ephemeralAutosaveIdFromState,
   findExistingHistoryLeaf,
   openDescFor,
   openGuard,
@@ -2210,10 +2211,17 @@ export default class GitHubSyncPlugin extends Plugin {
   }
 
   // §4.5.3 (B1) — the accumulation GUARANTEE. At layout-ready (AFTER the layout restore +
-  // Obsidian's native restore, so every live editor has claimed its dir), wipe every
+  // Obsidian's native restore, so every open editor's leaf is present), wipe every
   // history-/deleted- autosave dir with NO open editor tab. Conflict dirs (tracked-/
   // synthetic-) are never touched (prefix — handled by the §4.2 sweep instead). This is
   // what makes ephemeral History/Deleted sessions unable to pile up on disk.
+  //
+  // The "live" set is derived from each leaf's SERIALIZED STATE, NOT `l.view instanceof
+  // DiffEditorView`: under Obsidian 1.7.7+ a BACKGROUND leaf is a DEFERRED stub (no view
+  // yet → instanceof would be false), so an instanceof-gated collect would miss it and
+  // wrongly wipe its still-open dir. getViewState().state is present even for a deferred
+  // leaf → its dir stays claimed. (Benign today — History mounts force-fresh — but load-
+  // bearing once History resume/draft-survival lands.)
   private async sweepHistoryDeletedOrphans(): Promise<void> {
     try {
       const a = this.app.vault.adapter;
@@ -2222,8 +2230,8 @@ export default class GitHubSyncPlugin extends Plugin {
       const dirIds = folders.map((f) => f.slice(f.lastIndexOf("/") + 1));
       const liveIds = new Set<string>();
       for (const l of this.app.workspace.getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE)) {
-        const id =
-          l.view instanceof DiffEditorView ? l.view.openDesc()?.autosaveId : undefined;
+        const state = l.getViewState()?.state as unknown as EditorTabState | undefined;
+        const id = state ? ephemeralAutosaveIdFromState(state) : null;
         if (id) liveIds.add(id);
       }
       const orphans = historyDeletedOrphans(dirIds, liveIds);
