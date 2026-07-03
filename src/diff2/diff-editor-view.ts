@@ -403,7 +403,20 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   // detach → onClose → dispose skips the §4.1 abandon-wipe (the commit removed the dir).
   onCommitExit(entry: ConflictEntry): void {
     const origin = this.state?.origin ?? "conflict";
-    this.leaf.detach();
-    this.deps.onEditorCommitted?.(origin, entry.basePath);
+    const src = this.leaf;
+    if (origin === "history") {
+      // 7a UX — return to the history list in THIS editor's tab group, not a random
+      // one. If the user CLOSED the history tab by hand, the host reopens it via
+      // getLeaf("tab"), which targets the ACTIVE group — so open FIRST (this editor is
+      // still active + attached → its group), THEN detach. (When the history tab is
+      // still open the host's dup-guard just reveals it; order is harmless there.)
+      void Promise.resolve(
+        this.deps.onEditorCommitted?.(origin, entry.basePath),
+      ).finally(() => src.detach());
+    } else {
+      // Conflict: unchanged — the panel is a singleton with its own spot.
+      src.detach();
+      this.deps.onEditorCommitted?.(origin, entry.basePath);
+    }
   }
 }
