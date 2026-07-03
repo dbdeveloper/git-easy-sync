@@ -38,11 +38,13 @@ import { buildModel, serializeModel } from "./diff-model";
 // The autosave root, read live by autosaveDir() / sweepAll() (ES live binding,
 // so autosave-cleanup.ts sees updates). Default = vault-root (tests / back-compat);
 // the plugin reconfigures it to the plugin dir at onload (setAutosaveRoot).
-export let AUTOSAVE_ROOT = ".diff2-autosave";
+export let AUTOSAVE_ROOT = ".runtime/diff2-autosave";
 
 // The trailing segment is constant; setAutosaveRoot receives the PARENT (the
-// plugin dir) and appends it, so callers pass `<configDir>/plugins/<id>`.
-export const AUTOSAVE_DIRNAME = ".diff2-autosave";
+// plugin dir) and appends it, so callers pass `<configDir>/plugins/<id>`. All
+// plugin runtime state lives under a single `.runtime/` subfolder (2026-07-03) —
+// a top-level runtime file in the plugin dir made BRAT reload-loop (see main.ts).
+export const AUTOSAVE_DIRNAME = ".runtime/diff2-autosave";
 
 // Point the autosave root at `<parentDir>/.diff2-autosave`. Called ONCE at
 // plugin onload (before recoverAutosaveDirs). Idempotent.

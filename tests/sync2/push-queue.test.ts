@@ -51,7 +51,7 @@ function fixture(): {
     CONFIG_DIR,
     "plugins",
     SELF_PLUGIN_ID,
-    ".push-queue",
+    ".runtime/push-queue",
   );
   return { root, vault, queue, queueRoot, clock };
 }
@@ -1071,7 +1071,7 @@ describe("PushQueue", () => {
       expect(new TextDecoder().decode(buf)).toBe(content);
       expect(fetchCalls).toBe(1);
       expect(observedUrl).toMatch(/^mock-resource:\/\//);
-      expect(observedUrl).toContain("/.push-queue/");
+      expect(observedUrl).toContain("/.runtime/push-queue/");
       expect(observedUrl).toContain("/x.md");
     });
 

@@ -241,7 +241,7 @@ function fixture(): {
       CONFIG_DIR,
       "plugins",
       SELF_PLUGIN_ID,
-      ".conflicts",
+      ".runtime/conflicts",
     ),
     clock,
     idSeq,

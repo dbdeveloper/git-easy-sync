@@ -31,7 +31,7 @@ function fixture() {
     selfPluginId: SELF_PLUGIN_ID,
     now: () => FIXED_NOW,
   });
-  const trashRoot = `${CONFIG_DIR}/plugins/${SELF_PLUGIN_ID}/.trash`;
+  const trashRoot = `${CONFIG_DIR}/plugins/${SELF_PLUGIN_ID}/.runtime/trash`;
   return {
     root,
     trashStore,

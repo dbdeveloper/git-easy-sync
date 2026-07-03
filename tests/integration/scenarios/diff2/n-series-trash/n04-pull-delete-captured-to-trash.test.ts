@@ -88,7 +88,7 @@ describe.skipIf(!integrationEnabled())(
         // Bytes preserved — user could [Restore] within the window.
         const trashCopy = path.join(
           client.vaultPath,
-          ".obsidian/plugins/github-easy-sync/.trash",
+          ".obsidian/plugins/github-easy-sync/.runtime/trash",
           captured[0].id,
           "vault",
           filePath,

@@ -31,6 +31,7 @@ export function classifyAuthOutcome(err: unknown): AuthOutcome {
 }
 
 export class TokenExpiredFlag {
+  private readonly runtimeDir: string;
   private readonly path: string;
   // Authoritative in-memory state; the file mirrors it best-effort.
   private expired = false;
@@ -39,7 +40,8 @@ export class TokenExpiredFlag {
     private readonly vault: Vault,
     pluginDir: string,
   ) {
-    this.path = normalizePath(`${pluginDir}/.token_expired`);
+    this.runtimeDir = normalizePath(`${pluginDir}/.runtime`);
+    this.path = normalizePath(`${this.runtimeDir}/token_expired`);
   }
 
   // Seed the in-memory flag from disk. Call once at onload (one exists()).
@@ -87,6 +89,9 @@ export class TokenExpiredFlag {
   private async write(on: boolean): Promise<void> {
     try {
       if (on) {
+        if (!(await this.vault.adapter.exists(this.runtimeDir))) {
+          await this.vault.adapter.mkdir(this.runtimeDir);
+        }
         await this.vault.adapter.write(this.path, new Date().toISOString());
       } else if (await this.vault.adapter.exists(this.path)) {
         await this.vault.adapter.remove(this.path);

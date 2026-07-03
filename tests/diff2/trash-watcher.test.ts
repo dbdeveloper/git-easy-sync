@@ -81,7 +81,7 @@ function fixture() {
     fakeDelete,
     fakeTrash,
     watcher,
-    trashRoot: `${CONFIG_DIR}/plugins/${SELF_PLUGIN_ID}/.trash`,
+    trashRoot: `${CONFIG_DIR}/plugins/${SELF_PLUGIN_ID}/.runtime/trash`,
   };
 }
 

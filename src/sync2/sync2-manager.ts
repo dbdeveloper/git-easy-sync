@@ -4171,7 +4171,7 @@ export class Sync2Manager {
   private async estimateBatchBytes(batchId: string): Promise<number> {
     const batch = await this.queue.read(batchId);
     let total = 0;
-    const vaultRoot = `${this.configDir}/plugins/${this.selfPluginId}/.push-queue/${batchId}/vault`;
+    const vaultRoot = `${this.configDir}/plugins/${this.selfPluginId}/.runtime/push-queue/${batchId}/vault`;
     for (const f of batch.files) {
       const stat = await this.vault.adapter.stat(`${vaultRoot}/${f}`);
       if (stat) total += stat.size;

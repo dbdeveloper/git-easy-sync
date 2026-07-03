@@ -28,7 +28,7 @@ import { safeRename } from "./cross-platform";
 // and atomically renamed to its final name. Crash-recovery is handled
 // by AtomicWriteRecovery.sweep() via ownership dispatch on .sync-tmp.
 
-const CONFLICTS_DIRNAME = ".conflicts";
+const CONFLICTS_DIRNAME = ".runtime/conflicts";
 const META_FILE = "meta.json";
 const META_TMP_FILE = "meta.json.tmp";
 

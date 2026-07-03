@@ -31,7 +31,7 @@
 import { Vault } from "obsidian";
 import { safeRename } from "./cross-platform";
 
-const PENDING_DIRNAME = ".pending-deletions";
+const PENDING_DIRNAME = ".runtime/pending-deletions";
 const META_FILE = "meta.json";
 const META_TMP_FILE = "meta.json.tmp";
 

@@ -30,7 +30,7 @@
 
 import { normalizePath, type Vault } from "obsidian";
 
-export const PUSH_INFLIGHT_FILE_NAME = ".push-inflight.json";
+export const PUSH_INFLIGHT_FILE_NAME = ".runtime/push-inflight.json";
 
 export interface PushInflightMarker {
   // The commit the tracked branch was advanced to (updateBranchHead's sha).
@@ -66,7 +66,9 @@ export async function writePushInflight(
   selfPluginId: string,
   marker: PushInflightMarker,
 ): Promise<void> {
-  const dir = normalizePath(`${vault.configDir}/plugins/${selfPluginId}`);
+  // Include the `.runtime` segment so the segment-by-segment ensureDir creates it too
+  // (the marker now lives at `<plugindir>/.runtime/push-inflight.json`).
+  const dir = normalizePath(`${vault.configDir}/plugins/${selfPluginId}/.runtime`);
   if (!(await vault.adapter.exists(dir))) {
     let acc = "";
     for (const part of dir.split("/")) {

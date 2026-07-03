@@ -1,5 +1,5 @@
 // The autosave root is reconfigurable at plugin onload (setAutosaveRoot) so the
-// dir lives WITH the plugin's data — `<configDir>/plugins/<id>/.diff2-autosave/`
+// dir lives WITH the plugin's data — `<configDir>/plugins/<id>/.runtime/diff2-autosave/`
 // — instead of cluttering the vault root. The unit tests keep the vault-root
 // default; this file pins the setter + the ES live binding (autosaveDir AND
 // sweepAll in autosave-cleanup.ts must see the new root). Reset in afterEach so
@@ -19,7 +19,7 @@ import {
 } from "../../src/diff2/autosave-store";
 import { sweepAll } from "../../src/diff2/autosave-cleanup";
 
-afterEach(() => setAutosaveRoot("")); // → normalizePath("/.diff2-autosave") = ".diff2-autosave" (default)
+afterEach(() => setAutosaveRoot("")); // → normalizePath("/.runtime/diff2-autosave") = ".runtime/diff2-autosave" (default)
 
 function fixture(): Vault {
   const root = path.join(os.tmpdir(), `autosave-root-${crypto.randomBytes(4).toString("hex")}`);
@@ -29,13 +29,13 @@ function fixture(): Vault {
 
 describe("setAutosaveRoot — relocate the autosave dir under the plugin folder", () => {
   it("default is the vault-root path", () => {
-    expect(autosaveDir("cid")).toBe(".diff2-autosave/cid");
+    expect(autosaveDir("cid")).toBe(".runtime/diff2-autosave/cid");
   });
 
-  it("after setAutosaveRoot(parent) the dir lives under <parent>/.diff2-autosave", () => {
+  it("after setAutosaveRoot(parent) the dir lives under <parent>/.runtime/diff2-autosave", () => {
     setAutosaveRoot(".obsidian/plugins/github-easy-sync");
     expect(autosaveDir("cid")).toBe(
-      ".obsidian/plugins/github-easy-sync/.diff2-autosave/cid",
+      ".obsidian/plugins/github-easy-sync/.runtime/diff2-autosave/cid",
     );
   });
 
@@ -47,8 +47,8 @@ describe("setAutosaveRoot — relocate the autosave dir under the plugin folder"
     await vault.adapter.writeBinary("s.md", new TextEncoder().encode("sib\n").buffer as ArrayBuffer);
     await startSession(vault, "cid", "b.md", "s.md");
     // Mkdir landed under the plugin folder, not the vault root.
-    expect(await vault.adapter.exists(".obsidian/plugins/github-easy-sync/.diff2-autosave/cid")).toBe(true);
-    expect(await vault.adapter.exists(".diff2-autosave/cid")).toBe(false);
+    expect(await vault.adapter.exists(".obsidian/plugins/github-easy-sync/.runtime/diff2-autosave/cid")).toBe(true);
+    expect(await vault.adapter.exists(".runtime/diff2-autosave/cid")).toBe(false);
 
     // sweepAll walks AUTOSAVE_ROOT — if the live binding failed it would scan the
     // old default and find nothing. It finds + sweeps the empty-history session.

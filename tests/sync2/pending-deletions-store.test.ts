@@ -67,7 +67,7 @@ describe("PendingDeletionsStore", () => {
       CONFIG_DIR,
       "plugins",
       SELF,
-      ".pending-deletions",
+      ".runtime/pending-deletions",
       rec.id,
       "meta.json",
     );
@@ -137,7 +137,7 @@ describe("PendingDeletionsStore", () => {
       CONFIG_DIR,
       "plugins",
       SELF,
-      ".pending-deletions",
+      ".runtime/pending-deletions",
       rec.id,
     );
     expect(fs.existsSync(entryDir)).toBe(true);
@@ -203,7 +203,7 @@ describe("PendingDeletionsStore", () => {
       CONFIG_DIR,
       "plugins",
       SELF,
-      ".pending-deletions",
+      ".runtime/pending-deletions",
     );
     // Plant a sibling entry directory with malformed meta.json.
     const badId = "11111111-1111-1111-1111-111111111111";
@@ -251,7 +251,7 @@ describe("PendingDeletionsStore", () => {
       CONFIG_DIR,
       "plugins",
       SELF,
-      ".pending-deletions",
+      ".runtime/pending-deletions",
     );
     expect(fs.existsSync(dir)).toBe(true);
 

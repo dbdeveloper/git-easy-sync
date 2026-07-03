@@ -42,7 +42,7 @@ import {
 } from "./trash-disk-helpers";
 import { TrashHooks, TrashRecord } from "./types";
 
-const TRASH_DIRNAME = ".trash";
+const TRASH_DIRNAME = ".runtime/trash";
 const VAULT_SUBDIR = "vault";
 const META_FILE = "meta.json";
 

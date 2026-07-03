@@ -18,7 +18,7 @@ import {
 } from "../src/token-expired-flag";
 
 const PLUGIN_DIR = ".obsidian/plugins/github-easy-sync";
-const MARKER = `${PLUGIN_DIR}/.token_expired`;
+const MARKER = `${PLUGIN_DIR}/.runtime/token_expired`;
 
 const tmpdirs: string[] = [];
 function fixture(): Vault {

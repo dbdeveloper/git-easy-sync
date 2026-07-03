@@ -33,7 +33,7 @@ function fixture() {
     selfPluginId: SELF_PLUGIN_ID,
     now: () => new Date(Date.UTC(2026, 4, 26, 10, 30, 0, 0)),
   });
-  const trashRoot = `${CONFIG_DIR}/plugins/${SELF_PLUGIN_ID}/.trash`;
+  const trashRoot = `${CONFIG_DIR}/plugins/${SELF_PLUGIN_ID}/.runtime/trash`;
   return {
     root,
     trashStore,

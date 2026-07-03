@@ -251,7 +251,7 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
         CONFIG_DIR,
         "plugins",
         SELF,
-        ".conflicts",
+        ".runtime/conflicts",
         rec.id,
       );
       expect(fs.existsSync(path.join(recordDir, "meta.json"))).toBe(true);

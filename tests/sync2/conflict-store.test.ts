@@ -75,7 +75,7 @@ function fixture(): {
     CONFIG_DIR,
     "plugins",
     SELF_PLUGIN_ID,
-    ".conflicts",
+    ".runtime/conflicts",
   );
   return { root, vault, store, conflictsRoot, clock, idSeq };
 }

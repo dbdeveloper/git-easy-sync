@@ -11,6 +11,7 @@ import {
   Plugin,
   WorkspaceLeaf,
   Notice,
+  normalizePath,
   setTooltip,
 } from "obsidian";
 import {
@@ -356,6 +357,10 @@ export default class GitHubSyncPlugin extends Plugin {
       this.addSettingTab(new GitHubSyncSettingsTab(this.app, this));
       this.logger.info("Plugin onload: settings tab registered");
 
+      // One-time move of runtime state into the `.runtime/` subfolder — BEFORE
+      // initSync2 (which inits the stores at their NEW paths).
+      await this.migrateRuntimeDirs();
+
       await this.initSync2();
       this.logger.info("Plugin onload: initSync2 done");
 
@@ -555,7 +560,7 @@ export default class GitHubSyncPlugin extends Plugin {
       window.clearTimeout(this.layoutCaptureTimer);
       this.layoutCaptureTimer = null;
     }
-    this.saveDiff2Layout(); // synchronous (localStorage)
+    await this.saveDiff2Layout();
     // 2.0.2-beta2 hardening (SYNC2-TODO "drain overlap spanning a
     // plugin reload"). Abort any in-flight drain on THIS (outgoing)
     // instance before teardown completes, so it can't keep pushing
@@ -2123,15 +2128,57 @@ export default class GitHubSyncPlugin extends Plugin {
     return await this.workerClient.decodeBase64(contents.content);
   }
 
+  // One-time (2026-07-03) migration: all plugin runtime state moved from top-level
+  // dirs/files in the plugin folder into a single `.runtime/` subfolder (a top-level
+  // runtime FILE made BRAT reload-loop — see the layout-marker note). Rename each old
+  // location to its new spot on first load of the new build; a no-op once migrated (old
+  // gone / new exists). Runs BEFORE the stores init at their new paths.
+  private async migrateRuntimeDirs(): Promise<void> {
+    const a = this.app.vault.adapter;
+    const base = `${this.app.vault.configDir}/plugins/${manifest.id}`;
+    const runtime = normalizePath(`${base}/.runtime`);
+    const moves: [string, string][] = [
+      [".diff2-autosave", ".runtime/diff2-autosave"],
+      [".push-queue", ".runtime/push-queue"],
+      [".conflicts", ".runtime/conflicts"],
+      [".trash", ".runtime/trash"],
+      [".pending-deletions", ".runtime/pending-deletions"],
+      [".push-inflight.json", ".runtime/push-inflight.json"],
+      [".token_expired", ".runtime/token_expired"],
+    ];
+    try {
+      for (const [oldRel, newRel] of moves) {
+        const oldPath = normalizePath(`${base}/${oldRel}`);
+        const newPath = normalizePath(`${base}/${newRel}`);
+        if (!(await a.exists(oldPath)) || (await a.exists(newPath))) continue;
+        if (!(await a.exists(runtime))) await a.mkdir(runtime);
+        await a.rename(oldPath, newPath);
+        this.logger?.info("migrateRuntimeDirs: moved", { from: oldRel, to: newRel });
+      }
+    } catch (err) {
+      this.logger?.warn("migrateRuntimeDirs failed", { err: `${err}` });
+    }
+  }
+
   // ── §4.5.3 (B3) cross-fast-reload layout restore ─────────────────────────────
 
-  // The marker lives in per-vault localStorage, NOT a file. A file inside the plugin
-  // dir is fatal: BRAT (and hot-reload dev tooling) WATCH the plugin folder, so writing
-  // `.diff2-layout-restore.json` there on every onunload triggered a reload → onunload
-  // rewrites it → reload → an INFINITE ~2s reload loop (device-repro 2026-07-03, with
-  // ghost "plugin no longer active" tabs between reloads). localStorage is a non-file,
-  // synchronous, survives reload+quit, and no watcher sees it.
-  private static readonly LAYOUT_RESTORE_KEY = "diff2-layout-restore";
+  // The marker is a file in a `.runtime/` SUBFOLDER of the plugin dir (NOT a top-level
+  // file). A top-level `.diff2-layout-restore.json` was fatal: BRAT watches the plugin
+  // folder's top level and reacted to it being created (onunload) + deleted (onload)
+  // each cycle → reload → INFINITE ~2s loop (device-confirmed: disabling BRAT stopped
+  // it). Our other runtime state lives in subfolders (.diff2-autosave/, .push-queue/)
+  // which BRAT does NOT churn on — so a `.runtime/` subfolder marker is safe too
+  // (TESTING this hypothesis; localStorage is the known-safe fallback if it still loops).
+  private static readonly LAYOUT_RESTORE_SUBDIR = ".runtime";
+  private static readonly LAYOUT_RESTORE_FILE = "diff2-layout-restore.json";
+
+  private diff2RuntimePaths(): { dir: string; file: string } {
+    const base = `${this.app.vault.configDir}/plugins/${manifest.id}/${GitHubSyncPlugin.LAYOUT_RESTORE_SUBDIR}`;
+    return {
+      dir: normalizePath(base),
+      file: normalizePath(`${base}/${GitHubSyncPlugin.LAYOUT_RESTORE_FILE}`),
+    };
+  }
 
   private hasOpenDiff2Leaf(): boolean {
     const ws = this.app.workspace;
@@ -2158,17 +2205,19 @@ export default class GitHubSyncPlugin extends Plugin {
     }, 500);
   }
 
-  // onunload: persist the last stable snapshot (with our leaves) + a timestamp to
-  // localStorage. Synchronous → survives even a quit (unlike the async file write).
-  private saveDiff2Layout(): void {
+  // onunload: persist the last stable snapshot (with our leaves) + a timestamp to a file
+  // in the `.runtime/` SUBFOLDER (see the class-field note re: BRAT + top-level files).
+  private async saveDiff2Layout(): Promise<void> {
     if (this.lastStableLayout === null) return;
     try {
-      (this.app as unknown as {
-        saveLocalStorage: (k: string, v: unknown) => void;
-      }).saveLocalStorage(GitHubSyncPlugin.LAYOUT_RESTORE_KEY, {
-        savedAt: Date.now(),
-        layout: this.lastStableLayout,
-      });
+      const { dir, file } = this.diff2RuntimePaths();
+      if (!(await this.app.vault.adapter.exists(dir))) {
+        await this.app.vault.adapter.mkdir(dir);
+      }
+      await this.app.vault.adapter.write(
+        file,
+        JSON.stringify({ savedAt: Date.now(), layout: this.lastStableLayout }),
+      );
     } catch (err) {
       this.logger?.warn("saveDiff2Layout failed", { err: `${err}` });
     }
@@ -2178,23 +2227,19 @@ export default class GitHubSyncPlugin extends Plugin {
   // replay the saved layout so our windows return exactly where they were. The marker is
   // ALWAYS consumed (fresh → restore, stale → clean start). No-op when absent.
   private async restoreDiff2Layout(): Promise<void> {
+    const { file } = this.diff2RuntimePaths();
     try {
-      const app = this.app as unknown as {
-        loadLocalStorage: (k: string) => unknown;
-        saveLocalStorage: (k: string, v: unknown) => void;
-      };
-      const marker = app.loadLocalStorage(GitHubSyncPlugin.LAYOUT_RESTORE_KEY) as
-        | { savedAt: number; layout: unknown }
-        | null;
-      app.saveLocalStorage(GitHubSyncPlugin.LAYOUT_RESTORE_KEY, null); // one-shot: consume
-      if (!marker) return;
-      if (!isLayoutRestoreFresh(marker.savedAt, Date.now(), GitHubSyncPlugin.LAYOUT_RESTORE_TTL_MS)) {
+      if (!(await this.app.vault.adapter.exists(file))) return;
+      const raw = await this.app.vault.adapter.read(file);
+      await this.app.vault.adapter.remove(file); // one-shot: consume regardless
+      const { savedAt, layout } = JSON.parse(raw) as { savedAt: number; layout: unknown };
+      if (!isLayoutRestoreFresh(savedAt, Date.now(), GitHubSyncPlugin.LAYOUT_RESTORE_TTL_MS)) {
         this.logger?.info("diff2 layout marker stale → clean start");
         return;
       }
       await (this.app.workspace as unknown as {
         changeLayout: (l: unknown) => Promise<void>;
-      }).changeLayout(marker.layout);
+      }).changeLayout(layout);
       this.logger?.info("diff2 layout restored (fast reload)");
     } catch (err) {
       this.logger?.warn("restoreDiff2Layout failed", { err: `${err}` });

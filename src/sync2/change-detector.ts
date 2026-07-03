@@ -37,7 +37,7 @@ export async function isSyncable(
   // staging area; it sits inside the vault but must never be uploaded.
   // Without this rule, vault.getFiles() surfaces queued snapshots as
   // user content and we'd push them on the next sync.
-  const queuePrefix = `${configDir}/plugins/${selfPluginId}/.push-queue/`;
+  const queuePrefix = `${configDir}/plugins/${selfPluginId}/.runtime/push-queue/`;
   if (path.startsWith(queuePrefix)) return false;
   // Same protection for the ConflictStore (pseudo-merge): meta.json +
   // the captured theirs-bytes backups are per-device internals. The
@@ -45,7 +45,7 @@ export async function isSyncable(
   // blocks them when the invariant gitignore is in place, but the
   // hardcoded rule guards setups (tests, partial init) where that
   // gitignore hasn't been seeded yet.
-  const conflictsPrefix = `${configDir}/plugins/${selfPluginId}/.conflicts/`;
+  const conflictsPrefix = `${configDir}/plugins/${selfPluginId}/.runtime/conflicts/`;
   if (path.startsWith(conflictsPrefix)) return false;
   if (path === ".git" || path.startsWith(".git/")) return false;
   if (path.includes("/.git/")) return false;

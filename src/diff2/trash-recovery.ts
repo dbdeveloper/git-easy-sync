@@ -59,7 +59,7 @@ export interface TrashRecoveryDeps {
 }
 
 export async function sweepOnload(deps: TrashRecoveryDeps): Promise<void> {
-  const trashRoot = `${deps.configDir}/plugins/${deps.selfPluginId}/.trash`;
+  const trashRoot = `${deps.configDir}/plugins/${deps.selfPluginId}/.runtime/trash`;
   const adapter = deps.vault.adapter;
   const now = deps.now ?? (() => new Date());
 

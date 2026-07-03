@@ -23,7 +23,7 @@ import { FileChange, QueueBatch } from "./types";
 // `.meta.json`, `.in-progress`, or `deleted-paths.txt` would collide
 // with our control files.
 
-const QUEUE_DIRNAME = ".push-queue";
+const QUEUE_DIRNAME = ".runtime/push-queue";
 const META_FILE = ".meta.json";
 const IN_PROGRESS_FILE = ".in-progress";
 // Written by processBatch on first start; NEVER cleared on failure

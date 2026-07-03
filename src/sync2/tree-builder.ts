@@ -20,7 +20,7 @@ export interface TreeBuilderClient {
 }
 
 const VAULT_SUBDIR = "vault";
-const QUEUE_DIRNAME = ".push-queue";
+const QUEUE_DIRNAME = ".runtime/push-queue";
 
 export interface TreeBuilderDeps {
   vault: Vault;
