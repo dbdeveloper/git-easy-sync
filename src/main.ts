@@ -357,10 +357,6 @@ export default class GitHubSyncPlugin extends Plugin {
       this.addSettingTab(new GitHubSyncSettingsTab(this.app, this));
       this.logger.info("Plugin onload: settings tab registered");
 
-      // One-time move of runtime state into the `.runtime/` subfolder — BEFORE
-      // initSync2 (which inits the stores at their NEW paths).
-      await this.migrateRuntimeDirs();
-
       await this.initSync2();
       this.logger.info("Plugin onload: initSync2 done");
 
@@ -2126,38 +2122,6 @@ export default class GitHubSyncPlugin extends Plugin {
     }
     // content is base64 (Contents API / Blobs-API fallback) → decode on the cpu-worker.
     return await this.workerClient.decodeBase64(contents.content);
-  }
-
-  // One-time (2026-07-03) migration: all plugin runtime state moved from top-level
-  // dirs/files in the plugin folder into a single `.runtime/` subfolder (a top-level
-  // runtime FILE made BRAT reload-loop — see the layout-marker note). Rename each old
-  // location to its new spot on first load of the new build; a no-op once migrated (old
-  // gone / new exists). Runs BEFORE the stores init at their new paths.
-  private async migrateRuntimeDirs(): Promise<void> {
-    const a = this.app.vault.adapter;
-    const base = `${this.app.vault.configDir}/plugins/${manifest.id}`;
-    const runtime = normalizePath(`${base}/.runtime`);
-    const moves: [string, string][] = [
-      [".diff2-autosave", ".runtime/diff2-autosave"],
-      [".push-queue", ".runtime/push-queue"],
-      [".conflicts", ".runtime/conflicts"],
-      [".trash", ".runtime/trash"],
-      [".pending-deletions", ".runtime/pending-deletions"],
-      [".push-inflight.json", ".runtime/push-inflight.json"],
-      [".token_expired", ".runtime/token_expired"],
-    ];
-    try {
-      for (const [oldRel, newRel] of moves) {
-        const oldPath = normalizePath(`${base}/${oldRel}`);
-        const newPath = normalizePath(`${base}/${newRel}`);
-        if (!(await a.exists(oldPath)) || (await a.exists(newPath))) continue;
-        if (!(await a.exists(runtime))) await a.mkdir(runtime);
-        await a.rename(oldPath, newPath);
-        this.logger?.info("migrateRuntimeDirs: moved", { from: oldRel, to: newRel });
-      }
-    } catch (err) {
-      this.logger?.warn("migrateRuntimeDirs failed", { err: `${err}` });
-    }
   }
 
   // ── §4.5.3 (B3) cross-fast-reload layout restore ─────────────────────────────
