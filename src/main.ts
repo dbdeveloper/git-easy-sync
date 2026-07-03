@@ -49,7 +49,14 @@ import { setAutosaveRoot } from "./diff2/autosave-store";
 import { DiffPanelView, DIFF2_EDIT_VIEW_TYPE, type DiffEditViewDeps } from "./diff2/diff-edit-view";
 import { DiffEditorView, DIFF2_EDITOR_VIEW_TYPE } from "./diff2/diff-editor-view";
 import {
+  DiffHistoryView,
+  DIFF2_HISTORY_VIEW_TYPE,
+  type DiffHistoryViewDeps,
+} from "./diff2/diff-history-view";
+import type { HistoryVersion } from "./diff2/history-versions";
+import {
   alignOpenDescs,
+  findExistingHistoryLeaf,
   openDescFor,
   openGuard,
   planBackNav,
@@ -435,6 +442,11 @@ export default class GitHubSyncPlugin extends Plugin {
         DIFF2_EDITOR_VIEW_TYPE,
         (leaf) => new DiffEditorView(leaf, this.diffViewDeps()),
       );
+      // 7a.2 — the per-file diff2-history list view.
+      this.registerView(
+        DIFF2_HISTORY_VIEW_TYPE,
+        (leaf) => new DiffHistoryView(leaf, this.historyViewDeps()),
+      );
       this.addCommand({
         id: "open-diff-edit",
         name: "Open Diff-Edit",
@@ -455,10 +467,20 @@ export default class GitHubSyncPlugin extends Plugin {
         name: "Compare active file with…",
         callback: () => this.activateDiffEditView(),
       });
+      // 7a.2 — TEMPORARY: route the stub command to the real per-file history view
+      // so 7a.2 is manually verifiable before 7a.4 wires the three proper entry
+      // points (command via activeFilePath / file-menu / status-bar).
       this.addCommand({
         id: "diff-edit-show-history",
         name: "Show history of active file",
-        callback: () => this.activateDiffEditView(),
+        callback: () => {
+          const path = this.activeFilePath();
+          if (!path) {
+            new Notice("No active file to show history for.");
+            return;
+          }
+          void this.openHistoryView(path);
+        },
       });
 
       this.logger.info(
@@ -1902,6 +1924,63 @@ export default class GitHubSyncPlugin extends Plugin {
     }
     workspace.revealLeaf(leaf);
     return leaf;
+  }
+
+  // 7a.2 — dependencies for the diff2-history list view. client + queue live inside
+  // sync2Manager (constructed in onload); reached via the same cast pattern
+  // resetPluginState uses. The thunks return null when sync2 isn't configured yet,
+  // so a restored history leaf renders "not configured" rather than throwing.
+  private historyViewDeps(): DiffHistoryViewDeps {
+    // Live-read sync2Manager INSIDE each thunk (not captured once) — the CLAUDE.md
+    // deps-thunk idiom: opening the view while unconfigured then configuring must
+    // start working without reopening, and survives a reset/reconfigure that
+    // reconstructs sync2Manager.
+    const mgr = () =>
+      this.sync2Manager as unknown as
+        | { client: GithubClient; queue: PushQueue }
+        | undefined;
+    return {
+      queue: () => mgr()?.queue ?? null,
+      client: () => mgr()?.client ?? null,
+      branch: () => this.settings.githubBranch,
+      localDeviceLabel: () => this.settings.deviceLabel ?? "Obsidian",
+      logger: this.logger,
+      openHistoryVersion: (path, version) => this.openHistoryVersion(path, version),
+    };
+  }
+
+  // 7a.2 — open (or reveal) the per-file diff2-history tab for `path`. Command-level
+  // dup-guard: one tab per file — if one is already open for this path, reveal it
+  // instead of spawning a second (the in-view collapse handles the drag/split case).
+  async openHistoryView(path: string): Promise<void> {
+    const { workspace } = this.app;
+    const leaves = workspace.getLeavesOfType(DIFF2_HISTORY_VIEW_TYPE);
+    const paths = leaves.map((l) =>
+      l.view instanceof DiffHistoryView ? l.view.currentPath() : null,
+    );
+    const which = findExistingHistoryLeaf(paths, path);
+    if (which >= 0) {
+      workspace.revealLeaf(leaves[which]);
+      return;
+    }
+    const leaf = workspace.getLeaf("tab");
+    await leaf.setViewState({
+      type: DIFF2_HISTORY_VIEW_TYPE,
+      active: true,
+      state: { path },
+    });
+    workspace.revealLeaf(leaf);
+  }
+
+  // 7a.2 STUB — clicking a version row lands the diff2-editor open in 7a.3. Kept a
+  // no-op-with-notice so the list is manually clickable now without a dead handler.
+  private openHistoryVersion(path: string, version: HistoryVersion): void {
+    this.logger.info("diff2 history version clicked (7a.3 will open the editor)", {
+      path,
+      local: version.local,
+      id: version.id,
+    });
+    new Notice("Opening a historical version lands in the next step (7a.3).");
   }
 
   // S5 — the editor's `[←]` committed: navigate back to the singleton panel and scroll

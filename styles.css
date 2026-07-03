@@ -867,3 +867,52 @@
 .diff2-touch-search .cm-search [name="replaceAll"] {
     display: none !important;
 }
+
+/* Phase 7 §4.7 7a.2 — diff2-history list (per-file version list). Thin slice:
+   legible + clickable rows, mirroring the conflicts-list conventions. 7b adds
+   filter / skeleton / infinite-scroll polish. */
+.diff2-history-view-root {
+    padding: 8px 12px;
+}
+
+.diff2-history-loading,
+.diff2-history-empty {
+    color: var(--text-muted);
+    padding: 12px 4px;
+}
+
+.diff2-history-error {
+    color: var(--text-warning);
+    padding: 6px 4px;
+    font-size: 0.9em;
+}
+
+.diff2-history-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 10px;
+    margin: 2px 0;
+    border-radius: 4px;
+    background: var(--background-secondary);
+    cursor: pointer;
+}
+
+.diff2-history-row:hover {
+    background: var(--background-modifier-hover);
+}
+
+.diff2-history-date {
+    color: var(--text-normal);
+}
+
+.diff2-history-who {
+    color: var(--text-muted);
+    font-size: 0.9em;
+}
+
+/* Local (not-yet-pushed) versions get a subtle accent so they read as "yours, pending". */
+.diff2-history-row[data-local="true"] .diff2-history-who {
+    color: var(--text-accent);
+}

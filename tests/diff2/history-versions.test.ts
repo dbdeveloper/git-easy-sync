@@ -14,6 +14,7 @@ import {
 import {
   mergeVersionList,
   enumeratePushQueueVersions,
+  loadHistoryVersions,
   type GithubCommit,
   type HistoryVersion,
 } from "../../src/diff2/history-versions";
@@ -206,5 +207,43 @@ describe("enumeratePushQueueVersions", () => {
 
     const out = await enumeratePushQueueVersions(queue, "Notes/x.md", "phone");
     expect(out).toHaveLength(1);
+  });
+
+  // loadHistoryVersions — the local-always / caught-github-error contract (7a.2).
+  describe("loadHistoryVersions", () => {
+    it("merges local + github when both succeed (githubError:false)", async () => {
+      writeVaultFile("Notes/x.md", "v1\n");
+      const id = await queue.enqueue([ADD("Notes/x.md")], {
+        parentCommitSha: "p", parentTreeSha: "t",
+      });
+      const client = {
+        listCommitsForPath: async (): Promise<GithubCommit[]> => [
+          { sha: "c1", date: "2000-01-01T00:00:00Z", message: "old" },
+        ],
+      };
+      const { versions, githubError } = await loadHistoryVersions(
+        queue, client, "Notes/x.md", "main", "phone",
+      );
+      expect(githubError).toBe(false);
+      // newest-first: the local batch (2026 clock) above the ancient github commit.
+      expect(versions.map((v) => v.id)).toEqual([id, "c1"]);
+    });
+
+    it("GitHub throws → local versions STILL returned, githubError:true", async () => {
+      writeVaultFile("Notes/x.md", "v1\n");
+      const id = await queue.enqueue([ADD("Notes/x.md")], {
+        parentCommitSha: "p", parentTreeSha: "t",
+      });
+      const client = {
+        listCommitsForPath: async (): Promise<GithubCommit[]> => {
+          throw new Error("offline");
+        },
+      };
+      const { versions, githubError } = await loadHistoryVersions(
+        queue, client, "Notes/x.md", "main", "phone",
+      );
+      expect(githubError).toBe(true);
+      expect(versions.map((v) => v.id)).toEqual([id]); // local survived the github failure
+    });
   });
 });

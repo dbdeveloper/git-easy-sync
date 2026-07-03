@@ -176,6 +176,20 @@ export function alignOpenDescs(
   return perLeaf.map((d) => d ?? INERT_DESC);
 }
 
+// 7a.2 — per-file open-guard for the diff2-history view. main.ts maps
+// getLeavesOfType("diff2-history") → each leaf's path (null while a leaf is
+// mid-rebuild — the transient empty getState on a split), and resolves the
+// returned index against THAT SAME array to reveal the existing tab. A null slot
+// never matches, so a split's empty phase can't alias a live tab. Pure sibling of
+// openGuard — kept here (not in the ItemView module) so it is unit-testable
+// without an Obsidian runtime.
+export function findExistingHistoryLeaf(
+  paths: readonly (string | null)[],
+  path: string,
+): number {
+  return paths.findIndex((p) => p === path);
+}
+
 export function openGuard(
   open: readonly OpenEditorDesc[],
   req: OpenRequest,

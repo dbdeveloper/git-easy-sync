@@ -514,16 +514,31 @@ wholeWord}` (та сама, що вже у проєкті для in-editor Ctrl+
   `baseShaAtStart` (= content blob-sha, ≠ commit-sha; unit-locked: 2 версії→2 id). ✅ build + **1711
   unit** зелені (1698 pre-existing незмінні = conflict байт-у-байт).
 
-**7a.2 — `diff2-history` view-type (список версій).**
-- NEW `src/diff2/diff-history-view.ts` `DiffHistoryView extends ItemView` (view-type `diff2-history`),
-  register у main.ts onload (`:430-437` патерн). **Per-file** dup-guard (1/file — reveal наявний; §4.2).
-  `getState/setState={path}` (persist restart).
-- Рендер списку версій (7a.0), звичайне «Loading…», клік по рядку → 7a.3. БЕЗ фільтра/skeleton/scroll.
-- ⚠️ **7a.2 не має власного входу до 7a.4** (єдиний спосіб відкрити `diff2-history` — entry-points
-  7a.4) → тимчасово відкриваємо через вже-stubbed команду (`main.ts:459`) АБО верифікуємо **спільно з
-  7a.4** (стадії не є незалежно-device-checkable поодинці).
-- **Tests:** harness/manual (render, per-file dup-guard, click). **Acceptance:** список per-file;
-  десятки різних файлів = десятки табів.
+**7a.2 — `diff2-history` view-type (список версій). 🟡 CODE-COMPLETE (2026-07-03) — device-verify
+pending (спільно з 7a.4; view render не має executed-coverage — Obsidian ItemView, не запускається в
+unit).** Файли: NEW `src/diff2/diff-history-view.ts` + `editor-tabs.ts` (`findExistingHistoryLeaf`) +
+`history-versions.ts` (`loadHistoryVersions`) + `main.ts` + `styles.css`. Tests: `history-view-guard.test.ts`
+(5) + `loadHistoryVersions` ×2 у `history-versions.test.ts`.
+- NEW `DiffHistoryView extends ItemView` (view-type `diff2-history`), register у main.ts onload.
+  `getState/setState={path}` (persist restart). Title = `<path> History` (sync, без refreshHeader-хаку).
+- **Both-ready gate** (render з onOpen+setState, no-op доки нема contentEl+path) + **gen-token** (свіжий
+  render виграє) + `isConnected`-guard (не рендерити в detached-node) — патерн із `diff-editor-view`.
+- **🔴 Per-file uniqueness = MOVE-not-clone (user 2026-07-03, як diff-panel):** 1 таб/файл; split/drag
+  → таб **ПЕРЕНОСИТЬСЯ**, не дублюється. Два рівні: (a) command-level dup-guard `findExistingHistoryLeaf`
+  (reveal наявний) у `openHistoryView`; (b) view-level `collapseSameFileDuplicates` (KEEP this.leaf,
+  detach інші leaves з тим самим path — read-only список ⇒ MOVE як panel, не REFUSE як editor). Різні
+  файли → свої таби (§4.2).
+- **local-always:** `loadHistoryVersions` — local (push-queue, instant, не кидає) ЗАВЖДИ + GitHub у
+  try/catch (offline/unconfig/rate-limit → `githubError:true`, показуємо local + warning, не ховаємо).
+  Deps-thunks `queue()`/`client()` **live-read** sync2Manager (не captured) → unconfigured→configure
+  без reopen. Клік по рядку → `openHistoryVersion` STUB (Notice; wire у 7a.3).
+- ⚠️ **7a.2 не має власного входу до 7a.4** → тимчасово repoint stubbed-команди `diff-edit-show-history`
+  → `openHistoryView(activeFilePath())` (device-reachable зараз; 7a.4 замінить на 3 входи). ~30-commit
+  cap (GitHub default page, без пагінації — 7b.1).
+- **Tests:** unit `findExistingHistoryLeaf` (null-slot/first-match) + `loadHistoryVersions`
+  (both-succeed / github-throw→local-survives). Render/dup-guard/click = harness/manual (device 7a.4).
+  **Acceptance (pending device):** список per-file; десятки різних файлів = десятки табів; split=move.
+  ✅ build + **1718 unit** зелені.
 
 **7a.3 — версія → `diff2-editor` origin=history.**
 - main.ts `openHistoryVersion(path, versionSha)`: fetch base bytes (`getContentsAtRef`

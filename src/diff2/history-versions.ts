@@ -54,6 +54,14 @@ export interface QueueVersionSource {
   read(id: string): Promise<{ id: string; createdAt: number; files: string[] }>;
 }
 
+/** Minimal GithubClient surface the history list needs. */
+export interface HistoryCommitSource {
+  listCommitsForPath(args: {
+    path: string;
+    branch: string;
+  }): Promise<GithubCommit[]>;
+}
+
 /**
  * Local, not-yet-pushed versions of `path` from the push-queue, one per
  * batch whose snapshot includes the path. `deviceLabel` is this device's
@@ -101,4 +109,31 @@ export function mergeVersionList(
   // sort stably across engines.
   merged.sort((a, b) => b.date - a.date || b.id.localeCompare(a.id));
   return merged;
+}
+
+/**
+ * 7a.2 — assemble a file's full version timeline for the diff2-history view.
+ * Local (push-queue) versions are read FIRST and always returned — they need no
+ * network and can't throw. GitHub commits are then loaded, but a failure (offline
+ * / token-not-set / rate-limited) is CAUGHT and surfaced as `githubError:true`
+ * rather than hiding the local unpushed versions (the view renders local-only +
+ * a warning). Extracted from the view so this local-always contract is unit-
+ * testable without an Obsidian ItemView runtime.
+ */
+export async function loadHistoryVersions(
+  queue: QueueVersionSource,
+  client: HistoryCommitSource,
+  path: string,
+  branch: string,
+  deviceLabel: string,
+): Promise<{ versions: HistoryVersion[]; githubError: boolean }> {
+  const local = await enumeratePushQueueVersions(queue, path, deviceLabel);
+  let github: GithubCommit[] = [];
+  let githubError = false;
+  try {
+    github = await client.listCommitsForPath({ path, branch });
+  } catch {
+    githubError = true;
+  }
+  return { versions: mergeVersionList(local, github), githubError };
 }
