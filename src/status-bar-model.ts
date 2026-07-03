@@ -59,6 +59,7 @@ export type MenuActionKey =
   | "commit-current"
   | "pull-push"
   | "open-diff"
+  | "open-history"
   | "settings";
 
 export interface StatusMenuItem {
@@ -80,7 +81,7 @@ export interface StatusMenuInput {
   queueDepth: number;
   conflictCount: number;
   // Is there an active file to act on? Gates the current-file-bound items
-  // (commit-current, and later show-history) → disabled/grey when false, so a
+  // (commit-current, and later open-history) → disabled/grey when false, so a
   // click can't fall through to a "No active file" Notice. Computed fresh on
   // each menu open (the menu rebuilds per click).
   hasActiveFile: boolean;
@@ -119,13 +120,19 @@ export function buildStatusMenu(input: StatusMenuInput): StatusMenuItem[] {
     // clicking through to a "No active file to commit" Notice).
     items.push({
       key: "commit-current",
-      label: "Commit current file",
+      label: "Commit active file",
       disabled: !hasActiveFile,
     });
     items.push({ key: "pull-push", label: pullPushLabel(queueDepth) });
     items.push({
       key: "open-diff",
       label: `Open diff-panel${openDiffSuffix(conflictCount)}`,
+    });
+    // 7a.4 — current-file-bound (like commit-current): greyed when no active file.
+    items.push({
+      key: "open-history",
+      label: "Open history of active file",
+      disabled: !hasActiveFile,
     });
   }
 

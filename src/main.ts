@@ -11,6 +11,7 @@ import {
   Plugin,
   WorkspaceLeaf,
   Notice,
+  TFile,
   normalizePath,
   setTooltip,
 } from "obsidian";
@@ -501,21 +502,25 @@ export default class GitHubSyncPlugin extends Plugin {
         name: "Compare active file with…",
         callback: () => this.activateDiffEditView(),
       });
-      // 7a.2 — TEMPORARY: route the stub command to the real per-file history view
-      // so 7a.2 is manually verifiable before 7a.4 wires the three proper entry
-      // points (command via activeFilePath / file-menu / status-bar).
+      // 7a.4 — entry-point 1/3: the command palette.
       this.addCommand({
-        id: "diff-edit-show-history",
-        name: "Show history of active file",
-        callback: () => {
-          const path = this.activeFilePath();
-          if (!path) {
-            new Notice("No active file to show history for.");
-            return;
-          }
-          void this.openHistoryView(path);
-        },
+        id: "diff-edit-open-history",
+        name: "Open history of active file",
+        callback: () => this.openHistoryOfActiveFile(),
       });
+      // 7a.4 — entry-point 2/3: the file-menu (right-click a file → "Open GitHub history").
+      // Opens history for the CLICKED file (a TFile), not the active one.
+      this.registerEvent(
+        this.app.workspace.on("file-menu", (menu, file) => {
+          if (!(file instanceof TFile)) return;
+          menu.addItem((item) =>
+            item
+              .setTitle("Open GitHub history")
+              .setIcon("history")
+              .onClick(() => void this.openHistoryView(file.path)),
+          );
+        }),
+      );
 
       this.logger.info(
         `Plugin onload complete (duration=${Date.now() - startedAt}ms)`,
@@ -1555,6 +1560,9 @@ export default class GitHubSyncPlugin extends Plugin {
       case "open-diff":
         void this.activateDiffEditView();
         break;
+      case "open-history":
+        this.openHistoryOfActiveFile();
+        break;
       case "settings":
         this.openSettings();
         break;
@@ -2019,6 +2027,17 @@ export default class GitHubSyncPlugin extends Plugin {
   }
 
   // 7a.2 — open (or reveal) the per-file diff2-history tab for `path`. Command-level
+  // 7a.4 — shared by the command + the status-bar item (both act on the ACTIVE file).
+  // The file-menu entry acts on its clicked TFile directly, so it calls openHistoryView.
+  openHistoryOfActiveFile(): void {
+    const path = this.activeFilePath();
+    if (!path) {
+      new Notice("No active file to show history for.");
+      return;
+    }
+    void this.openHistoryView(path);
+  }
+
   // dup-guard: one tab per file — if one is already open for this path, reveal it
   // instead of spawning a second (the in-view collapse handles the drag/split case).
   async openHistoryView(path: string): Promise<void> {

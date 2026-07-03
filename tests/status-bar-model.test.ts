@@ -84,6 +84,7 @@ describe("buildStatusMenu — §7 three states", () => {
       "commit-current",
       "pull-push",
       "open-diff",
+      "open-history",
       "settings",
     ]);
     expect(m[0].label).toBe("GitHub Easy Sync: Token expired");
@@ -105,6 +106,7 @@ describe("buildStatusMenu — §7 three states", () => {
       "commit-current",
       "pull-push",
       "open-diff",
+      "open-history",
       "settings",
     ]);
     expect(m.find((i) => i.key === "sync-all")?.separatorBefore).toBeFalsy();
@@ -123,6 +125,14 @@ describe("buildStatusMenu — §7 three states", () => {
     expect(mk(0)).toBe("Open diff-panel");
     expect(mk(1)).toBe("Open diff-panel (1 open conflict)");
     expect(mk(5)).toBe("Open diff-panel (5 open conflicts)");
+  });
+
+  it("7a.4 — open-history is greyed (disabled) exactly when there is no active file", () => {
+    const item = (hasActiveFile: boolean) =>
+      buildStatusMenu({ state: "normal", pluginName: "x", queueDepth: 0, conflictCount: 0, hasActiveFile })
+        .find((i) => i.key === "open-history");
+    expect(item(true)?.disabled).toBeFalsy();
+    expect(item(false)?.disabled).toBe(true);
   });
 
   it("commit-current is greyed (disabled) exactly when there is no active file", () => {
