@@ -252,7 +252,7 @@ current file`. Нема empty-state «виберіть файл».
 
 **2 рівні / back-stack:**
 
-1. **`diff2-history`** *(НОВИЙ view-type, singleton)* — для ОДНОГО обраного файлу:
+1. **`diff2-history`** *(НОВИЙ view-type, per-file: 1 таб на файл)* — для ОДНОГО обраного файлу:
    список його **закомічених** версій + toolbar: `[←]` + **фільтр** (деталі §4.4) — дві осі:
    **період** (`1 день | тиждень | місяць | рік | все`) і **текстова фраза** (форма як
    CM6-search, без replace-рядка: `[search…] [Aa] [.*] [word]` = case / regexp / whole-word).
@@ -265,7 +265,10 @@ Close `diff2-history` tab (`[x]`) - просто закриває цей таб.
 
 **Чому окремий view-type `diff2-history`, а не detail-mode у панелі** (рішення
 2026-06-29): треба **прямий** вхід із context-menu на файлі; detail-mode вимагав би спершу
-пройти дерево. `diff2-history` — singleton, перевикористовується на кожен обраний файл.
+пройти дерево. `diff2-history` — **per-file** (1 таб на файл, ратифікований uniqueness-invariant
+«history = 1/file»): різні файли = різні таби, повторне відкриття того самого файлу **фокусує**
+наявний таб. **НЕ vault-singleton** (це виправляє раннє формулювання «singleton, перевикористовується
+на кожен файл» у feasibility §10).
 
 Панель (`diff2-panel`) лишається з **тільки** Conflicts/Deleted sub-tabs (History там
 НЕМАЄ!).
@@ -315,26 +318,79 @@ current-file = sibling).
     **`No history for this file`**.
 
 ### 4.4 GitHub API + worker + фільтр (нове — Phase 7)
+
+**GitHub API.**
 - **`GithubClient.listCommitsForPath(path, branch, {since?, perPage?, page?})`** — обгортка
   навколо `GET /repos/{owner}/{repo}/commits?path=&sha=` (R2.3). **Ще не існує.** `since` ←
   період-фільтр; `page`/`perPage` ← infinite-scroll (§4.3 п.4).
 - Байти конкретної версії — через `getContentsAtRef` (вже є; Blobs-API fallback >1MB, SYNC2
   §7.6) за commit-SHA.
-- **Worker (лягає на наявну оркестру `src/worker/`):** `listCommitsForPath` / `getContentsAtRef`
-  → **network-worker** (як весь engine, через `WorkerClient.httpRequest`); пошук фрази у вмісті
-  версій → **cpu-worker**. ⚠️ **Межа:** worker НЕ має доступу до Obsidian API → воркер лише
-  fetch-ить + шукає й **повертає дані**; запис у кеш `.diff2` (adapter) і рендер списку — на main.
-- **Два режими одного завантажувача:**
-  - **без текстового фільтра** — вантажимо лише **метадані комітів** (`listCommitsForPath`,
-    легко, посторінково) → список = усі версії в межах періоду.
-  - **з текстовим фільтром** — треба **вміст кожної версії** (`getContentsAtRef`, важко): worker
-    послідовно тягне версії, шукає в них фразу, у список потрапляють **лише збіги** → повільно,
-    звідси **skeleton-плейсхолдери** (§4.3).
-- **Текстовий фільтр = reuse §2.2.17.** Модель запиту = `SearchQuery {search, caseSensitive,
-  regexp, wholeWord}` (та сама, що вже у проєкті для in-editor Ctrl+F, `@codemirror/search`);
-  тумблери UI = дзеркало CM6-search-панелі, без replace-рядка. Reuse = **query-модель +
-  UI-тумблери**; сам пошук іде не по відкритому документу, а по вмісту версій у worker-і
-  (cpu-worker будує matcher із цих параметрів).
+- ⚠️ **Серверного пошуку по історичних версіях GitHub НЕ має** (перевірено 2026-07-03):
+  Code Search (`/search/code`) індексує **лише default-branch HEAD** (+ файли <384 КБ, потрібна
+  індексація); commit-search — лише **повідомлення**, не вміст; довільний commit-SHA не шукається.
+  Локальний `git log -S` нам недоступний (немає git-бінарника, лише REST). **⇒ пошук фрази МУСИТЬ
+  завантажити вміст кожної версії й шукати локально — оминути це API-ом неможливо.** Дрібна
+  економія: **поточну (HEAD) версію з мережі не тягнемо** — це і є локальний vault-файл (sibling).
+
+**Worker (наявна оркестра `src/worker/`).** `listCommitsForPath`/`getContentsAtRef` →
+**network-worker** (як весь engine, через `WorkerClient.httpRequest`); пошук фрази → **cpu-worker**.
+**Послідовно, один потік — БЕЗ конкурентності** (user 2026-07-03: рідкісний важкий кейс, не
+паралелимо) → порядок зберігається сам, пік RAM ≈ **одна версія**. ⚠️ **Межа:** worker не має
+доступу до Obsidian API → лише fetch-ить+шукає й **повертає дані**; кеш `.diff2` (adapter) і рендер
+— на main.
+
+**Два режими завантажувача (за наявністю текстового фільтра).**
+- **без фільтра** — лише **метадані комітів** (`listCommitsForPath`, легко, посторінково) → список
+  = усі версії в межах періоду.
+- **з фільтром** — **вміст кожної версії** (`getContentsAtRef`, важко): **стрімінг** — worker
+  послідовно fetch→search→**одразу рендерить кожен збіг** замість placeholder-а (§4.3), пошук
+  триває далі, знайдений рядок **клікабельний під час пошуку** (клік → `diff2-editor`, фон триває).
+
+**Кеш вмісту версій — Settings-перемикач (disk ↔ frugal), platform-aware дефолт.**
+Нове налаштування у групі **«Diff Editor»**: *History version cache* = `Disk` / `None (re-fetch)`.
+Дефолт **platform-aware** (`Platform.isMobile`): **mobile → None (Frugal)**, **desktop → Disk**.
+**Формула (для settings-tooltip):** *Disk — більше диску, менше трафіку; None — менше диску, більше
+трафіку (повторні завантаження).* Перший пошук коштує **однаково** в обох (обидва мусять завантажити
+всі версії — серверного пошуку нема); різниця — на **повторах**: кліки по версії + кожен новий пошук.
+Обидва режими ділять **той самий** послідовний streaming/skeleton-пайплайн; різниця — **лише доля
+байтів після пошуку**:
+- **Disk:** завантажений вміст → на диск у `.history-cache/` (**сесійний** кеш, layout нижче).
+  Далі пошук — **локальний** (без мережі). Кеш **росте монотонно в межах сесії**: **звуження**
+  періоду (місяць→тиждень) записів **НЕ видаляє**; **розширення** (тиждень→місяць) при пошуку
+  **до-вантажує лише брак** (версії, яких ще нема в кеші). Клік по знайденому → читаємо **з диска**
+  (без fetch). **Cleanup:** вихід із History-таба для файлу F → видаляємо **лише**
+  `.history-cache/<F>/`; onload плагіна (рестарт/крах) → `.history-cache/` **повністю** (backstop;
+  сесійний, ніколи не переживає рестарт — як trash-recovery / atomic-write onload-sweep-и).
+- **Frugal / None:** fetch→search→**одразу забуваємо байти** (на диск не пишемо); у списку — лише
+  рядок (метадані). Клік → **ре-fetch** тієї версії. **Нуль диска**, більше мережі. НЕ in-memory
+  (на mobile 30×2 МБ у RAM = OOM-kill Capacitor-WebView).
+
+**Layout дискового кешу (Disk-режим).** Окремий каталог **`.history-cache/`** у
+`.obsidian/plugins/<id>/`, **gitignored** (як `.push-queue`/`.trash`; додати у `CONFIG_DIR_SEED`
+`gitignore-invariants.ts`). Структура **дзеркалить vault-шлях**, **ім'я файлу стає каталогом**,
+усередині — версії, названі за **commit-SHA**:
+```
+.history-cache/
+  Folder1/
+    note.md/              ← ім'я файлу = каталог
+      <commitSha1>        ← байти версії 1 (raw; тип/EOL — за розширенням каталогу-файлу)
+      <commitSha2>
+```
+Self-documenting (одразу видно, чиї версії кешовані — та сама логіка, що `.trash/<id>/vault/<path>`).
+Колізій із vault немає (окреме дерево).
+
+**⚠️ Диск під навантаженням.** `diff2-history` — **per-file** (1 таб на файл, §4.2); користувач
+може тримати відкритими **десятки** таких табів паралельно — **кожен для ІНШОГО файлу** (двох на той
+самий файл не буде — 1/file). У Disk-режимі кожен **накопичує свій** `.history-cache/<F>/` → сумарний
+диск може вирости **суттєво** (десятки файлів × вміст їхніх версій). Тому **наголошувати користувачу**
+(tooltip/Notice), що одночасний пошук по історії багатьох (тим паче важких) файлів відчутно збільшує
+використаний диск — саме тут доречний Frugal-режим. (Кожен таб чистить свій `<F>/` при закритті;
+повне очищення — onload.)
+
+**Текстовий фільтр = reuse §2.2.17.** Модель запиту = `SearchQuery {search, caseSensitive, regexp,
+wholeWord}` (та сама, що вже у проєкті для in-editor Ctrl+F, `@codemirror/search`); тумблери UI =
+дзеркало CM6-search-панелі, без replace-рядка. Reuse = **query-модель + UI-тумблери**; сам пошук іде
+не по відкритому документу, а по вмісту версій у worker-і (cpu-worker будує matcher із цих параметрів).
 
 ### 4.5 Commit / Recovery
 - Commit: `commitUnchangedSide("base")` (§3.2) — пише лише sibling (поточний файл), base не
@@ -599,7 +655,8 @@ Phase A при drain (`conflict-classifier.ts:235`, `!siblingExists → store.de
 
 **History (Phase 7) — greenfield:**
 1. `GithubClient.listCommitsForPath(...)` з пагінацією (+ кеш у `.diff2`). 🔴 нове.
-2. `diff2-history` view-type (singleton, список версій + time-filter). 🔴 нове.
+2. `diff2-history` view-type (**per-file**, 1/file — можуть бути **десятки** паралельно; список
+   версій + time-filter). 🔴 нове.
 3. push-queue-first формування списку (readFile уже є). 🟡 wiring.
 4. `deriveAutosaveId` +`"history"` kind + version-SHA у `AutosaveMeta`. 🟡 мала правка.
 5. Commit — reuse `commitUnchangedSide("base")` (уже є). 🟢.
