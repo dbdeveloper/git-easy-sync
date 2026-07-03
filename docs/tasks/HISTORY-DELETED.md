@@ -458,15 +458,31 @@ wholeWord}` (та сама, що вже у проєкті для in-editor Ctrl+
 
 #### Phase 7a — тонкий наскрізний зріз (shippable, device-verifiable)
 
-**7a.0 — data-шар: `listCommitsForPath` + push-queue enumeration.**
-- NEW `GithubClient.listCommitsForPath(path, branch, {since?, perPage?, page?})` — обгортка над
-  `GET /commits?path=&sha=`, маршрут через `workerClient.httpRequest` (timed-патерн `client.ts:101-162`).
-  Повертає `[{sha, date, message}]`.
-- Pure `enumeratePushQueueVersions(path)` — `queue.list()`+`read(id)`+`readFile(id,path)`
-  (`push-queue.ts:211/221/493`) → локальні версії `{createdAt, sha, bytes}`.
-- Pure `mergeVersionList(local, github)` — dedup за sha, хронологічно.
-- **Tests:** unit `mergeVersionList` (dedup/order/локальні-новіші); integration (real GitHub)
-  `listCommitsForPath` (пагінація + `since`). **Acceptance:** список версій будується з обох джерел.
+**7a.0 — data-шар: `listCommitsForPath` + push-queue enumeration. ✅ DONE (2026-07-03).**
+Файли: `src/diff2/history-versions.ts` + `src/github/client.ts` `listCommitsForPath` +
+`src/sync2/commit-message.ts` `parseLocalTimestamp`. Tests: `tests/diff2/history-versions.test.ts`
+(13 unit), `tests/integration/scenarios/diff2/history-list-commits.test.ts` (scaffold, real GitHub).
+- NEW `GithubClient.listCommitsForPath({path, branch, since?, perPage?, page?, retry?})` — обгортка над
+  `GET /commits?path=&sha=`, маршрут через `timed`→`workerClient.httpRequest` (`client.ts`). Повертає
+  RAW `[{sha, date, message}]` (клієнт НЕ знає формату наших commit-msg). **Одна сторінка/виклик**
+  (пагінує викликаюча сторона). **Кидає** `makeGithubAPIError` на non-2xx (не swallow-null, як
+  `getLatestCommitDateForPath`) — щоб view показав error-стан; `[]` на порожній 200.
+- Pure `enumeratePushQueueVersions(queue, path, deviceLabel)` — `queue.list()`+`read(id)`, фільтр
+  `batch.files.includes(path)` → локальні версії. **Ручка = `batchId`** (байти пізніше через
+  `readFile(id,path)`); blob-SHA/bytes НЕ рахуємо (не потрібні у 7a.0).
+- Pure `mergeVersionList(local, github)` — уніфікований рядок **`{local, date, id, deviceLabel}`**
+  (`id`=batchId|commitSHA, `local` каже opener-у як тягнути байти). **БЕЗ lossy-dedup** (ратифіковано
+  2026-07-03): (a) GitHub commit-SHA ≠ push-queue blob-SHA — різні простори, cross-source «dedup за
+  sha» ніколи не збігається; (b) [[feedback-preserve-all-commits]] — дві локальні правки в різний час
+  з однаковими байтами = два артефакти, не схлопувати. ⇒ concat + сорт newest-first. У нормі списки
+  й так disjoint (черга тримає лише НЕзапушене). **`date` = справжній момент авторства**: для GitHub
+  парситься з commit-msg (`parseLocalTimestamp`, `commit-message.ts`) з fallback на git-committer-date
+  (= push-момент, SYNC2 §4.4) для чужих комітів; `deviceLabel`=`parseDeviceSuffix` («unknown» для
+  чужих). Парсинг — у `mergeVersionList` (клієнт лишається raw).
+- **Tests:** unit `mergeVersionList` (msg-parse/fallback/order/локальні-новіші/no-dedup) +
+  `parseLocalTimestamp` round-trip + `enumeratePushQueueVersions` (call-site, real PushQueue);
+  integration (real GitHub) `listCommitsForPath` (пагінація + `since`) — **RAN green** (1 passed, не
+  skipped). **Acceptance:** список версій будується з обох джерел. ✅ build + 1698 unit + 1 integration зелені.
 
 **7a.1 — 4 seams (усі default-off, conflict байт-у-байт).**
 - `deriveAutosaveId` union += `"history"` (`autosave-store.ts:99-106`).

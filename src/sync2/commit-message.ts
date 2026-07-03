@@ -158,3 +158,25 @@ export function parseDeviceSuffix(message: string): string {
   const m = /\s\(([^()]+)\)\s*$/.exec(message);
   return m ? m[1] : UNKNOWN_DEVICE_LABEL;
 }
+
+// Reverse of formatLocalTimestamp: recover the TRUE local commit moment
+// (epoch-ms) embedded in a sync2 commit message. All formatX messages end
+// with "<verb> at <local-time+offset> (label)"; the timestamp is
+// formatLocalTimestamp's exact shape, e.g. "2026-07-01 10:00:00.123+03:00"
+// (space between date and time, ISO-parseable after that space → "T").
+//
+// Phase 7 History (HISTORY-DELETED §4.7 7a.0) shows WHEN a version was
+// authored, not when it pushed — git's committer date is the PUSH moment
+// (SYNC2 §4.4), so the message timestamp is the correct source. Returns
+// null for a message this plugin didn't write (web edit, adoption, foreign
+// tool) so the caller can fall back to the git date. Lives here so the
+// parser and formatLocalTimestamp stay format-locked in one file.
+export function parseLocalTimestamp(message: string): number | null {
+  const m =
+    /\bat (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2})/.exec(
+      message,
+    );
+  if (!m) return null;
+  const ms = Date.parse(`${m[1]}T${m[2]}`);
+  return Number.isNaN(ms) ? null : ms;
+}

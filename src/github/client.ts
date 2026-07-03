@@ -400,6 +400,83 @@ export default class GithubClient {
   }
 
   /**
+   * List commits that touched `path` on `branch`, newest-first — the
+   * data source for the Phase 7 History timeline (HISTORY-DELETED §4.7
+   * 7a.0). Returns `{sha, date, message}` per commit, where `sha` is the
+   * COMMIT-sha (the open-handle the History view uses to fetch that
+   * version's bytes via `getContentsAtRef`).
+   *
+   * `since` (ISO-8601) scopes to a period (period-filter, 7b.1);
+   * `page`/`perPage` page the result (infinite-scroll, §4.3). This is a
+   * SINGLE page per call — the caller loops pages, this does not.
+   *
+   * Unlike `getLatestCommitDateForPath` (a best-effort tie-break that
+   * swallows failures to null), this feeds a UI list, so it distinguishes
+   * empty-history (`[]` on a 200) from fetch-failure: it THROWS via
+   * `makeGithubAPIError` on a non-2xx, matching `getContentsAtRef` /
+   * `createTree`, so the view can render an error state.
+   *
+   * GET /repos/{o}/{r}/commits?path={path}&sha={branch}[&since=][&per_page=][&page=]
+   */
+  async listCommitsForPath({
+    path,
+    branch,
+    since,
+    perPage,
+    page,
+    retry = false,
+    maxRetries = 5,
+  }: {
+    path: string;
+    branch: string;
+    since?: string;
+    perPage?: number;
+    page?: number;
+    retry?: boolean;
+    maxRetries?: number;
+  }): Promise<Array<{ sha: string; date: string; message: string }>> {
+    let query =
+      `path=${encodeURIComponent(path)}&sha=${encodeURIComponent(branch)}`;
+    if (since !== undefined) query += `&since=${encodeURIComponent(since)}`;
+    if (perPage !== undefined) query += `&per_page=${perPage}`;
+    if (page !== undefined) query += `&page=${page}`;
+    const response = await retryUntil(
+      async () => {
+        return this.timed(
+          {
+            url: `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/commits?${query}`,
+            headers: this.headers(),
+            throw: false,
+          },
+          "list-commits-for-path",
+        );
+      },
+      (res) => !isRetriableStatus(res.status),
+      retry ? maxRetries : 0,
+    );
+    if (response.status < 200 || response.status >= 400) {
+      this.logger.error("Failed to list commits for path", response);
+      throw makeGithubAPIError(
+        response.status,
+        `Failed to list commits for ${path}@${branch}, status ${response.status}`,
+      );
+    }
+    const arr = (response.json ?? []) as Array<{
+      sha?: string;
+      commit?: {
+        message?: string;
+        committer?: { date?: string };
+        author?: { date?: string };
+      };
+    }>;
+    return arr.map((c) => ({
+      sha: c.sha ?? "",
+      date: c.commit?.committer?.date ?? c.commit?.author?.date ?? "",
+      message: c.commit?.message ?? "",
+    }));
+  }
+
+  /**
    * The committer date (ms since epoch) of the LATEST commit that
    * touched `path` at/under `ref`. Used by the plugin-js mtime
    * tie-break (SYNC2 §7) as the "theirs" timestamp — i.e. when the
