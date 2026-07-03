@@ -14,7 +14,10 @@ import {
   normalizePath,
   setTooltip,
 } from "obsidian";
-import { isLayoutRestoreFresh } from "./diff2/history-deleted-lifecycle";
+import {
+  isLayoutRestoreFresh,
+  historyDeletedOrphans,
+} from "./diff2/history-deleted-lifecycle";
 import { GitHubSyncSettings, DEFAULT_SETTINGS } from "./settings/settings";
 import GitHubSyncSettingsTab from "./settings/tab";
 import Logger from "./logger";
@@ -47,7 +50,7 @@ import { TrashStore } from "./diff2/trash-store";
 import { TrashWatcher } from "./diff2/trash-watcher";
 import { sweepOnload as trashSweepOnload } from "./diff2/trash-recovery";
 import { recoverAutosaveDirs } from "./diff2/onload-recovery";
-import { setAutosaveRoot } from "./diff2/autosave-store";
+import { setAutosaveRoot, AUTOSAVE_ROOT, autosaveDir } from "./diff2/autosave-store";
 import { DiffPanelView, DIFF2_EDIT_VIEW_TYPE, type DiffEditViewDeps } from "./diff2/diff-edit-view";
 import { DiffEditorView, DIFF2_EDITOR_VIEW_TYPE } from "./diff2/diff-editor-view";
 import {
@@ -367,6 +370,8 @@ export default class GitHubSyncPlugin extends Plugin {
             this.app.workspace.on("layout-change", () => this.scheduleLayoutCapture()),
           );
           this.scheduleLayoutCapture(); // seed the initial snapshot
+          // §4.5.3 (B1) — after the restore settled, wipe orphaned history/deleted dirs.
+          void this.sweepHistoryDeletedOrphans();
         });
 
         if (this.settings.showStatusBarItem) this.showStatusBarItem();
@@ -2187,6 +2192,35 @@ export default class GitHubSyncPlugin extends Plugin {
       this.logger?.info("diff2 layout restored (fast reload)");
     } catch (err) {
       this.logger?.warn("restoreDiff2Layout failed", { err: `${err}` });
+    }
+  }
+
+  // §4.5.3 (B1) — the accumulation GUARANTEE. At layout-ready (AFTER the layout restore +
+  // Obsidian's native restore, so every live editor has claimed its dir), wipe every
+  // history-/deleted- autosave dir with NO open editor tab. Conflict dirs (tracked-/
+  // synthetic-) are never touched (prefix — handled by the §4.2 sweep instead). This is
+  // what makes ephemeral History/Deleted sessions unable to pile up on disk.
+  private async sweepHistoryDeletedOrphans(): Promise<void> {
+    try {
+      const a = this.app.vault.adapter;
+      if (!(await a.exists(AUTOSAVE_ROOT))) return;
+      const { folders } = await a.list(AUTOSAVE_ROOT);
+      const dirIds = folders.map((f) => f.slice(f.lastIndexOf("/") + 1));
+      const liveIds = new Set<string>();
+      for (const l of this.app.workspace.getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE)) {
+        const id =
+          l.view instanceof DiffEditorView ? l.view.openDesc()?.autosaveId : undefined;
+        if (id) liveIds.add(id);
+      }
+      const orphans = historyDeletedOrphans(dirIds, liveIds);
+      for (const id of orphans) {
+        await a.rmdir(autosaveDir(id), true).catch(() => {});
+      }
+      if (orphans.length > 0) {
+        this.logger?.info("diff2 history/deleted orphan sweep", { wiped: orphans.length });
+      }
+    } catch (err) {
+      this.logger?.warn("sweepHistoryDeletedOrphans failed", { err: `${err}` });
     }
   }
 

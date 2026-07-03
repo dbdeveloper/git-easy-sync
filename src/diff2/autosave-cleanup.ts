@@ -34,6 +34,7 @@ import {
   readMeta,
 } from "./autosave-store";
 import { assessHistoryV2 } from "./history-replay-v2";
+import { isEphemeralAutosaveId } from "./history-deleted-lifecycle";
 
 export type SweepDecision =
   | { action: "keep" }
@@ -121,6 +122,12 @@ export async function sweepAll(vault: Vault): Promise<SweepResult[]> {
   const out: SweepResult[] = [];
   for (const folder of folders) {
     const conflictId = folder.slice(folder.lastIndexOf("/") + 1);
+    // §4.5.3 (B1) — the EPHEMERAL History/Deleted sessions are NOT the conflict sweep's
+    // business. This early-onload sweep is conflict-oriented (§4.2) and would wrongly
+    // condemn a history dir (base===sibling paths trip cond-7 "self-resolved") BEFORE
+    // the layout-restore runs. They are cleaned by the layoutReady orphan-sweep instead
+    // (main.ts sweepHistoryDeletedOrphans, keyed on "no live editor tab").
+    if (isEphemeralAutosaveId(conflictId)) continue;
     const decision = await classifySweep(vault, conflictId);
     if (decision.action === "sweep") {
       await a.rmdir(autosaveDir(conflictId), true);

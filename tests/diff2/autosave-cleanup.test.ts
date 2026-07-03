@@ -179,6 +179,24 @@ describe("sweepAll — list, rmdir condemned, defer commits, keep valid", () => 
     expect(await fx.vault.adapter.exists(autosaveDir("committing"))).toBe(true);
   });
 
+  it("§4.5.3 (B1): SKIPS ephemeral history-/deleted- dirs even when condemnable", async () => {
+    // A history dir has base===sibling paths → its content is identical → cond-7
+    // "self-resolved" would normally CONDEMN it. The conflict sweep must NOT touch it
+    // (the layoutReady orphan-sweep owns ephemeral dirs). Seed it self-resolved.
+    const { bp, sp } = await seed(fx.vault, "history-eph");
+    await fx.vault.adapter.writeBinary(bp, enc("SAME\n"));
+    await fx.vault.adapter.writeBinary(sp, enc("SAME\n"));
+    await seed(fx.vault, "deleted-eph");
+
+    const results = await sweepAll(fx.vault);
+    const ids = results.map((r) => r.conflictId);
+    expect(ids).not.toContain("history-eph"); // not even classified
+    expect(ids).not.toContain("deleted-eph");
+    // Both dirs survive the conflict sweep.
+    expect(await fx.vault.adapter.exists(autosaveDir("history-eph"))).toBe(true);
+    expect(await fx.vault.adapter.exists(autosaveDir("deleted-eph"))).toBe(true);
+  });
+
   it("idempotent: a second sweep keeps the survivors (§4.3)", async () => {
     await seed(fx.vault, "keep-me");
     await seed(fx.vault, "doomed");
