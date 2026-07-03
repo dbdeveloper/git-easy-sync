@@ -1830,45 +1830,25 @@ export default class GitHubSyncPlugin extends Plugin {
       willReload.push(id);
     }
     if (willReload.length === 0) return;
-
-    // §4.5.3 — a reload (disable+enable) destroys the reloaded plugin's OPEN VIEWS. We
-    // preserve them across the workspace: snapshot the layout while every window is still
-    // present, reload the OTHER plugins, then changeLayout to bring their windows back in
-    // place. Our OWN reload (self) tears this instance down, so it can't restore inline —
-    // it is handled by the onunload→onload marker (which snapshots the ALREADY-restored
-    // layout, so it also carries the others' windows). Ordering matters: others →
-    // restore → self, so self captures the intact layout.
-    const others = willReload.filter((id) => id !== manifest.id);
-    const includesSelf = willReload.includes(manifest.id);
-    const layout = others.length > 0 ? this.app.workspace.getLayout() : null;
-    void (async () => {
-      // 500ms unwind so the drain stack frame that called us returns first.
-      await new Promise((r) => setTimeout(r, 500));
-      if (others.length > 0) {
-        await Promise.all(
-          others.map((id) =>
-            reloadPluginById(this.app, id).catch((err) =>
-              this.logger?.error("reloadPlugin failed", { id, err: describeError(err) }),
-            ),
-          ),
-        );
-        try {
-          await (this.app.workspace as unknown as {
-            changeLayout: (l: unknown) => Promise<void>;
-          }).changeLayout(layout);
-          this.logger?.info("BRAT-style reload + layout restore done", { ids: others });
-        } catch (err) {
-          this.logger?.warn("layout restore after plugin reload failed", { err: `${err}` });
-        }
-      }
-      // Self LAST — the layout is now intact, so self's onunload marker captures it.
-      // Don't await: reloadPluginById(self) unloads THIS instance.
-      if (includesSelf) {
-        void reloadPluginById(this.app, manifest.id).catch((err) =>
-          this.logger?.error("self-reload failed", { id: manifest.id, err: describeError(err) }),
-        );
-      }
-    })();
+    // Reload each affected plugin (disable+enable — the BRAT mechanism). Scheduled on a
+    // 500ms timeout so the drain stack frame unwinds before a self-reload tears this
+    // instance down. Our OWN windows are restored by the SEPARATE onunload→onload marker
+    // (saveDiff2Layout/restoreDiff2Layout, §4.5.3) — untouched by this. A reloaded plugin's
+    // OWN windows close (same as when BRAT itself updates it — expected).
+    for (const id of willReload) {
+      setTimeout(() => {
+        reloadPluginById(this.app, id)
+          .then(() => {
+            this.logger?.info("BRAT-style reload done", { id });
+          })
+          .catch((err) => {
+            this.logger?.error("reloadPlugin failed", {
+              id,
+              err: describeError(err),
+            });
+          });
+      }, 500);
+    }
     const label =
       willReload.length === 1
         ? `Plugin "${willReload[0]}" updated`
