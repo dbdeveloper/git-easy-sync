@@ -1399,6 +1399,82 @@ Tests: `push-inflight.test.ts` (marker fault-tolerance / plugin-folder location)
 conflict", and "finalize-merge crash SELF-RECOVERS via re-finalize" (proves the
 merge site: no conflict, cb cleared, snapshot advanced, second drain a no-op).
 
+### 7.10 "own data came back as a conflict" — the eventually-consistent head READ (2026-07-04)
+
+**Symptom.** A one-device vault pushing SEVERAL commits in one sync (a multi-batch
+drain) hit `PATCH /git/refs → 422 "Update is not a fast forward"`, and the engine
+reconciled its OWN just-pushed commits as if the remote had diverged. Never
+reproduced with one commit at a time; only under a rapid multi-batch drain.
+
+**The one fact everything rests on.** GitHub's ref **WRITE** (`PATCH`) is a strongly
+consistent, atomic compare-and-swap — it succeeds only as a fast-forward, so it
+serialises all writers (one wins, the rest 422 and reconcile; this is git's whole
+concurrency model). But the ref **READ** (`GET .../git/refs/heads/<branch>`) is
+**eventually consistent**: right after our own push advances the head H→C1, a read
+can be served by a lagging replica that still returns H (or, after a second push,
+C1 while the truth is C2). The engine re-read the head before EACH batch
+(`pullIfNeeded`), and `reconcileBatchAgainstHead` **re-targets the batch's parent to
+`currentHead` UNCONDITIONALLY** (no ahead/behind check) — so a lagged read of a head
+we already SUPERSEDED made batch N build on a stale parent → the real `PATCH`
+(against the true, ahead head) is non-fast-forward → 422 / phantom self-conflict.
+Confirmed by reading the re-target site, then reproduced RED-then-GREEN.
+
+Two earlier changes made this visible NOW: §7.9's fail-fast on ref-update 422
+(`isRefUpdateRetriableStatus`, `b7614cb`) turned a 33 s retry-hang into a visible
+error, and a head-GET cache-buster (`?ts=`, added the same day for a *cached* stale
+head) unmasked the underlying *replica* lag the cache had been accidentally
+smoothing over. The `push-inflight` marker (§7.9) is NOT implicated — its recovery
+verifies `realHead === marker.newHead` and drops the marker otherwise, so a
+422-failed push leaves no poison.
+
+**Fix — three cooperating mechanisms (`sync2-manager.ts`).**
+
+1. **Chaining (the primary fix, single-device).** The drain no longer re-reads the
+   head between OUR OWN batches. After a batch's `updateBranchHead` returns 200 we
+   KNOW the head (it is our commit); the next batch's `headHint` is threaded from
+   `store.getLastSyncCommitSha()` (`chainedHead`), never a fresh read. `pullIfNeeded`
+   runs only for the FIRST batch (or after a 422). This removes the *false* 422s at
+   the root — a read that can lie is simply not consulted. (Deferring mid-drain
+   remote pulls to the next drain is consistent with the existing "no drain-end
+   sweep" latency trade-off.)
+
+2. **`REF_STALE_MAX_RETRIES` reconcile-retry (multi-device fallback).** A *genuine*
+   422 (a concurrent device really moved the head) is now a TRUSTWORTHY signal
+   (chaining removed the phantoms). On it the drain drops the chained head, forces a
+   fresh reconcile via `processBatch(null)`, and retries in-place (bounded, short
+   backoff) — self-healing within the same sync instead of failing and waiting for
+   the next scheduled drain. 100 writers serialise through this: one wins, the rest
+   reconcile-and-retry.
+
+3. **Monotonic-head guard (`getGuardedHead` + `recordConfirmedHead`).** The reads we
+   CANNOT skip — `pullIfNeeded`, the 422-retry's fresh read, `recoverPushInflight` —
+   are themselves lag-vulnerable. Every `updateBranchHead` 200 records `(sha, at)` in
+   an in-memory, window-pruned `recentConfirmedHeads`. `getGuardedHead` NEVER accepts
+   a read that matches a head we confirmed earlier this session but have already
+   superseded (a definite replica lag): it backs off exponentially (0.5→1→2→4 s,
+   default window 10 s — the whole thing bounded by ONE constant = "how long a
+   replica may lag" = "how long we remember a bookmark") and re-reads until the
+   replica catches up (read is our latest) or the read is a head we never confirmed
+   (a genuine remote move → let reconcile handle it). Past the window a still-behind
+   read is accepted as reality. Guard and retry back each other up: if the window is
+   mis-estimated too short, the resulting 422 triggers the reconcile-retry, whose
+   next read the guard again keeps honest — so an imperfect constant is self-correcting.
+
+**Non-promise (write it down).** The monotonic guard treats a read behind our
+confirmed-latest as replica lag. A **force-push / branch reset to an ancestor of our
+latest** is byte-identical to that (same SHA) and would be fought for the window,
+then accepted. That is acceptable: branching/rebasing/force-push are out of scope
+(CLAUDE.md) — **we assume the branch is append-only.** A reset to a *novel* commit
+(a SHA we never confirmed) is correctly seen as a genuine remote move, not lag.
+
+**Tests (`sync2-manager.test.ts`, all RED-then-GREEN verified via a `headReadOverride`
+replica-lag hook + a `patchFailuresRemaining` 422 hook).** "multi-batch drain: batch
+2 builds on batch 1's CONFIRMED head" (chaining: RED asserted parent =
+`BRANCH_HEAD_INIT`), "monotonic-head guard: a replica-lagged read of a SUPERSEDED
+confirmed head is re-read" (RED: only 1 read, phantom `compare` fires), "push 422
+(concurrent multi-device move) → drain reconciles + retries in-place" (RED: the sync
+throws).
+
 ---
 
 ## 8. Worker Orchestra

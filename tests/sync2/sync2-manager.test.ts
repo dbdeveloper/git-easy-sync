@@ -47,6 +47,8 @@ function makeFakeClient(): Sync2Client & {
     commitMessageByCommit: Map<string, string>;
   };
   setBranchHead(sha: string): void;
+  setHeadReadOverride(fn: ((real: string) => string) | null): void;
+  setPatchFailuresRemaining(n: number): void;
   setContentAtRef(ref: string, path: string, content: string): void;
   setTreeShaForCommit(commitSha: string, treeSha: string): void;
   setCommitDate(commitSha: string, isoDate: string): void;
@@ -106,6 +108,10 @@ function makeFakeClient(): Sync2Client & {
         }>;
       }
     >(),
+    // Replica-lag hook: maps the real branchHead → what a (possibly stale) read returns.
+    headReadOverride: null as ((real: string) => string) | null,
+    // Concurrent-push hook: makes the next N PATCHes fail with a not-fast-forward 422.
+    patchFailuresRemaining: 0,
   };
   const calls: { op: string; args: unknown }[] = [];
 
@@ -114,6 +120,12 @@ function makeFakeClient(): Sync2Client & {
     calls,
     setBranchHead(sha) {
       state.branchHead = sha;
+    },
+    setHeadReadOverride(fn) {
+      state.headReadOverride = fn;
+    },
+    setPatchFailuresRemaining(n) {
+      state.patchFailuresRemaining = n;
     },
     setContentAtRef(ref, path, content) {
       let inner = state.contentsByRef.get(ref);
@@ -141,7 +153,12 @@ function makeFakeClient(): Sync2Client & {
 
     async getBranchHeadSha() {
       calls.push({ op: "getBranchHeadSha", args: undefined });
-      return state.branchHead;
+      // Replica-lag simulation: an override may return a STALE (behind) head
+      // for the real branchHead — exactly what an eventually-consistent GitHub
+      // ref read can do right after a push moved the head.
+      return state.headReadOverride
+        ? state.headReadOverride(state.branchHead)
+        : state.branchHead;
     },
     async createBlob(args) {
       calls.push({ op: "createBlob", args });
@@ -169,6 +186,14 @@ function makeFakeClient(): Sync2Client & {
     },
     async updateBranchHead(args) {
       calls.push({ op: "updateBranchHead", args });
+      if (state.patchFailuresRemaining > 0) {
+        state.patchFailuresRemaining -= 1;
+        const err = new Error("Update is not a fast forward") as Error & {
+          status: number;
+        };
+        err.status = 422;
+        throw err;
+      }
       state.branchHead = args.sha;
     },
     async createReference(args) {
@@ -325,6 +350,11 @@ function silentLogger(): Sync2Logger {
 function fixture(opts?: {
   conflictStore?: import("../../src/sync2/conflict-store").default;
   consolidateCommits?: boolean;
+  staleHeadGuardConfig?: {
+    windowMs: number;
+    baseDelayMs: number;
+    maxDelayMs: number;
+  };
   onProgress?: (msg: string) => {
     update: (m: string) => void;
     hide: () => void;
@@ -423,6 +453,7 @@ function fixture(opts?: {
     gitAuthor: opts?.gitAuthor,
     conflictStore: defaultConflictStore,
     consolidateCommits: opts?.consolidateCommits ?? false,
+    staleHeadGuardConfig: opts?.staleHeadGuardConfig,
     onProgress: opts?.onProgress,
     onLocalCommitted: opts?.onLocalCommitted,
     onNoLocalChanges: opts?.onNoLocalChanges,
@@ -780,6 +811,148 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
     // After both, queue is empty.
     expect(await f.queue.list()).toEqual([]);
+  });
+
+  it("multi-batch drain: batch 2 builds on batch 1's CONFIRMED head, NOT a replica-lagged re-read (chaining)", async () => {
+    // ROOT CAUSE (field bug 2026-07-04, single device): in a multi-batch drain the engine
+    // re-reads the branch head before each batch. Right after batch 1's push, GitHub's
+    // eventually-consistent ref read can return a STALE (behind) head. reconcileBatchAgainstHead
+    // then re-targets batch 2's parent to that stale head (UNCONDITIONAL re-target,
+    // sync2-manager.ts:parentCommitSha=currentHead) → the real PATCH is non-fast-forward → 422
+    // ("own data came back as a conflict"). The fix CHAINS: batch 2 builds on the head WE just
+    // confirmed via batch 1's 200, never a re-read.
+    //
+    // This test forces the replica lag deterministically: once the head is COMMIT_SHA_1 (after
+    // batch 1), every head READ returns the pre-batch-1 BRANCH_HEAD_INIT (stale). Without
+    // chaining, batch 2's commit parent is the stale INIT (RED). With chaining it is COMMIT_SHA_1.
+    writeVaultFile(f.root, "a.md", "1");
+    writeVaultFile(f.root, "b.md", "2");
+    f.store.setLastSync("BRANCH_HEAD_INIT", "TREE_0");
+    const id1 = await f.queue.enqueue(
+      [{ kind: "added", path: "a.md", size: 1, mtime: 0 }],
+      { parentCommitSha: "BRANCH_HEAD_INIT", parentTreeSha: "TREE_0" },
+    );
+    const id2 = await f.queue.enqueue(
+      [{ kind: "added", path: "b.md", size: 1, mtime: 0 }],
+      { parentCommitSha: "BRANCH_HEAD_INIT", parentTreeSha: "TREE_0" },
+    );
+    expect(id2 > id1).toBe(true);
+    // Snapshot both so findChanges yields no extra batch.
+    f.store.set("a.md", {
+      path: "a.md",
+      remoteSha: await shaOf("1"),
+      mtime: fs.statSync(path.join(f.root, "a.md")).mtimeMs,
+      size: 1,
+    });
+    f.store.set("b.md", {
+      path: "b.md",
+      remoteSha: await shaOf("2"),
+      mtime: fs.statSync(path.join(f.root, "b.md")).mtimeMs,
+      size: 1,
+    });
+    await f.store.save();
+
+    // The lag: after batch 1 advances the head to COMMIT_SHA_1, reads still show the OLD head.
+    f.client.setHeadReadOverride((real) =>
+      real === "COMMIT_SHA_1" ? "BRANCH_HEAD_INIT" : real,
+    );
+
+    await f.manager.resumeQueue();
+
+    const commits = f.client.calls.filter((c) => c.op === "createCommit");
+    expect(commits).toHaveLength(2);
+    expect((commits[0].args as { parent?: string }).parent).toBe("BRANCH_HEAD_INIT");
+    // THE CRUX: chaining threads batch 1's confirmed head → batch 2's parent is COMMIT_SHA_1,
+    // not the replica-lagged BRANCH_HEAD_INIT that would 422 on real GitHub.
+    expect((commits[1].args as { parent?: string }).parent).toBe("COMMIT_SHA_1");
+  });
+
+  it("monotonic-head guard: a replica-lagged read of a SUPERSEDED confirmed head is re-read, not reconciled against", async () => {
+    // SYNC2 §7.10. The 422-retry / pullIfNeeded / recovery reads are themselves lag-vulnerable:
+    // right after our own push, an eventually-consistent read can return a head we already
+    // SUPERSEDED. Building on it reconciles our own commit as a phantom remote conflict. The
+    // guard recognises a read that matches a head we confirmed earlier this session (recorded on
+    // every 200 PATCH) and re-reads (bounded backoff) until the replica catches up.
+    const g = fixture({
+      staleHeadGuardConfig: { windowMs: 100_000, baseDelayMs: 1, maxDelayMs: 2 },
+    });
+    // Drain 2 batches → the engine CONFIRMS COMMIT_SHA_1 then COMMIT_SHA_2.
+    writeVaultFile(g.root, "a.md", "1");
+    writeVaultFile(g.root, "b.md", "2");
+    g.store.setLastSync("BRANCH_HEAD_INIT", "TREE_0");
+    await g.queue.enqueue([{ kind: "added", path: "a.md", size: 1, mtime: 0 }], {
+      parentCommitSha: "BRANCH_HEAD_INIT",
+      parentTreeSha: "TREE_0",
+    });
+    await g.queue.enqueue([{ kind: "added", path: "b.md", size: 1, mtime: 0 }], {
+      parentCommitSha: "BRANCH_HEAD_INIT",
+      parentTreeSha: "TREE_0",
+    });
+    g.store.set("a.md", {
+      path: "a.md",
+      remoteSha: await shaOf("1"),
+      mtime: fs.statSync(path.join(g.root, "a.md")).mtimeMs,
+      size: 1,
+    });
+    g.store.set("b.md", {
+      path: "b.md",
+      remoteSha: await shaOf("2"),
+      mtime: fs.statSync(path.join(g.root, "b.md")).mtimeMs,
+      size: 1,
+    });
+    await g.store.save();
+    await g.manager.resumeQueue();
+    expect(g.client.calls.filter((c) => c.op === "createCommit")).toHaveLength(2);
+    // Head is now COMMIT_SHA_2; recentConfirmedHeads = [COMMIT_SHA_1, COMMIT_SHA_2].
+
+    const comparesBefore = g.client.calls.filter((c) => c.op === "compare").length;
+    // Simulate a lagging replica: the NEXT head read returns our SUPERSEDED COMMIT_SHA_1,
+    // then catches up to the real head (COMMIT_SHA_2).
+    let guardReads = 0;
+    g.client.setHeadReadOverride((real) => {
+      guardReads += 1;
+      return guardReads === 1 ? "COMMIT_SHA_1" : real;
+    });
+    await g.manager.syncAll();
+
+    // The guard RE-READ past the superseded head (≥2 reads)...
+    expect(guardReads).toBeGreaterThanOrEqual(2);
+    // ...and pullIfNeeded therefore saw the TRUE head (== snapshot) → NO phantom reconcile
+    // (a compare against the stale COMMIT_SHA_1 is exactly the "own data as conflict" path).
+    const comparesNow =
+      g.client.calls.filter((c) => c.op === "compare").length - comparesBefore;
+    expect(comparesNow).toBe(0);
+  });
+
+  it("push 422 (concurrent multi-device move) → drain reconciles against fresh head + retries in-place (self-heal)", async () => {
+    // SYNC2 §7.10 fallback. A GENUINE not-fast-forward (another device advanced the head) is a
+    // trustworthy signal, not a phantom. The drain must re-read a fresh head, reconcile, and
+    // re-push WITHIN the same drain instead of failing and waiting for the next scheduled sync.
+    const g = fixture({
+      staleHeadGuardConfig: { windowMs: 100_000, baseDelayMs: 1, maxDelayMs: 2 },
+    });
+    writeVaultFile(g.root, "a.md", "1");
+    g.store.setLastSync("BRANCH_HEAD_INIT", "TREE_0");
+    await g.queue.enqueue([{ kind: "added", path: "a.md", size: 1, mtime: 0 }], {
+      parentCommitSha: "BRANCH_HEAD_INIT",
+      parentTreeSha: "TREE_0",
+    });
+    g.store.set("a.md", {
+      path: "a.md",
+      remoteSha: await shaOf("1"),
+      mtime: fs.statSync(path.join(g.root, "a.md")).mtimeMs,
+      size: 1,
+    });
+    await g.store.save();
+
+    // The first PATCH is rejected 422 (someone else moved the head); the retry succeeds.
+    g.client.setPatchFailuresRemaining(1);
+    await expect(g.manager.resumeQueue()).resolves.not.toThrow();
+
+    // Two PATCH attempts (initial + one retry), and the batch actually drained.
+    const patches = g.client.calls.filter((c) => c.op === "updateBranchHead");
+    expect(patches.length).toBeGreaterThanOrEqual(2);
+    expect(await g.queue.list()).toEqual([]);
   });
 
   it("syncFile: nothing to sync when file matches snapshot", async () => {

@@ -245,6 +245,30 @@ export interface Sync2Client {
 export const PROGRESS_BYTES_THRESHOLD = 500 * 1024;
 const PROGRESS_COUNT_THRESHOLD = 5;
 
+// Drain fallback: how many times to re-fetch a fresh head + reconcile + re-push a batch that
+// hit a not-fast-forward 422 (rare — a concurrent multi-device push, or a GitHub ref-read
+// replica lag that survived the per-batch head chaining). Bounded so a persistently-diverged
+// ref can't spin forever; the next drain still reconciles.
+const REF_STALE_MAX_RETRIES = 3;
+
+// Monotonic-head guard (SYNC2 §7.10). GitHub's ref READ is eventually-consistent: right after
+// our own push advances the head, a read can be served by a lagging replica that still shows a
+// PRIOR (behind) head we already superseded. Building on that stale head reconciles our own
+// commits as a phantom "remote conflict" → 422. The guard NEVER accepts a read that matches a
+// head we confirmed earlier this session (but is not our latest): it backs off exponentially
+// and re-reads until the replica catches up, bounded by the window. Past the window a still-
+// behind read is accepted as reality (a real branch reset — out of scope; we ASSUME the branch
+// is append-only, so this only degrades gracefully on an unsupported operation).
+const MONOTONIC_HEAD_WINDOW_MS = 10_000;
+const MONOTONIC_HEAD_BASE_DELAY_MS = 500;
+const MONOTONIC_HEAD_MAX_DELAY_MS = 4_000;
+
+interface StaleHeadGuardConfig {
+  windowMs: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+}
+
 // Progress UI hook. Sync2Manager keeps one handle per drain run and
 // calls update() as it advances commits or files. Whether that maps
 // to an Obsidian Notice, a status-bar item, or a noop is the caller's
@@ -437,6 +461,9 @@ export interface Sync2ManagerDeps {
   renameFile?: (oldPath: string, newPath: string) => Promise<void>;
   // Override the clock for deterministic tests.
   now?: () => number;
+  // Test override for the monotonic-head guard timing (SYNC2 §7.10). Production uses the
+  // module defaults; tests pass tiny values so backoff re-reads run fast.
+  staleHeadGuardConfig?: StaleHeadGuardConfig;
   // Optional Worker orchestra controller. When provided, hot-path
   // CPU operations (SHA computation, base64 decode, 3-way merge)
   // dispatch through the worker pool — threshold-gated, large
@@ -540,6 +567,11 @@ export class Sync2Manager {
     | ((oldPath: string, newPath: string) => Promise<void>)
     | undefined;
   private readonly now: () => number;
+  private readonly staleHeadGuard: StaleHeadGuardConfig;
+  // Heads we have CONFIRMED (PATCH → 200) this session, oldest-first, with the time confirmed.
+  // The monotonic-head guard uses this to recognise a replica-lagged read of a head we already
+  // superseded. In-memory + window-pruned — replica lag is a live-session concern only.
+  private recentConfirmedHeads: { sha: string; at: number }[] = [];
   // Guard against re-entrant drain. The runner only loops one
   // batch at a time; if a second syncAll() lands while the first is
   // still pushing, we let it enqueue but skip the second drain
@@ -608,6 +640,11 @@ export class Sync2Manager {
       deps.maxAutoMergeSizeBytes ?? (() => 1_000_000);
     this.renameFile = deps.renameFile;
     this.now = deps.now ?? (() => Date.now());
+    this.staleHeadGuard = deps.staleHeadGuardConfig ?? {
+      windowMs: MONOTONIC_HEAD_WINDOW_MS,
+      baseDelayMs: MONOTONIC_HEAD_BASE_DELAY_MS,
+      maxDelayMs: MONOTONIC_HEAD_MAX_DELAY_MS,
+    };
   }
 
   // Fire onQueueDepthChanged with the CURRENT push-queue depth. Used
@@ -1005,7 +1042,7 @@ export class Sync2Manager {
     if (!marker) return;
     let realHead: string;
     try {
-      realHead = await this.client.getBranchHeadSha({ retry: true });
+      realHead = await this.getGuardedHead();
     } catch {
       // Offline / transient — LEAVE the marker so a later drain retries the heal. Clearing
       // it here would forfeit the correction and re-expose the false conflict.
@@ -1036,6 +1073,54 @@ export class Sync2Manager {
     await clearPushInflight(this.vault, this.selfPluginId);
   }
 
+  // Record a head we just CONFIRMED via a 200 PATCH (or seed). Prunes anything older than the
+  // guard window so the set stays tiny. SYNC2 §7.10.
+  private recordConfirmedHead(sha: string): void {
+    const nowMs = this.now();
+    this.recentConfirmedHeads.push({ sha, at: nowMs });
+    const cutoff = nowMs - this.staleHeadGuard.windowMs;
+    this.recentConfirmedHeads = this.recentConfirmedHeads.filter(
+      (h) => h.at >= cutoff,
+    );
+  }
+
+  // Monotonic-head guard (SYNC2 §7.10). Read the branch head, but NEVER trust a read that
+  // matches a head we confirmed earlier this session and have already superseded — that is a
+  // replica-lagged read of our own past push. Back off exponentially and re-read until the
+  // replica catches up (read is our latest, or a head we never confirmed → a genuine remote
+  // move for the normal reconcile to handle). Past the window, accept a still-behind read as
+  // reality (append-only assumption; a real reset is out of scope). This is what keeps the
+  // 422-retry's fresh read (and pullIfNeeded / recoverPushInflight) honest under lag.
+  private async getGuardedHead(): Promise<string> {
+    let delay = this.staleHeadGuard.baseDelayMs;
+    let waited = 0;
+    for (;;) {
+      const read = await this.client.getBranchHeadSha({ retry: true });
+      const cutoff = this.now() - this.staleHeadGuard.windowMs;
+      this.recentConfirmedHeads = this.recentConfirmedHeads.filter(
+        (h) => h.at >= cutoff,
+      );
+      const idx = this.recentConfirmedHeads.findIndex((h) => h.sha === read);
+      const superseded =
+        idx >= 0 && idx < this.recentConfirmedHeads.length - 1;
+      if (!superseded) return read;
+      if (waited >= this.staleHeadGuard.windowMs) {
+        this.logger.warn(
+          "Sync2 monotonic-head: read stuck behind a confirmed head past the window — accepting as real (append-only assumption)",
+          { read },
+        );
+        return read;
+      }
+      this.logger.info(
+        "Sync2 monotonic-head: read is a SUPERSEDED confirmed head (replica lag) — backoff + re-read",
+        { read, delayMs: delay },
+      );
+      await new Promise<void>((r) => setTimeout(r, delay));
+      waited += delay;
+      delay = Math.min(delay * 2, this.staleHeadGuard.maxDelayMs);
+    }
+  }
+
   private async pullIfNeeded(
     sharedProgress: ProgressHandle | null = null,
   ): Promise<string | null> {
@@ -1044,7 +1129,7 @@ export class Sync2Manager {
 
     let currentHead: string | null;
     try {
-      currentHead = await this.client.getBranchHeadSha({ retry: true });
+      currentHead = await this.getGuardedHead();
     } catch (err) {
       const status = (err as { status?: number }).status;
       if (status === 404 || status === 409) return null; // bare repo somehow
@@ -2593,6 +2678,7 @@ export class Sync2Manager {
     // via re-finalize on the next drain (cosmetic cost: a redundant merge commit). Marking
     // it would add machinery to an already-solved problem and risk breaking that re-finalize.
     await this.client.updateBranchHead({ sha: mergeCommit, retry: true });
+    this.recordConfirmedHead(mergeCommit); // SYNC2 §7.10 monotonic-head guard
     await this.client.deleteReference({
       ref: `heads/${cb.name}`,
       retry: true,
@@ -2876,8 +2962,17 @@ export class Sync2Manager {
       // intentional — it makes "we caught a late arrival"
       // greppable from the field.
       while (true) {
+        // SYNC2 §2.8 — CHAIN successive batches on our OWN known head instead of re-reading
+        // it before each. Right after a push, GitHub's ref read is eventually-consistent and
+        // can return a STALE (behind) head; in a multi-batch drain that made processBatch
+        // reconcile our own just-pushed commits as if the remote diverged → 422 "not a fast
+        // forward" / "own data came back as a conflict" (single device, no other machine).
+        // processBatch records the new head in the snapshot; we thread that DETERMINISTIC
+        // value into the next batch's headHint. pullIfNeeded (which reads the head) runs only
+        // for the FIRST batch — or after a 422 forces a fresh reconcile (see the retry below).
+        let chainedHead: string | null = null;
         while (true) {
-          const headHint = await this.pullIfNeeded(progress);
+          const headHint = chainedHead ?? (await this.pullIfNeeded(progress));
           const ids = await this.queue.list();
           if (ids.length === 0) break;
           commitNum += 1;
@@ -2900,13 +2995,38 @@ export class Sync2Manager {
               progress = this.onProgress(msg);
             }
           };
-          await this.processBatch(
-            ids[0],
-            headHint,
-            ensurePushProgress,
-            commitNum,
-            commitNum + ids.length - 1,
-          );
+          // Fallback for a genuine head move (concurrent multi-device push, or the chained
+          // head somehow diverged): a not-fast-forward 422 → drop the chained head, force a
+          // FRESH head read + reconcile, and re-push. Bounded; a short backoff lets GitHub's
+          // ref replica catch up before the fresh read. With chaining above, the FIRST attempt
+          // already builds on our own known head, so this rarely fires.
+          for (let attempt = 0; ; attempt++) {
+            try {
+              await this.processBatch(
+                ids[0],
+                attempt === 0 ? headHint : null, // retry → null forces processBatch's own fresh GET
+                ensurePushProgress,
+                commitNum,
+                commitNum + ids.length - 1,
+              );
+              break;
+            } catch (err) {
+              const status = (err as { status?: number }).status;
+              if (status === 422 && attempt < REF_STALE_MAX_RETRIES) {
+                chainedHead = null; // the chained head is suspect → re-read fresh next time
+                this.logger.info(
+                  "Sync2 push 422 (not-fast-forward / stale ref) — fresh head + retry",
+                  { batchId: ids[0], attempt: attempt + 1 },
+                );
+                await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+                continue;
+              }
+              throw err;
+            }
+          }
+          // CHAIN: the next batch builds on the head WE just recorded (processBatch's
+          // setLastSync) — never a fresh re-read that could be replica-lag stale.
+          chainedHead = this.store.getLastSyncCommitSha();
           pushedAnyBatch = true;
         }
         // 2.0.2-beta2 tail re-check. See outer-loop comment above.
@@ -3209,7 +3329,7 @@ export class Sync2Manager {
         currentHead = headHint;
       } else {
         try {
-          currentHead = await this.client.getBranchHeadSha({ retry: true });
+          currentHead = await this.getGuardedHead();
         } catch (err) {
           const status = (err as { status?: number }).status;
           if (status === 404 || status === 409) currentHead = null;
@@ -3480,6 +3600,7 @@ export class Sync2Manager {
           sha: commitSha,
           retry: true,
         });
+        this.recordConfirmedHead(commitSha); // SYNC2 §7.10 monotonic-head guard
       }
 
       // Update local state. recordSync re-stats the file so its mtime
