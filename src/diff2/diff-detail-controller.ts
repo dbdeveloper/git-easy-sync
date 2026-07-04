@@ -21,7 +21,13 @@ import { type App, Notice } from "obsidian";
 import { closeSearchPanel, openSearchPanel, searchPanelOpen } from "@codemirror/search";
 import type { EditorView } from "@codemirror/view";
 import { DiffPaneOwner, resolvedFromView } from "./diff-pane-owner";
-import { type DiffViewConfig, mountDiffPaneV2 } from "./diff-pane-v2";
+import {
+  type DiffEditorMode,
+  type DiffEditorSearchContext,
+  type DiffViewConfig,
+  mountDiffPaneV2,
+} from "./diff-pane-v2";
+import { formatConflictTimestamp } from "./strip-conflict-suffix";
 import { toLf } from "./eol";
 import { isMarkdownPath } from "./conflict-merge-all";
 import {
@@ -55,7 +61,7 @@ import {
   type ConflictEntry,
 } from "./synthetic-detector";
 import { type DiffToolbarHandle, renderDiffToolbar } from "./diff-toolbar";
-import type { DiffEditViewDeps } from "./diff-edit-view";
+import type { DiffEditViewDeps } from "./diff-panel-view";
 import { calculateGitBlobSHA } from "../utils";
 
 // The navigation seam. Composition, NOT a base class: the controller asks the host
@@ -82,6 +88,9 @@ export class DiffDetailController {
   // decrease → focus first).
   private toolbarHandle: DiffToolbarHandle | null = null;
   private autoFocus = false;
+  // TODO §17 — external search context captured at mount() (history/deleted from a searched
+  // list). Drives the open-focus priority over Auto-focus. null in conflict mode / no search.
+  private openSearch: DiffEditorSearchContext | null = null;
   private prevConflictCount = 0;
   // Active V2 DiffPaneOwner lives only while detail-mode is shown. Replaced on every
   // mount; disposed when leaving detail-mode or on view close. The owner holds the
@@ -192,8 +201,24 @@ export class DiffDetailController {
   // intermittent "auto-focus didn't work on open". rAF runs after CM6's measure cycle.
   // No-op when the flag is off or the owner is gone (disposed / re-rendered).
   private autoFocusFirst(): void {
+    // TODO §17 — an external search phrase (history/deleted opened from a searched list) has
+    // HIGHER priority than Auto-focus: scroll to the first MATCH on open, regardless of the
+    // Auto-focus toggle. Engine (@codemirror/search) + 7b source pending — this is the seam.
+    if (this.openSearch?.query) {
+      this.focusFirstSearchMatch();
+      return;
+    }
     if (!this.autoFocus) return;
     requestAnimationFrame(() => this.owner?.focusFirstConflict());
+  }
+
+  // TODO §17 — search-driven initial focus (higher priority than Auto-focus). No-op until the
+  // Ctrl+F search engine + the 7b list-filter that supplies the phrase are wired; the seam
+  // (openSearch + this call site) is in place so lighting it up needs no controller change.
+  private focusFirstSearchMatch(): void {
+    this.deps.logger?.info?.("diff2 §17 search-driven focus (engine pending)", {
+      query: this.openSearch?.query,
+    });
   }
 
   // bug-56 pre-flight — how many edits would ACTUALLY be recovered, with NO side
@@ -244,17 +269,26 @@ export class DiffDetailController {
       // readOnlyBase; commit routes to commitUnchangedSide. Absent ⇒ conflict path
       // is textually today's code.
       history?: { versionSha: string; fetchBytes: () => Promise<ArrayBuffer> };
+      // TODO §17 — external search context (history/deleted opened from a searched list). Seam
+      // only for now: stored + drives the open-focus priority; engine/source wired later.
+      search?: DiffEditorSearchContext;
     },
   ): Promise<void> {
     const history = opts?.history;
-    // TODO §17 — the Vault side (ver1 / base-file) is labelled the literal "Local", NOT the
-    // local deviceLabel. A user who never renamed their device shows "Obsidian" on every
-    // machine, so the old scheme compared "Obsidian" vs "Obsidian" — useless. The remote
-    // side keeps entry.deviceLabel. History sessions are left as-is (their ver1 is a
-    // historical version; the "Actual" relabel + role-flip is separate, unbuilt History work).
-    const localSideLabel = history ? (this.deps.localDeviceLabel?.() ?? "local") : "Local";
+    this.openSearch = opts?.search ?? null;
+    // TODO §17 — the diff-editor runs in three modes with mode-specific side labels + button
+    // verbs (Deleted reuses History). CONFLICT: ver1 = the literal "Local" (the base-file on
+    // THIS machine — a user who never renamed their device would otherwise see "Obsidian" vs
+    // "Obsidian", useless), ver2 = the remote's deviceLabel. HISTORY/DELETED: the roles flip —
+    // ver1 = the past/deleted VERSION, labelled by its DATE (version date / deletion date) in
+    // the standard "YYYY-MM-DD HH:MM:SS" form — NOT the deviceLabel (which the user reads off
+    // the history/deleted LIST). ver2 = "Actual" (the current file).
+    const mode: DiffEditorMode = history ? "history" : "conflict";
+    const localSideLabel =
+      mode === "conflict" ? "Local" : formatConflictTimestamp(entry.isoTimestamp);
+    const remoteSideLabel = mode === "conflict" ? entry.deviceLabel : "Actual";
     const toolbar = parent.createDiv({ cls: "diff2-detail-toolbar" });
-    this.renderToolbar(toolbar, entry, localSideLabel);
+    this.renderToolbar(toolbar, entry, localSideLabel, remoteSideLabel, mode);
     // §title (Screenshot-17): the file identity lives in the VIEW HEADER
     // (getDisplayText), so the old in-body title row is dropped — saving a row for the
     // editor itself.
@@ -320,10 +354,11 @@ export class DiffDetailController {
       // (top/bottom markers), join date, and isMarkdown (Join-button gate). The owner
       // derives the resolve ResolveOpts {label: remoteLabel, date} from it.
       const config: DiffViewConfig = {
-        localLabel: localSideLabel, // TODO §17 — "Local" (conflict) / deviceLabel (history)
-        remoteLabel: entry.deviceLabel,
+        localLabel: localSideLabel, // TODO §17 — "Local" (conflict) / version label (history)
+        remoteLabel: remoteSideLabel, // TODO §17 — remote deviceLabel (conflict) / "Actual" (history)
         date: entry.isoTimestamp,
         isMarkdown: isMarkdownPath(entry.basePath),
+        mode, // TODO §17 — drives ver-block button verbs + Join gate
         touchOnly: this.deps.touchOnly?.() ?? false, // §2.2.14 read-only mode (Settings)
         wordLevelDiff: this.deps.diffWordLevel?.() ?? false, // word vs char highlight (Settings)
       };
@@ -631,22 +666,29 @@ export class DiffDetailController {
   private renderToolbar(
     toolbar: HTMLElement,
     entry: ConflictEntry,
-    localLabel: string, // TODO §17 — "Local" (conflict) / deviceLabel (history), from mount()
+    localLabel: string, // TODO §17 — "Local" (conflict) / version label (history), from mount()
+    remoteLabel: string, // TODO §17 — remote deviceLabel (conflict) / "Actual" (history)
+    mode: DiffEditorMode,
   ): void {
     const isMd = isMarkdownPath(entry.basePath);
+    // TODO §17 — Join is conflict-only (a version-restore never merges, even for markdown).
+    const joinable = isMd && mode === "conflict";
 
     // §2.2.15 — per-session mode state seeded from Settings; toggled locally for this
     // view. resolve-all routes to the V2 owner (ours→keep1, theirs→keep2, join→join).
     // The join opts carry the conflict's label+date so the header reads "Changes from
     // `<device>` at <date>".
-    this.autoFocus = this.deps.autoFocus?.() ?? true;
+    // TODO §17 — auto-focus default is PER-MODE (conflict on / history+deleted off): you review
+    // versions in history, you don't want an auto-jump to the first diff.
+    this.autoFocus = this.deps.autoFocus?.(mode) ?? mode === "conflict";
     const joinOpts = { label: entry.deviceLabel, date: entry.isoTimestamp };
     this.toolbarHandle = renderDiffToolbar(
       toolbar,
       {
         localLabel,
-        remoteLabel: entry.deviceLabel,
+        remoteLabel,
         isMarkdown: isMd,
+        mode,
         touchOn: this.deps.touchOnly?.() ?? false,
         autoFocusOn: this.autoFocus,
         diffMode: this.deps.diffWordLevel?.() ? "words" : "characters",
@@ -656,7 +698,7 @@ export class DiffDetailController {
         onSearch: () => this.toggleSearch(),
         onKeepAll: () => this.owner?.applyResolveAll("keep1"),
         onApplyAll: () => this.owner?.applyResolveAll("keep2"),
-        onJoinAll: isMd ? () => this.owner?.applyResolveAll("join", joinOpts) : undefined,
+        onJoinAll: joinable ? () => this.owner?.applyResolveAll("join", joinOpts) : undefined,
         onPrev: () => this.owner?.navPrev(),
         onNext: () => this.owner?.navNext(),
         onUndo: () => this.owner?.undo(),

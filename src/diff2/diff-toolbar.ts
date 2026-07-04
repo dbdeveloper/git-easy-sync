@@ -13,6 +13,7 @@
 // augmentation; icons via Obsidian setIcon (no-op-stubbed in tests).
 
 import { setIcon } from "obsidian";
+import type { DiffEditorMode } from "./diff-pane-v2";
 
 export type DiffMode = "characters" | "words";
 
@@ -38,6 +39,9 @@ export interface DiffToolbarInitial {
   touchOn: boolean;
   autoFocusOn: boolean;
   diffMode: DiffMode;
+  // TODO §17 — conflict → [Keep all][Apply all][> Join all]; history/deleted →
+  // [Restore all][Keep all] (no Join). Default "conflict".
+  mode?: DiffEditorMode;
 }
 
 // Live state, recomputed from the editor on every transaction.
@@ -124,10 +128,18 @@ export function renderDiffToolbar(
   l1.className = "diff2-tb-left";
   iconButton(l1, "arrow-left", "Back to list", cb.onBack);
   iconButton(l1, "search", "Search (Mod+F) — toggle", cb.onSearch);
-  textButton(l1, "diff2-btn-keep-local", "Keep all", `Keep all ${initial.localLabel} changes`, cb.onKeepAll);
-  textButton(l1, "diff2-btn-apply-remote", "Apply all", `Apply all remote (${initial.remoteLabel}) changes`, cb.onApplyAll);
-  if (cb.onJoinAll) {
-    textButton(l1, "diff2-btn-join-all", "> Join all", `Keep local and join changes from "${initial.remoteLabel}"`, cb.onJoinAll);
+  // TODO §17 — verbs by mode. Callbacks are identical (onKeepAll = keep ver1, onApplyAll =
+  // keep ver2); only labels/tooltips change and Join is conflict-only.
+  const restore = initial.mode === "history" || initial.mode === "deleted";
+  if (restore) {
+    textButton(l1, "diff2-btn-keep-local", "Restore all", `Restore all changes from ${initial.localLabel}`, cb.onKeepAll);
+    textButton(l1, "diff2-btn-apply-remote", "Keep all", `Keep all actual (${initial.remoteLabel}) changes`, cb.onApplyAll);
+  } else {
+    textButton(l1, "diff2-btn-keep-local", "Keep all", `Keep all ${initial.localLabel} changes`, cb.onKeepAll);
+    textButton(l1, "diff2-btn-apply-remote", "Apply all", `Apply all remote (${initial.remoteLabel}) changes`, cb.onApplyAll);
+    if (cb.onJoinAll) {
+      textButton(l1, "diff2-btn-join-all", "> Join all", `Keep local and join changes from "${initial.remoteLabel}"`, cb.onJoinAll);
+    }
   }
   const r1 = row1.appendChild(document.createElement("div"));
   r1.className = "diff2-tb-right";

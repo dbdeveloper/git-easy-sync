@@ -7,7 +7,7 @@
 // stops at empty vers).
 //
 // New file during migration: the old `diff-pane.ts` is the §1 Segment[] model
-// still consumed by diff-edit-view.ts; this becomes `diff-pane.ts` (old deleted)
+// still consumed by diff-panel-view.ts; this becomes `diff-pane.ts` (old deleted)
 // at the Phase-3 wiring step.
 //
 // Scope of this increment: the render + navigation spine. The editing-behaviour
@@ -116,11 +116,30 @@ export interface DiffPaneV2Hooks {
 // derived). localLabel = ver1/ours device (top marker), remoteLabel = ver2/theirs
 // device (bottom marker + Join header/tooltip), date = Join header date,
 // isMarkdown gates the Join button (a blockquote join would corrupt non-markdown).
+// TODO §17 — the diff-editor runs in three modes. Conflict = resolve ours-vs-theirs.
+// History/Deleted = restore a past/deleted version against the ACTUAL current file (same
+// interaction, different verbs: ver1 is a version to "Restore", ver2 is the "Actual" file to
+// "Keep"; no Join). Deleted reuses History's verbs verbatim — only its entry point differs.
+export type DiffEditorMode = "conflict" | "history" | "deleted";
+
+// TODO §17 — an external search context passed when a history/deleted editor is opened from a
+// searched version list: the same phrase + toggles the list used, so the editor's Ctrl+F
+// (@codemirror/search) shows identical matches AND — higher priority than Auto-focus — scrolls
+// to the first match on open. Source (7b list filter) + engine wiring land later; this is the seam.
+export interface DiffEditorSearchContext {
+  query: string;
+  caseSensitive: boolean; // [Aa]
+  regexp: boolean; // [.*]
+  wholeWord: boolean; // [word]
+}
+
 export interface DiffViewConfig {
   localLabel: string;
   remoteLabel: string;
   date: string;
   isMarkdown: boolean;
+  // TODO §17 — drives the ver-block button verbs + Join gate. Default "conflict".
+  mode?: DiffEditorMode;
   // §2.2.14 — touch-only / read-only mode: the editor blocks edits (typing/delete/paste) but
   // keeps resolve buttons, selection, copy, and undo/redo; the marker glyph-click (caret into
   // a block) is disabled. Optional (default false); set from the "Interface" setting at open.
@@ -135,6 +154,7 @@ export const DEFAULT_VIEW_CONFIG: DiffViewConfig = {
   remoteLabel: "remote",
   date: "",
   isMarkdown: true,
+  mode: "conflict",
   touchOnly: false,
   wordLevelDiff: false,
 };
@@ -180,7 +200,8 @@ interface BtnSpec {
   hotkey: string; // §1.9 CM6 key spec (matches diffResolveKeymap)
   desc?: string;
 }
-const MARKER_BUTTONS: Record<MarkerKind, BtnSpec[]> = {
+// Conflict-mode verbs: ver1 = local (ours), ver2 = remote (theirs); Join merges both (markdown).
+const MARKER_BUTTONS_CONFLICT: Record<MarkerKind, BtnSpec[]> = {
   open: [
     { label: "Keep ↓", choice: "keep1", hotkey: "Ctrl-Enter", desc: "Keep this local change" },
     { label: "Remove ↓", choice: "keep2", hotkey: "Ctrl-Backspace", desc: "Remove this local change" },
@@ -195,6 +216,31 @@ const MARKER_BUTTONS: Record<MarkerKind, BtnSpec[]> = {
     { label: "Remove ↑", choice: "keep1", hotkey: "Ctrl-Backspace", desc: "Remove this remote change" },
   ],
 };
+
+// TODO §17 — History/Deleted verbs: ver1 = a past/deleted version to "Restore", ver2 = the
+// ACTUAL current file to "Keep". SAME choices (keep1/keep2/both/neither) — only labels differ,
+// and there is NO Join (a version-restore never merges, even for markdown).
+const MARKER_BUTTONS_RESTORE: Record<MarkerKind, BtnSpec[]> = {
+  open: [
+    { label: "Restore ↓", choice: "keep1", hotkey: "Ctrl-Enter", desc: "Restore this version's change" },
+    { label: "Remove ↓", choice: "keep2", hotkey: "Ctrl-Backspace", desc: "Discard this version's change" },
+  ],
+  mid: [
+    { label: "Apply ↓↑", choice: "both", hotkey: "Ctrl-Shift-Enter", desc: "Apply both changes" },
+    { label: "Remove ↓↑", choice: "neither", hotkey: "Ctrl-Shift-Backspace", desc: "Remove both changes" },
+  ],
+  close: [
+    { label: "Keep ↑", choice: "keep2", hotkey: "Ctrl-Enter", desc: "Keep the actual (current) change" },
+    { label: "Remove ↑", choice: "keep1", hotkey: "Ctrl-Backspace", desc: "Remove the actual change" },
+  ],
+};
+
+// TODO §17 — Deleted reuses History's verbs verbatim. Exported for unit tests.
+export function markerButtonsFor(mode: DiffEditorMode | undefined): Record<MarkerKind, BtnSpec[]> {
+  return mode === "history" || mode === "deleted"
+    ? MARKER_BUTTONS_RESTORE
+    : MARKER_BUTTONS_CONFLICT;
+}
 
 // Caret target for clicking a marker glyph (§2.2.4.9 mouse/tap entry into a block — the
 // only way to reach an EMPTY ver-block, collapsed/height:0, not directly clickable).
@@ -302,8 +348,10 @@ class MarkerWidget extends WidgetType {
     const resolveOpts = { label: this.config.remoteLabel, date: this.config.date };
     const buttons = document.createElement("span");
     buttons.className = "diff2-marker-buttons";
-    for (const b of MARKER_BUTTONS[this.kind]) {
-      // Join is markdown-only (a blockquote join corrupts non-markdown files).
+    for (const b of markerButtonsFor(this.config.mode)[this.kind]) {
+      // Join is markdown-only (a blockquote join corrupts non-markdown files) AND
+      // conflict-only (a version-restore never merges). markerButtonsFor already drops it for
+      // history/deleted; the isMarkdown guard stays for non-markdown conflicts.
       if (b.choice === "join" && !this.config.isMarkdown) continue;
       const btn = document.createElement("button");
       btn.className = `diff2-btn diff2-marker-btn diff2-marker-btn-${b.choice}`;

@@ -116,3 +116,51 @@ describe("diff-toolbar", () => {
     expect(mode).toBe("words");
   });
 });
+
+// TODO §17 — mode-aware toolbar verbs. Conflict = Keep/Apply/Join; History+Deleted = Restore/Keep
+// (no Join, even for markdown). Callbacks are identical (onKeepAll/onApplyAll) — only labels change.
+describe("diff-toolbar — TODO §17 mode-aware verbs", () => {
+  const byText = (c: HTMLElement, t: string) =>
+    Array.from(c.querySelectorAll("button")).find((b) => b.textContent === t);
+
+  it("conflict → [Keep all] [Apply all] [> Join all]", () => {
+    const c = document.createElement("div");
+    renderDiffToolbar(c, { ...initial, mode: "conflict" }, cbs());
+    expect(byText(c, "Keep all")).toBeTruthy();
+    expect(byText(c, "Apply all")).toBeTruthy();
+    expect(byText(c, "> Join all")).toBeTruthy();
+    expect(byText(c, "Restore all")).toBeFalsy();
+  });
+
+  it("history → [Restore all] [Keep all], NO Join even for markdown", () => {
+    const c = document.createElement("div");
+    renderDiffToolbar(c, { ...initial, mode: "history", isMarkdown: true }, cbs());
+    expect(byText(c, "Restore all")).toBeTruthy();
+    expect(byText(c, "Keep all")).toBeTruthy();
+    expect(byText(c, "> Join all")).toBeFalsy();
+    expect(byText(c, "Apply all")).toBeFalsy();
+  });
+
+  it("deleted → same verbs as history (Restore/Keep, no Join)", () => {
+    const c = document.createElement("div");
+    renderDiffToolbar(c, { ...initial, mode: "deleted", isMarkdown: true }, cbs());
+    expect(byText(c, "Restore all")).toBeTruthy();
+    expect(byText(c, "Keep all")).toBeTruthy();
+    expect(byText(c, "> Join all")).toBeFalsy();
+  });
+
+  it("history 'Restore all'/'Keep all' route to the SAME callbacks as conflict Keep/Apply", () => {
+    const c = document.createElement("div");
+    let keep = 0;
+    let apply = 0;
+    renderDiffToolbar(
+      c,
+      { ...initial, mode: "history" },
+      { ...cbs(), onKeepAll: () => (keep += 1), onApplyAll: () => (apply += 1) },
+    );
+    byText(c, "Restore all")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    byText(c, "Keep all")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(keep).toBe(1); // Restore all = onKeepAll (keep ver1)
+    expect(apply).toBe(1); // Keep all (actual) = onApplyAll (keep ver2)
+  });
+});

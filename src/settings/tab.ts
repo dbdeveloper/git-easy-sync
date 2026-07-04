@@ -763,21 +763,35 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
                   });
           });
 
-      new Setting(containerEl)
-          .setName("Auto-focus conflicts")
-          .setDesc(
-              "After resolving a conflict, scroll the diff-editor to the FIRST remaining " +
-              "conflict (cursor at its start). Speeds up resolving many conflicts in a row. " +
-              "(§2.2.15) Can be toggled per-document in the diff-editor toolbar.",
-          )
-          .addToggle((toggle) => {
-              toggle
-                  .setValue(this.plugin.settings.diffEditorAutoFocus ?? true)
-                  .onChange(async (value) => {
-                      this.plugin.settings.diffEditorAutoFocus = value;
-                      await this.plugin.saveSettings();
-                  });
-          });
+      // TODO §17 — per-mode auto-focus default (conflict ON, history/deleted OFF). Each is
+      // still toggleable per-document in the diff-editor toolbar.
+      const autoFocusModes: Array<{
+          mode: "conflict" | "history" | "deleted";
+          name: string;
+          def: boolean;
+      }> = [
+          { mode: "conflict", name: "Auto-focus conflicts", def: true },
+          { mode: "history", name: "Auto-focus history", def: false },
+          { mode: "deleted", name: "Auto-focus deleted", def: false },
+      ];
+      for (const { mode, name, def } of autoFocusModes) {
+          new Setting(containerEl)
+              .setName(name)
+              .setDesc(
+                  "On open/each resolve, scroll the diff-editor to the FIRST remaining " +
+                  "difference (cursor at its start). Toggleable per-document in the toolbar. " +
+                  "(§2.2.15 / §17)",
+              )
+              .addToggle((toggle) => {
+                  toggle
+                      .setValue(this.plugin.settings.diffEditorAutoFocus?.[mode] ?? def)
+                      .onChange(async (value) => {
+                          const cur = this.plugin.settings.diffEditorAutoFocus ?? {};
+                          this.plugin.settings.diffEditorAutoFocus = { ...cur, [mode]: value };
+                          await this.plugin.saveSettings();
+                      });
+              });
+      }
 
       // ── Performance ─────────────────────────────────────────────────
       new Setting(containerEl).setName("Performance").setHeading();
