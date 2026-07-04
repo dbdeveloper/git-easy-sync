@@ -183,9 +183,19 @@ export class DiffPaneOwner {
   // edits are NOT in memory, so the exit-commit recordCount reads the full
   // history.jsonl from disk instead — this is only the synchronous abandon-wipe
   // signal for a genuinely fresh dir.
+  // TODO §21 — the live RAW resolved sides (base = normal+ver1, sibling = normal+ver2), for the
+  // content-SHA dirty check (isResolvedPristine). Cheap: reads the doc + structure, no SHA here.
+  resolvedSides(): ResolvedSides {
+    return resolvedFromView(this.view);
+  }
+
   inMemoryNetEdits(): number {
-    const s = this.writer.getStats();
-    return Math.max(0, s.totalEntries - 2 * s.undoCount);
+    // undoDepth = steps back to the session's STARTING doc. 0 ⇔ the doc is pristine (the [undo]
+    // toolbar button is greyed) ⇔ no unsaved changes — the SAME signal the toolbar already uses
+    // for canUndo. The old `totalEntries − 2·undoCount` heuristic mis-counted GROUPED undos, so a
+    // doc undone all the way back to the start still read as edited → the §21 "modified" modal
+    // (and the §4.1 abandon-wipe's "worthless session" test) were wrong. undoDepth is exact.
+    return undoDepth(this.view.state);
   }
 
   // [← back] Step-1 flush barrier (§2.8) — await every scheduled append before

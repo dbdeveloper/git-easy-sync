@@ -626,3 +626,51 @@ describe("commit7Step — config-dir (.obsidian/) conflict paths (dot-dir)", () 
     expect(await fx.vault.adapter.exists(autosaveDir(ID))).toBe(false);
   });
 });
+
+// TODO §21 — the content-authoritative dirty check that replaced undoDepth for the open-guard.
+import { isResolvedPristine } from "../../src/diff2/exit-commit";
+
+describe("isResolvedPristine (§21 content-authoritative dirty check)", () => {
+  const u8 = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
+  async function metaFor(base: string, sibling: string, eol: "lf" | "crlf" | "cr" = "lf") {
+    return {
+      basePath: "b.md",
+      siblingPath: "b.conflict.md",
+      baseShaAtStart: await calculateGitBlobSHA(u8(base)),
+      siblingShaAtStart: await calculateGitBlobSHA(u8(sibling)),
+      baseExistedAtStart: base !== "",
+      startedAtIso: "2026-01-01T00:00:00Z",
+      eol,
+    } as unknown as import("../../src/diff2/autosave-store").AutosaveMeta;
+  }
+
+  it("unchanged sides → pristine", async () => {
+    const meta = await metaFor("base\n", "sib\n");
+    expect(await isResolvedPristine({ base: "base\n", sibling: "sib\n" }, meta)).toBe(true);
+  });
+
+  it("a changed side (either) → NOT pristine", async () => {
+    const meta = await metaFor("base\n", "sib\n");
+    expect(await isResolvedPristine({ base: "base X\n", sibling: "sib\n" }, meta)).toBe(false);
+    expect(await isResolvedPristine({ base: "base\n", sibling: "sib Y\n" }, meta)).toBe(false);
+  });
+
+  it("manual add-then-remove back to the start content → pristine (undoDepth would still be >0)", async () => {
+    const meta = await metaFor("base\n", "sib\n");
+    // The point: isResolvedPristine looks ONLY at the current bytes, so a doc edited and hand-
+    // reverted to identical content reads clean — which undoDepth (>0 after any edit) cannot.
+    expect(await isResolvedPristine({ base: "base\n", sibling: "sib\n" }, meta)).toBe(true);
+  });
+
+  it("empty/absent base — pristine while still empty, dirty once filled", async () => {
+    const meta = await metaFor("", "sib\n");
+    expect(await isResolvedPristine({ base: "", sibling: "sib\n" }, meta)).toBe(true);
+    expect(await isResolvedPristine({ base: "now\n", sibling: "sib\n" }, meta)).toBe(false);
+  });
+
+  it("CRLF session — restoreEol reproduces the start bytes' SHA (the model works in \\n)", async () => {
+    const meta = await metaFor("base\r\n", "sib\r\n", "crlf");
+    expect(await isResolvedPristine({ base: "base\n", sibling: "sib\n" }, meta)).toBe(true);
+    expect(await isResolvedPristine({ base: "base\nx\n", sibling: "sib\n" }, meta)).toBe(false);
+  });
+});

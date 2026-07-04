@@ -67,6 +67,7 @@ import {
   findExistingHistoryLeaf,
   openDescFor,
   openGuard,
+  overlapAction,
   planBackNav,
   type DiffEditorOrigin,
   type EditorTabState,
@@ -2127,19 +2128,6 @@ export default class GitHubSyncPlugin extends Plugin {
       );
       const req = openDescFor("history", path, path, autosaveId);
       const result = openGuard(open, req);
-      // §4.5.5 — one History session per file. If F is ALREADY being edited (this
-      // file's History session, a DIFFERENT version, OR even a conflict on F — the
-      // write-set overlaps on F), show the "file already being edited" dialog rather
-      // than silently focusing. Only a truly free F opens a fresh tab. (Unlike the
-      // conflict open-path, History always dialogs when busy — you must close the
-      // current session before viewing another version; the [←] cycle frees it.)
-      if (result.action === "focus" || result.action === "dialog") {
-        const busyFile = result.action === "dialog" ? result.busyFile : path;
-        const choice = await new EditorBusyModal(this.app, busyFile).prompt();
-        if (choice === "switch") this.revealAndFocusEditor(leaves[result.which]);
-        return;
-      }
-      const leaf = this.createEditorLeaf(toRight);
       const state: EditorTabState = {
         origin: "history",
         basePath: path,
@@ -2147,6 +2135,56 @@ export default class GitHubSyncPlugin extends Plugin {
         historyVersion: version,
         openMode: "user", // user-initiated → resume modal; restart-restore is silent
       };
+      // TODO §21 — history uses ONE per-file autosaveId, so opening ANY version of F while F's
+      // history editor is open is a "focus" (same key). Compare the actual VERSION to decide:
+      //   • same version → just reveal (even if dirty — same pair, nothing to reload);
+      //   • different version, CLEAN → reload the (shared-dir) editor with this version;
+      //   • different version, DIRTY → the "already modified" warning.
+      if (result.action === "focus") {
+        const busyLeaf = leaves[result.which];
+        const openVer =
+          busyLeaf.view instanceof DiffEditorView
+            ? busyLeaf.view.historyVersionSha()
+            : undefined;
+        if (openVer === version.id) {
+          // SAME version. Ctrl (toRight) → move it right, preserving the session (clean or dirty);
+          // plain → reveal.
+          if (toRight && busyLeaf.view instanceof DiffEditorView) {
+            void this.moveEditorPreservingSession(busyLeaf, state);
+            return;
+          }
+          this.revealAndFocusEditor(busyLeaf);
+          return;
+        }
+        const dirty =
+          busyLeaf.view instanceof DiffEditorView
+            ? await busyLeaf.view.hasUnsavedChanges()
+            : true;
+        if (overlapAction(dirty) === "reload") {
+          // SAME per-file dir → pass sharedDir so reopenEditor clears it ORDERED before mount.
+          void this.reopenEditor(busyLeaf, state, toRight, autosaveDir(autosaveId));
+          return;
+        }
+        const choice = await new EditorBusyModal(this.app, path, true).prompt();
+        if (choice === "switch") this.revealAndFocusEditor(busyLeaf);
+        return;
+      }
+      // "dialog" — a DIFFERENT session (a conflict on F) holds F → DIFFERENT dir, no shared clear.
+      if (result.action === "dialog") {
+        const busyLeaf = leaves[result.which];
+        const dirty =
+          busyLeaf.view instanceof DiffEditorView
+            ? await busyLeaf.view.hasUnsavedChanges()
+            : true;
+        if (overlapAction(dirty) === "reload") {
+          void this.reopenEditor(busyLeaf, state, toRight);
+          return;
+        }
+        const choice = await new EditorBusyModal(this.app, result.busyFile, true).prompt();
+        if (choice === "switch") this.revealAndFocusEditor(busyLeaf);
+        return;
+      }
+      const leaf = this.createEditorLeaf(toRight);
       await leaf.setViewState({
         type: DIFF2_EDITOR_VIEW_TYPE,
         state: state as unknown as Record<string, unknown>,
@@ -2427,6 +2465,84 @@ export default class GitHubSyncPlugin extends Plugin {
     return workspace.getLeaf("tab");
   }
 
+  // TODO §21 — reload the busy editor tab with a new pair (caller already checked it's CLEAN).
+  // PLACEMENT by modifier:
+  //   • plain → in the OLD tab's group (where the user created/dragged it);
+  //   • toRight (Ctrl) → to the RIGHT of the panel/history (createEditorLeaf, same as a fresh open).
+  // DIR SAFETY (the load-bearing part):
+  //   • CONFLICTS — old + new have DIFFERENT per-pair dirs, so the old's normal abandon-wipe (on
+  //     detach) can't touch the new. sharedDir omitted; order-independent.
+  //   • HISTORY — one PER-FILE dir hosts every version, so old + new share it. We MUST NOT let the
+  //     old's async abandon-wipe race the new startSession: disposeForReload() (no wipe) → detach →
+  //     AWAIT an explicit rmdir(sharedDir) → THEN mount. Ordered → no wipe-vs-write corruption.
+  private async reopenEditor(
+    oldLeaf: WorkspaceLeaf,
+    state: EditorTabState,
+    toRight: boolean,
+    sharedDir?: string,
+  ): Promise<void> {
+    const { workspace } = this.app;
+    const mount = (leaf: WorkspaceLeaf) =>
+      void leaf.setViewState({
+        type: DIFF2_EDITOR_VIEW_TYPE,
+        state: state as unknown as Record<string, unknown>,
+        active: true,
+      });
+    // Destination leaf, created BEFORE detaching the old so a single-tab group's split survives.
+    let newLeaf: WorkspaceLeaf;
+    if (toRight) {
+      newLeaf = this.createEditorLeaf(true);
+    } else {
+      let placed: WorkspaceLeaf | undefined;
+      try {
+        const make = (workspace as unknown as {
+          createLeafInParent?: (p: unknown, i: number) => WorkspaceLeaf | undefined;
+        }).createLeafInParent;
+        placed = make ? make.call(workspace, oldLeaf.parent, -1) : undefined;
+      } catch (e) {
+        this.logger?.info?.("diff2 §21 createLeafInParent failed", { err: String(e) });
+      }
+      newLeaf = placed ?? workspace.getLeaf("tab");
+    }
+    if (sharedDir) {
+      // HISTORY same-file: no async wipe on the shared dir; clear it (awaited) before the mount.
+      (oldLeaf.view instanceof DiffEditorView
+        ? oldLeaf.view
+        : null
+      )?.disposeForReload();
+      oldLeaf.detach();
+      await this.app.vault.adapter.rmdir(sharedDir, true).catch(() => {});
+    } else {
+      oldLeaf.detach();
+    }
+    mount(newLeaf);
+    workspace.revealLeaf(newLeaf);
+  }
+
+  // TODO §21 resume-move — MOVE an already-open editor (SAME pair) to the right, keeping its
+  // session whether CLEAN or DIRTY. Obsidian has no programmatic leaf-move, so: flush pending
+  // edits to the autosave dir → dispose WITHOUT the wipe (keep the dir) → detach → mount the SAME
+  // pair to the right as a SILENT RESUME (openMode stripped). The proven 1B/crash resume path
+  // restores the edits at the new location → nothing is lost even with unsaved changes.
+  private async moveEditorPreservingSession(
+    oldLeaf: WorkspaceLeaf,
+    state: EditorTabState,
+  ): Promise<void> {
+    const { workspace } = this.app;
+    const ov = oldLeaf.view instanceof DiffEditorView ? oldLeaf.view : null;
+    await ov?.flushEdits();
+    const newLeaf = this.createEditorLeaf(true);
+    ov?.disposeForReload(); // no wipe — the dir keeps the edits for the resume
+    oldLeaf.detach();
+    const resumeState = { ...state, openMode: undefined }; // no openMode → silent resume
+    await newLeaf.setViewState({
+      type: DIFF2_EDITOR_VIEW_TYPE,
+      state: resumeState as unknown as Record<string, unknown>,
+      active: true,
+    });
+    workspace.revealLeaf(newLeaf);
+  }
+
   async openEditorForPair(entry: ConflictEntry, toRight = false): Promise<void> {
     const autosaveId = autosaveIdForEntry(entry);
     // Synchronous re-entrancy guard closing the check-then-act window across the
@@ -2442,20 +2558,6 @@ export default class GitHubSyncPlugin extends Plugin {
       const req = openDescFor("conflict", entry.basePath, entry.siblingPath, autosaveId);
       const result = openGuard(open, req);
 
-      if (result.action === "focus") {
-        this.revealAndFocusEditor(leaves[result.which]);
-        return;
-      }
-      if (result.action === "dialog") {
-        const choice = await new EditorBusyModal(this.app, result.busyFile).prompt();
-        // Between building `open[]` and the click the target leaf could be closed;
-        // revealLeaf on a detached leaf is a benign Obsidian no-op.
-        if (choice === "switch") this.revealAndFocusEditor(leaves[result.which]);
-        return;
-      }
-
-      // result.action === "open"
-      const leaf = this.createEditorLeaf(toRight);
       const state: EditorTabState = {
         origin: "conflict",
         basePath: entry.basePath,
@@ -2464,6 +2566,40 @@ export default class GitHubSyncPlugin extends Plugin {
         // a later restart-restore of the same leaf is silent.
         openMode: "user",
       };
+
+      if (result.action === "focus") {
+        // SAME conflict already open. Plain → reveal. Ctrl (toRight) → MOVE it right, preserving
+        // the session (CLEAN or DIRTY) via the flush + silent-resume path.
+        const busyLeaf = leaves[result.which];
+        if (toRight && busyLeaf.view instanceof DiffEditorView) {
+          void this.moveEditorPreservingSession(busyLeaf, state);
+          return;
+        }
+        this.revealAndFocusEditor(busyLeaf);
+        return;
+      }
+      if (result.action === "dialog") {
+        // TODO §21 — the busy editor shares a write-set file with this request (e.g. two
+        // conflicts of the same base). If it's CLEAN → reload it in place with the new pair
+        // (fast browsing). If it has unsaved edits → the "already modified" warning.
+        const busyLeaf = leaves[result.which];
+        const dirty =
+          busyLeaf.view instanceof DiffEditorView
+            ? await busyLeaf.view.hasUnsavedChanges()
+            : true;
+        if (overlapAction(dirty) === "reload") {
+          void this.reopenEditor(busyLeaf, state, toRight);
+          return;
+        }
+        const choice = await new EditorBusyModal(this.app, result.busyFile, true).prompt();
+        // Between building `open[]` and the click the target leaf could be closed;
+        // revealLeaf on a detached leaf is a benign Obsidian no-op.
+        if (choice === "switch") this.revealAndFocusEditor(busyLeaf);
+        return;
+      }
+
+      // result.action === "open"
+      const leaf = this.createEditorLeaf(toRight);
       await leaf.setViewState({
         type: DIFF2_EDITOR_VIEW_TYPE,
         state: state as unknown as Record<string, unknown>,

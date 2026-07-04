@@ -101,6 +101,9 @@ export class EditorBusyModal extends Modal {
   constructor(
     app: App,
     private readonly busyFile: string,
+    // TODO §21 — `modified` variant: the file is open AND has unsaved edits. A CLEAN overlap
+    // now reloads in place silently, so this modal is only reached when there IS unsaved work.
+    private readonly modified = false,
   ) {
     super(app);
   }
@@ -109,16 +112,26 @@ export class EditorBusyModal extends Modal {
     return new Promise((resolve) => {
       this.onClose = () => resolve(this.choice);
       const c = this.contentEl;
-      this.titleEl.setText("File already open in a diff-editor");
       c.empty();
-
-      c.createEl("p").setText(
-        `"${this.busyFile}" is being resolved in another diff-editor tab. ` +
-          "Finish there first, or switch to it now.",
-      );
+      if (this.modified) {
+        this.titleEl.setText("File already modified in a different diff-editor");
+        c.createEl("p").setText(
+          `"${this.busyFile}" is already being edited in another diff editor tab. ` +
+            "Finish or revoke your changes to open it in another conflict.",
+        );
+      } else {
+        this.titleEl.setText("File already open in a diff-editor");
+        c.createEl("p").setText(
+          `"${this.busyFile}" is being resolved in another diff-editor tab. ` +
+            "Finish there first, or switch to it now.",
+        );
+      }
 
       const row = c.createDiv({ cls: "modal-button-container" });
-      const sw = row.createEl("button", { text: "Switch to that tab", cls: "mod-cta" });
+      const sw = row.createEl("button", {
+        text: this.modified ? "Go to that tab" : "Switch to that tab",
+        cls: "mod-cta",
+      });
       sw.addEventListener("click", () => {
         this.choice = "switch";
         this.close();

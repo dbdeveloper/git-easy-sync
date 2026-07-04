@@ -257,8 +257,14 @@ export class DiffPanelView extends ItemView {
           // A row-click SELECTS (shows the cursor) then opens a dedicated diff2-editor tab
           // (behind the open-guard in main). Production always wires openEditor via diffViewDeps.
           onEntryClick: (entry, toRight) => {
-            this.conflictSelectedKey = conflictKey(entry);
-            this.conflictLaunchedKey = this.conflictSelectedKey; // launch position for [←]
+            const key = conflictKey(entry);
+            // applyConflictSelection highlights BY INDEX, so update the index too — not just the
+            // key — or the cursor stays on the previously-selected row (bug: click 2nd conflict,
+            // cursor stuck on the 1st). [←] restore already sets the index; the click path missed it.
+            const i = this.conflictRefs.findIndex((r) => conflictKey(r.entry) === key);
+            if (i >= 0) this.conflictSelectedIndex = i;
+            this.conflictSelectedKey = key;
+            this.conflictLaunchedKey = key; // launch position for [←]
             this.applyConflictSelection();
             this.deps.openEditor?.(entry, toRight);
           },

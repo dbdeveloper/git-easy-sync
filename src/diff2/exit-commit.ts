@@ -182,6 +182,26 @@ export interface ResolvedSides {
   sibling: string;
 }
 
+// TODO §21 — is the LIVE resolved content byte-identical to the session start? The AUTHORITATIVE
+// "not modified" test — immune to undo/redo bookkeeping AND to manual add-then-remove (which both
+// leave undoDepth > 0 at identical content). Reconstruct both sides (resolvedFromView), restore the
+// session EOL, and git-blob-SHA each with the SAME utf8/restoreEol composition the commit write
+// uses, then compare to meta.*ShaAtStart — the ORIGINAL file SHAs written ONCE at true startSession
+// (NOT re-derived on resume), so a RESUMED session with unsaved edits correctly reads NOT pristine.
+// History reduces to the sibling side (the read-only base never changes) — same test as
+// never-clobber. Empty/absent base is handled by construction: SHA("") === baseShaAtStart.
+// EOL caveat: a file with MIXED EOL has restoreEol(toLf(raw)) ≠ raw, so an untouched such file
+// reads dirty from open (spurious, conservative — never data loss). Rare; accepted, not engineered.
+export async function isResolvedPristine(
+  sides: ResolvedSides,
+  meta: AutosaveMeta,
+): Promise<boolean> {
+  const eol = meta.eol ?? "lf";
+  const baseSha = await calculateGitBlobSHA(utf8(restoreEol(sides.base, eol)));
+  const siblingSha = await calculateGitBlobSHA(utf8(restoreEol(sides.sibling, eol)));
+  return baseSha === meta.baseShaAtStart && siblingSha === meta.siblingShaAtStart;
+}
+
 export interface Commit7Options {
   // Target paths default to the conflict's real paths (meta.basePath /
   // siblingPath); Step 4 self-skips for any target that doesn't pre-exist, so a

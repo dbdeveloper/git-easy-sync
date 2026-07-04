@@ -192,3 +192,36 @@ describe("persistedEditorState (1B getState — strips the transient openMode)",
     expect("openMode" in persistedEditorState(s)).toBe(false);
   });
 });
+
+// TODO §21 — the clean/dirty predicate that gates reload-in-place vs the "already modified"
+// modal. sessionHasValue is the EXACT COMPLEMENT of dispose()'s abandon-wipe condition (one
+// predicate → they can't drift). overlapAction maps dirtiness to the open-guard "dialog" action.
+import { sessionHasValue, overlapAction } from "../../src/diff2/editor-tabs";
+
+describe("sessionHasValue (dirty predicate)", () => {
+  it("editDepth 0 → NOT dirty (doc pristine / [undo] greyed / abandon-wipeable)", () => {
+    expect(sessionHasValue(0)).toBe(false);
+  });
+  it("editDepth > 0 → dirty", () => {
+    expect(sessionHasValue(1)).toBe(true);
+    expect(sessionHasValue(5)).toBe(true);
+  });
+  it("a RESUMED session undone back to the start reads CLEAN — undoDepth captures the (undoable) replayed edits, so there is no permanent-dirty", () => {
+    // the §21 move+undo regression: hadPriorEdits used to pin this dirty forever.
+    expect(sessionHasValue(0)).toBe(false);
+  });
+  it("is the exact complement of dispose()'s wipe condition (editDepth === 0 → wipe)", () => {
+    for (const d of [0, 1, 3]) {
+      expect(sessionHasValue(d)).toBe(d !== 0);
+    }
+  });
+});
+
+describe("overlapAction", () => {
+  it("clean → reload in place", () => {
+    expect(overlapAction(false)).toBe("reload");
+  });
+  it("dirty → modal (warn, don't clobber edits)", () => {
+    expect(overlapAction(true)).toBe("modal");
+  });
+});

@@ -339,6 +339,33 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   // the write-set is normalized (the carry-flag). Available from the STATE before
   // the async mount completes (a rapid double-open is caught), and null when the
   // state is missing / not a real conflict sibling.
+  // TODO §21 — does this editor hold unsaved work? Read by the open-guard to decide reload
+  // (clean) vs the "already modified" warning. Null controller (pre-mount) → clean. Async: the
+  // content-SHA check git-blob-SHAs both reconstructed sides.
+  async hasUnsavedChanges(): Promise<boolean> {
+    return (await this.controller?.hasUnsavedChanges()) ?? false;
+  }
+
+  // TODO §21 — the HISTORY version this editor currently shows (per-file autosaveId collapses
+  // all versions to one open-guard key, so main.ts compares versions to tell "same version →
+  // reveal" from "different version → reload"). Undefined for a conflict editor.
+  historyVersionSha(): string | undefined {
+    return this.state?.historyVersion?.id;
+  }
+
+  // TODO §21 — dispose in REPLACE mode ahead of a reload: no abandon-wipe (the caller clears the
+  // shared per-file dir explicitly, ordered before the new mount). Called before detach so the
+  // subsequent onClose→dispose is an idempotent no-op.
+  disposeForReload(): void {
+    this.controller?.dispose(true);
+  }
+
+  // TODO §21 resume-move — flush pending edits before a move-close so the silent resume at the
+  // new location restores the latest keystrokes (not just the last auto-saved tail).
+  async flushEdits(): Promise<void> {
+    await this.controller?.flushForReload();
+  }
+
   openDesc(): OpenEditorDesc | null {
     const s = this.state;
     if (!s) return null;

@@ -28,6 +28,7 @@ import {
   mountDiffPaneV2,
 } from "./diff-pane-v2";
 import { formatConflictTimestamp } from "./strip-conflict-suffix";
+import { sessionHasValue } from "./editor-tabs";
 import { toLf } from "./eol";
 import { isMarkdownPath } from "./conflict-merge-all";
 import {
@@ -53,6 +54,7 @@ import {
   commitToAlt,
   commitUnchangedSide,
   guardEmpty,
+  isResolvedPristine,
   type ResolvedSides,
   type ToctouStatus,
 } from "./exit-commit";
@@ -143,7 +145,10 @@ export class DiffDetailController {
 
   // gap-2 — idempotent. The old host calls this from render() (top, before re-render)
   // AND from onClose(); calling twice must not double-fire the §4.1 abandon-wipe.
-  dispose(): void {
+  // `reload` (TODO §21) — this is a REPLACE, not an abandon: the SAME per-file autosave dir will
+  // host the next version, so DON'T fire the async abandon-wipe here (it would race the caller's
+  // awaited dir-clear + new startSession). The caller clears the dir explicitly, ordered.
+  dispose(reload = false): void {
     const session = this.activeSession;
     // §4.1 net-edit signal — read BEFORE dispose (owner.dispose stops the cursor
     // timer + destroys the view). For a FRESH session this in-memory net count is
@@ -161,7 +166,7 @@ export class DiffDetailController {
     // edits a crash should keep, so it is NEVER wiped here. The committed/discarded
     // `[←]` path nulls activeSession before navigation, so this only fires on a genuine
     // abandon (the host's counter-guard prevents a spurious detail-mode re-render).
-    if (session && !session.hadPriorEdits && netEdits === 0) {
+    if (!reload && session && !sessionHasValue(netEdits)) {
       void this.deps.vault.adapter
         .rmdir(autosaveDir(session.conflictId), true)
         .catch(() => {
@@ -169,6 +174,28 @@ export class DiffDetailController {
         });
     }
     this.activeSession = null;
+  }
+
+  // TODO §21 — does this editor hold unsaved work? CONTENT-AUTHORITATIVE: dirty iff the live
+  // resolved sides differ from the session-start SHAs (isResolvedPristine) — immune to undo/redo
+  // bookkeeping AND manual add-then-remove (both leave undoDepth > 0 at identical content, which
+  // used to keep the "already modified" warning up). The p.21 open-guard reads this to decide
+  // reload (clean) vs the warning. Deliberately SPLIT from dispose()'s §4.1 abandon-wipe, which
+  // stays on the SYNC undoDepth signal: the only divergence is manual-add-then-remove (undoDepth>0
+  // keeps the dir, isPristine says clean) → a content-identical dir the onload sweep reclaims. No
+  // data loss, no stuck modal, and dispose() stays synchronous. undoDepth also still drives the
+  // toolbar's canUndo — a separate, legitimate use.
+  async hasUnsavedChanges(): Promise<boolean> {
+    const session = this.activeSession;
+    if (!session || !this.owner) return false;
+    return !(await isResolvedPristine(this.owner.resolvedSides(), session.meta));
+  }
+
+  // TODO §21 resume-move — flush pending edits to the autosave dir (history.jsonl) BEFORE the
+  // editor is closed for a move, so the new leaf's SILENT RESUME restores the latest keystrokes.
+  // Same §2.8 drain barrier the `[←]` commit uses.
+  async flushForReload(): Promise<void> {
+    await this.owner?.drainHistory();
   }
 
   // §2.2.15 — refresh the toolbar's live state on every owner update (count + nav/undo/

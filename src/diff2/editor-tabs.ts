@@ -252,3 +252,21 @@ export function openGuard(
   // (3) No conflict — open a new editor tab.
   return { action: "open" };
 }
+
+// A diff-editor session is "dirty" (has recoverable value) iff its live editDepth (= CM6
+// undoDepth) is > 0. undoDepth = steps back to the session's STARTING doc, so 0 ⇔ the doc is
+// pristine ⇔ the [undo] button is greyed. Crucially, the resume/replay path re-applies edits
+// UNDOABLY, so undoDepth reflects a RESUMED session's edits too — a resumed session undone all
+// the way back reads clean, exactly as the user expects. (Earlier this also OR-ed `hadPriorEdits`,
+// which pinned a resumed session dirty FOREVER even at undoDepth 0 → the §21 "modified" modal kept
+// re-appearing after a move+undo.) The EXACT COMPLEMENT of dispose()'s abandon-wipe condition;
+// both call this ONE predicate so they can't drift. (§4.1 / TODO §21.)
+export function sessionHasValue(editDepth: number): boolean {
+  return editDepth > 0;
+}
+
+// TODO §21 — opening a diff for a file ALREADY open in another editor (openGuard "dialog"):
+// silently RELOAD that tab in place when it is clean (fast history-version browsing), else warn.
+export function overlapAction(dirty: boolean): "reload" | "modal" {
+  return dirty ? "modal" : "reload";
+}
