@@ -25,6 +25,19 @@ export interface ConflictsListCallbacks {
   onEntryClick: (entry: ConflictEntry) => void;
 }
 
+// A rendered conflict row paired with its entry, in VISUAL (grouped) order — the list the
+// panel's keyboard nav walks. File-name group HEADERS are not refs, so arrows/Home/End/PgUp/
+// PgDn skip them automatically (they land only on date + deviceLabel entry rows).
+export interface ConflictRowRef {
+  entry: ConflictEntry;
+  row: HTMLElement;
+}
+
+// Stable per-conflict identity (the sibling path is unique) for persisting the panel selection.
+export function conflictKey(e: ConflictEntry): string {
+  return e.siblingPath;
+}
+
 // Render the conflicts list into the supplied container. Idempotent:
 // clears the container first so this can be called on every refresh
 // (e.g. after a ConflictCounter notify) without leaking stale DOM.
@@ -32,7 +45,8 @@ export function renderConflictsList(
   container: HTMLElement,
   entries: ConflictEntry[],
   callbacks: ConflictsListCallbacks,
-): void {
+  selectedKey?: string | null,
+): ConflictRowRef[] {
   container.empty();
   container.addClass("diff2-conflicts-list");
 
@@ -41,7 +55,7 @@ export function renderConflictsList(
       cls: "diff2-conflicts-empty",
       text: "No pending conflicts.",
     });
-    return;
+    return [];
   }
 
   // Group by basePath, preserving newest-first order. Map insertion
@@ -54,9 +68,19 @@ export function renderConflictsList(
     else grouped.set(entry.basePath, [entry]);
   }
 
+  const refs: ConflictRowRef[] = [];
   for (const [basePath, group] of grouped.entries()) {
-    renderBaseGroup(container, basePath, group, callbacks);
+    renderBaseGroup(container, basePath, group, callbacks, refs);
   }
+  if (selectedKey) {
+    for (const r of refs) {
+      r.row.classList.toggle(
+        "diff2-conflicts-row-selected",
+        conflictKey(r.entry) === selectedKey,
+      );
+    }
+  }
+  return refs;
 }
 
 function renderBaseGroup(
@@ -64,6 +88,7 @@ function renderBaseGroup(
   basePath: string,
   group: ConflictEntry[],
   callbacks: ConflictsListCallbacks,
+  refs: ConflictRowRef[],
 ): void {
   const groupEl = container.createDiv({ cls: "diff2-conflicts-group" });
 
@@ -84,7 +109,7 @@ function renderBaseGroup(
   // "expandable rows"; v1 is "always expanded".
   const rows = groupEl.createDiv({ cls: "diff2-conflicts-rows" });
   for (const entry of group) {
-    renderEntryRow(rows, entry, callbacks);
+    refs.push({ entry, row: renderEntryRow(rows, entry, callbacks) });
   }
 }
 
@@ -92,7 +117,7 @@ function renderEntryRow(
   parent: HTMLElement,
   entry: ConflictEntry,
   callbacks: ConflictsListCallbacks,
-): void {
+): HTMLElement {
   const row = parent.createDiv({
     cls: `diff2-conflicts-row diff2-conflicts-row-${entry.kind}`,
   });
@@ -123,4 +148,5 @@ function renderEntryRow(
   row.addEventListener("click", () => {
     callbacks.onEntryClick(entry);
   });
+  return row;
 }

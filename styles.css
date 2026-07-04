@@ -875,6 +875,61 @@
     background: var(--background-modifier-hover);
 }
 
+/* Keyboard/click SELECTION bar — the version currently in focus (open, or about to open with
+   [Enter]). Persists so returning to the tab shows which version you last viewed.
+   Two intensities: SUBTLE when the list is NOT focused (a quiet "you last viewed this"), and
+   HIGH-CONTRAST when the list IS focused (an active cursor you're driving with the keyboard).
+   Both read in light and dark themes (accent fill + on-accent text). */
+.diff2-history-row-selected,
+.diff2-history-row-selected:hover {
+    background: var(--background-modifier-active-hover, var(--background-modifier-hover));
+    box-shadow: inset 3px 0 0 0 var(--interactive-accent);
+}
+
+/* Focused list → the selected row becomes a solid accent cursor with on-accent text. */
+.diff2-history-list:focus-within .diff2-history-row-selected,
+.diff2-history-list:focus .diff2-history-row-selected {
+    background: var(--interactive-accent);
+    box-shadow: inset 3px 0 0 0 var(--interactive-accent);
+}
+.diff2-history-list:focus-within .diff2-history-row-selected .diff2-history-date,
+.diff2-history-list:focus .diff2-history-row-selected .diff2-history-date,
+.diff2-history-list:focus-within .diff2-history-row-selected .diff2-history-who,
+.diff2-history-list:focus .diff2-history-row-selected .diff2-history-who {
+    color: var(--text-on-accent);
+}
+
+/* The list owns keyboard focus (arrows / Home / End / PgUp / PgDn / Enter); hide the default
+   focus ring since the selection bar is the visible cue. */
+.diff2-history-list:focus,
+.diff2-history-list:focus-visible {
+    outline: none;
+}
+
+/* Conflict-list keyboard selection cursor — same two-intensity, focus-aware scheme as the
+   history list (subtle when unfocused, solid accent + on-accent text when the list is focused).
+   File-name group headers are never selectable, so the cursor only lands on entry rows. */
+.diff2-conflicts-row-selected,
+.diff2-conflicts-row-selected:hover {
+    background: var(--background-modifier-active-hover, var(--background-modifier-hover));
+    box-shadow: inset 3px 0 0 0 var(--interactive-accent);
+}
+.diff2-conflicts-list:focus-within .diff2-conflicts-row-selected,
+.diff2-conflicts-list:focus .diff2-conflicts-row-selected {
+    background: var(--interactive-accent);
+    box-shadow: inset 3px 0 0 0 var(--interactive-accent);
+}
+.diff2-conflicts-list:focus-within .diff2-conflicts-row-selected .diff2-conflicts-device-label,
+.diff2-conflicts-list:focus .diff2-conflicts-row-selected .diff2-conflicts-device-label,
+.diff2-conflicts-list:focus-within .diff2-conflicts-row-selected .diff2-conflicts-timestamp,
+.diff2-conflicts-list:focus .diff2-conflicts-row-selected .diff2-conflicts-timestamp {
+    color: var(--text-on-accent);
+}
+.diff2-conflicts-list:focus,
+.diff2-conflicts-list:focus-visible {
+    outline: none;
+}
+
 .diff2-history-date {
     color: var(--text-normal);
 }

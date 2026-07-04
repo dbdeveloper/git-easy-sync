@@ -25,7 +25,12 @@ import { ItemView, type Vault, WorkspaceLeaf } from "obsidian";
 import type SnapshotStore from "../sync2/snapshot-store";
 import type { ConflictCounter } from "../sync2/conflict-counter";
 import type ConflictStore from "../sync2/conflict-store";
-import { renderConflictsList } from "./conflicts-list";
+import {
+  conflictKey,
+  renderConflictsList,
+  type ConflictRowRef,
+} from "./conflicts-list";
+import { nextHistorySelection } from "./diff-history-view";
 import { DiffEditSubTab } from "./events";
 import type Logger from "../logger";
 import {
@@ -35,7 +40,7 @@ import {
 import type { BackNav, DiffEditorOrigin } from "./editor-tabs";
 import type { HistoryVersion } from "./history-versions";
 
-export const DIFF2_EDIT_VIEW_TYPE = "diff2-edit-view";
+export const DIFF2_PANEL_VIEW_TYPE = "diff2-panel-view";
 
 // The dependency object both diff2 hosts (this panel + the editor) take. Most fields
 // are consumed by the editor's DiffDetailController; the panel itself uses only vault,
@@ -58,8 +63,9 @@ export interface DiffEditViewDeps {
   // Diff highlight granularity: true → word-level, false → char-level (default). Read at open.
   diffWordLevel?: () => boolean;
   // §2.2.15 Auto-focus default (scroll to the first remaining conflict on each resolve). Read
-  // at open; toggled per-session in the toolbar. Default true.
-  autoFocus?: () => boolean;
+  // at open; toggled per-session in the toolbar. TODO §17 — PER-MODE default (conflict on /
+  // history+deleted off): reviewing versions shouldn't auto-jump to the first diff.
+  autoFocus?: (mode: "conflict" | "history" | "deleted") => boolean;
   // Plugin logger — the §5.0.e one-side-silent exit logs here instead of
   // nagging the user with a Notice (no-op when logging is disabled). Optional
   // in test fixtures.
@@ -99,6 +105,16 @@ export class DiffPanelView extends ItemView {
   private readonly deps: DiffEditViewDeps;
   // Unsubscribe handle from ConflictCounter.subscribe — set on open, called on close.
   private unsubscribeCounter: (() => void) | null = null;
+  // Keyboard-driven conflict-list selection (mirrors the history view). The nav walks the FLAT
+  // ref list (file-name group headers aren't refs → skipped). selectedKey persists across
+  // re-renders + tab-return so [←] back lands you on the row you opened.
+  private conflictRefs: ConflictRowRef[] = [];
+  private conflictSelectedIndex = 0;
+  private conflictSelectedKey: string | null = null;
+  // The conflict LAST OPENED from this list (the "launch position"). [←] returns the cursor
+  // here even if the list was navigated elsewhere while the editor was open. See the history view.
+  private conflictLaunchedKey: string | null = null;
+  private conflictListEl: HTMLElement | null = null;
 
   constructor(leaf: WorkspaceLeaf, deps: DiffEditViewDeps) {
     super(leaf);
@@ -106,7 +122,7 @@ export class DiffPanelView extends ItemView {
   }
 
   getViewType(): string {
-    return DIFF2_EDIT_VIEW_TYPE;
+    return DIFF2_PANEL_VIEW_TYPE;
   }
 
   getDisplayText(): string {
@@ -132,7 +148,7 @@ export class DiffPanelView extends ItemView {
     // "two onOpens race to zero panels" case is thus unreachable (no layout-ready dedup
     // needed), and even if it somehow occurred it's recoverable by reopening.
     for (const l of this.app.workspace
-      .getLeavesOfType(DIFF2_EDIT_VIEW_TYPE)
+      .getLeavesOfType(DIFF2_PANEL_VIEW_TYPE)
       .filter((l) => l !== this.leaf)) {
       l.detach();
     }
@@ -142,6 +158,19 @@ export class DiffPanelView extends ItemView {
     this.unsubscribeCounter = this.deps.conflictCounter.subscribe(() => {
       queueMicrotask(() => this.render());
     });
+
+    // Re-focus the conflict list when this tab becomes active again (e.g. after opening an
+    // entry in the editor and clicking [←] back), so the cursor returns to high-contrast AND
+    // the arrow keys work. Also on any mousedown in the body → clicking anywhere activates it.
+    // No-ops on the Deleted tab (conflictListEl is null there). Same fix as the history view.
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        if (leaf === this.leaf) this.focusConflictList();
+      }),
+    );
+    this.registerDomEvent(this.contentEl, "mousedown", () =>
+      this.focusConflictList(),
+    );
 
     this.viewState = initialState();
     this.render();
@@ -221,13 +250,45 @@ export class DiffPanelView extends ItemView {
         this.deps.vault,
         this.deps.conflictStore,
       );
-      renderConflictsList(body, entries, {
-        // A row-click opens a dedicated diff2-editor tab (behind the open-guard in
-        // main). Production always wires openEditor via diffViewDeps.
-        onEntryClick: (entry) => this.deps.openEditor?.(entry),
-      });
+      this.conflictRefs = renderConflictsList(
+        body,
+        entries,
+        {
+          // A row-click SELECTS (shows the cursor) then opens a dedicated diff2-editor tab
+          // (behind the open-guard in main). Production always wires openEditor via diffViewDeps.
+          onEntryClick: (entry) => {
+            this.conflictSelectedKey = conflictKey(entry);
+            this.conflictLaunchedKey = this.conflictSelectedKey; // launch position for [←]
+            this.applyConflictSelection();
+            this.deps.openEditor?.(entry);
+          },
+        },
+        this.conflictSelectedKey,
+      );
+      // Keyboard-driven, header-skipping (nav walks conflictRefs, not the DOM). Restore the
+      // selected index from the persisted key; default to the first row.
+      const restored = this.conflictSelectedKey
+        ? this.conflictRefs.findIndex(
+            (r) => conflictKey(r.entry) === this.conflictSelectedKey,
+          )
+        : -1;
+      this.conflictSelectedIndex = restored >= 0 ? restored : 0;
+      if (this.conflictRefs.length > 0) {
+        this.conflictSelectedKey = conflictKey(
+          this.conflictRefs[this.conflictSelectedIndex].entry,
+        );
+      }
+      this.conflictListEl = body;
+      body.tabIndex = 0; // focusable → arrows / Home / End / PgUp / PgDn / Enter
+      this.applyConflictSelection();
+      // Plain listener on the per-render body → GC'd with the element (no Component-list growth).
+      body.addEventListener("keydown", (e) => this.onConflictKeyDown(e));
+      body.focus({ preventScroll: true });
       return;
     }
+    // Not the conflicts tab → no conflict list to keyboard-drive.
+    this.conflictListEl = null;
+    this.conflictRefs = [];
 
     // tab === "deleted" — Phase 9b placeholder.
     body.createEl("p", {
@@ -236,5 +297,78 @@ export class DiffPanelView extends ItemView {
         "Deleted-mode UI lands in Phase 9b. See " +
         "docs/DIFF2_IMPLEMENTATION_PLAN.md §R3.13 for the Phase 9b enumeration.",
     });
+  }
+
+  // Focus the conflict list so the keyboard cursor is active. Queries the LIVE list element
+  // (not the possibly-stale `this.conflictListEl`, which a split/layout rebuild can detach).
+  // Public so the `[←]` back-nav (main.ts) can focus DETERMINISTICALLY — active-leaf-change
+  // alone leaves it unfocused when the editor closes in a DIFFERENT split. No-op on the
+  // Deleted tab (no conflict list rendered).
+  focusConflictList(): void {
+    const list =
+      this.contentEl?.querySelector<HTMLElement>(".diff2-conflicts-list") ??
+      this.conflictListEl;
+    list?.focus({ preventScroll: true });
+  }
+
+  // Paint the selection cursor on the selected conflict row and reveal it.
+  private applyConflictSelection(): void {
+    this.conflictRefs.forEach((r, i) =>
+      r.row.classList.toggle(
+        "diff2-conflicts-row-selected",
+        i === this.conflictSelectedIndex,
+      ),
+    );
+    this.conflictRefs[this.conflictSelectedIndex]?.row.scrollIntoView({
+      block: "nearest",
+    });
+  }
+
+  private selectConflict(i: number): void {
+    if (this.conflictRefs.length === 0) return;
+    this.conflictSelectedIndex = Math.max(
+      0,
+      Math.min(i, this.conflictRefs.length - 1),
+    );
+    this.conflictSelectedKey = conflictKey(
+      this.conflictRefs[this.conflictSelectedIndex].entry,
+    );
+    this.applyConflictSelection();
+  }
+
+  private openSelectedConflict(): void {
+    const ref = this.conflictRefs[this.conflictSelectedIndex];
+    if (!ref) return;
+    this.conflictSelectedKey = conflictKey(ref.entry);
+    this.conflictLaunchedKey = this.conflictSelectedKey; // launch position for [←]
+    this.deps.openEditor?.(ref.entry);
+  }
+
+  // On [←] back-nav: return the cursor to the conflict we LAUNCHED (not wherever the list was
+  // navigated since), scroll it into view, and take keyboard focus. Public — called from main.ts.
+  restoreLaunchedConflict(): void {
+    if (this.conflictLaunchedKey) {
+      const i = this.conflictRefs.findIndex(
+        (r) => conflictKey(r.entry) === this.conflictLaunchedKey,
+      );
+      if (i >= 0) {
+        this.conflictSelectedIndex = i;
+        this.conflictSelectedKey = this.conflictLaunchedKey;
+        this.applyConflictSelection(); // scrolls the launched row into view
+      }
+    }
+    this.focusConflictList();
+  }
+
+  private onConflictKeyDown(e: KeyboardEvent): void {
+    const r = nextHistorySelection(
+      e.key,
+      this.conflictSelectedIndex,
+      this.conflictRefs.length,
+    );
+    if (r === null) return;
+    e.preventDefault();
+    if (r === "open") this.openSelectedConflict();
+    else this.selectConflict(r);
   }
 }

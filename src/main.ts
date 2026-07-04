@@ -52,7 +52,7 @@ import { TrashWatcher } from "./diff2/trash-watcher";
 import { sweepOnload as trashSweepOnload } from "./diff2/trash-recovery";
 import { recoverAutosaveDirs } from "./diff2/onload-recovery";
 import { setAutosaveRoot, AUTOSAVE_ROOT, autosaveDir } from "./diff2/autosave-store";
-import { DiffPanelView, DIFF2_EDIT_VIEW_TYPE, type DiffEditViewDeps } from "./diff2/diff-edit-view";
+import { DiffPanelView, DIFF2_PANEL_VIEW_TYPE, type DiffEditViewDeps } from "./diff2/diff-panel-view";
 import { DiffEditorView, DIFF2_EDITOR_VIEW_TYPE } from "./diff2/diff-editor-view";
 import {
   DiffHistoryView,
@@ -492,7 +492,7 @@ export default class GitHubSyncPlugin extends Plugin {
       // Panel host (singleton, list↔detail) and the multi-tab editor host
       // (one per base:sibling pair, S3) share the SAME dependency object.
       this.registerView(
-        DIFF2_EDIT_VIEW_TYPE,
+        DIFF2_PANEL_VIEW_TYPE,
         (leaf) => new DiffPanelView(leaf, this.diffViewDeps()),
       );
       this.registerView(
@@ -2014,10 +2014,10 @@ export default class GitHubSyncPlugin extends Plugin {
   // getLeaf("tab") + setViewState. Returns once the leaf is revealed.
   async activateDiffEditView(): Promise<WorkspaceLeaf> {
     const { workspace } = this.app;
-    let leaf = workspace.getLeavesOfType(DIFF2_EDIT_VIEW_TYPE)[0];
+    let leaf = workspace.getLeavesOfType(DIFF2_PANEL_VIEW_TYPE)[0];
     if (!leaf) {
       leaf = workspace.getLeaf("tab");
-      await leaf.setViewState({ type: DIFF2_EDIT_VIEW_TYPE, active: true });
+      await leaf.setViewState({ type: DIFF2_PANEL_VIEW_TYPE, active: true });
     }
     workspace.revealLeaf(leaf);
     return leaf;
@@ -2068,7 +2068,7 @@ export default class GitHubSyncPlugin extends Plugin {
     );
     const which = findExistingHistoryLeaf(paths, path);
     if (which >= 0) {
-      workspace.revealLeaf(leaves[which]);
+      this.revealAndFocusHistory(leaves[which]);
       return;
     }
     const leaf = workspace.getLeaf("tab");
@@ -2077,7 +2077,24 @@ export default class GitHubSyncPlugin extends Plugin {
       active: true,
       state: { path },
     });
-    workspace.revealLeaf(leaf);
+    this.revealAndFocusHistory(leaf);
+  }
+
+  // Reveal a diff2-history leaf AND deterministically hand keyboard focus to its list. This is
+  // the reliable path for the editor `[←]` back-nav: relying on active-leaf-change alone left
+  // the list unfocused (no keyboard, low-contrast cursor) when the editor closed in a DIFFERENT
+  // split. setActiveLeaf(focus) makes the leaf active; the rAF focuses the list once the reveal
+  // layout has settled (a fresh view's list is rendered by then).
+  private revealAndFocusHistory(leaf: WorkspaceLeaf): void {
+    // Match the panel back-nav EXACTLY (which works cleanly across splits): revealLeaf +
+    // an rAF focus of the list. An earlier setActiveLeaf(focus:true) here — which the panel
+    // path does NOT do — was the one structural difference and interfered across splits.
+    this.app.workspace.revealLeaf(leaf);
+    requestAnimationFrame(() => {
+      // Return the cursor to the LAUNCH position (the version [←] came from), scroll it into
+      // view, and focus the list — not merely focus wherever the list was last navigated.
+      if (leaf.view instanceof DiffHistoryView) leaf.view.restoreLaunchedSelection();
+    });
   }
 
   // 7a.3 — open a historical version in a diff2-editor tab (origin=history), behind
@@ -2184,7 +2201,7 @@ export default class GitHubSyncPlugin extends Plugin {
 
   private hasOpenDiff2Leaf(): boolean {
     const ws = this.app.workspace;
-    return [DIFF2_EDIT_VIEW_TYPE, DIFF2_EDITOR_VIEW_TYPE, DIFF2_HISTORY_VIEW_TYPE].some(
+    return [DIFF2_PANEL_VIEW_TYPE, DIFF2_EDITOR_VIEW_TYPE, DIFF2_HISTORY_VIEW_TYPE].some(
       (t) => ws.getLeavesOfType(t).length > 0,
     );
   }
@@ -2302,7 +2319,13 @@ export default class GitHubSyncPlugin extends Plugin {
       return;
     }
     const leaf = await this.activateDiffEditView();
-    if (leaf.view instanceof DiffPanelView) leaf.view.applyBackNav(nav);
+    if (leaf.view instanceof DiffPanelView) {
+      leaf.view.applyBackNav(nav);
+      // Return the cursor to the LAUNCH position + focus the list (same reason as history —
+      // active-leaf-change alone is unreliable across splits).
+      const panel = leaf.view;
+      requestAnimationFrame(() => panel.restoreLaunchedConflict());
+    }
   }
 
   // The dependency object both diff2 hosts take. Live-reads settings via thunks so
@@ -2320,8 +2343,10 @@ export default class GitHubSyncPlugin extends Plugin {
       touchOnly: () => this.settings.diffEditorTouchMode ?? false,
       // Diff highlight mode: "words" → word-level, else char-level (default).
       diffWordLevel: () => this.settings.diffEditorDiffMode === "words",
-      // §2.2.15 Auto-focus default (toggleable per-document in the toolbar).
-      autoFocus: () => this.settings.diffEditorAutoFocus ?? true,
+      // §2.2.15 / TODO §17 Auto-focus default — PER-MODE (toggleable per-document in the
+      // toolbar). conflict → on, history/deleted → off; an old bool value is ignored.
+      autoFocus: (mode) =>
+        this.settings.diffEditorAutoFocus?.[mode] ?? mode === "conflict",
       // S4 — the panel's conflicts-list routes a row-click here instead of its own
       // (now-bypassed, S6-deleted) detail-mode.
       openEditor: (entry) => void this.openEditorForPair(entry),
