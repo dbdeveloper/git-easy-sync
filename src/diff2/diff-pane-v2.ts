@@ -497,12 +497,17 @@ const drawSelectionComp = new Compartment();
 export const touchOnlyComp = new Compartment();
 export const wordLevelComp = new Compartment();
 
-// TODO §15 — the CM6 search panel's next/prev buttons (relabeled ">>"/"<<" via phrases)
-// carry no tooltip. When the panel opens, tag them with their find-again hotkeys so the
-// glyphs are self-explanatory. Runs only on the open transition (cheap); the buttons live
-// in the panel DOM under the view (`.cm-search button[name="next"|"prev"]`), which CM6 has
-// already mounted by the time the updateListener fires.
-export const searchButtonHints: Extension = EditorView.updateListener.of((u) => {
+// TODO §15/§17 — tweak the default CM6 search panel when it opens. The buttons live in the
+// panel DOM under the view (`.cm-search button[name="…"]`), already mounted by the time the
+// updateListener fires; the panel's DOM is stable for its lifetime (rebuilt only on
+// close/reopen), so doing this once per open is enough. Two tweaks:
+//   1. Tag next/prev (relabeled ">>"/"<<" via phrases, no native tooltip) with their
+//      find-again hotkeys so the glyphs are self-explanatory.
+//   2. Hide the [All] button (name="select" → selectMatches). It selects every match as a
+//      MULTI-selection, but diff2 never enables allowMultipleSelections (multi-cursor would
+//      fight the resolve/merge cascade), so CM6 collapses it to one range — the button does
+//      nothing useful. Hidden to avoid a dead control.
+export const configureSearchPanel: Extension = EditorView.updateListener.of((u) => {
   if (!searchPanelOpen(u.state) || searchPanelOpen(u.startState)) return;
   const panel = u.view.dom.querySelector(".cm-search");
   panel
@@ -511,6 +516,8 @@ export const searchButtonHints: Extension = EditorView.updateListener.of((u) => 
   panel
     ?.querySelector('button[name="prev"]')
     ?.setAttribute("title", "Previous match (Shift+F3)");
+  const selectAll = panel?.querySelector('button[name="select"]');
+  if (selectAll instanceof HTMLElement) selectAll.style.display = "none";
 });
 
 // §2.2.15 — scroll to a conflict group (2-line lead) + caret at ver1.from (its `from`). The
@@ -806,7 +813,7 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       // no extra binding is needed; search-gate.test.ts locks it. HISTORY-DELETED.md §4.6
       // relies on F3 for phrase carry-over.
       keymap.of(searchKeymap),
-      searchButtonHints, // TODO §15 — hotkey tooltips on the panel's << / >> buttons
+      configureSearchPanel, // TODO §15/§17 — hotkey tooltips on << / >>; hide dead [All]
       keymap.of([...historyKeymap, ...defaultKeymap]),
       // §1.11 / TODO §6.9 — draw the selection ourselves so its background extends
       // to the END of the line, INCLUDING the trailing `↵` glyph widget (native

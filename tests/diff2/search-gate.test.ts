@@ -106,4 +106,12 @@ describe("§2.2.17 / TODO §15 — F3 / Shift+F3 next/prev", () => {
       "Previous match (Shift+F3)",
     );
   });
+
+  it("hides the [All] button (selectMatches is a dead multi-cursor control here)", () => {
+    const v = mount("x\nAAA\ny\n", "x\nBBB\ny\n");
+    openSearchPanel(v);
+    const selectAll = v.dom.querySelector('.cm-search button[name="select"]') as HTMLElement | null;
+    expect(selectAll).not.toBeNull(); // still in the DOM (default panel) …
+    expect(selectAll!.style.display).toBe("none"); // … but hidden
+  });
 });
