@@ -727,9 +727,24 @@ export class DiffDetailController {
       }
 
       try {
+        // TODO(perf) — [←] commit-chain instrumentation. A 2 MB file froze the UI ~1-2 min
+        // on save with 0 conflicts left (so NOT the diff — base==sibling is a trivial
+        // diffLines). Each step logs its own ms + payload size so a repro pins the exact
+        // offender (suspected: the history.jsonl path — a "Keep/Apply all" on a big file
+        // records a ~file-sized ChangeSet, so drain/read/assess grow with the log). Cheap
+        // (a few log lines per save); keep until the large-file freeze is fixed + verified.
+        const tExit0 = performance.now();
+        let tPrev = tExit0;
+        const lap = (step: string, extra?: Record<string, unknown>): void => {
+          const now = performance.now();
+          this.deps.logger?.info(`diff2 [←] ${step}`, { ms: Math.round(now - tPrev), ...extra });
+          tPrev = now;
+        };
+
         // Step 1 (§5.0) — flush queued history before the commit. commit7Step Step 7
         // removes the dir on success; drainHistory awaits the serialized append chain.
         await owner.drainHistory();
+        lap("drainHistory");
         // §4.1 zero-edit invariant — the NET trustworthy edit count over the FULL
         // history.jsonl (prior + this session): 0 ⇒ "no recovery value AND nothing to
         // commit" → commitOrDiscardExit wipes the dir without touching the input files.
@@ -737,11 +752,17 @@ export class DiffDetailController {
         // prior edits live on disk, and a new undo can pop into a replayed edit, so
         // in-memory + prior is not additive (§0.5.4).
         const jsonl = await readHistoryJsonl(this.deps.vault, session.conflictId);
+        lap("readHistoryJsonl", { jsonlKB: Math.round(jsonl.length / 1024) });
         const recordCount = assessHistoryV2(jsonl).edits;
+        lap("assessHistoryV2", { recordCount });
         // getResolved() = raw splitModel sides ("" for empty); commit7Step's
         // baseCommitAction applies the empty-base semantics (delete / 0-byte / "\n") and
         // hashes EXACTLY those bytes into done.json.
         const resolved = owner.getResolved();
+        lap("getResolved", {
+          baseKB: Math.round(resolved.base.length / 1024),
+          siblingKB: Math.round(resolved.sibling.length / 1024),
+        });
         // §5.0 exit decision (discard-if-empty / commit / TOCTOU). TOCTOU (§5.0 Step
         // 1.5): a sync may have rewritten base/sibling under us.
         const outcome = await commitOrDiscardExit(
@@ -808,10 +829,29 @@ export class DiffDetailController {
     session: { conflictId: string; meta: AutosaveMeta; hadPriorEdits: boolean },
   ): Promise<void> {
     try {
+      // TODO(perf) — history [←] instrumentation (History is unfinished — may still hit a
+      // "primitive" path). A 2 MB history version froze the UI ~1-2 min on [←]. Same step
+      // timers as the conflict path so a repro pins the offender (drain / read / assess /
+      // resolve / never-clobber SHA / commitUnchangedSide). Keep until the freeze is fixed.
+      const tExit0 = performance.now();
+      let tPrev = tExit0;
+      const lap = (step: string, extra?: Record<string, unknown>): void => {
+        const now = performance.now();
+        this.deps.logger?.info(`diff2 history [←] ${step}`, { ms: Math.round(now - tPrev), ...extra });
+        tPrev = now;
+      };
+
       await owner.drainHistory();
+      lap("drainHistory");
       const jsonl = await readHistoryJsonl(this.deps.vault, session.conflictId);
+      lap("readHistoryJsonl", { jsonlKB: Math.round(jsonl.length / 1024) });
       const edits = assessHistoryV2(jsonl).edits;
+      lap("assessHistoryV2", { edits });
       const resolved = owner.getResolved();
+      lap("getResolved", {
+        baseKB: Math.round(resolved.base.length / 1024),
+        siblingKB: Math.round(resolved.sibling.length / 1024),
+      });
 
       if (edits === 0) {
         // Browsed only — discard the session (no write), then navigate back.
@@ -829,6 +869,7 @@ export class DiffDetailController {
       // Never-clobber: currentFile must be byte-identical to session start.
       const curBytes = await this.deps.vault.adapter.readBinary(entry.siblingPath);
       const curSha = await calculateGitBlobSHA(curBytes);
+      lap("neverClobberSha", { curKB: Math.round(curBytes.byteLength / 1024) });
       if (curSha !== session.meta.siblingShaAtStart) {
         new Notice(
           `"${entry.basePath}" changed since you opened this version — not ` +
@@ -847,6 +888,7 @@ export class DiffDetailController {
         resolved,
         "base", // write resolved.sibling → meta.siblingPath (= currentFile)
       );
+      lap("commitUnchangedSide", { totalMs: Math.round(performance.now() - tExit0) });
       new Notice(`Saved ${writtenPath}`);
     } catch (err) {
       new Notice(`Failed to save ${entry.basePath}: ${String(err)}`);
