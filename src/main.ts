@@ -2126,13 +2126,12 @@ export default class GitHubSyncPlugin extends Plugin {
 
   // ── §4.5.3 (B3) cross-fast-reload layout restore ─────────────────────────────
 
-  // The marker is a file in a `.runtime/` SUBFOLDER of the plugin dir (NOT a top-level
-  // file). A top-level `.diff2-layout-restore.json` was fatal: BRAT watches the plugin
-  // folder's top level and reacted to it being created (onunload) + deleted (onload)
-  // each cycle → reload → INFINITE ~2s loop (device-confirmed: disabling BRAT stopped
-  // it). Our other runtime state lives in subfolders (.diff2-autosave/, .push-queue/)
-  // which BRAT does NOT churn on — so a `.runtime/` subfolder marker is safe too
-  // (TESTING this hypothesis; localStorage is the known-safe fallback if it still loops).
+  // The marker is a file in the `.runtime/` SUBFOLDER of the plugin dir, NEVER a top-level
+  // file. A top-level marker was fatal: BRAT watches the plugin folder's top level and
+  // reacted to the file being created (onunload) + deleted (onload) each cycle → reload →
+  // an INFINITE ~2s loop (device-confirmed: disabling BRAT stopped it). Runtime state in a
+  // SUBFOLDER doesn't trigger it — which is exactly why ALL runtime state now lives under
+  // `.runtime/` (device-verified 2026-07-03).
   private static readonly LAYOUT_RESTORE_SUBDIR = ".runtime";
   private static readonly LAYOUT_RESTORE_FILE = "diff2-layout-restore.json";
 
