@@ -15,13 +15,15 @@
 
 import { ItemView, WorkspaceLeaf } from "obsidian";
 import {
+  historyIsoTimestamp,
   loadHistoryVersions,
   type HistoryCommitSource,
   type HistoryVersion,
   type QueueVersionSource,
 } from "./history-versions";
+import { formatConflictTimestamp } from "./strip-conflict-suffix";
 
-export const DIFF2_HISTORY_VIEW_TYPE = "diff2-history";
+export const DIFF2_HISTORY_VIEW_TYPE = "diff2-history-view";
 
 export interface DiffHistoryViewDeps {
   // Thunks return null when GitHub sync is not configured (sync2Manager absent) —
@@ -38,15 +40,50 @@ export interface DiffHistoryViewDeps {
 
 interface HistoryViewState {
   path?: string;
+  // Persisted selection (the last-viewed / about-to-open version) so returning to the tab —
+  // or reopening it after a restart — restores the focus bar and keyboard position.
+  selectedKey?: string;
+}
+
+// Stable per-version identity for persisting the selection across re-renders / reopen. `id` is
+// a batchId (local) or a commit-sha (remote); `local` disambiguates the two id-spaces.
+function versionKey(v: HistoryVersion): string {
+  return `${v.local ? "L" : "R"}:${v.id}`;
+}
+
+// Rows to jump for PageUp / PageDown.
+const HISTORY_PAGE = 10;
+
+// Pure keyboard-nav resolver (obsidian-runtime-free → unit-testable). Maps a key + the current
+// index + list length to the NEXT selected index (clamped), "open" ([Enter]), or null (a key we
+// don't handle → let it pass through).
+export function nextHistorySelection(
+  key: string,
+  current: number,
+  len: number,
+): number | "open" | null {
+  if (len === 0) return null;
+  const clamp = (n: number) => Math.max(0, Math.min(n, len - 1));
+  switch (key) {
+    case "ArrowDown": return clamp(current + 1);
+    case "ArrowUp": return clamp(current - 1);
+    case "Home": return 0;
+    case "End": return len - 1;
+    case "PageDown": return clamp(current + HISTORY_PAGE);
+    case "PageUp": return clamp(current - HISTORY_PAGE);
+    case "Enter": return "open";
+    default: return null;
+  }
 }
 
 // The pure per-file dup-guard (`findExistingHistoryLeaf`) lives in editor-tabs.ts
 // (obsidian-runtime-free → unit-testable); main.ts uses it in openHistoryView.
 
-// Human-readable row date. toLocaleString is locale/timezone-aware — fine for a
-// display-only list (the true authoring ms is carried on the version for sorting).
+// Row date in the standard "YYYY-MM-DD HH:MM:SS" (24-hour) form used everywhere else (the
+// conflicts list, the detail-view title/labels) — via the SAME historyIsoTimestamp →
+// formatConflictTimestamp derivation, so the list and the opened editor read identically.
 function formatRowDate(ms: number): string {
-  return new Date(ms).toLocaleString();
+  return formatConflictTimestamp(historyIsoTimestamp(ms));
 }
 
 export class DiffHistoryView extends ItemView {
@@ -55,6 +92,16 @@ export class DiffHistoryView extends ItemView {
   // Generation token — the latest render() wins; a stale in-flight load (a second
   // render from the onOpen/setState pair, or a path change) is discarded on return.
   private gen = 0;
+  // Keyboard-driven selection state (rebuilt each renderList; selectedKey persists).
+  private versions: readonly HistoryVersion[] = [];
+  private rows: HTMLElement[] = [];
+  private listEl: HTMLElement | null = null;
+  private selectedIndex = 0;
+  private selectedKey: string | null = null;
+  // The version LAST OPENED from this list (the "launch position"). Distinct from selectedKey:
+  // you may navigate the list (v3 → v10) while the editor is open, but [←] must return the
+  // cursor to the version you launched (v3), not wherever you roamed. Set on open.
+  private launchedKey: string | null = null;
 
   constructor(leaf: WorkspaceLeaf, deps: DiffHistoryViewDeps) {
     super(leaf);
@@ -98,18 +145,45 @@ export class DiffHistoryView extends ItemView {
   }
 
   getState(): Record<string, unknown> {
-    return { path: this.state.path } as unknown as Record<string, unknown>;
+    return {
+      path: this.state.path,
+      selectedKey: this.selectedKey ?? undefined,
+    } as unknown as Record<string, unknown>;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async setState(state: any, result: unknown): Promise<void> {
     this.state = (state ?? {}) as HistoryViewState;
+    if (typeof this.state.selectedKey === "string") {
+      this.selectedKey = this.state.selectedKey;
+    }
     await super.setState(state, result as never);
     void this.render();
   }
 
   async onOpen(): Promise<void> {
+    // Re-focus the list whenever this tab becomes active again — e.g. after opening a version
+    // in the editor and clicking [←] back here. Without this the list keeps DOM focus nowhere,
+    // so the selection cursor stays low-contrast AND the arrow keys do nothing. Also focus on
+    // any mousedown in the body, so clicking ANYWHERE in the view (not just a row) activates
+    // the keyboard cursor. registerEvent/registerDomEvent auto-clean on view close.
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        if (leaf === this.leaf) this.focusList();
+      }),
+    );
+    this.registerDomEvent(this.contentEl, "mousedown", () => this.focusList());
     void this.render();
+  }
+
+  // Focus the list so the keyboard cursor is active. Queries the LIVE list element (not the
+  // possibly-stale `this.listEl`, which a split/layout rebuild can detach) → we never focus a
+  // dead node. Public so the reveal-on-[←] path (main.ts) can focus DETERMINISTICALLY: when the
+  // editor closes in a DIFFERENT split, active-leaf-change doesn't reliably target this leaf.
+  focusList(): void {
+    const list =
+      this.contentEl?.querySelector<HTMLElement>(".diff2-history-list") ?? this.listEl;
+    list?.focus({ preventScroll: true });
   }
 
   // Both-ready gate + generation token. Loads local (instant, can't throw) always,
@@ -181,8 +255,19 @@ export class DiffHistoryView extends ItemView {
       });
       return;
     }
+    // Keyboard-driven list: the container owns focus; rows carry a persistent selection bar.
+    this.versions = versions;
+    const restored = this.selectedKey
+      ? versions.findIndex((v) => versionKey(v) === this.selectedKey)
+      : -1;
+    this.selectedIndex = restored >= 0 ? restored : 0;
+    this.selectedKey = versionKey(versions[this.selectedIndex]);
+
     const list = container.createEl("div", { cls: "diff2-history-list" });
-    for (const v of versions) {
+    list.tabIndex = 0; // focusable → arrows / Home / End / PgUp / PgDn / Enter
+    this.listEl = list;
+    this.rows = [];
+    versions.forEach((v, i) => {
       const row = list.createEl("div", { cls: "diff2-history-row" });
       row.dataset.local = String(v.local);
       row.createEl("span", { text: formatRowDate(v.date), cls: "diff2-history-date" });
@@ -190,7 +275,62 @@ export class DiffHistoryView extends ItemView {
         text: v.local ? `${v.deviceLabel} · not pushed` : v.deviceLabel,
         cls: "diff2-history-who",
       });
-      row.addEventListener("click", () => this.deps.openHistoryVersion(path, v));
+      // Click both SELECTS (shows the bar) and OPENS.
+      row.addEventListener("click", () => {
+        this.select(i);
+        this.openSelected(path);
+      });
+      this.rows.push(row);
+    });
+    this.applySelection();
+    list.addEventListener("keydown", (e) => this.onKeyDown(e, path));
+    // Focus the list so the arrows work the instant the tab is shown / returned to.
+    list.focus({ preventScroll: true });
+  }
+
+  // Paint the selection bar on the selected row and reveal it.
+  private applySelection(): void {
+    this.rows.forEach((r, i) =>
+      r.classList.toggle("diff2-history-row-selected", i === this.selectedIndex),
+    );
+    this.rows[this.selectedIndex]?.scrollIntoView({ block: "nearest" });
+  }
+
+  // Move the selection (clamped), remember it (persists across re-render / reopen).
+  private select(i: number): void {
+    if (this.versions.length === 0) return;
+    this.selectedIndex = Math.max(0, Math.min(i, this.versions.length - 1));
+    this.selectedKey = versionKey(this.versions[this.selectedIndex]);
+    this.applySelection();
+  }
+
+  private openSelected(path: string): void {
+    const v = this.versions[this.selectedIndex];
+    if (!v) return;
+    this.launchedKey = versionKey(v); // remember the launch position for [←] return
+    this.deps.openHistoryVersion(path, v);
+  }
+
+  // On [←] back-nav: return the cursor to the version we LAUNCHED (not wherever the list was
+  // navigated to since), scroll it into view, and take keyboard focus. Public — called from
+  // main.ts's reveal path. Falls back to focus-only if the launch version is gone.
+  restoreLaunchedSelection(): void {
+    if (this.launchedKey) {
+      const i = this.versions.findIndex((v) => versionKey(v) === this.launchedKey);
+      if (i >= 0) {
+        this.selectedIndex = i;
+        this.selectedKey = this.launchedKey;
+        this.applySelection(); // scrolls the launched row into view
+      }
     }
+    this.focusList();
+  }
+
+  private onKeyDown(e: KeyboardEvent, path: string): void {
+    const r = nextHistorySelection(e.key, this.selectedIndex, this.versions.length);
+    if (r === null) return;
+    e.preventDefault();
+    if (r === "open") this.openSelected(path);
+    else this.select(r);
   }
 }

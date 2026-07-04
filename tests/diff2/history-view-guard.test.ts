@@ -29,3 +29,42 @@ describe("findExistingHistoryLeaf", () => {
     expect(findExistingHistoryLeaf([], "a.md")).toBe(-1);
   });
 });
+
+// Keyboard-driven HistoryList nav (§ user request 2026-07-04): arrows / Home / End / PgUp /
+// PgDn move the selection; Enter opens. Pure resolver — clamps at both ends, ignores other keys.
+import { nextHistorySelection } from "../../src/diff2/diff-history-view";
+
+describe("nextHistorySelection", () => {
+  it("Arrow keys move by one, clamped at both ends", () => {
+    expect(nextHistorySelection("ArrowDown", 0, 5)).toBe(1);
+    expect(nextHistorySelection("ArrowDown", 4, 5)).toBe(4); // clamped
+    expect(nextHistorySelection("ArrowUp", 2, 5)).toBe(1);
+    expect(nextHistorySelection("ArrowUp", 0, 5)).toBe(0); // clamped
+  });
+
+  it("Home / End jump to the ends", () => {
+    expect(nextHistorySelection("Home", 3, 5)).toBe(0);
+    expect(nextHistorySelection("End", 1, 5)).toBe(4);
+  });
+
+  it("PageDown / PageUp jump by a page, clamped", () => {
+    expect(nextHistorySelection("PageDown", 0, 25)).toBe(10);
+    expect(nextHistorySelection("PageDown", 0, 5)).toBe(4); // clamped (0+10 > 4)
+    expect(nextHistorySelection("PageUp", 15, 25)).toBe(5);
+    expect(nextHistorySelection("PageUp", 3, 25)).toBe(0); // clamped
+  });
+
+  it("Enter → 'open'", () => {
+    expect(nextHistorySelection("Enter", 2, 5)).toBe("open");
+  });
+
+  it("unhandled keys → null (pass through)", () => {
+    expect(nextHistorySelection("a", 2, 5)).toBeNull();
+    expect(nextHistorySelection("Tab", 2, 5)).toBeNull();
+  });
+
+  it("empty list → null for every key", () => {
+    expect(nextHistorySelection("ArrowDown", 0, 0)).toBeNull();
+    expect(nextHistorySelection("Enter", 0, 0)).toBeNull();
+  });
+});
