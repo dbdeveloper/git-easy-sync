@@ -33,20 +33,16 @@ export async function isSyncable(
   // Per-device configDir gate — symmetric: OFF blocks the whole
   // <configDir>/ subtree on both push and pull.
   if (!syncConfigDir && path.startsWith(`${configDir}/`)) return false;
-  // Anything under our own plugin's push-queue is sync2's internal
-  // staging area; it sits inside the vault but must never be uploaded.
-  // Without this rule, vault.getFiles() surfaces queued snapshots as
-  // user content and we'd push them on the next sync.
-  const queuePrefix = `${configDir}/plugins/${selfPluginId}/.runtime/push-queue/`;
-  if (path.startsWith(queuePrefix)) return false;
-  // Same protection for the ConflictStore (pseudo-merge): meta.json +
-  // the captured theirs-bytes backups are per-device internals. The
-  // strict-allowlist `<configDir>/plugins/<self>/.gitignore` already
-  // blocks them when the invariant gitignore is in place, but the
-  // hardcoded rule guards setups (tests, partial init) where that
-  // gitignore hasn't been seeded yet.
-  const conflictsPrefix = `${configDir}/plugins/${selfPluginId}/.runtime/conflicts/`;
-  if (path.startsWith(conflictsPrefix)) return false;
+  // ALL of our plugin's per-device runtime state lives under a SINGLE `.runtime/`
+  // subfolder (push-queue snapshots, conflict-store meta + theirs-backups, trash,
+  // pending-deletions, autosave sessions, push-inflight / token-expired / layout
+  // markers). None of it may ever be uploaded — vault.getFiles() surfaces it as user
+  // content, and pushing per-device state feedback-loops onto other devices. The
+  // strict-allowlist `<self>/.gitignore` (`* !main.js !manifest.json !styles.css
+  // !.gitignore`) already blocks the whole plugin dir, but this ONE hardcoded prefix
+  // guards the un-seeded window (tests, partial init) — and by gating the `.runtime/`
+  // ROOT it covers every current AND future runtime artifact without a per-item list.
+  if (path.startsWith(`${configDir}/plugins/${selfPluginId}/.runtime/`)) return false;
   if (path === ".git" || path.startsWith(".git/")) return false;
   if (path.includes("/.git/")) return false;
   // Conflict sibling files (`<base>.conflict-from-<label>-<ts>.<ext>`,

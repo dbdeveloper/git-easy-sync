@@ -115,6 +115,27 @@ describe("ChangeDetector", () => {
       expect(out).toEqual([]);
     });
 
+    it("§4.5.3 (C2/G2): the WHOLE .runtime/ subtree is excluded (single prefix, no gitignore needed)", async () => {
+      // The reorg put ALL per-device runtime state under one `.runtime/` folder; the
+      // single hardcoded prefix must exclude every current + future artifact — even with
+      // syncConfigDir ON and NO plugin .gitignore seeded (the un-seeded window this
+      // safety-net exists for). A regression here feedback-loops per-device state to GitHub.
+      const pdir = `${CONFIG_DIR}/plugins/${SELF_PLUGIN_ID}`;
+      writeFile(f.root, `${pdir}/.runtime/push-queue/b1/vault/note.md`, "q");
+      writeFile(f.root, `${pdir}/.runtime/conflicts/c1/meta.json`, "{}");
+      writeFile(f.root, `${pdir}/.runtime/trash/t1/meta.json`, "{}");
+      writeFile(f.root, `${pdir}/.runtime/pending-deletions/p1/meta.json`, "{}");
+      writeFile(f.root, `${pdir}/.runtime/diff2-autosave/history-x/meta.json`, "{}");
+      writeFile(f.root, `${pdir}/.runtime/push-inflight.json`, "{}");
+      writeFile(f.root, `${pdir}/.runtime/token_expired`, "x");
+      writeFile(f.root, `${pdir}/.runtime/diff2-layout-restore.json`, "{}");
+      // Control: a real plugin file is NOT over-blocked (main.js still syncs).
+      writeFile(f.root, `${pdir}/main.js`, "code");
+      const paths = (await f.detector.findChanges()).map((c) => c.path);
+      expect(paths.filter((p) => p.includes("/.runtime/"))).toEqual([]);
+      expect(paths).toContain(`${pdir}/main.js`);
+    });
+
     it("respects gitignore at root", async () => {
       writeFile(f.root, ".gitignore", "*.log\n");
       writeFile(f.root, "x.log", "noise");
