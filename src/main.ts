@@ -54,6 +54,7 @@ import { recoverAutosaveDirs } from "./diff2/onload-recovery";
 import { setAutosaveRoot, AUTOSAVE_ROOT, autosaveDir } from "./diff2/autosave-store";
 import { DiffPanelView, DIFF2_PANEL_VIEW_TYPE, type DiffEditViewDeps } from "./diff2/diff-panel-view";
 import { DiffEditorView, DIFF2_EDITOR_VIEW_TYPE } from "./diff2/diff-editor-view";
+import { findRightNeighborIndex, type Rect } from "./diff2/split-nav";
 import {
   DiffHistoryView,
   DIFF2_HISTORY_VIEW_TYPE,
@@ -2042,7 +2043,8 @@ export default class GitHubSyncPlugin extends Plugin {
       branch: () => this.settings.githubBranch,
       localDeviceLabel: () => this.settings.deviceLabel ?? "Obsidian",
       logger: this.logger,
-      openHistoryVersion: (path, version) => this.openHistoryVersion(path, version),
+      openHistoryVersion: (path, version, toRight) =>
+        this.openHistoryVersion(path, version, toRight),
     };
   }
 
@@ -2101,7 +2103,11 @@ export default class GitHubSyncPlugin extends Plugin {
   // the SAME write-set open-guard as conflicts (openEditorForPair). Two versions of one
   // file share the write-set [currentFile] → different autosaveId → "busy" dialog (you
   // can't merge two versions into one file at once); the SAME version reopened → focus.
-  async openHistoryVersion(path: string, version: HistoryVersion): Promise<void> {
+  async openHistoryVersion(
+    path: string,
+    version: HistoryVersion,
+    toRight = false,
+  ): Promise<void> {
     const entry: ConflictEntry = {
       basePath: path,
       siblingPath: path, // history: base===sibling===currentFile
@@ -2133,7 +2139,7 @@ export default class GitHubSyncPlugin extends Plugin {
         if (choice === "switch") this.revealAndFocusEditor(leaves[result.which]);
         return;
       }
-      const leaf = workspace.getLeaf("tab");
+      const leaf = this.createEditorLeaf(toRight);
       const state: EditorTabState = {
         origin: "history",
         basePath: path,
@@ -2349,7 +2355,7 @@ export default class GitHubSyncPlugin extends Plugin {
         this.settings.diffEditorAutoFocus?.[mode] ?? mode === "conflict",
       // S4 — the panel's conflicts-list routes a row-click here instead of its own
       // (now-bypassed, S6-deleted) detail-mode.
-      openEditor: (entry) => void this.openEditorForPair(entry),
+      openEditor: (entry, toRight) => void this.openEditorForPair(entry, toRight),
       // S5 — the editor's `[←]` routes here to navigate back to the panel.
       onEditorCommitted: (origin, anchorPath) => void this.onEditorCommitted(origin, anchorPath),
       // 7a.3 — lazy version-bytes fetch for a history editor's fresh mount.
@@ -2374,7 +2380,54 @@ export default class GitHubSyncPlugin extends Plugin {
   // guard's `which` resolves to the right leaf — `alignOpenDescs` enforces that
   // (never `.filter`). Both the request and every open descriptor route through
   // `openDescFor` so the overlap compare only ever sees normalized write-sets.
-  async openEditorForPair(entry: ConflictEntry): Promise<void> {
+  // Create the leaf a diff-editor opens into. Normally a new tab in the active group. With
+  // toRight (Ctrl/⌘ + click / Enter on a list row): open to the RIGHT of the panel/history
+  // window — a new tab in the CLOSEST right-neighbour window, or a fresh right split when there
+  // is none. All of it is best-effort over semi-private geometry/API: mobile (no splits) and any
+  // failure fall back to the plain tab, so the open never breaks.
+  private createEditorLeaf(toRight: boolean): WorkspaceLeaf {
+    const { workspace } = this.app;
+    if (!toRight || Platform.isMobile) return workspace.getLeaf("tab");
+    try {
+      const origin = workspace.activeLeaf;
+      const originEl = origin?.view?.containerEl;
+      if (origin && originEl) {
+        const originRect = originEl.getBoundingClientRect() as Rect;
+        const cands: WorkspaceLeaf[] = [];
+        const rects: Rect[] = [];
+        workspace.iterateAllLeaves((l) => {
+          if (l === origin) return;
+          // Main area only — a sidebar to the right must not swallow the editor.
+          const getRoot = (l as unknown as { getRoot?: () => unknown }).getRoot;
+          if (typeof getRoot === "function" && getRoot.call(l) !== workspace.rootSplit) return;
+          const el = l.view?.containerEl;
+          if (!el) return;
+          const rc = el.getBoundingClientRect();
+          if (rc.width === 0 || rc.height === 0) return; // inactive/hidden tab
+          cands.push(l);
+          rects.push(rc as Rect);
+        });
+        const idx = findRightNeighborIndex(originRect, rects);
+        if (idx >= 0) {
+          // Rule 2/3 — new tab in the closest right-neighbour window's group.
+          const parent = cands[idx].parent;
+          const make = (workspace as unknown as {
+            createLeafInParent?: (p: unknown, i: number) => WorkspaceLeaf | undefined;
+          }).createLeafInParent;
+          const leaf = make ? make.call(workspace, parent, -1) : undefined;
+          if (leaf) return leaf;
+        }
+        // Rule 1 — no right neighbour (or createLeafInParent unavailable) → split origin right.
+        // "vertical" = side-by-side in Obsidian; device-verify the SIDE and flip if it opens below.
+        return workspace.getLeaf("split", "vertical");
+      }
+    } catch (e) {
+      this.logger?.info?.("diff2 open-to-right failed → plain tab", { err: String(e) });
+    }
+    return workspace.getLeaf("tab");
+  }
+
+  async openEditorForPair(entry: ConflictEntry, toRight = false): Promise<void> {
     const autosaveId = autosaveIdForEntry(entry);
     // Synchronous re-entrancy guard closing the check-then-act window across the
     // `setViewState` await (double-click → two tabs → write-race).
@@ -2402,7 +2455,7 @@ export default class GitHubSyncPlugin extends Plugin {
       }
 
       // result.action === "open"
-      const leaf = workspace.getLeaf("tab");
+      const leaf = this.createEditorLeaf(toRight);
       const state: EditorTabState = {
         origin: "conflict",
         basePath: entry.basePath,

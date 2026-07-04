@@ -34,8 +34,13 @@ export interface DiffHistoryViewDeps {
   branch: () => string;
   localDeviceLabel: () => string;
   logger?: { info(message: string, o?: unknown): void };
-  // Wired in 7a.3 — open the clicked version in a diff2-editor (origin=history).
-  openHistoryVersion: (path: string, version: HistoryVersion) => void;
+  // Wired in 7a.3 — open the clicked version in a diff2-editor (origin=history). toRight
+  // (Ctrl/⌘): open to the right of this history window (see main.createEditorLeaf).
+  openHistoryVersion: (
+    path: string,
+    version: HistoryVersion,
+    toRight?: boolean,
+  ) => void;
 }
 
 interface HistoryViewState {
@@ -275,10 +280,20 @@ export class DiffHistoryView extends ItemView {
         text: v.local ? `${v.deviceLabel} · not pushed` : v.deviceLabel,
         cls: "diff2-history-who",
       });
-      // Click both SELECTS (shows the bar) and OPENS.
-      row.addEventListener("click", () => {
+      // Click both SELECTS (shows the bar) and OPENS. Ctrl+Click → open to the right.
+      row.addEventListener("click", (e) => {
         this.select(i);
-        this.openSelected(path);
+        this.openSelected(path, e.ctrlKey);
+      });
+      // macOS turns Ctrl+Click into a system secondary-click → it arrives as `contextmenu`, not
+      // `click`. Treat a Ctrl one as open-to-the-right so Ctrl+Click works on Mac too (matching
+      // Ctrl+Enter); a plain right-click is left untouched.
+      row.addEventListener("contextmenu", (e) => {
+        if (e.ctrlKey) {
+          e.preventDefault();
+          this.select(i);
+          this.openSelected(path, true);
+        }
       });
       this.rows.push(row);
     });
@@ -304,11 +319,11 @@ export class DiffHistoryView extends ItemView {
     this.applySelection();
   }
 
-  private openSelected(path: string): void {
+  private openSelected(path: string, toRight = false): void {
     const v = this.versions[this.selectedIndex];
     if (!v) return;
     this.launchedKey = versionKey(v); // remember the launch position for [←] return
-    this.deps.openHistoryVersion(path, v);
+    this.deps.openHistoryVersion(path, v, toRight);
   }
 
   // On [←] back-nav: return the cursor to the version we LAUNCHED (not wherever the list was
@@ -330,7 +345,7 @@ export class DiffHistoryView extends ItemView {
     const r = nextHistorySelection(e.key, this.selectedIndex, this.versions.length);
     if (r === null) return;
     e.preventDefault();
-    if (r === "open") this.openSelected(path);
+    if (r === "open") this.openSelected(path, e.ctrlKey); // Ctrl+Enter → right
     else this.select(r);
   }
 }

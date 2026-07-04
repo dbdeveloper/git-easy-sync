@@ -20,9 +20,10 @@ import type { ConflictEntry } from "./synthetic-detector";
 import { formatConflictTimestamp } from "./strip-conflict-suffix";
 
 export interface ConflictsListCallbacks {
-  // Fires when user clicks a sibling row. Receives base + sibling
-  // paths so the caller (DiffPanelView) can open a diff2-editor tab for the pair.
-  onEntryClick: (entry: ConflictEntry) => void;
+  // Fires when user clicks a sibling row. Receives base + sibling paths so the caller
+  // (DiffPanelView) can open a diff2-editor tab for the pair. toRight (Ctrl/⌘ + click) → open
+  // to the right of the panel window.
+  onEntryClick: (entry: ConflictEntry, toRight?: boolean) => void;
 }
 
 // A rendered conflict row paired with its entry, in VISUAL (grouped) order — the list the
@@ -145,8 +146,16 @@ function renderEntryRow(
     text: entry.kind === "tracked" ? "tracked" : "synthetic",
   });
 
-  row.addEventListener("click", () => {
-    callbacks.onEntryClick(entry);
+  row.addEventListener("click", (e) => {
+    callbacks.onEntryClick(entry, e.ctrlKey); // Ctrl+Click → open to the right
+  });
+  // macOS turns Ctrl+Click into a system secondary-click → it arrives as `contextmenu`. Treat a
+  // Ctrl one as open-to-the-right so Ctrl+Click works on Mac too; a plain right-click is untouched.
+  row.addEventListener("contextmenu", (e) => {
+    if (e.ctrlKey) {
+      e.preventDefault();
+      callbacks.onEntryClick(entry, true);
+    }
   });
   return row;
 }

@@ -73,7 +73,7 @@ export interface DiffEditViewDeps {
   // S4 — open a dedicated `diff2-editor-view` tab for a conflict (behind the
   // open-guard). The panel routes a conflicts-list row-click here. Optional so test
   // fixtures / the editor host (which never lists) can omit it.
-  openEditor?: (entry: ConflictEntry) => void;
+  openEditor?: (entry: ConflictEntry, toRight?: boolean) => void;
   // S5 — the editor host calls this on a committed `[←]` so the host (main.ts) can
   // navigate back: reveal the singleton panel + scroll to the base group (R-D). origin
   // routes the destination; anchorPath = base for a conflict.
@@ -256,11 +256,11 @@ export class DiffPanelView extends ItemView {
         {
           // A row-click SELECTS (shows the cursor) then opens a dedicated diff2-editor tab
           // (behind the open-guard in main). Production always wires openEditor via diffViewDeps.
-          onEntryClick: (entry) => {
+          onEntryClick: (entry, toRight) => {
             this.conflictSelectedKey = conflictKey(entry);
             this.conflictLaunchedKey = this.conflictSelectedKey; // launch position for [←]
             this.applyConflictSelection();
-            this.deps.openEditor?.(entry);
+            this.deps.openEditor?.(entry, toRight);
           },
         },
         this.conflictSelectedKey,
@@ -336,12 +336,12 @@ export class DiffPanelView extends ItemView {
     this.applyConflictSelection();
   }
 
-  private openSelectedConflict(): void {
+  private openSelectedConflict(toRight = false): void {
     const ref = this.conflictRefs[this.conflictSelectedIndex];
     if (!ref) return;
     this.conflictSelectedKey = conflictKey(ref.entry);
     this.conflictLaunchedKey = this.conflictSelectedKey; // launch position for [←]
-    this.deps.openEditor?.(ref.entry);
+    this.deps.openEditor?.(ref.entry, toRight);
   }
 
   // On [←] back-nav: return the cursor to the conflict we LAUNCHED (not wherever the list was
@@ -368,7 +368,7 @@ export class DiffPanelView extends ItemView {
     );
     if (r === null) return;
     e.preventDefault();
-    if (r === "open") this.openSelectedConflict();
+    if (r === "open") this.openSelectedConflict(e.ctrlKey); // Ctrl+Enter → right
     else this.selectConflict(r);
   }
 }
