@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 //
 // P6.3 — pins the DECISIONS DiffEditView.mountDiffPane / exitDetailView make on
-// the V2 path, which the §1 diff-edit-view-commit.test.ts / reopen-empty-history.
+// the V2 path, which the §1 diff-panel-view-commit.test.ts / reopen-empty-history.
 // test.ts no longer exercise (they still drive the dead §1 DiffPane). mountDiffPane
 // + exitDetailView are private ItemView glue with no mount harness, so — like
 // reopen-empty-history.test.ts — this replays the glue against a real fs-backed

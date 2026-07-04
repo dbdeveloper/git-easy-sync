@@ -3,7 +3,7 @@
 // S2 of the panel/editor split (docs/tasks/SPLIT-PANEL-EDITOR-FEASIBILITY.md §12).
 //
 // Drives the EXTRACTED detail engine through its host seam — the coverage the old
-// diff-edit-view-v2-glue.test.ts couldn't reach ("private ItemView glue with no mount
+// diff-panel-view-v2-glue.test.ts couldn't reach ("private ItemView glue with no mount
 // harness"). DiffDetailController is now a plain class, and getView() (added for the
 // host Mod+F hook) doubles as a test handle, so we can:
 //   - mount(connectedDiv, entry) → edit via getView().dispatch → exit(entry)
@@ -12,7 +12,7 @@
 //
 // Scope (advisor caveat): only the modal-FREE paths — fresh mount, net>0 commit, net-0
 // discard, no-session leave. The Resume/Empty/Alt modals need real `app` wiring and aren't
-// worth faking here; their decisions are pinned by diff-edit-view-v2-glue.test.ts.
+// worth faking here; their decisions are pinned by diff-panel-view-v2-glue.test.ts.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "fs";
@@ -28,7 +28,7 @@ import {
   DiffDetailController,
   type DiffDetailHost,
 } from "../../src/diff2/diff-detail-controller";
-import type { DiffEditViewDeps } from "../../src/diff2/diff-edit-view";
+import type { DiffEditViewDeps } from "../../src/diff2/diff-panel-view";
 import {
   autosaveIdForEntry,
   type ConflictEntry,

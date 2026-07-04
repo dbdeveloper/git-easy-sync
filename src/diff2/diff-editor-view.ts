@@ -26,7 +26,7 @@ import {
   DiffDetailController,
   type DiffDetailHost,
 } from "./diff-detail-controller";
-import type { DiffEditViewDeps } from "./diff-edit-view";
+import type { DiffEditViewDeps } from "./diff-panel-view";
 import {
   openDescFor,
   persistedEditorState,

@@ -223,7 +223,7 @@ export function alignOpenDescs(
 }
 
 // 7a.2 — per-file open-guard for the diff2-history view. main.ts maps
-// getLeavesOfType("diff2-history") → each leaf's path (null while a leaf is
+// getLeavesOfType("diff2-history-view") → each leaf's path (null while a leaf is
 // mid-rebuild — the transient empty getState on a split), and resolves the
 // returned index against THAT SAME array to reveal the existing tab. A null slot
 // never matches, so a split's empty phase can't alias a live tab. Pure sibling of
