@@ -11,6 +11,7 @@ import {
   entryFromSibling,
   findAllConflicts,
   groupByBasePath,
+  pendingConflictSummary,
   type ConflictEntry,
 } from "../../src/diff2/synthetic-detector";
 
@@ -189,6 +190,57 @@ describe("findAllConflicts", () => {
       "tracked.md:tracked",
     ]);
     expect(byBasePath.size).toBe(3);
+  });
+
+  it("EXCLUDES a resolved conflict whose sibling was deleted while its ConflictStore record lingers (pre-sync-gate parity)", async () => {
+    // REGRESSION: after the user resolves a conflict in diff2, the sibling file is
+    // removed (merge → base rewritten, sibling gone) but the ConflictStore record is
+    // NOT dropped until the NEXT drain's evaluateConflictState (Phase A: !siblingExists
+    // → accept-ours). The pre-sync gate used to read the raw records (conflictStore.
+    // getAll()), so it re-surfaced this already-resolved conflict in the "you still have
+    // conflicts" modal even though the diff-panel no longer showed it. The panel/badge/
+    // gate all source from findAllConflicts (live vault siblings) now — so a record whose
+    // sibling is gone must NOT appear, while a genuinely-live conflict still does.
+    writeFile(fx.root, "resolved.md", "merged bytes"); // base rewritten by the resolution
+    const resolvedRec = await fx.store.create({
+      vaultPath: "resolved.md",
+      kind: "modify-vs-modify",
+      oursBlobSha: "1111111111111111111111111111111111111111",
+      theirsBlobSha: "2222222222222222222222222222222222222222",
+      theirsContent: new TextEncoder().encode("theirs").buffer as ArrayBuffer,
+      remoteDevice: "Phone",
+      baseMtime: null,
+      baseSize: null,
+      baseSha: null,
+    });
+    // A second, still-unresolved TRACKED conflict (its sibling stays on disk).
+    writeFile(fx.root, "live.md", "ours");
+    await fx.store.create({
+      vaultPath: "live.md",
+      kind: "modify-vs-modify",
+      oursBlobSha: "3333333333333333333333333333333333333333",
+      theirsBlobSha: "4444444444444444444444444444444444444444",
+      theirsContent: new TextEncoder().encode("theirs-live").buffer as ArrayBuffer,
+      remoteDevice: "Laptop",
+      baseMtime: null,
+      baseSize: null,
+      baseSha: null,
+    });
+
+    // Simulate the diff2 resolution: the sibling file is gone from the vault, but the
+    // ConflictStore record is still present (drain hasn't reconciled yet).
+    fs.rmSync(path.join(fx.root, resolvedRec.siblingPath));
+    // Raw records (the OLD gate source, conflictStore.getAll()): BOTH still there — reading
+    // them would put the resolved "resolved.md" back into the pre-sync modal (the bug).
+    expect(fx.store.getAll().map((r) => r.vaultPath).sort()).toEqual(["live.md", "resolved.md"]);
+
+    // The gate's actual source (pendingConflictSummary → findAllConflicts) surfaces ONLY the
+    // live conflict; the resolved one is filtered out. If the gate ever reverts to raw
+    // records this assertion fails.
+    const summary = pendingConflictSummary(fx.vault as unknown as import("obsidian").Vault, fx.store);
+    expect(summary).not.toBeNull();
+    expect(summary!.paths).toEqual(["live.md"]);
+    expect(summary!.firstSibling).toContain("live.conflict-from-Laptop"); // the live sibling, not the deleted one
   });
 
   it("groups multi-sibling-per-path into one bucket each", async () => {

@@ -403,6 +403,38 @@ export class Plugin {
   }
 }
 
+// ItemView stub: the diff2 view classes (DiffPanelView / DiffEditorView /
+// DiffHistoryView) extend it. Only needs to be a constructable base so those
+// modules load under vitest; tests that actually exercise a view construct it
+// explicitly. containerEl is created lazily so this is safe in the node env
+// (no document) as well as happy-dom.
+export class ItemView {
+  app: unknown;
+  leaf: unknown;
+  containerEl: unknown;
+  constructor(leaf?: unknown) {
+    this.leaf = leaf;
+    this.containerEl =
+      typeof document !== "undefined"
+        ? document.createElement("div")
+        : { empty: () => {} };
+  }
+  registerEvent(_ref: EventRef): void {}
+  registerInterval(_id: number): void {}
+  addAction(_icon: string, _title: string, _cb: () => void): HTMLElement {
+    return { remove: () => {} } as unknown as HTMLElement;
+  }
+  addChild<T>(child: T): T {
+    return child;
+  }
+  getViewType(): string {
+    return "";
+  }
+  getDisplayText(): string {
+    return "";
+  }
+}
+
 // PluginSettingTab stub: the settings/tab.ts class extends it.
 export class PluginSettingTab {
   app: unknown;

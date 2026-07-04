@@ -20,6 +20,7 @@ import * as os from "os";
 import * as path from "path";
 import * as crypto from "crypto";
 import { undo } from "@codemirror/commands";
+import { applyResolve } from "../../src/diff2/diff-resolve";
 import type { App } from "obsidian";
 import type { Vault } from "obsidian";
 import { Vault as MockVault } from "../../mock-obsidian";
@@ -197,6 +198,44 @@ describe("DiffDetailController host seam (S2)", () => {
       ctl.dispose();
     }).not.toThrow();
     expect(ctl.getView()).toBeNull();
+  });
+
+  // REGRESSION: a partial resolve (conflict count N→N-1, still >0) with Auto-focus ON must
+  // not blow the stack. focusFirstConflict()'s scrollToConflict dispatches a selection-set
+  // transaction that RE-ENTERS refreshToolbar synchronously (CM6 fires updateListeners on
+  // selectionSet even for a same-position cursor). If prevConflictCount is updated AFTER the
+  // focus call (the original bug) the count-decrease guard never trips on re-entry → infinite
+  // recursion → RangeError "Maximum call stack size exceeded" (device crash while editing a
+  // small multi-conflict file). NOTE the overflow is SWALLOWED: CM6 wraps updateListener
+  // calls in try/catch and routes the exception to console.error ("update listener: …"), so
+  // the resolve dispatch does NOT throw to the caller — we must assert on that logged error.
+  // deps() here forces autoFocus ON (the device default; the other tests use false).
+  it("partial resolve with Auto-focus ON does NOT recurse (refreshToolbar re-entrancy)", async () => {
+    // Two conflict groups so resolving one leaves the count at 1 (>0 → auto-focus fires).
+    const base = "a\nMINE1\nb\nMINE2\nc\n";
+    const sibling = "a\nTHEIRS1\nb\nTHEIRS2\nc\n";
+    const { entry } = await writeInputs(base, sibling);
+    const host = recordingHost();
+    const focusDeps = { vault: fx.vault, autoFocus: () => true } as unknown as DiffEditViewDeps;
+    const ctl = new DiffDetailController({} as unknown as App, focusDeps, host);
+
+    await ctl.mount(container, entry);
+    const view = ctl.getView()!;
+
+    // Resolve group 1 → count 2→1. The dispatch drives owner.onUpdate → refreshToolbar →
+    // focusFirstConflict → re-entrant refreshToolbar. Capture CM6's swallowed listener errors.
+    const errs: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => void errs.push(args.map(String).join(" "));
+    try {
+      applyResolve(view, 1, "keep1");
+    } finally {
+      console.error = origError;
+    }
+
+    // Pre-fix: errs is full of "update listener: RangeError: Maximum call stack size exceeded".
+    expect(errs.join("\n")).not.toMatch(/call stack/i);
+    ctl.dispose();
   });
 
   it("1B silentResume: a restart-restore REPLAYS the recorded edit with NO modal", async () => {

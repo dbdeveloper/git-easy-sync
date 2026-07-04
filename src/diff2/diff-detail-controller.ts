@@ -177,10 +177,14 @@ export class DiffDetailController {
     }
     const s = this.owner.toolbarState();
     this.toolbarHandle.update(s);
-    if (this.autoFocus && s.conflictCount > 0 && s.conflictCount < this.prevConflictCount) {
-      this.owner.focusFirstConflict();
-    }
+    // Record the new count BEFORE focusFirstConflict(): its scrollToConflict dispatches a
+    // selection-set transaction that RE-ENTERS refreshToolbar synchronously (onUpdate fires
+    // on selectionSet). Updating prevConflictCount first makes that re-entrant call see
+    // conflictCount == prevConflictCount → the count-decrease guard is false → no re-focus,
+    // no infinite recursion (was: RangeError "Maximum call stack size exceeded").
+    const dropped = this.autoFocus && s.conflictCount > 0 && s.conflictCount < this.prevConflictCount;
     this.prevConflictCount = s.conflictCount;
+    if (dropped) this.owner.focusFirstConflict();
   }
 
   // §2.2.15 — Auto-focus the first conflict, DEFERRED past layout. On a just-mounted

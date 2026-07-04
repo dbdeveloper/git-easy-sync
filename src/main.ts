@@ -74,6 +74,7 @@ import { EditorBusyModal } from "./diff2/recovery-dialog";
 import {
   autosaveIdForEntry,
   findAllConflicts,
+  pendingConflictSummary,
   type ConflictEntry,
 } from "./diff2/synthetic-detector";
 import { TokenExpiredModal } from "./sync2/views/token-expired-modal";
@@ -1302,20 +1303,24 @@ export default class GitHubSyncPlugin extends Plugin {
   // first sibling in the editor as a courtesy).
   private async confirmPendingConflictsBeforeSync(): Promise<boolean> {
     if (!this.conflictStore) return true;
-    const records = this.conflictStore.getAll();
-    if (records.length === 0) return true;
-    const paths = Array.from(
-      new Set(records.map((r) => r.vaultPath)),
-    ).sort();
-    const decision = await new PreSyncConflictModal(this.app, paths).prompt();
+    // Source of truth = pendingConflictSummary → findAllConflicts (live vault siblings) —
+    // the SAME source the diff-panel, badge, status bar and menu use — NOT the raw
+    // ConflictStore records. A conflict the user already resolved (sibling deleted + base
+    // rewritten to the merge) lingers as a record until the NEXT drain's
+    // evaluateConflictState drops it (Phase A: !siblingExists → accept-ours). Reading the
+    // raw records here re-surfaced that already-resolved conflict in the gate even though
+    // the panel no longer listed it. Read-only: record cleanup stays the drain's job.
+    const summary = pendingConflictSummary(this.app.vault, this.conflictStore);
+    if (!summary) return true;
+    const decision = await new PreSyncConflictModal(this.app, summary.paths).prompt();
     if (decision === "sync-anyway") return true;
     if (decision === "resolve") {
-      // Open the first sibling file in the editor so the user can act
-      // on it immediately. workspace.openLinkText accepts a vault-
+      // Open the first (newest) sibling file in the editor so the user can
+      // act on it immediately. workspace.openLinkText accepts a vault-
       // relative path; the second arg ("") is the source path the
       // resolver would use to resolve relative links, which doesn't
       // matter for absolute paths.
-      const firstSibling = records[0].siblingPath;
+      const firstSibling = summary.firstSibling;
       try {
         await this.app.workspace.openLinkText(firstSibling, "", false);
       } catch (err) {

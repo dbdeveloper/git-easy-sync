@@ -154,6 +154,28 @@ export function findAllConflicts(
   return { entries, byBasePath };
 }
 
+// The pre-sync conflict gate's summary (main.ts confirmPendingConflictsBeforeSync).
+// SOURCED FROM findAllConflicts — the live vault siblings — NOT the raw ConflictStore
+// records. A conflict the user already resolved in diff2 (sibling deleted, base rewritten
+// to the merge) keeps its ConflictStore record until the NEXT drain's evaluateConflictState
+// drops it (Phase A: !siblingExists → accept-ours); reading the raw records in the gate
+// re-surfaced that already-resolved conflict in the "you still have conflicts" modal even
+// though the diff-panel no longer showed it. Going through findAllConflicts makes the gate
+// list EXACTLY what the panel / badge / status bar list. Returns null when there are no
+// live conflicts (gate lets sync proceed). `firstSibling` is the newest sibling — what the
+// modal's "Resolve" button opens.
+export function pendingConflictSummary(
+  vault: Vault,
+  conflictStore: ConflictStore,
+): { paths: string[]; firstSibling: string } | null {
+  const { entries, byBasePath } = findAllConflicts(vault, conflictStore);
+  if (entries.length === 0) return null;
+  return {
+    paths: Array.from(byBasePath.keys()).sort(),
+    firstSibling: entries[0].siblingPath, // entries are newest-first
+  };
+}
+
 // Convenience: shape that excludes the file-iteration / vault-walking
 // concern, useful in tests where the caller hand-constructs entries
 // for assertions on grouping logic.
