@@ -247,8 +247,14 @@ export class DiffDetailController {
     },
   ): Promise<void> {
     const history = opts?.history;
+    // TODO §17 — the Vault side (ver1 / base-file) is labelled the literal "Local", NOT the
+    // local deviceLabel. A user who never renamed their device shows "Obsidian" on every
+    // machine, so the old scheme compared "Obsidian" vs "Obsidian" — useless. The remote
+    // side keeps entry.deviceLabel. History sessions are left as-is (their ver1 is a
+    // historical version; the "Actual" relabel + role-flip is separate, unbuilt History work).
+    const localSideLabel = history ? (this.deps.localDeviceLabel?.() ?? "local") : "Local";
     const toolbar = parent.createDiv({ cls: "diff2-detail-toolbar" });
-    this.renderToolbar(toolbar, entry);
+    this.renderToolbar(toolbar, entry, localSideLabel);
     // §title (Screenshot-17): the file identity lives in the VIEW HEADER
     // (getDisplayText), so the old in-body title row is dropped — saving a row for the
     // editor itself.
@@ -314,7 +320,7 @@ export class DiffDetailController {
       // (top/bottom markers), join date, and isMarkdown (Join-button gate). The owner
       // derives the resolve ResolveOpts {label: remoteLabel, date} from it.
       const config: DiffViewConfig = {
-        localLabel: this.deps.localDeviceLabel?.() ?? "local",
+        localLabel: localSideLabel, // TODO §17 — "Local" (conflict) / deviceLabel (history)
         remoteLabel: entry.deviceLabel,
         date: entry.isoTimestamp,
         isMarkdown: isMarkdownPath(entry.basePath),
@@ -622,9 +628,12 @@ export class DiffDetailController {
   // R7.9a toolbar — [← Back] + group resolve buttons + Auto-advance toggle. Built once
   // per detail open into the `toolbar` element `mount` created; `refreshToolbar` keeps
   // its live state in sync thereafter.
-  private renderToolbar(toolbar: HTMLElement, entry: ConflictEntry): void {
+  private renderToolbar(
+    toolbar: HTMLElement,
+    entry: ConflictEntry,
+    localLabel: string, // TODO §17 — "Local" (conflict) / deviceLabel (history), from mount()
+  ): void {
     const isMd = isMarkdownPath(entry.basePath);
-    const localLabel = this.deps.localDeviceLabel?.() ?? "local";
 
     // §2.2.15 — per-session mode state seeded from Settings; toggled locally for this
     // view. resolve-all routes to the V2 owner (ours→keep1, theirs→keep2, join→join).

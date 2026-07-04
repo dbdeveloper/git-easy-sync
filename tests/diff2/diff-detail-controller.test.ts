@@ -129,6 +129,35 @@ describe("DiffDetailController host seam (S2)", () => {
     return { basePath, siblingPath, entry, conflictId: autosaveIdForEntry(entry) };
   }
 
+  it("TODO §17 — conflict mode labels the Vault (ver1) side 'Local', not the device label", async () => {
+    const { entry } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+    const host = recordingHost();
+    // deps DELIBERATELY provides a local device label — the conflict view must IGNORE it for
+    // the local side (that's the whole point: "Obsidian" vs "Obsidian" was useless) and show
+    // the literal "Local". The remote side keeps entry.deviceLabel ("Phone").
+    const labelDeps = {
+      vault: fx.vault,
+      autoFocus: () => false,
+      localDeviceLabel: () => "MyDesktop",
+    } as unknown as DiffEditViewDeps;
+    const ctl = new DiffDetailController({} as unknown as App, labelDeps, host);
+    await ctl.mount(container, entry);
+
+    // Toolbar "Keep all" hint reads "Local", not the device label.
+    const keepBtn = container.querySelector(".diff2-btn-keep-local") as HTMLElement | null;
+    expect(keepBtn?.title).toBe("Keep all Local changes");
+
+    // The ver1 (top) marker is labelled "Local"; the ver2 (bottom) marker keeps "Phone"
+    // (the marker renders the label parenthesized).
+    const labels = Array.from(container.querySelectorAll(".diff2-marker-label")).map(
+      (e) => e.textContent,
+    );
+    expect(labels).toContain("(Local)");
+    expect(labels.some((l) => l?.includes("MyDesktop"))).toBe(false);
+    expect(labels).toContain("(Phone)");
+    ctl.dispose();
+  });
+
   it("fresh mount → edit → exit() commits: onCommitExit fires, base written, dir wiped", async () => {
     const base = "a\nMINE\nc\n";
     const sibling = "a\nTHEIRS\nc\n";

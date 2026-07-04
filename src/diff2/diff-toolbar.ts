@@ -124,7 +124,7 @@ export function renderDiffToolbar(
   l1.className = "diff2-tb-left";
   iconButton(l1, "arrow-left", "Back to list", cb.onBack);
   iconButton(l1, "search", "Search (Mod+F) — toggle", cb.onSearch);
-  textButton(l1, "diff2-btn-keep-local", "Keep all", `Keep all local (${initial.localLabel}) changes`, cb.onKeepAll);
+  textButton(l1, "diff2-btn-keep-local", "Keep all", `Keep all ${initial.localLabel} changes`, cb.onKeepAll);
   textButton(l1, "diff2-btn-apply-remote", "Apply all", `Apply all remote (${initial.remoteLabel}) changes`, cb.onApplyAll);
   if (cb.onJoinAll) {
     textButton(l1, "diff2-btn-join-all", "> Join all", `Keep local and join changes from "${initial.remoteLabel}"`, cb.onJoinAll);
