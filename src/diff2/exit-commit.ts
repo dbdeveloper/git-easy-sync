@@ -38,7 +38,7 @@
 // MERGE-MODE §9.2/§9.3).
 
 import { normalizePath, TFile, type Vault } from "obsidian";
-import { atomicWriteFile, stagingPathFor } from "../sync2/atomic-write";
+import { atomicWriteFile, MODIFY_IN_PLACE_MAX_BYTES, stagingPathFor, withViewPreserve } from "../sync2/atomic-write";
 import { restoreEol } from "./eol";
 import { safeRename } from "../sync2/cross-platform";
 import { buildSiblingPath } from "../sync2/conflict-store";
@@ -47,6 +47,19 @@ import { autosaveDir, readMeta, type AutosaveMeta } from "./autosave-store";
 
 const utf8 = (s: string): ArrayBuffer =>
   new TextEncoder().encode(s).buffer as ArrayBuffer;
+
+// TODO(perf) diagnostic — commitUnchangedSide had no logger; this module-level sink bridges
+// its sub-step timing (prep / atomicWrite / rmdir) to the file log. main.ts wires it to
+// logger.info; null in unit tests. Pins the 28 s large-file history [←] to the exact step.
+export interface CommitStepPerf {
+  step: string;
+  ms: number;
+  bytes?: number;
+}
+let commitStepSink: ((p: CommitStepPerf) => void) | null = null;
+export function setCommitStepSink(fn: ((p: CommitStepPerf) => void) | null): void {
+  commitStepSink = fn;
+}
 
 // git-blob SHA of zero bytes — the well-known empty blob. Both commit and
 // recovery use it to recognise an empty-resolved base. (Verified === a live
@@ -323,14 +336,22 @@ async function promoteInPlace(
   const modBin = (
     vault as { modifyBinary?: (f: TFile, b: ArrayBuffer) => Promise<void> }
   ).modifyBinary;
-  if (typeof getter === "function" && typeof modBin === "function") {
+  if (
+    typeof getter === "function" &&
+    typeof modBin === "function" &&
+    bytes.byteLength <= MODIFY_IN_PLACE_MAX_BYTES // small → in-place (tab untouched); large → rename via the hook
+  ) {
     const existing = getter.call(vault, targetPath);
     if (existing instanceof TFile) {
       await modBin.call(vault, existing, bytes);
       return;
     }
   }
-  await safeRename(vault.adapter, tmpPath, targetPath);
+  // Large (or non-TFile) → rename THROUGH the view-preserve hook (same as atomicWriteFile):
+  // if targetPath is open in a tab, close it → rename → reopen fresh + cursor. UNIFORM.
+  await withViewPreserve(targetPath, () =>
+    safeRename(vault.adapter, tmpPath, targetPath),
+  );
 }
 
 // ── exit decision: commit vs discard (§5.0 + §4.1 zero-edit invariant) ─
@@ -454,12 +475,19 @@ export async function commitUnchangedSide(
   // roll-forward) — keep the empty→"\n" guard so an emptied side stays a benign
   // 1-byte file rather than a §2.9-resurrectable 0-byte one.
   // bug-59 — restore the session EOL (empty→"\n" marker kept via guardEmpty AFTER).
-  await atomicWriteFile(
-    vault,
-    writtenPath,
-    utf8(guardEmpty(restoreEol(writeStr, meta.eol ?? "lf"))),
-  );
+  // TODO(perf) — split the sub-steps: a 693 KB history [←] took ~28 s here (device). prep
+  // (restoreEol+encode) is trivial; the suspect is atomicWriteFile → modifyBinary (Obsidian
+  // re-renders/re-indexes the large file when it is open). rmdir clears the autosave dir
+  // (holds ~file-sized snapshots). commitStepSink logs each; null in tests.
+  const tPrep = performance.now();
+  const bytes = utf8(guardEmpty(restoreEol(writeStr, meta.eol ?? "lf")));
+  commitStepSink?.({ step: "commitUnchangedSide.prep", ms: Math.round(performance.now() - tPrep), bytes: bytes.byteLength });
+  const tWrite = performance.now();
+  await atomicWriteFile(vault, writtenPath, bytes);
+  commitStepSink?.({ step: "commitUnchangedSide.atomicWrite", ms: Math.round(performance.now() - tWrite) });
+  const tRm = performance.now();
   await vault.adapter.rmdir(autosaveDir(autosaveId), true);
+  commitStepSink?.({ step: "commitUnchangedSide.rmdir", ms: Math.round(performance.now() - tRm) });
   return { writtenPath };
 }
 

@@ -435,6 +435,16 @@ export class ItemView {
   }
 }
 
+// MarkdownView stub: writePreservingOpenViews does `view instanceof MarkdownView` +
+// reads view.file?.path. Tests never construct one (no real workspace), so a bare
+// constructable class with a `file` field is enough for the import + instanceof.
+export class MarkdownView extends ItemView {
+  file: TFile | null = null;
+  getEphemeralState(): unknown {
+    return null;
+  }
+}
+
 // PluginSettingTab stub: the settings/tab.ts class extends it.
 export class PluginSettingTab {
   app: unknown;

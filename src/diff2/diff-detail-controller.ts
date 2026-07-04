@@ -764,7 +764,9 @@ export class DiffDetailController {
           siblingKB: Math.round(resolved.sibling.length / 1024),
         });
         // §5.0 exit decision (discard-if-empty / commit / TOCTOU). TOCTOU (§5.0 Step
-        // 1.5): a sync may have rewritten base/sibling under us.
+        // 1.5): a sync may have rewritten base/sibling under us. Open-tab preservation for
+        // base+sibling is handled UNIFORMLY inside atomicWriteFile/promoteInPlace (via the
+        // view-preserve hook) — no wrap needed here.
         const outcome = await commitOrDiscardExit(
           this.deps.vault,
           session.conflictId,
@@ -881,6 +883,9 @@ export class DiffDetailController {
         return; // stay in the editor
       }
 
+      // Open-tab preservation is now handled UNIFORMLY inside atomicWriteFile (via the
+      // view-preserve hook): a large write to an open file closes the tab → renames →
+      // reopens fresh + cursor. So this call is a plain write.
       const { writtenPath } = await commitUnchangedSide(
         this.deps.vault,
         session.conflictId,
@@ -895,7 +900,13 @@ export class DiffDetailController {
       return; // stay in the editor so the user doesn't lose work
     }
     this.activeSession = null;
+    // TODO(perf) — freeze 2 marker: the 2nd device freeze happened AFTER the editor closed,
+    // when currentFile (now ~693 KB) got revealed in a tab and Obsidian rendered the markdown.
+    // onCommitExit drives the host navigation (detach editor → reveal panel/file). Timestamp
+    // it + disposeOwner (logged in dispose) so the gap to the next log line localizes freeze 2.
+    const tNav = performance.now();
     this.host.onCommitExit(entry);
+    this.deps.logger?.info("diff2 history [←] onCommitExit", { ms: Math.round(performance.now() - tNav) });
   }
 
   // §5.0.e — the vault changed under the session (classifyToctou → mismatch).

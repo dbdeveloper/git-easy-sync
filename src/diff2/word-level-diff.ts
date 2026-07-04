@@ -17,11 +17,22 @@
 
 import { diffChars, diffWords } from "diff";
 
-// char-level diff is O(n·m); a large ver-block (a big paste) diffed char-by-char on every
-// keystroke would freeze the render. Above this product of the two sides' lengths, fall
-// back to the much cheaper word-level diff (coarser highlight, but big blocks rarely need
-// per-character precision). Typical config-line conflicts are tiny → always char-level.
+// BOTH diffChars and diffWords are Myers O(n·d) → O(n·m) worst case on DIFFERING content.
+// Measured on 2 differing sides (jsdiff): diffWords 16 KB/side = 2.7 s, 32 KB/side = 11.6 s;
+// diffChars 32 KB/side = 91 s — pure quadratic (2× size ⇒ ~4× time). So the old "fall back
+// to word-level for big blocks" did NOT save anything: word-level is quadratic too. The
+// product of the two sides' lengths is the cost knob. Two thresholds:
+//   - ≤ CHAR_DIFF_BUDGET      → diffChars   (precise per-character; ~14 ms at the cap)
+//   - ≤ WORD_DIFF_BUDGET      → diffWords   (coarser; ~24 ms at the cap)
+//   - >  WORD_DIFF_BUDGET     → SKIP: no intra-chunk highlight at all (the line-level tint
+//                               already marks the whole group as changed). This is what
+//                               fixes the multi-minute UI freeze on a large conflict group
+//                               (user: a ~2 MB history "Restore"). Matches how VS Code /
+//                               GitHub cap intra-line diffing by size.
+// The SKIP cap overrides the `wordLevel` user preference — a forced word diff on a 2 MB
+// block would hang exactly the same.
 const CHAR_DIFF_BUDGET = 200_000;
+const WORD_DIFF_BUDGET = 2_000_000;
 
 export interface WordSpan {
   // Character offsets within the side's joined text (oursText or
@@ -35,6 +46,24 @@ export interface WordDiffResult {
   oursSpans: WordSpan[];   // words present in ours but not in theirs (or different)
   theirsSpans: WordSpan[]; // words present in theirs but not in ours (or different)
 }
+
+// TODO(perf) diagnostic — the render layer (buildDecorations) is a pure StateField update
+// with no plugin logger, so a module-level sink bridges intra-chunk-diff timing to the file
+// log. main.ts wires it to `logger.info` at onload; null (default) → no-op (unit tests). It
+// fires PER GROUP but only for NOTABLE ones: any group that hit the skip cap (a big group —
+// confirms the O(n²) freeze is now avoided), or any char/word diff that still took ≥ the
+// threshold (catches a medium-group hitch). Keep until the large-file perf work is done.
+export interface WordDiffPerf {
+  oursLen: number;
+  theirsLen: number;
+  mode: "char" | "word" | "skip";
+  ms: number;
+}
+let perfSink: ((p: WordDiffPerf) => void) | null = null;
+export function setWordDiffPerfSink(fn: ((p: WordDiffPerf) => void) | null): void {
+  perfSink = fn;
+}
+const PERF_LOG_MS = 15;
 
 // Compute character-level diff between two text fragments. The result
 // describes which character ranges on each side are visually
@@ -52,9 +81,18 @@ export function computeWordDiff(
   theirsText: string,
   wordLevel = false, // Settings "Diff highlight mode" — true → whole changed WORDS (diffWords)
 ): WordDiffResult {
-  // wordLevel (user preference) OR the size guard (large block, char-level too slow) → the
-  // cheaper coarser word-level; otherwise the precise per-character diff.
-  const useWords = wordLevel || oursText.length * theirsText.length > CHAR_DIFF_BUDGET;
+  // Size guard FIRST (both algorithms are quadratic on differing content). Above the word
+  // budget → no intra-chunk highlight (the group's line tint remains); this is the freeze
+  // fix and it overrides the wordLevel preference.
+  const t0 = performance.now();
+  const product = oursText.length * theirsText.length;
+  if (product > WORD_DIFF_BUDGET) {
+    perfSink?.({ oursLen: oursText.length, theirsLen: theirsText.length, mode: "skip", ms: 0 });
+    return { oursSpans: [], theirsSpans: [] };
+  }
+  // wordLevel (user preference) OR the char budget (per-character too slow above it) → the
+  // coarser word-level; otherwise the precise per-character diff.
+  const useWords = wordLevel || product > CHAR_DIFF_BUDGET;
   const parts = useWords ? diffWords(oursText, theirsText) : diffChars(oursText, theirsText);
   const oursSpans: WordSpan[] = [];
   const theirsSpans: WordSpan[] = [];
@@ -76,6 +114,12 @@ export function computeWordDiff(
     }
   }
 
+  if (perfSink) {
+    const ms = Math.round(performance.now() - t0);
+    if (ms >= PERF_LOG_MS) {
+      perfSink({ oursLen: oursText.length, theirsLen: theirsText.length, mode: useWords ? "word" : "char", ms });
+    }
+  }
   return {
     oursSpans: mergeAdjacent(oursSpans),
     theirsSpans: mergeAdjacent(theirsSpans),

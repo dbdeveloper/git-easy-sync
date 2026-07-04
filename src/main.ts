@@ -77,6 +77,10 @@ import {
   pendingConflictSummary,
   type ConflictEntry,
 } from "./diff2/synthetic-detector";
+import { setWordDiffPerfSink } from "./diff2/word-level-diff";
+import { setAtomicWritePerfSink, setViewPreserveHook } from "./sync2/atomic-write";
+import { setCommitStepSink } from "./diff2/exit-commit";
+import { writePreservingOpenViews } from "./preserve-open-views";
 import { TokenExpiredModal } from "./sync2/views/token-expired-modal";
 import { CancelSyncModal } from "./sync2/views/cancel-sync-modal";
 import { AuthError } from "./errors";
@@ -331,6 +335,22 @@ export default class GitHubSyncPlugin extends Plugin {
         this.settings.enableLogging,
       );
       await this.logger.init();
+      // TODO(perf) diagnostic — bridge the diff2 render layer's intra-chunk-diff timing to
+      // the file log (it is a pure StateField update with no logger of its own). Fires only
+      // for notable groups: a big group that hit the skip cap, or a char/word diff ≥15 ms.
+      // Confirms the large-file freeze is avoided + catches any remaining render hitch.
+      setWordDiffPerfSink((p) => this.logger.info("diff2 wordDiff", p));
+      // TODO(perf) diagnostic — a 693 KB history [←] write blocked ~28 s; time atomicWriteFile
+      // sub-steps (shared by diff2 [←] AND sync) to confirm the cost is Obsidian's modifyBinary
+      // re-index, not our staging I/O. Logs only slow writes (≥200 ms).
+      setAtomicWritePerfSink((p) => this.logger.info("atomicWrite slow", p));
+      setCommitStepSink((p) => this.logger.info("diff2 commitStep", p));
+      // The ONE place windows are touched: atomicWriteFile/promoteInPlace invoke this for the
+      // rename branch (large existing file / new file). Closes any tab showing `path` → runs
+      // the write → reopens it fresh with cursor restored. Makes large writes (diff2 [←] AND
+      // background sync-pull) not freeze / not lose the tab. Small files modify in place and
+      // never reach this. See src/preserve-open-views.ts.
+      setViewPreserveHook((path, write) => writePreservingOpenViews(this.app, path, write));
       // E1 — seed the persistent token-expired marker from disk (one exists()).
       this.tokenExpiredFlag = new TokenExpiredFlag(
         this.app.vault,

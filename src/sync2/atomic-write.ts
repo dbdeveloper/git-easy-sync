@@ -195,6 +195,58 @@ export function parseStagingPath(
   return null;
 }
 
+// TODO(perf) diagnostic — atomicWriteFile has no logger of its own (it's a low-level engine
+// helper called from many places). This module-level sink bridges per-write step timing to
+// the file log; main.ts wires it to logger.info at onload. Fires only for SLOW writes
+// (totalMs ≥ AW_PERF_LOG_MS), so normal small writes stay silent. Pins where a large-file
+// write blocks (staging I/O vs Obsidian's modifyBinary re-index). Keep until the large-file
+// write path is understood/fixed.
+export interface AtomicWritePerf {
+  path: string;
+  bytes: number;
+  strategy: "modify" | "rename";
+  stageMs: number;
+  modifyMs: number;
+  restMs: number;
+  totalMs: number;
+}
+let awPerfSink: ((p: AtomicWritePerf) => void) | null = null;
+export function setAtomicWritePerfSink(fn: ((p: AtomicWritePerf) => void) | null): void {
+  awPerfSink = fn;
+}
+const AW_PERF_LOG_MS = 200;
+
+// The modifyBinary fast-path (below) preserves an open editor's cursor/scroll, but on a
+// LARGE file Obsidian's modifyBinary re-reads + re-renders/re-indexes the open MarkdownView
+// SYNCHRONOUSLY and spins for minutes with "File system operation timed out" retries
+// (device: 693 KB → 28 s, 1.1 MB → 112 s — superlinear). Above this size the cursor
+// preservation is not worth that freeze, so we fall through to the rename strategy: it
+// writes the new bytes to a `.sync-tmp` (NOT into the open file) then renames it over the
+// target — the open view reloads (losing cursor) but there is no modifyBinary storm. Normal
+// notes (< 256 KB) keep the editor-friendly fast path.
+// Exported so exit-commit.ts's promoteInPlace (commit7Step's in-place promote — the SAME
+// modifyBinary path in another function) uses the identical threshold. ONE source of truth.
+export const MODIFY_IN_PLACE_MAX_BYTES = 262_144;
+
+// View-preserve hook — the ONE place windows are touched. Registered by main.ts with
+// app.workspace. atomicWriteFile/promoteInPlace make ONE size decision:
+//   - SMALL existing file → modifyBinary in place → the open tab is UNTOUCHED (cursor kept,
+//     no flash), and the hook is NEVER invoked.
+//   - LARGE existing file OR new file → the rename strategy, RUN THROUGH this hook: it closes
+//     any tab showing `path` BEFORE the rename (so the rename's "file vanished" can't leave a
+//     dead/frozen tab), then reopens it fresh + cursor after.
+// This is what makes a background sync-pull into a file you're reading safe: small updates
+// land in place; a large one blinks the tab closed→reopen instead of freezing or vanishing.
+// null → passthrough (headless / unit tests / nothing open).
+export type ViewPreserveHook = (path: string, write: () => Promise<void>) => Promise<void>;
+let viewPreserveHook: ViewPreserveHook | null = null;
+export function setViewPreserveHook(h: ViewPreserveHook | null): void {
+  viewPreserveHook = h;
+}
+export function withViewPreserve(path: string, write: () => Promise<void>): Promise<void> {
+  return viewPreserveHook ? viewPreserveHook(path, write) : write();
+}
+
 export async function atomicWriteFile(
   vault: Vault,
   path: string,
@@ -221,7 +273,11 @@ export async function atomicWriteFile(
   const modBin = (
     vault as { modifyBinary?: (f: TFile, b: ArrayBuffer) => Promise<void> }
   ).modifyBinary;
-  if (typeof getter === "function" && typeof modBin === "function") {
+  if (
+    typeof getter === "function" &&
+    typeof modBin === "function" &&
+    bytes.byteLength <= MODIFY_IN_PLACE_MAX_BYTES // large files → rename strategy (avoid the modifyBinary freeze)
+  ) {
     const existing = getter.call(vault, path);
     if (existing instanceof TFile) {
       // Crash-safe modify protocol — forward-complete recovery:
@@ -256,6 +312,11 @@ export async function atomicWriteFile(
       //     it as a transient (crash before step 2).
       const tmpPath = stagingPathFor(path, "tmp");
       const markerPath = modifyMarkerPathFor(path);
+      // TODO(perf) diagnostic — a 693 KB history [←] write blocked the UI ~28 s (device log).
+      // Time each sub-step: the suspect is modifyBinary (Obsidian re-indexes the large file
+      // synchronously), NOT our staging I/O. Shared by diff2 [←] AND sync's large-file
+      // writes. Logs only when the whole write is slow (≥ threshold). See awPerfSink.
+      const tStage0 = performance.now();
       // Step 1: stage new bytes in .sync-tmp. Existing transient
       // staging path / file shape, reused — the marker is the
       // signal that distinguishes this from a rename-strategy
@@ -264,9 +325,11 @@ export async function atomicWriteFile(
       // Step 2: drop the marker. From this point on, recovery
       // treats the tmp as forward-complete material.
       await vault.adapter.write(markerPath, "");
+      const tModify0 = performance.now();
       try {
         // Step 3: write new bytes in place. Editor stays attached.
         await modBin.call(vault, existing, bytes);
+        const tRest0 = performance.now();
         // Step 4: caller updates snapshot.
         if (afterCommit) {
           await afterCommit();
@@ -278,6 +341,21 @@ export async function atomicWriteFile(
         // Step 6: remove marker last. The marker's presence has
         // always been a true "in progress" signal up to this point.
         await vault.adapter.remove(markerPath);
+        if (awPerfSink) {
+          const now = performance.now();
+          const totalMs = Math.round(now - tStage0);
+          if (totalMs >= AW_PERF_LOG_MS) {
+            awPerfSink({
+              path,
+              bytes: bytes.byteLength,
+              strategy: "modify",
+              stageMs: Math.round(tModify0 - tStage0),
+              modifyMs: Math.round(tRest0 - tModify0),
+              restMs: Math.round(now - tRest0),
+              totalMs,
+            });
+          }
+        }
       } catch (err) {
         // Best-effort cleanup; sweep handles whatever's left.
         try {
@@ -296,6 +374,26 @@ export async function atomicWriteFile(
     }
   }
 
+  // LARGE existing file OR a brand-new file → the crash-safe rename strategy, RUN THROUGH the
+  // view-preserve hook. ONE size decision (above) chose this branch, so the hook runs ONLY
+  // here — a SMALL file's in-place modify never touches its open tab. For a large file open in
+  // a tab, the hook closes it BEFORE the rename (the rename's "file vanished" would otherwise
+  // leave a dead tab) and reopens it fresh + cursor after; no-op for new files / nothing open
+  // / no hook. This is what makes a background sync-pull into an open file safe too.
+  await withViewPreserve(path, () => renameStrategyWrite(vault, path, bytes, afterCommit));
+}
+
+// The crash-safe atomic write: stage new bytes in .sync-tmp → move any live file aside to
+// .sync-bak → rename tmp→path → afterCommit → drop .sync-bak; roll back from .sync-bak on
+// error. Extracted so atomicWriteFile runs it INSIDE withViewPreserve without a giant inline
+// wrap. Used for large existing files (avoid the modifyBinary freeze) + brand-new files
+// (no TFile to modify in place).
+async function renameStrategyWrite(
+  vault: Vault,
+  path: string,
+  bytes: ArrayBuffer,
+  afterCommit?: () => Promise<void>,
+): Promise<void> {
   // Pre-suffix staging paths so Obsidian's file explorer still
   // recognizes the staging file by extension (a `.md.sync-tmp`
   // file is hidden under "Show all file types: false" but a
@@ -304,10 +402,14 @@ export async function atomicWriteFile(
   const tmpPath = stagingPathFor(path, "tmp");
   const bakPath = stagingPathFor(path, "bak");
 
+  // TODO(perf) — time the rename strategy too, so if a large file is STILL slow here (raw
+  // adapter.writeBinary / rename) we see it. Expected fast: writes to a tmp, not the open file.
+  const tRenStage0 = performance.now();
   // Step 1: stage new bytes in .sync-tmp. A previous crash may have
   // left a stale .sync-tmp behind — overwrite silently; the file is
   // transient by definition.
   await vault.adapter.writeBinary(tmpPath, bytes);
+  const tRenPromote0 = performance.now();
 
   try {
     // Step 2: move the live path aside under .sync-bak. Skipped when
@@ -334,6 +436,21 @@ export async function atomicWriteFile(
     // before (no rename happened in step 2).
     if (await vault.adapter.exists(bakPath)) {
       await vault.adapter.remove(bakPath);
+    }
+    if (awPerfSink) {
+      const now = performance.now();
+      const totalMs = Math.round(now - tRenStage0);
+      if (totalMs >= AW_PERF_LOG_MS) {
+        awPerfSink({
+          path,
+          bytes: bytes.byteLength,
+          strategy: "rename",
+          stageMs: Math.round(tRenPromote0 - tRenStage0),
+          modifyMs: Math.round(now - tRenPromote0), // promote+afterCommit+cleanup
+          restMs: 0,
+          totalMs,
+        });
+      }
     }
   } catch (err) {
     // Best-effort rollback. Restoring from .sync-bak gives us the
