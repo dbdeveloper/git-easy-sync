@@ -515,7 +515,7 @@ export const configureSearchPanel: Extension = EditorView.updateListener.of((u) 
     ?.setAttribute("title", "Next match (F3)");
   panel
     ?.querySelector('button[name="prev"]')
-    ?.setAttribute("title", "Previous match (Shift+F3)");
+    ?.setAttribute("title", "Previous match (⇧F3)");
   const selectAll = panel?.querySelector('button[name="select"]');
   if (selectAll instanceof HTMLElement) selectAll.style.display = "none";
 });
@@ -808,10 +808,10 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       diffClipboardCopy, // §2.2.7 — copy a group-spanning selection as a fenced block
       diffClipboardPaste, // §2.2.7 п.3a — paste fenced groups into normal → materialize + cascade
       // §2.2.17 / TODO §15 — Mod+F open, Esc close, and BOTH find-again pairs next/prev:
-      // Mod+G / Shift+Mod+G AND F3 / Shift+F3. The F3 pair ships inside searchKeymap as of
-      // @codemirror/search 6.7.1 (scope "editor search-panel" → active in the editor too), so
-      // no extra binding is needed; search-gate.test.ts locks it. HISTORY-DELETED.md §4.6
-      // relies on F3 for phrase carry-over.
+      // Mod+G / Shift+Mod+G AND F3 / Shift+F3. The F3 pair already ships inside searchKeymap
+      // (@codemirror/search 6.5.6, the pinned version — scope "editor search-panel" is active
+      // in the editor too), so no extra binding is needed; search-gate.test.ts locks it.
+      // HISTORY-DELETED.md §4.6 relies on F3 for phrase carry-over.
       keymap.of(searchKeymap),
       configureSearchPanel, // TODO §15/§17 — hotkey tooltips on << / >>; hide dead [All]
       keymap.of([...historyKeymap, ...defaultKeymap]),

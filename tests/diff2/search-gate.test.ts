@@ -103,7 +103,7 @@ describe("§2.2.17 / TODO §15 — F3 / Shift+F3 next/prev", () => {
       "Next match (F3)",
     );
     expect(panel.querySelector('button[name="prev"]')?.getAttribute("title")).toBe(
-      "Previous match (Shift+F3)",
+      "Previous match (⇧F3)",
     );
   });
 
