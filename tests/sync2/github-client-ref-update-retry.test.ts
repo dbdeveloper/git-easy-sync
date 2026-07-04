@@ -133,3 +133,37 @@ describe("GithubClient.updateBranchHead — ref-update retry policy", () => {
     expect(c.count()).toBe(1);
   });
 });
+
+// Field bug 2026-07-04: a ~6 ms CACHED "GET branch head" returned a STALE head right after a
+// push moved it → processBatch thought it was up-to-date → ref-update PATCH hit 422 "not a
+// fast forward". The head GET now carries a unique cache-buster so Electron's HTTP cache can
+// never serve a stale ref. (All other GETs are @sha-addressed and stay cacheable.)
+describe("GithubClient.getBranchHeadSha — cache-busting (stale-head 422 fix)", () => {
+  let cleanup: () => void;
+  afterEach(() => {
+    installRequestFaultInjector(null);
+    if (cleanup) cleanup();
+  });
+
+  it("the head GET carries a cache-buster so a stale cached ref can't be served", async () => {
+    const f = makeClient();
+    cleanup = f.cleanup;
+    const urls: string[] = [];
+    installRequestFaultInjector({
+      intercept(url: string, method: string): FakeResponse | null {
+        // The head read is a GET (method !== PATCH) to /git/refs/heads/.
+        if (method !== "PATCH" && url.includes("/git/refs/heads/")) {
+          urls.push(url);
+          return { status: 200, body: JSON.stringify({ object: { sha: "headsha" } }) };
+        }
+        return null;
+      },
+    });
+
+    const sha = await f.client.getBranchHeadSha({});
+    expect(sha).toBe("headsha");
+    expect(urls).toHaveLength(1);
+    // A unique query param → the URL can never be an HTTP-cache hit.
+    expect(urls[0]).toMatch(/[?&]ts=\d+/);
+  });
+});

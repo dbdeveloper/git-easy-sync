@@ -964,7 +964,17 @@ export default class GithubClient {
       async () => {
         return this.timed(
           {
-            url: `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/git/refs/heads/${this.settings.githubBranch}`,
+            // The branch head is the ONE mutable ref we read; it MUST be fresh. The network
+            // worker uses native `fetch`, so a CACHED response can be served — observed as a
+            // ~6 ms "GET branch head" that returned a STALE head right after a push moved it,
+            // which defeated processBatch's reconcile → the ref-update PATCH hit a 422 "not a
+            // fast forward". Fix = a UNIQUE cache-buster query param (`ts`): the URL can never
+            // be a cache hit, GitHub ignores the unknown param, and — unlike a `Cache-Control`
+            // REQUEST header — it does NOT trigger a CORS preflight (GitHub's
+            // Access-Control-Allow-Headers doesn't list cache-control, so that header gets the
+            // request BLOCKED). All other GETs are @sha-addressed and stay cacheable. VERIFY
+            // on device: a fixed head GET should be ~300 ms (network), NOT ~6 ms (cache).
+            url: `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/git/refs/heads/${this.settings.githubBranch}?ts=${Date.now()}`,
             headers: this.headers(),
             throw: false,
           },
