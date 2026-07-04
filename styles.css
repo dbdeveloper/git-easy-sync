@@ -139,16 +139,6 @@
     flex: 0 0 auto; /* bug-23 — fixed toolbar, never scrolls off-screen */
 }
 
-.diff2-back-arrow {
-    font-weight: 600;
-    color: var(--interactive-accent);
-}
-
-.diff2-detail-title {
-    color: var(--text-muted);
-    font-size: 0.9em;
-}
-
 /* bug-23 — the detail body fills the remaining height; the CM6 editor inside it
  * owns the ONLY scrollbar. No fixed calc() (toolbar height varies with wrap), no
  * own overflow:auto (that was the second scrollbar). */
@@ -504,15 +494,6 @@
     top: 0;
 }
 
-/* §1.8.a: temporary 1-line container shown while an empty ver-block is
- * activated, so the caret has a visible spot to type into. */
-.diff2-empty-ver-active {
-    min-height: 1.2em;
-    border: 1px dashed var(--text-faint);
-    border-radius: 3px;
-    opacity: 0.7;
-}
-
 .diff2-marker-label {
     margin-left: 8px;
     opacity: 0.85;
@@ -525,10 +506,6 @@
 
 .diff2-line-theirs {
     background: var(--diff2-theirs-bg);
-}
-
-.diff2-line-common {
-    /* No tint — keep common lines on the editor's default background. */
 }
 
 /* V2 §2.2.8 — the bare terminal `\n` line of a ver-block (and an unfocused empty
@@ -761,16 +738,6 @@
     font-weight: normal;
     font-size: 0.85em;
 }
-.github-easy-sync-statusbar-icon {
-    display: inline-flex;
-    vertical-align: middle;
-}
-.github-easy-sync-statusbar-icon svg {
-    width: 0.9em;
-    height: 0.9em;
-    animation: github-easy-sync-ribbon-spin 1s linear infinite;
-}
-
 /* E2 (TODO §6) — status-bar suffix "(↑ N | M ⁇)". The push-queue "↑ N" is
  * green, the conflict count "M ⁇" red. These sit on the span itself, so they
  * override the parent's inherited syncing-green while a drain runs. */
