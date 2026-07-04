@@ -30,7 +30,7 @@ import { defaultKeymap, deleteToLineEnd, history, historyKeymap, redoDepth, undo
 // §2.2.17 search. Pinned to 6.5.6 (declares view/state `^6.0.0`, so it runs on the project's
 // device-verified CM6 6.36.2 / 6.6.0); package.json `pnpm.overrides` force-dedup view+state to
 // those. Do NOT bump search (6.7.x needs view ≥6.43) without re-verifying diff2 selection/geometry.
-import { search, searchKeymap } from "@codemirror/search";
+import { search, searchKeymap, searchPanelOpen } from "@codemirror/search";
 import {
   Decoration,
   type DecorationSet,
@@ -497,6 +497,22 @@ const drawSelectionComp = new Compartment();
 export const touchOnlyComp = new Compartment();
 export const wordLevelComp = new Compartment();
 
+// TODO §15 — the CM6 search panel's next/prev buttons (relabeled ">>"/"<<" via phrases)
+// carry no tooltip. When the panel opens, tag them with their find-again hotkeys so the
+// glyphs are self-explanatory. Runs only on the open transition (cheap); the buttons live
+// in the panel DOM under the view (`.cm-search button[name="next"|"prev"]`), which CM6 has
+// already mounted by the time the updateListener fires.
+export const searchButtonHints: Extension = EditorView.updateListener.of((u) => {
+  if (!searchPanelOpen(u.state) || searchPanelOpen(u.startState)) return;
+  const panel = u.view.dom.querySelector(".cm-search");
+  panel
+    ?.querySelector('button[name="next"]')
+    ?.setAttribute("title", "Next match (F3)");
+  panel
+    ?.querySelector('button[name="prev"]')
+    ?.setAttribute("title", "Previous match (Shift+F3)");
+});
+
 // §2.2.15 — scroll to a conflict group (2-line lead) + caret at ver1.from (its `from`). The
 // caret-cadence/structure handle the rest. Shared by the toolbar ↑/↓ and the Ctrl+[/] keys.
 export function scrollToConflict(view: EditorView, from: number): void {
@@ -784,7 +800,13 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       ]),
       diffClipboardCopy, // §2.2.7 — copy a group-spanning selection as a fenced block
       diffClipboardPaste, // §2.2.7 п.3a — paste fenced groups into normal → materialize + cascade
-      keymap.of(searchKeymap), // §2.2.17 — Mod+F open, Mod+G next, Shift+Mod+G prev, Esc close
+      // §2.2.17 / TODO §15 — Mod+F open, Esc close, and BOTH find-again pairs next/prev:
+      // Mod+G / Shift+Mod+G AND F3 / Shift+F3. The F3 pair ships inside searchKeymap as of
+      // @codemirror/search 6.7.1 (scope "editor search-panel" → active in the editor too), so
+      // no extra binding is needed; search-gate.test.ts locks it. HISTORY-DELETED.md §4.6
+      // relies on F3 for phrase carry-over.
+      keymap.of(searchKeymap),
+      searchButtonHints, // TODO §15 — hotkey tooltips on the panel's << / >> buttons
       keymap.of([...historyKeymap, ...defaultKeymap]),
       // §1.11 / TODO §6.9 — draw the selection ourselves so its background extends
       // to the END of the line, INCLUDING the trailing `↵` glyph widget (native
