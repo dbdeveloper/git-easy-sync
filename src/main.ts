@@ -1613,6 +1613,20 @@ export default class GitHubSyncPlugin extends Plugin {
         true,
       );
     }
+    this.applySyncIconSpin(); // TODO §14 — seed the -no-spin marker from the setting
+  }
+
+  // TODO §14 — the sync ribbon icon spins + accent-tints while a drain runs. The spin is
+  // optional: when spinSyncIcon is false we keep the accent tint (the "syncing" cue) but
+  // suppress the rotation via the -no-spin marker (styles.css zeroes the animation when
+  // both classes are present). The marker rides the element across drains, so it's set on
+  // icon creation and re-applied whenever the setting changes (settings tab). No-op-safe
+  // when the ribbon icon is hidden.
+  applySyncIconSpin(): void {
+    this.syncRibbonIcon?.toggleClass(
+      "github-easy-sync-no-spin",
+      !(this.settings.spinSyncIcon ?? true),
+    );
   }
 
   // Seed the cached push-queue depth from disk so both the ribbon badge and the

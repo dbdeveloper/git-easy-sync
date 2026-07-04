@@ -727,6 +727,11 @@
     color: var(--interactive-accent);
     animation: github-easy-sync-ribbon-spin 1s linear infinite;
 }
+/* TODO §14 — "Spin the sync icon" OFF: keep the accent tint (the syncing cue) but
+ * suppress the rotation. main.ts applySyncIconSpin toggles the -no-spin marker. */
+.github-easy-sync-ribbon-syncing.github-easy-sync-no-spin svg {
+    animation: none;
+}
 @keyframes github-easy-sync-ribbon-spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }

@@ -707,6 +707,24 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           });
       });
 
+    new Setting(containerEl)
+      .setName("Spin the sync icon while syncing")
+      .setDesc(
+        "Rotate the sync ribbon icon while a sync is in progress. It's a clear, " +
+          "at-a-glance cue, but purely cosmetic. Turn OFF to stop the rotation " +
+          "(the icon still tints to the accent colour while syncing) — handy to " +
+          "reduce motion or save a little battery.",
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.spinSyncIcon ?? true)
+          .onChange(async (value) => {
+            this.plugin.settings.spinSyncIcon = value;
+            await this.plugin.saveSettings();
+            this.plugin.applySyncIconSpin();
+          });
+      });
+
       // ── Diff Editor ─────────────────────────────────────────────────
       new Setting(containerEl).setName("Diff Editor").setHeading();
 
