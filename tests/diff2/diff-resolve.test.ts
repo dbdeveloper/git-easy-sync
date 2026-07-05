@@ -32,12 +32,12 @@ describe("diff-resolve — resolveGroup (pure, scenario-2)", () => {
   });
   it("join → ver1 + quoted ver2 under a header", () => {
     expect(insertOf("join", { label: "dev", date: "2026-06-05 10:31:30" })).toBe(
-      "L\n> Changes from `dev` at 2026-06-05 10:31:30:\n> R\n",
+      "L\n> **Changes from `dev` at 2026-06-05 10:31:30:**\n> R\n",
     );
   });
   it("join header parses the FS-safe timestamp into a readable date", () => {
     expect(insertOf("join", { label: "VladPixel 6 Pro", date: "2026-06-05T10-31-30Z" })).toBe(
-      "L\n> Changes from `VladPixel 6 Pro` at 2026-06-05 10:31:30:\n> R\n",
+      "L\n> **Changes from `VladPixel 6 Pro` at 2026-06-05 10:31:30:**\n> R\n",
     );
   });
   it("replaces the WHOLE group span and puts the caret at the END of the insert (§2.2.9)", () => {
@@ -128,7 +128,7 @@ describe("diff-resolve — resolveAll (bulk toolbar)", () => {
     })!;
     const s1 = s0.update(spec).state;
     const doc = s1.doc.toString();
-    expect(doc).toContain("> Changes from `VladPixel 6 Pro` at 2026-06-05 09:19:09:");
+    expect(doc).toContain("> **Changes from `VladPixel 6 Pro` at 2026-06-05 09:19:09:**");
     expect(doc).not.toContain("`remote`");
     expect(doc).not.toContain("at :");
   });

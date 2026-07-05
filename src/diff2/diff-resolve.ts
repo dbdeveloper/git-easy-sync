@@ -40,7 +40,7 @@ function joinText(ver2content: string, opts: ResolveOpts): string {
   if (ver2content === "") return "";
   const label = opts.label ?? "remote";
   const date = formatConflictTimestamp(opts.date ?? "");
-  const header = `> Changes from \`${label}\` at ${date}:\n`;
+  const header = `> **Changes from \`${label}\` at ${date}:**\n`;
   const hadTrailingNl = ver2content.endsWith("\n");
   const body = hadTrailingNl ? ver2content.slice(0, -1) : ver2content;
   const quoted = body.split("\n").map((l) => `> ${l}`).join("\n") + (hadTrailingNl ? "\n" : "");
