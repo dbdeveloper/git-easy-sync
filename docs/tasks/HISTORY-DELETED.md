@@ -47,16 +47,16 @@ read-only-сторони. Тому спільну машинерію опису�
 Це — пряма відповідь на питання користувача «звідки беруться версії». Є **три** фізичних
 джерела байтів; кожен режим тягне з двох.
 
-| Джерело | Фізичне розташування | Хто пише | History | Deleted |
-|---|---|---|---|---|
-| **Push-queue** (локальні pending-коміти) | `.obsidian/plugins/<id>/.push-queue/<batchId>/vault/<path>` | sync2-рушій (батч ще не запушений) | ✅ версії, **новіші** за GitHub (ще не залиті) | — |
-| **Local trash** | `.obsidian/plugins/<id>/.trash/<id>/vault/<originalPath>` | TrashStore (перехоплення delete) — **лише поточна sync-сесія** | — | ✅ свіжо-видалені (до наступного sync) |
-| **GitHub repo** | remote commit-history | sync2 push | ✅ commit-list через `listCommitsForPath` + contents-at-ref | ✅ `status:"removed"` у commit-diff |
+| Джерело | Фізичне розташування                                                | Хто пише | History | Deleted |
+|---|---------------------------------------------------------------------|---|---|---|
+| **Push-queue** (локальні pending-коміти) | `.obsidian/plugins/<id>/.runtime/push-queue/<batchId>/vault/<path>` | sync2-рушій (батч ще не запушений) | ✅ версії, **новіші** за GitHub (ще не залиті) | — |
+| **Local trash** | `.obsidian/plugins/<id>/.runtime/trash/<id>/vault/<originalPath>`   | TrashStore (перехоплення delete) — **лише поточна sync-сесія** | — | ✅ свіжо-видалені (до наступного sync) |
+| **GitHub repo** | remote commit-history                                               | sync2 push | ✅ commit-list через `listCommitsForPath` + contents-at-ref | ✅ `status:"removed"` у commit-diff |
 
 Ключові властивості кожного джерела:
 
 ### 1.1 Push-queue (History-only, локальне, «свіже»)
-- `.push-queue/<batchId>/vault/<path>` = байтовий снапшот файлу в межах **незапушеного**
+- `.runtime/push-queue/<batchId>/vault/<path>` = байтовий снапшот файлу в межах **незапушеного**
   батча (та сама структура `vault/<повний-path>`, що й trash).
 - **Показ (нова модель, §4.3):** push-queue-версії (що відповідають фільтру) показуються
   **миттєво** й локально, а GitHub довантажується **фоново завжди** (worker + progress-bar).
@@ -64,12 +64,12 @@ read-only-сторони. Тому спільну машинерію опису�
   (R2.3 п.1 / feasibility §10 п.3) **скасована** (user 2026-07-03, деталі §4.3).
 
 ### 1.2 Local trash (Deleted-only, локальне, session-scoped)
-- `.trash/<id>/vault/<originalPath>` = **переміщений** (move, не copy — R3.2) видалений
-  файл. `<id>` — 17-цифровий timestamp (як `.conflicts/`, `.push-queue/`).
+- `.runtime/trash/<id>/vault/<originalPath>` = **переміщений** (move, не copy — R3.2) видалений
+  файл. `<id>` — 17-цифровий timestamp (як `.runtime/conflicts/`, `.runtime/push-queue/`).
 - **Session-scoped (R2.4):** запис живе **тільки до наступного Sync**. Після того як sync
   підтвердив видалення на GitHub, запис вичищається (TTL, R3.5). Далі відновити можна лише
   з GitHub. Файл, створений і видалений **в одному** sync-циклі, втрачається незворотно.
-  Файл, який знаходиться в `.gitignore` потрапляє в `.trash/` при видаленні, і буде остаточно
+  Файл, який знаходиться в `.gitignore` потрапляє в `.runtime/trash/` при видаленні, і буде остаточно
   вичищатись після наступного Sync (TTL, R3.5), як і інші файли, після чого втрачається 
   незворотно, бо не має збережених версій в GitHub repo.
 - **Data-шар вже реалізований** (R3.8 — детально §5.2 + §7).
@@ -79,7 +79,7 @@ read-only-сторони. Тому спільну машинерію опису�
   page?})` навколо `GET /repos/{owner}/{repo}/commits?path={path}&sha={branch}` (R2.3).
 - Для Deleted: `listCommitsForPath` + `compare()` для виявлення `status:"removed"` (R3.6
   п.2).
-- **Кеш (два кеші, §4.4):** metadata (commit-list) → `.history-cache/<path>/<file>/commits.json`
+- **Кеш (два кеші, §4.4):** metadata (commit-list) → `.runtime/history-cache/<path>/<file>/commits.json`
   (щоб не бити GitHub повторно за списком); вміст версій → окремий content-кеш `<commitSha>`
   (лише Disk-режим). Time-filter → `{since}`.
 
@@ -91,12 +91,12 @@ read-only-сторони. Тому спільну машинерію опису�
 режимі. `base` = ver1 = «−» (видалене/старіше), `sibling` = ver2 = «+»
 (додане/новіше).
 
-| Режим | `base` (ver1, «−») | `sibling` (ver2, «+») | пишемо у vault                                                               | read-only сторона | `[←]`-якір веде в |
-|---|---|---|------------------------------------------------------------------------------|---|---|
-| `conflict` | поточний vault-файл (`note.md`) | remote `.conflict-from-*` (theirs) | base **і** sibling (pair-atomic)                                             | — (обидві editable) | **base** → `panel:Conflicts` |
-| `history` | **історична версія** (нема у vault, read-only) | **поточний файл** (current) | тільки **sibling**                                                           | **base** (історія) | **sibling** → `diff2-history` |
-| `deleted` | **порожньо** = поточний відсутній стан (`originalPath`) | **вміст із `.trash`** (read-only) | тільки **base**                                                              | **sibling** (trash) | **base** → `panel:Deleted` |
-| `compare` | файл A | файл B | файл A **i** файл B (pair-atomic) |  — (обидві editable)  | base-файл (звич. таб) |
+| Режим | `base` (ver1, «−») | `sibling` (ver2, «+»)                     | пишемо у vault                                                               | read-only сторона | `[←]`-якір веде в |
+|---|---|-------------------------------------------|------------------------------------------------------------------------------|---|---|
+| `conflict` | поточний vault-файл (`note.md`) | remote `.conflict-from-*` (theirs)        | base **і** sibling (pair-atomic)                                             | — (обидві editable) | **base** → `panel:Conflicts` |
+| `history` | **історична версія** (нема у vault, read-only) | **поточний файл** (current)               | тільки **sibling**                                                           | **base** (історія) | **sibling** → `diff2-history` |
+| `deleted` | **порожньо** = поточний відсутній стан (`originalPath`) | **вміст із `.runtime/trash`** (read-only) | тільки **base**                                                              | **sibling** (trash) | **base** → `panel:Deleted` |
+| `compare` | файл A | файл B                                    | файл A **i** файл B (pair-atomic) |  — (обидві editable)  | base-файл (звич. таб) |
 
 **Дзеркальність History ↔ Deleted (найважливіше):**
 - **History:** read-only = **base** (стара версія); пишемо **sibling** (поточний файл).
@@ -282,7 +282,7 @@ Close `diff2-history` tab (`[x]`) - просто закриває цей таб.
 > а GitHub довантажуємо **ФОНОВО завжди** (у worker-і) — instant + повний список ціною
 > GitHub-викликів на кожне відкриття History.
 
-1. **Миттєво** рендеримо `.push-queue`-версії (локально, `readFile`), що відповідають фільтру
+1. **Миттєво** рендеримо `.runtime/push-queue`-версії (локально, `readFile`), що відповідають фільтру
    (§4.4). Мережі не чекаємо.
 2. **Одразу фоново** стартуємо GitHub-завантаження наступної сторінки — якщо кеш `.diff2`
    порожній **АБО** діє текстовий фільтр — із **skeleton-плейсхолдерами** (індикатор прогресу,
@@ -356,27 +356,27 @@ current-file = sibling).
 всі версії — серверного пошуку нема); різниця — на **повторах**: кліки по версії + кожен новий пошук.
 Обидва режими ділять **той самий** послідовний streaming/skeleton-пайплайн; різниця — **лише доля
 байтів після пошуку**:
-- **Disk:** завантажений вміст → на диск у `.history-cache/` (**сесійний** кеш, layout нижче).
+- **Disk:** завантажений вміст → на диск у `.runtime/history-cache/` (**сесійний** кеш, layout нижче).
   Далі пошук — **локальний** (без мережі). Кеш **росте монотонно в межах сесії**: **звуження**
   періоду (місяць→тиждень) записів **НЕ видаляє**; **розширення** (тиждень→місяць) при пошуку
   **до-вантажує лише брак** (версії, яких ще нема в кеші). Клік по знайденому → читаємо **з диска**
   (без fetch). **Клік БЕЗ пошуку теж кешує** (metadata-only показ, `commits.json`): перший клік по
-  рядку → fetch версії → **запис у `.history-cache/<F>/<commitSha>` ПЕРЕД відкриттям у diff-editor** →
+  рядку → fetch версії → **запис у `.runtime/history-cache/<F>/<commitSha>` ПЕРЕД відкриттям у diff-editor** →
   повторний клік по тій самій версії → **з диска** (без fetch). Клікнуті версії **накопичуються на
   диску** доти, доки відкритий таб `<F> history` (cleanup нижче). Тобто content-кеш наповнюють ОБИДВА
   джерела — і пошук, і поодинокі кліки. **Cleanup:** вихід із History-таба для файлу F → видаляємо **лише**
-  `.history-cache/<F>/`; onload плагіна (рестарт/крах) → `.history-cache/` **повністю** (backstop;
+  `.runtime/history-cache/<F>/`; onload плагіна (рестарт/крах) → `.runtime/history-cache/` **повністю** (backstop;
   сесійний, ніколи не переживає рестарт — як trash-recovery / atomic-write onload-sweep-и).
 - **Frugal / None:** fetch→search→**одразу забуваємо байти** (на диск не пишемо); у списку — лише
   рядок (метадані). Клік → **ре-fetch** тієї версії. **Нуль диска**, більше мережі. НЕ in-memory
   (на mobile 30×2 МБ у RAM = OOM-kill Capacitor-WebView).
 
-**Layout кешу (два кеші під одним per-file каталогом).** Каталог **`.history-cache/`** у
+**Layout кешу (два кеші під одним per-file каталогом).** Каталог **`.runtime/history-cache/`** у
 `.obsidian/plugins/<id>/`, ВЖЕ **gitignored** (весь вміст плагін-папки — `SELF_PLUGIN_GITIGNORE`,
 `gitignore-invariants.ts:80-85`; окремої правки НЕ треба). Структура **дзеркалить vault-шлях**,
 **ім'я файлу = каталог**; усередині — **два кеші** цього файлу:
 ```
-.history-cache/
+.runtime/history-cache/
   Folder1/
     note.md/              ← ім'я файлу = каталог (per-file, self-contained)
       commits.json        ← METADATA-кеш: commit-list файлу (потрібен завжди, і без фрази)
@@ -388,15 +388,15 @@ current-file = sibling).
 - **CONTENT-кеш `<commitSha>`** — важкий (байти версій, raw; тип/EOL за розширенням каталогу-файлу);
   пишеться **лише в Disk-режимі**; Frugal їх не матеріалізує.
 
-Self-documenting (та сама `vault/`-дзеркальність, що `.trash/<id>/vault/<path>` — лише ключ = сам
+Self-documenting (та сама `vault/`-дзеркальність, що `.runtime/trash/<id>/vault/<path>` — лише ключ = сам
 vault-шлях, бо History per-file, не per-bundle; проміжний `vault/` зайвий, кеш тримає ЛИШЕ версії).
 Колізій нема (окреме дерево; `commits.json` + 40-hex-SHA-імена не конфліктують). **Cleanup спільний
-per-file** (див. Disk-bullet вище): закриття таба F → `rm .history-cache/<F-path>/<F-name>/` (метадані
-+ content разом); onload → весь `.history-cache/`.
+per-file** (див. Disk-bullet вище): закриття таба F → `rm .runtime/history-cache/<F-path>/<F-name>/` (метадані
++ content разом); onload → весь `.runtime/history-cache/`.
 
 **⚠️ Диск під навантаженням.** `diff2-history` — **per-file** (1 таб на файл, §4.2); користувач
 може тримати відкритими **десятки** таких табів паралельно — **кожен для ІНШОГО файлу** (двох на той
-самий файл не буде — 1/file). У Disk-режимі кожен **накопичує свій** `.history-cache/<F>/` → сумарний
+самий файл не буде — 1/file). У Disk-режимі кожен **накопичує свій** `.runtime/history-cache/<F>/` → сумарний
 диск може вирости **суттєво** (десятки файлів × вміст їхніх версій). Тому **наголошувати користувачу**
 (tooltip/Notice), що одночасний пошук по історії багатьох (тим паче важких) файлів відчутно збільшує
 використаний диск — саме тут доречний Frugal-режим. (Кожен таб чистить свій `<F>/` при закритті;
@@ -417,7 +417,7 @@ wholeWord}` (та сама, що вже у проєкті для in-editor Ctrl+
 #### 4.5.1 Чому History/Deleted — «ефемерні» (на відміну від конфлікту)
 
 Конфлікт **реальний і живе на диску**: є два файли-сіблінги, і поки їх не вирішено, конфлікт
-існує «вічно». Тому його тека сеансу `.diff2-autosave/<id>/` **навмисно переживає** будь-яке
+існує «вічно». Тому його тека сеансу `.runtime/diff2-autosave/<id>/` **навмисно переживає** будь-яке
 закриття — це crash-recovery для реального конфлікту.
 
 History/Deleted-редактор — це **тимчасовий перегляд**: жодного постійного конфлікту на диску
@@ -463,7 +463,7 @@ History/Deleted-редактор — **ефемерний**: (а) його се�
 - `onLayoutReady` читає ознаку → **свіжа** (`now − savedAt < 3 с`, pure `isLayoutRestoreFresh`) →
   `changeLayout(знімок)` → вікна повертаються на місця; **стара** → ігноруємо (чистий старт). Ознаку
   в будь-якому разі **видаляємо** (one-shot).
-- **Чому TTL 3 с малий:** `changeLayout` замінює **весь** workspace; стале відновлення після
+- **Чому TTL 3 с повинен бути малим:** `changeLayout` замінює **весь** workspace; стале відновлення після
   **свідомого** disable (юзер повернувся пізніше) затерло б перекладені ним вкладки. Розрив швидкого
   reload-у ≈ 1 с (сам restore миттєвий — важкі дані вантажаться потім, async), тож 3 с покриває з
   запасом, а вікно затирання лишається крихітним.
@@ -471,16 +471,17 @@ History/Deleted-редактор — **ефемерний**: (а) його се�
 **B. Прибирання тек-сиріт — B1 orphan-sweep (`sweepHistoryDeletedOrphans` + pure `historyDeletedOrphans`).**
 На `onLayoutReady` — **ПІСЛЯ** відновлення layout-у (і рідного Obsidian-івського, і нашого
 `changeLayout`, щоб усі відкриті редактори вже стояли) — витираємо **кожну** `history-`/`deleted-`
-теку, під якою **немає відкритого editor-таба**. «Live»-набір беремо з **серіалізованого СТАНУ** кожного
+теку, для якої **немає відкритого editor-таба**. «Live»-набір беремо з **серіалізованого СТАНУ** кожного
 leaf-а (`getViewState().state` → `ephemeralAutosaveIdFromState`), а **не** через `instanceof
 DiffEditorView` — бо під Obsidian 1.7.7+ фоновий таб це **deferred-stub** без view (C1). Conflict-теки
 (`tracked-`/`synthetic-`) sweep **не чіпає** (за префіксом — їх веде §4.2-sweep). Це і є гарантія
 від накопичення (sweep при кожному старті).
 
-**Свідоме `[x]`:** правок не було → `dispose()` витирає теку **одразу** (§4.1 abandon-wipe, net-0);
-були правки → тека лишається до наступного старту, де її підбирає B1-sweep (таба вже нема).
+**Свідоме `[x]`:** 
+- правок не було → `dispose()` витирає теку **одразу** (§4.1 abandon-wipe, net-0);
+- були правки → тека лишається до наступного старту, де її підбирає B1-sweep (атже таба вже нема).
 
-**⚠️ Чернетка НЕ переживає reload.** Вікно + позиція + **версія** відновлюються (A + Obsidian re-mount),
+TODO далі: **⚠️ Чернетка НЕ переживає reload.** Вікно + позиція + **версія** відновлюються (A + Obsidian re-mount),
 але **незбережена чернетка** — ні: history монтується **force-fresh** (перечитує версію з GitHub, теку
 не резюмить). Це свідомий недороблений **draft-survival** — окремий follow-up (§4.5.7 / carry-item).
 *(Для **conflict**-редактора чернетка переживає — він резюмить свою autosave-теку через `classifyReopen`.)*
@@ -498,19 +499,22 @@ DiffEditorView` — бо під Obsidian 1.7.7+ фоновий таб це **def
 
 1. **Правок не було** (користувач лише подивився) → **нічого не пишемо** (щоб не «торкнути» файл
    і не породити зайвий коміт синхронізації), теку прибираємо, повертаємось у History-таб. ✅ реалізовано.
-2. **Поточний файл змінився ЗЗОВНІ** під час перегляду (напр., синхронізація з іншого пристрою) →
-   **діалог на 3 кнопки** (🎯 ЦІЛЬ / carry-item — зараз замість нього REFUSE, див. банер вище):
+2. **Поточний файл змінився ЗЗОВНІ** під час перегляду (напр., синхронізація з іншого пристрою, 
+   редагування в іншому табі) → **діалог на 3 кнопки** (🎯 ЦІЛЬ / carry-item — зараз замість нього 
+   REFUSE, див. банер вище):
    - **Підвантажити нову версію** — новий вміст поточного файлу записуємо в `sibling.snapshot`,
      редактор **перезапускається** (та сама стара версія проти оновленого файлу);
    - **Перезаписати** — наші зміни пишуться поверх (семантика «відновити версію = перезаписати»);
    - **Скасувати** — лишаємось у редакторі; хочеш вийти без запису — тисни `[x]`.
 3. **Інакше** → пишемо результат (`commitUnchangedSide`). ✅ реалізовано.
 
-Що саме пишемо (єдина відмінність History vs Deleted):
-- **History** → праву сторону (`normal-рядки + ver2-блоки`) у **поточний файл**;
-- **Deleted** → ліву сторону (`normal-рядки + ver1-блоки`) у **початковий шлях**.
+ВАЖЛИВО! Що саме пишемо: одностайність для History і для Deleted:
+         ТІЛЬКИ ПРАВУ СТОРОНУ(!) - (`normal-рядки + ver2-блоки`) у **поточний файл**;
 
-`guardEmpty`→`"\n"` доречний в обох (жоден із режимів **не видаляє** файл).
+`guardEmpty`→`"\n"` доречний в обох (жоден із режимів **не видаляє** файл) з одним зауваженням: "порожній" файл
+(тільки з одним символом "\n") в **Deleted**-режимі сприймається як "жодних змін внесено не було", а отже подальші
+дії з файлом ігноруються, тобто файл НЕ ВІДНОВЛЮЄТЬСЯ! Таким чином така низка дій: `Ctrl+A; Del; click [<-]` 
+в **Deleted**-режимі залишає файл в Vault далі видаленим.
 
 #### 4.5.5 «Файл уже редагується» (open-guard, крос-режимно)
 
@@ -569,7 +573,8 @@ idempotent `dispose()` це гасить (2-й `disposeOwner` = `hadOwner:false`
 **Проблема.** У кінці кожного успішного sync-у `handlePluginsAffectedReload` перезавантажує зачеплені
 плагіни — **включно з собою** — через `reloadPluginById` (500 мс після drain). `app.plugins.reloadPlugin`
 на десктопі **відсутній**, тож скрізь падає в `disablePlugin`+`enablePlugin`, що **руйнує** відкриті
-diff-editor. Тобто фонове самооновлення може автоматично знести відкритий редактор.
+таби diff-panel і diff-editor(s). Тобто фонове самооновлення може автоматично знести відкритий редактор та інші таби 
+створені плагіном.
 
 **Розв'язок — той самий механізм §4.5.3-A:** self-update = `disable`+`enable` **швидко** (< 3 с TTL) →
 `onunload` пише layout-ознаку → `enable` бачить свіжу → `changeLayout` **повертає вікна на місця**.
@@ -589,9 +594,12 @@ layout, включно з цими станами. Тобто «що збері�
 | **`diff2-edit-view`** (panel) | активний sub-tab (`conflicts`\|`deleted`) | позиція скролу, вибраний рядок |
 | **`diff2-history`** (per-file список) | `path` | діапазон дат (`day`…`year`), пошукова фраза, позиція скролу, підсвічений рядок (клавіші-стрілки) |
 | **`diff2-deleted`** (Phase 9b) | `path`/ідентичність | діапазон дат, фраза-фільтр **по назві файлу** (відсіяти видалені файли за назвою, коли їх багато), скрол, вибраний рядок |
+TODO: впорядкувани назви типів. Пропоную до всіх додати суфікс `-view` (зараз є з ним і є без) і для diff-panel змінити 
+назву view на `diff2-panel-view`, що природніше і зрозуміліше виглядає.
 
-**`.history-cache` прив'язаний до життя вкладки** (§4.4): поки `diff2-history`-таб на екрані — кеш
-цього файлу **не чистимо**; закриття таба → `rm .history-cache/<F>/`; onload → повний wipe (сесійний
+
+**`.runtime/history-cache` прив'язаний до життя вкладки** (§4.4): поки `diff2-history`-таб на екрані — кеш
+цього файлу **не чистимо**; закриття таба → `rm .runtime/history-cache/<F>/`; onload → повний wipe (сесійний
 backstop). **⚠️ Взаємодія з відновленням (7b-деталь, не 7a):** якщо на reload ми відновлюємо
 `diff2-history`-таб, його кеш або має пережити reload (не потрапити під onload-wipe), або таб
 **пере-fetch-ить** (прийнятно на reload — рідко). Точну політику вирішимо в 7b, коли буде кеш.
@@ -794,7 +802,7 @@ per-file multi-tab). Push на «пуш».
   worker робить усе»:** fetch = **network-worker** (HTTP тільки там), search = **cpu-worker**,
   оркестрація послідовно з main → **incremental-render** кожного збігу; клік-під-час-пошуку. Unit
   (matcher, streaming-reducer); integration (`getContentsAtRef`@sha); harness.
-- **7b.5 — content-кеш + Settings-toggle.** `.history-cache/` content-кеш (Disk: монотонний
+- **7b.5 — content-кеш + Settings-toggle.** `.runtime/history-cache/` content-кеш (Disk: монотонний
   period-bounded; Frugal: discard); Settings «History version cache: Disk/None» platform-aware
   (`Platform.isMobile`); per-file cleanup на close + onload wipe (onload-recovery-патерн); disk-warning.
   Unit (cache monotonic-growth + cleanup policy, mode toggle); manual (mobile=Frugal / desktop=Disk).
@@ -1001,14 +1009,14 @@ Phase A при drain (`conflict-classifier.ts:235`, `!siblingExists → store.de
 
 ### 7.0 Зведена таблиця
 
-| Область | Verdict | Що Є | Чого НЕМА (треба збудувати) |
-|---|---|---|---|
-| **1. GitHub commit-history API** | 🟡 PARTIAL | `getLatestCommitDateForPath` (1 коміт, без пагінації), `getContentsAtRef` (байти за SHA, Blobs-fallback >1MB), `getCommit(sha)` | **`listCommitsForPath(path, ref, {since?,perPage?,page?})`** з пагінацією; helper «commits between two refs» для Deleted removals |
-| **2. Push-queue reader** | 🟢 FUNCTIONAL | layout `.push-queue/<id>/vault/`; `list()`, `read(id)`, **`readFile(id, path)`**, `peekPathSha(path)`, `collectAllPaths()` | нічого нового — staging-area вистачає для History-локального шару; це НЕ history-log (лише pending-батчі) |
-| **3. TrashStore (`.trash`)** | 🟢 **COMPLETE** | повний клас + `intercept/list/get/subscribe/lift/return/resetLifts/confirm*/sweep*/asHooks`; 3-layer TTL; R3.7 shield; recovery-sweep; sync2-wire | — (data-шар готовий; лишилось `restore(id)` — це UI-фаза 9b, не data) |
+| Область | Verdict | Що Є                                                                                                                                                                                                           | Чого НЕМА (треба збудувати) |
+|---|---|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---|
+| **1. GitHub commit-history API** | 🟡 PARTIAL | `getLatestCommitDateForPath` (1 коміт, без пагінації), `getContentsAtRef` (байти за SHA, Blobs-fallback >1MB), `getCommit(sha)`                                                                                | **`listCommitsForPath(path, ref, {since?,perPage?,page?})`** з пагінацією; helper «commits between two refs» для Deleted removals |
+| **2. Push-queue reader** | 🟢 FUNCTIONAL | layout `.runtime/push-queue/<id>/vault/`; `list()`, `read(id)`, **`readFile(id, path)`**, `peekPathSha(path)`, `collectAllPaths()`                                                                             | нічого нового — staging-area вистачає для History-локального шару; це НЕ history-log (лише pending-батчі) |
+| **3. TrashStore (`.trash`)** | 🟢 **COMPLETE** | повний клас + `intercept/list/get/subscribe/lift/return/resetLifts/confirm*/sweep*/asHooks`; 3-layer TTL; R3.7 shield; recovery-sweep; sync2-wire                                                              | — (data-шар готовий; лишилось `restore(id)` — це UI-фаза 9b, не data) |
 | **4. View-types / origin** | 🟡 PARTIAL | `diff2-edit-view` (панель), `diff2-editor-view` (editor); **`DiffEditorOrigin` = `conflict\|compare\|history\|deleted`** (всі 4!); `DiffEditSubTab = conflicts\|deleted`; write-set routing для всіх origin-ів | `diff2-history` view-type; History/Compare entry-points |
-| **5. Commit / autosave-meta** | 🟡 PARTIAL | `baseCommitAction` (4 empty-кейси + delete), `commitUnchangedSide`, `commitToAlt`, `classifyToctou`, `commit7Step`, `AutosaveMeta.baseExistedAtStart`, `GIT_EMPTY_BLOB_SHA` | **write-or-skip factoring** `finalizeUnchangedSide` (0 входжень у `src/` — settled §3.2, назва замінила misnomer `resolveOrDeleteUnchangedSide`); `deriveAutosaveId` НЕ приймає `history\|deleted` (тільки `synthetic\|compare`, `autosave-store.ts:100`); meta без version-SHA (History) / trashId (Deleted) |
-| **6. UI** | 🔴 MINIMAL | Deleted sub-tab = **placeholder-текст** «Deleted-mode UI lands in Phase 9b»; forward-design (`planBackNav` deleted-гілка, `persistedEditorState`) | Deleted list/detail/restore; вся History UI; Compare picker |
+| **5. Commit / autosave-meta** | 🟡 PARTIAL | `baseCommitAction` (4 empty-кейси + delete), `commitUnchangedSide`, `commitToAlt`, `classifyToctou`, `commit7Step`, `AutosaveMeta.baseExistedAtStart`, `GIT_EMPTY_BLOB_SHA`                                    | **write-or-skip factoring** `finalizeUnchangedSide` (0 входжень у `src/` — settled §3.2, назва замінила misnomer `resolveOrDeleteUnchangedSide`); `deriveAutosaveId` НЕ приймає `history\|deleted` (тільки `synthetic\|compare`, `autosave-store.ts:100`); meta без version-SHA (History) / trashId (Deleted) |
+| **6. UI** | 🔴 MINIMAL | Deleted sub-tab = **placeholder-текст** «Deleted-mode UI lands in Phase 9b»; forward-design (`planBackNav` deleted-гілка, `persistedEditorState`)                                                              | Deleted list/detail/restore; вся History UI; Compare picker |
 
 ### 7.1 Data-джерела — стан по кожному (пряма відповідь на питання користувача)
 

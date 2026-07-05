@@ -80,6 +80,33 @@ detach self + reveal original»:
   не можна одночасно тримати відкритим конфлікт того ж `note.md` (Notice «зайнято»). Це
   прямий наслідок write-set-правила — узгоджено.
 
+**R-B.1. RELOAD / MOVE замість «файл зайнятий» (TODO §21, реалізовано 2026-07-05).**
+Розширює R-B: коли новий запит цілиться в редактор, який УЖЕ відкритий для цього ж файлу,
+модалку показуємо ЛИШЕ якщо там є **незбережені зміни**. Інакше — тихо перевикористовуємо таб.
+Це помітно полегшило перегляд history-версій і перемикання між конфліктами того ж файлу.
+- **Та сама пара** (для history — та сама версія; звіряється `historyVersionSha`):
+  - **plain** click/Enter → просто **reveal** (ніколи не перестворюємо);
+  - **Ctrl**+click/Enter (open-to-right) → **перемістити редактор праворуч, зберігши сесію**
+    (clean АБО dirty): flush правок → лишити autosave-dir → detach → змонтувати праворуч як
+    **SILENT RESUME** (той самий 1B/crash resume-шлях відновлює стан; `moveEditorPreservingSession`).
+    Obsidian не має програмного leaf-move, тож «переміщення» = close+reopen з resume.
+- **Інша пара/версія:**
+  - **CLEAN** → **reload** табу новим вмістом (для history — та сама per-file dir, тож
+    **ORDERED** close+reopen: dispose-без-wipe → AWAIT rmdir → mount, щоб wipe не гнав startSession);
+  - **DIRTY** → параметризований `EditorBusyModal` «File already modified…» `[Go to that tab] [Cancel]`.
+- **🔑 «Є зміни» = CONTENT-AUTHORITATIVE** (`isResolvedPristine`, `exit-commit.ts`): реконструюємо
+  обидві сторони з live-doc, відновлюємо EOL, git-blob-SHA кожної **тією ж композицією, що й
+  `[←]` commit**, і звіряємо з `meta.baseShaAtStart`/`siblingShaAtStart` (оригінал, записаний раз
+  на startSession, НЕ на resume → resumed-сесія з незбереженими правками = НЕ pristine). Імунне до
+  undo/redo-обліку І до «додав руками X → стер руками X» (обидва лишають undoDepth>0 при однаковому
+  вмісті). **hasUnsavedChanges — async.** EOL-нюанс: mixed-EOL файл → рідкісний spurious-dirty
+  (консервативно, без втрати даних).
+- **Dir-безпека (асиметрія):** conflicts мають per-pair dir → звичайний close+reopen безпечний;
+  history має ОДНУ per-file dir на всі версії → ordered close+reopen (див. вище).
+- §4.1 abandon-wipe (`dispose`) свідомо лишено на SYNC `undoDepth` (advisor: dispose простий/sync;
+  єдина розбіжність — add+remove-руками → content-identical dir, який onload-sweep прибере; без
+  втрати даних). `undoDepth` також лишається для toolbar-кнопки `[undo]`.
+
 **R-C. Persistence.**
 - І `diff2-panel`, і кожен `diff2-editor` таб **переживають рестарт Obsidian**.
 - Кожен editor-таб **сам** запускає recovery при відновленні. Старт може бути трохи
