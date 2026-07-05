@@ -582,7 +582,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
   it("gitAuthor configured → createCommit carries author/committer identity + ISO local date", async () => {
     const f2 = fixture({
-      gitAuthor: () => ({ name: "Vlad", email: "vlad@example.com" }),
+      gitAuthor: () => ({ name: "TestUser", email: "test@example.com" }),
     });
     writeVaultFile(f2.root, "x.md", "v");
     f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
@@ -596,8 +596,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       }
     ).author;
     expect(author).toBeDefined();
-    expect(author!.name).toBe("Vlad");
-    expect(author!.email).toBe("vlad@example.com");
+    expect(author!.name).toBe("TestUser");
+    expect(author!.email).toBe("test@example.com");
     // ISO 8601 with offset, 'T' separator (toGitAuthorDate).
     expect(author!.date).toMatch(
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/,
