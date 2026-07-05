@@ -161,19 +161,44 @@ export function findAllConflicts(
 // drops it (Phase A: !siblingExists → accept-ours); reading the raw records in the gate
 // re-surfaced that already-resolved conflict in the "you still have conflicts" modal even
 // though the diff-panel no longer showed it. Going through findAllConflicts makes the gate
-// list EXACTLY what the panel / badge / status bar list. Returns null when there are no
-// live conflicts (gate lets sync proceed). `firstSibling` is the newest sibling — what the
-// modal's "Resolve" button opens.
+// list EXACTLY what the panel / badge / status bar list.
+//
+// TODO §24 — the gate/modal is about TRACKED conflicts ONLY. Only a tracked conflict (a
+// real git conflict registered in ConflictStore) is invisible on other devices until
+// resolved; a SYNTHETIC conflict is a purely-local leftover (an echo of an already-resolved
+// conflict — GitHub knows nothing about it), so it carries no cross-device consequence and
+// must NOT block a sync or trigger the "not visible on other devices" warning. So:
+//   - `trackedPaths` = base paths that have ≥1 tracked sibling (a base with both tracked +
+//     synthetic siblings counts as tracked — resolving it matters).
+//   - Returns null when there are NO tracked conflicts (no conflicts at all, OR only
+//     synthetic leftovers) → the gate lets the sync proceed with no modal.
+// The modal's "Resolve" opens the diff CONFLICTS PANEL (the full list), so no specific
+// sibling path is needed here. The badge / status bar / menu still count tracked + synthetic
+// (TODO #7) — unchanged; §24 is only the pre-sync modal, so the count surfaces keep total.
+//
+// `trackedConflictCount` = total number of tracked SIBLINGS across the tracked base(s). One
+// base file can carry MORE THAN ONE tracked conflict (multiple `conflict-from-<device>-…`
+// siblings — one per remote device). It only matters for the modal's intro copy when there
+// is exactly ONE tracked file: 1 file + 1 conflict → "…a tracked conflict…resolve it"; 1
+// file + N conflicts → "…tracked conflicts…resolve them" (else the user is told "1 conflict"
+// but the panel shows several). With >1 files the copy is uniformly plural, so the exact
+// count is not consulted there.
 export function pendingConflictSummary(
   vault: Vault,
   conflictStore: ConflictStore,
-): { paths: string[]; firstSibling: string } | null {
-  const { entries, byBasePath } = findAllConflicts(vault, conflictStore);
-  if (entries.length === 0) return null;
-  return {
-    paths: Array.from(byBasePath.keys()).sort(),
-    firstSibling: entries[0].siblingPath, // entries are newest-first
-  };
+): { trackedPaths: string[]; trackedConflictCount: number } | null {
+  const { byBasePath } = findAllConflicts(vault, conflictStore);
+  const trackedPaths: string[] = [];
+  let trackedConflictCount = 0;
+  for (const [base, siblings] of byBasePath) {
+    const tracked = siblings.filter((s) => s.kind === "tracked").length;
+    if (tracked > 0) {
+      trackedPaths.push(base);
+      trackedConflictCount += tracked;
+    }
+  }
+  if (trackedPaths.length === 0) return null; // synthetic-only (or none) → no gate
+  return { trackedPaths: trackedPaths.sort(), trackedConflictCount };
 }
 
 // Convenience: shape that excludes the file-iteration / vault-walking

@@ -1332,22 +1332,27 @@ export default class GitHubSyncPlugin extends Plugin {
     // evaluateConflictState drops it (Phase A: !siblingExists → accept-ours). Reading the
     // raw records here re-surfaced that already-resolved conflict in the gate even though
     // the panel no longer listed it. Read-only: record cleanup stays the drain's job.
+    // §24 — summary is TRACKED-only: null means no tracked conflicts (none, or only
+    // synthetic leftovers) → let the sync proceed silently, no modal over local-only echoes.
     const summary = pendingConflictSummary(this.app.vault, this.conflictStore);
     if (!summary) return true;
-    const decision = await new PreSyncConflictModal(this.app, summary.paths).prompt();
+    const decision = await new PreSyncConflictModal(
+      this.app,
+      summary.trackedPaths,
+      summary.trackedConflictCount,
+    ).prompt();
     if (decision === "sync-anyway") return true;
     if (decision === "resolve") {
-      // Open the first (newest) sibling file in the editor so the user can
-      // act on it immediately. workspace.openLinkText accepts a vault-
-      // relative path; the second arg ("") is the source path the
-      // resolver would use to resolve relative links, which doesn't
-      // matter for absolute paths.
-      const firstSibling = summary.firstSibling;
+      // §24 — "Resolve" opens/activates the diff CONFLICTS PANEL (the diff2 list view),
+      // NOT the raw markdown sibling. The panel lists every tracked conflict and the user
+      // picks one to open in the diff editor. (Opening the sibling .md directly — the old
+      // behaviour — bypassed the whole diff2 resolution UI and dumped the user into a plain
+      // note.)
       try {
-        await this.app.workspace.openLinkText(firstSibling, "", false);
+        await this.activateDiffEditView();
       } catch (err) {
         void this.logger.error(
-          "Failed to open first sibling from pre-sync modal",
+          "Failed to open the diff panel from pre-sync modal",
           `${err}`,
         );
       }

@@ -6,9 +6,17 @@ import { App, Modal } from "obsidian";
 
 // Pre-sync confirmation modal — one of three visibility surfaces
 // for pending conflicts. Fires before EVERY manual sync click while
-// ConflictStore has at least one active record:
+// there is at least one TRACKED conflict (§24):
 //
-//   "N file(s) still in conflict. [resolve] [sync anyway]"
+//   "N file(s) still in tracked conflict. [resolve] [sync anyway]"
+//
+// §24 — the modal is TRACKED-only. `paths` is the tracked base-path
+// list (main.ts already filters synthetic-only conflicts out via
+// pendingConflictSummary, which returns null when nothing is tracked,
+// so this modal never fires for a synthetic-only sweep). Only a
+// tracked conflict is invisible on other devices until resolved; a
+// synthetic conflict is a local-only leftover. The note glossary
+// spells that distinction out so a user learns to tell the two apart.
 //
 // We add a Cancel button for the standard escape hatch (user
 // changed their mind mid-click). Returns the user's chosen action:
@@ -31,6 +39,10 @@ export class PreSyncConflictModal extends Modal {
   constructor(
     app: App,
     private readonly paths: string[],
+    // Total tracked-conflict (sibling) count. Only consulted when there is exactly ONE
+    // tracked file, to pick "a tracked conflict…it" vs "tracked conflicts…them" — a single
+    // file can carry several tracked conflicts (one per remote device). §24.
+    private readonly conflictCount: number = paths.length,
   ) {
     super(app);
   }
@@ -44,26 +56,57 @@ export class PreSyncConflictModal extends Modal {
       this.onClose = () => resolve(this.decision);
 
       const n = this.paths.length;
-      const word = n === 1 ? "file" : "files";
-      this.titleEl.setText(`${n} ${word} still in conflict`);
+      const one = n === 1;
+      const word = one ? "file" : "files";
+      // Title: "N file(s) still in <strong>tracked</strong> conflict" — titleEl
+      // renders DOM, so build the bold "tracked" as a real element (no markdown).
+      this.titleEl.empty();
+      this.titleEl.appendText(`${n} ${word} still in `);
+      this.titleEl.createEl("strong", { text: "tracked" });
+      this.titleEl.appendText(" conflict");
       this.contentEl.empty();
 
+      // Intro sentence — plural-aware on BOTH axes (§24):
+      //   >1 file                → "These files … tracked conflicts … resolve them:"
+      //    1 file, 1 conflict    → "This file … a tracked conflict … resolve it:"
+      //    1 file, >1 conflicts  → "This file … tracked conflicts … resolve them:"
+      // (A single file can hold several tracked conflicts — one per remote device — so a
+      // flat "1 file = 1 conflict" copy would tell the user "1" then the panel shows more.)
+      const oneConflict = one && this.conflictCount === 1;
       this.contentEl.createEl("p").setText(
-        `Files in conflict are not visible on other devices until you resolve them.`,
+        oneConflict
+          ? `This file with a tracked conflict is not visible on other devices until you resolve it:`
+          : one
+            ? `This file with tracked conflicts is not visible on other devices until you resolve them:`
+            : `These files with tracked conflicts are not visible on other devices until you resolve them:`,
       );
-      // Cap the visible list at the first 20 paths so a sweep of
-      // hundreds (rare but possible) doesn't make the modal
-      // unscrollable.
+      // §24 — show only the first 5 tracked paths; the total is already in the
+      // title and "Resolve" opens the panel with the full list, so a "…" line
+      // stands in for the 6th-and-rest rather than a scrollable dump.
+      const LIMIT = 5;
       const list = this.contentEl.createEl("ul");
-      const visible = this.paths.slice(0, 20);
-      for (const p of visible) {
+      for (const p of this.paths.slice(0, LIMIT)) {
         list.createEl("li").setText(p);
       }
-      if (this.paths.length > visible.length) {
-        this.contentEl
-          .createEl("p")
-          .setText(`… and ${this.paths.length - visible.length} more.`);
+      if (this.paths.length > LIMIT) {
+        list.createEl("li").setText("…");
       }
+      // §24 glossary — teach the tracked-vs-synthetic distinction so the user
+      // learns which conflicts actually affect other devices. NOTE (not CAUTION)
+      // → plain text, not `mod-warning` red. `gh-presync-note` adds the gap after
+      // the file list AND lays the block out as a flex row: the "NOTE:" label on
+      // the left, the two definition lines stacked in a column to its right (so
+      // both definitions align under each other, not under the word "NOTE").
+      // Built with real <strong> segments (setText would show literal ** markers).
+      const note = this.contentEl.createEl("div", { cls: "gh-presync-note" });
+      note.appendText("NOTE:");
+      const defs = note.createDiv({ cls: "gh-presync-note-defs" });
+      const tracked = defs.createDiv();
+      tracked.createEl("strong", { text: "Tracked conflict" });
+      tracked.appendText(" — real conflict from GitHub sync.");
+      const synthetic = defs.createDiv();
+      synthetic.createEl("strong", { text: "Synthetic conflict" });
+      synthetic.appendText(" — local conflict only.");
 
       const btnRow = this.contentEl.createDiv({
         cls: "modal-button-container",

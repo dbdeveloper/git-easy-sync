@@ -239,8 +239,101 @@ describe("findAllConflicts", () => {
     // records this assertion fails.
     const summary = pendingConflictSummary(fx.vault as unknown as import("obsidian").Vault, fx.store);
     expect(summary).not.toBeNull();
-    expect(summary!.paths).toEqual(["live.md"]);
-    expect(summary!.firstSibling).toContain("live.conflict-from-Laptop"); // the live sibling, not the deleted one
+    expect(summary!.trackedPaths).toEqual(["live.md"]);
+  });
+
+  // §24 — the gate/modal is TRACKED-only. A synthetic conflict (a *.conflict-from-* sibling
+  // with NO ConflictStore record — a local leftover) carries no cross-device consequence, so
+  // pendingConflictSummary excludes it: a synthetic-ONLY vault returns null (sync proceeds
+  // with no modal), and a mixed vault lists only the tracked base(s).
+  it("§24 synthetic-only vault → summary is null (gate lets sync proceed, no modal)", () => {
+    // A sibling with a base file but NO record → synthetic (findAllConflicts classifies it).
+    writeFile(fx.root, "note.md", "ours");
+    writeFile(
+      fx.root,
+      "note.conflict-from-Phone-2026-05-26T10-30-00Z.md",
+      "theirs",
+    );
+    const summary = pendingConflictSummary(fx.vault as unknown as import("obsidian").Vault, fx.store);
+    expect(summary).toBeNull();
+  });
+
+  it("§24 mixed tracked + synthetic → summary lists ONLY the tracked base + a tracked firstSibling", async () => {
+    // Synthetic leftover (no record).
+    writeFile(fx.root, "leftover.md", "ours");
+    writeFile(
+      fx.root,
+      "leftover.conflict-from-OldPhone-2026-05-26T10-30-00Z.md",
+      "theirs",
+    );
+    // Genuine tracked conflict (record + live sibling).
+    writeFile(fx.root, "real.md", "ours");
+    await fx.store.create({
+      vaultPath: "real.md",
+      kind: "modify-vs-modify",
+      oursBlobSha: "5555555555555555555555555555555555555555",
+      theirsBlobSha: "6666666666666666666666666666666666666666",
+      theirsContent: new TextEncoder().encode("theirs-real").buffer as ArrayBuffer,
+      remoteDevice: "Laptop",
+      baseMtime: null,
+      baseSize: null,
+      baseSha: null,
+    });
+    const summary = pendingConflictSummary(fx.vault as unknown as import("obsidian").Vault, fx.store);
+    expect(summary).not.toBeNull();
+    expect(summary!.trackedPaths).toEqual(["real.md"]); // synthetic "leftover.md" excluded
+    expect(summary!.trackedConflictCount).toBe(1);
+  });
+
+  it("§24 one file with MULTIPLE tracked siblings → one path, trackedConflictCount counts all", async () => {
+    writeFile(fx.root, "busy.md", "ours");
+    // Two tracked conflicts on the SAME base (one per remote device). Distinct
+    // theirsBlobSha per device — else ConflictStore's content-based dedup collapses
+    // them into one sibling (project-conflict-dedup-content-based).
+    const devices: Array<[string, string]> = [
+      ["Phone", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      ["Laptop", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+    ];
+    for (const [device, theirsSha] of devices) {
+      await fx.store.create({
+        vaultPath: "busy.md",
+        kind: "modify-vs-modify",
+        oursBlobSha: "9999999999999999999999999999999999999999",
+        theirsBlobSha: theirsSha,
+        theirsContent: new TextEncoder().encode(`theirs-${device}`).buffer as ArrayBuffer,
+        remoteDevice: device,
+        baseMtime: null,
+        baseSize: null,
+        baseSha: null,
+      });
+    }
+    const summary = pendingConflictSummary(fx.vault as unknown as import("obsidian").Vault, fx.store);
+    expect(summary!.trackedPaths).toEqual(["busy.md"]); // one file
+    expect(summary!.trackedConflictCount).toBe(2); // two tracked conflicts
+  });
+
+  it("§24 a base with BOTH a tracked and a synthetic sibling counts as tracked", async () => {
+    writeFile(fx.root, "mix.md", "ours");
+    // synthetic sibling (no record) for the same base
+    writeFile(
+      fx.root,
+      "mix.conflict-from-Ghost-2026-05-20T08-00-00Z.md",
+      "ghost",
+    );
+    // tracked sibling (record) for the same base
+    await fx.store.create({
+      vaultPath: "mix.md",
+      kind: "modify-vs-modify",
+      oursBlobSha: "7777777777777777777777777777777777777777",
+      theirsBlobSha: "8888888888888888888888888888888888888888",
+      theirsContent: new TextEncoder().encode("theirs-mix").buffer as ArrayBuffer,
+      remoteDevice: "Tablet",
+      baseMtime: null,
+      baseSize: null,
+      baseSha: null,
+    });
+    const summary = pendingConflictSummary(fx.vault as unknown as import("obsidian").Vault, fx.store);
+    expect(summary!.trackedPaths).toEqual(["mix.md"]); // listed once, as tracked
   });
 
   it("groups multi-sibling-per-path into one bucket each", async () => {

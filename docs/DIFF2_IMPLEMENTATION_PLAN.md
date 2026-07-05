@@ -546,13 +546,32 @@ Diff2 widget **повторює** цю поведінку:
   `Sync2Manager.registerConflictAndDropPath`
     + `processBatch` partitioning розв'язують це так: path-and з pending конфліктом ідуть на conflict branch, інші — на
       `main`.
-- Перед `[Sync]` спрацьовує **уже існуюча** `PreSyncConflictModal` (`src/sync2/views/pre-sync-conflict-modal.ts`):
-  показує список
-  pending конфліктів, дозволяє `[Resolve]` (відкриває перший sibling в editor-і) / `[Sync anyway]` (продовжити,
-  edit-while-in-conflict
-  path) / `[Cancel]`. Diff2 не дублює цю модалку; кнопка `[Resolve]` у v2 може бути перерофумована на "Open in
-  Diff-Edit"
-  (опційно, дрібний поліш).
+- Перед `[Sync]` спрацьовує `PreSyncConflictModal` (`src/sync2/views/pre-sync-conflict-modal.ts`):
+  показує список pending конфліктів, дозволяє `[Resolve]` / `[Sync anyway]` (продовжити, edit-while-in-conflict
+  path) / `[Cancel]`. Diff2 не дублює цю модалку.
+
+  **§24 (TODO §24, 2026-07-05) — модалка стосується ТІЛЬКИ tracked-конфліктів.** Джерело —
+  `pendingConflictSummary(vault, store)` (у `synthetic-detector.ts`), яка фільтрує через
+  `findAllConflicts` (той самий source, що panel/badge/status-bar) і повертає **лише tracked**
+  base-шляхи (base з ≥1 tracked sibling). Мотивація: тільки tracked-конфлікт невидимий на інших
+  пристроях до розв'язання; **synthetic**-конфлікт — суто локальний leftover (відголосок уже
+  закритого конфлікту, GitHub про нього не знає), тож не несе крос-девайсних наслідків. Наслідки:
+    * **synthetic-only sweep** (0 tracked) → `pendingConflictSummary` повертає `null` → gate
+      пропускає sync **без модалки** (не блокуємо над безнаслідковими leftover-ами). Панель
+      конфліктів усе одно їх показує для прибирання.
+    * **список у модалці — лише tracked** base-шляхи, cap на перші 5 + `…` (повна кількість у
+      заголовку; `[Resolve]` відкриває панель з повним списком).
+    * **`[Resolve]` → `activateDiffEditView()`** — відкриває/активує diff **conflicts-panel**
+      (список), а НЕ raw markdown sibling (стара поведінка кидала користувача в звичайну нотатку
+      повз diff2-UI).
+    * **текст плюралізується за двома осями** (`trackedConflictCount` = сума tracked-siblings; один
+      base може мати кілька `conflict-from-<device>` — по одному на пристрій): >1 файл → "These
+      files … tracked conflicts … resolve them"; 1 файл/1 конфлікт → "This file … a tracked
+      conflict … resolve it"; 1 файл/>1 конфлікт → "This file … tracked conflicts … resolve them".
+    * **NOTE-глосарій** (звичайним текстом, не `mod-warning`): "Tracked conflict — real conflict
+      from GitHub sync. Synthetic conflict — local conflict only." — щоб користувач поступово
+      навчився розрізняти типи. Лічильники badge/status-bar/menu не зачеплено (TODO #7 і далі
+      рахує tracked+synthetic).
 - Жодного "refuse-to-sync" guard-у не додаємо. Це б суперечило PSEUDO-MERGE-MODE §7 і ламало §8 Scenario B (six branch commits during long
   resolution session — кожен з них окремий [Sync] click).
 - Sibling-файли вже у `.gitignore` через `gitignore-invariants.ts`, отже на GitHub вони ніколи не потрапляють незалежно

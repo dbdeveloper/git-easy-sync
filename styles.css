@@ -943,3 +943,17 @@
 .diff2-history-row[data-local="true"] .diff2-history-who {
     color: var(--text-accent);
 }
+
+/* §24 pre-sync conflict modal — the tracked/synthetic glossary NOTE. Plain text
+   (it is a NOTE, not a CAUTION → no red), with a gap separating it from the
+   file list above. Flex row: "NOTE:" label + a column of the two definition
+   lines, so both definitions align under each other (not under the word NOTE). */
+.gh-presync-note {
+    margin-top: 1.5em;
+    display: flex;
+    gap: 0.4em;
+}
+.gh-presync-note-defs {
+    display: flex;
+    flex-direction: column;
+}
