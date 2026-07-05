@@ -34,6 +34,27 @@ import { diffChars, diffWords } from "diff";
 const CHAR_DIFF_BUDGET = 200_000;
 const WORD_DIFF_BUDGET = 2_000_000;
 
+// jsdiff's default word tokenizer only treats ASCII + extended-Latin as word
+// characters, so Cyrillic (and every other non-Latin script) is split
+// CHARACTER-by-character — word-mode then highlights mid-word fragments
+// ("розумі"|"є") exactly like char-mode (user, Cyrillic conflict). Feeding
+// diffWords an `Intl.Segmenter` (granularity:"word") makes it segment on real
+// Unicode word boundaries, so whole changed words are highlighted. Default
+// locale — word-boundary segmentation is locale-independent enough for our use
+// and we don't know the vault language. Feature-detected + created ONCE:
+// Intl.Segmenter is a standard modern-WebView API, but guard it so an older
+// Capacitor runtime falls back to plain diffWords rather than throwing at
+// module load. `null` = unavailable → omit the option (jsdiff's ASCII default).
+const wordSegmenter: Intl.Segmenter | null = (() => {
+  try {
+    return typeof Intl?.Segmenter === "function"
+      ? new Intl.Segmenter(undefined, { granularity: "word" })
+      : null;
+  } catch {
+    return null;
+  }
+})();
+
 export interface WordSpan {
   // Character offsets within the side's joined text (oursText or
   // theirsText respectively). Use these to build Decoration.mark
@@ -93,7 +114,9 @@ export function computeWordDiff(
   // wordLevel (user preference) OR the char budget (per-character too slow above it) → the
   // coarser word-level; otherwise the precise per-character diff.
   const useWords = wordLevel || product > CHAR_DIFF_BUDGET;
-  const parts = useWords ? diffWords(oursText, theirsText) : diffChars(oursText, theirsText);
+  const parts = useWords
+    ? diffWords(oursText, theirsText, wordSegmenter ? { intlSegmenter: wordSegmenter } : undefined)
+    : diffChars(oursText, theirsText);
   const oursSpans: WordSpan[] = [];
   const theirsSpans: WordSpan[] = [];
 
