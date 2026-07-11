@@ -716,7 +716,9 @@ export class DiffDetailController {
         remoteLabel,
         isMarkdown: isMd,
         mode,
-        touchOn: this.deps.touchOnly?.() ?? false,
+        // §2.2.14 — the toolbar shows the POSITIVE face (Editor mode = editing enabled);
+        // deps.touchOnly is the read-only setting, so editorModeOn = !touchOnly.
+        editorModeOn: !(this.deps.touchOnly?.() ?? false),
         autoFocusOn: this.autoFocus,
         diffMode: this.deps.diffWordLevel?.() ? "words" : "characters",
       },
@@ -734,8 +736,8 @@ export class DiffDetailController {
         // checkbox/select focuses it, so we hand focus straight back to the editor
         // (Auto-focus ON then jumps to the first conflict via autoFocusFirst; the others
         // just keep the caret put).
-        onToggleTouch: (on) => {
-          this.owner?.setTouchOnly(on);
+        onToggleEditorMode: (editable) => {
+          this.owner?.setTouchOnly(!editable); // Editor mode ON ⇒ read-only OFF
           this.owner?.getView().focus();
         },
         onToggleAutoFocus: (on) => {

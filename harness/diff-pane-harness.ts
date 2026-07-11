@@ -102,11 +102,11 @@ const H = {
     const noop = () => {};
     const h = renderDiffToolbar(
       tb,
-      { localLabel: "Macbook", remoteLabel: "Pixel 6", isMarkdown: true, touchOn: false, autoFocusOn: true, diffMode: "characters" },
+      { localLabel: "Macbook", remoteLabel: "Pixel 6", isMarkdown: true, editorModeOn: true, autoFocusOn: true, diffMode: "characters" },
       {
         onBack: noop, onSearch: noop, onKeepAll: noop, onApplyAll: noop, onJoinAll: noop,
         onPrev: noop, onNext: noop, onUndo: noop, onRedo: noop,
-        onToggleTouch: noop, onToggleAutoFocus: noop, onSetDiffMode: noop,
+        onToggleEditorMode: noop, onToggleAutoFocus: noop, onSetDiffMode: noop,
       },
     );
     h.update({ conflictCount: count, hasPrev: false, hasNext: true, canUndo: true, canRedo: false });

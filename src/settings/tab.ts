@@ -729,18 +729,22 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       new Setting(containerEl).setName("Diff Editor").setHeading();
 
       new Setting(containerEl)
-          .setName("Touch mode (read-only resolve)")
+          .setName("Editor mode (enable editing)")
           .setDesc(
-              "Open the conflict diff-editor read-only: resolve each conflict with the " +
-              "on-screen buttons only — typing/editing is disabled and the mobile soft " +
-              "keyboard is suppressed. Selection, copy and undo/redo still work. " +
-              "Convenient on small touch screens.",
+              "Open the conflict diff-editor with editing ENABLED: type/edit freely as " +
+              "well as resolve with the on-screen buttons. When OFF the editor is read-only " +
+              "— resolve via the buttons only, typing is disabled and the mobile soft " +
+              "keyboard is suppressed (selection, copy and undo/redo still work), which is " +
+              "convenient on small touch screens. Default: on for desktop, off for mobile. " +
+              "Toggle per-document with the 'Edit' checkbox in the editor toolbar.",
           )
+          // The stored setting stays read-only-positive (diffEditorTouchMode); "Editor mode"
+          // is its inverse, so display + persist the negation here.
           .addToggle((toggle) => {
               toggle
-                  .setValue(this.plugin.settings.diffEditorTouchMode ?? false)
+                  .setValue(!(this.plugin.settings.diffEditorTouchMode ?? false))
                   .onChange(async (value) => {
-                      this.plugin.settings.diffEditorTouchMode = value;
+                      this.plugin.settings.diffEditorTouchMode = !value;
                       await this.plugin.saveSettings();
                   });
           });

@@ -1605,7 +1605,7 @@ lines, які вміщують в собі розв'язок цього конф
 тестах, а потім імплементовані в DIFF-EDITOR-V2!
 
 
-#### 2.2.14 Режим touch-only (“Read-only” mode with mouse clicks/taps on the touchscreen enabled)
+#### 2.2.14 Режим Edit-only vs Touch-Mode (“Read-only” mode with mouse clicks/taps on the touchscreen enabled)
 
 Інколи (на мобільних пристроях) чи завжди (якщо це зручно користувачу), користувач може відмовлятись редагувати файли
 в конфлікті і вирішувати конфлікти тільки через вибір ver1 чи ver2 block для кожної diff-group у файлі, поки всі
@@ -1628,26 +1628,44 @@ default mode (той, яким плануємо користуватись бі�
    selection НЕ ПРАЦЮЄ
 5. UNDO/REDO працює як звичайно (розв'язані конфлікти користувач може захотіти відмінити, щоб вибрати інший варіант)
 
+**UI-обгортка: «Editor mode» (позитивна назва цього ж перемикача).** Внутрішньо режим лишається
+read-only-позитивним (`touchOnlyFacet` / setting `diffEditorTouchMode`: `true` = read-only). Але
+і в settings, і в toolbar користувач бачить **позитивний** перемикач «Editor mode»: увімкнено ⇒
+редагування дозволене (`touchOnly` false); вимкнено ⇒ read-only, як описано вище. У toolbar це
+чекбокс з коротким підписом **«Edit»**; повніша підказка «Editor mode» — у `title`.
+Default теж інвертований у цій термінології: desktop — Editor mode ON (редагування),
+mobile — Editor mode OFF (read-only). Інверсія `editorMode = !touchOnly` живе лише на двох UI-межах
+(settings-tab + controller→toolbar); facet/owner/збережений ключ не змінюються.
+
 
 #### 2.2.15. Toolbar для diff-еditor-v2
 
 ```
-[<-] [Keep all] [Apply al] [> Join all] <-(вирівняно вліво)|(вирівняно в право)->         Touch-mode [x]
+[<-] [Keep all] [Apply al] [> Join all] <-(вирівняно вліво)|(вирівняно в право)->               Edit [x]
 Conflicts: [ ↑ ] [Undo]                 <-(вирівняно вліво)|(вирівняно в право)->        Auto-focus: [x]
-   NNN     [ ↓ ] [Redo]                 <-(вирівняно вліво)|(вирівняно в право)-> Diff-mode: [Character]
+   NNN     [ ↓ ] [Redo]                 <-(вирівняно вліво)|(вирівняно в право)->           Diff: [Char]
 ```
 
 NOTE:  `[<-]`, `[ ↑ ]`, `[ ↓ ]`, `[Undo]`, `[Redo]` - це графічні зображення цих дій (іконки), а не символи
 
 Перенесення кнопок при зменшенні ширини вікна відбувається ПО РЯДКАХ з вирівнюванням ВПРАВО. Тобто кожний рядок
 розбивається на два-три рядки, в які потрапляють ті об'єкти, які не влізли в перший, але вирівнювання їх
-відбувається вправо. Фактично, layout виглядає як 2 окремих div, кожний з яких переноситься на новий рядок окремо:
+відбувається вправо.
+
+**Уточнення (row 1): `Edit [x]` — це НЕ окрема права група.** Row 1 — це ЄДИНИЙ wrap-потік
+`[<-] [🔍] [Keep all] [Apply all] [> Join all] … Edit [x]`, де `Edit` має `margin-left:auto`
+(вирівняний вправо). Тому при звуженні `Edit` НЕ переноситься на власний окремий рядок, а
+намагається сісти на ОСТАННІЙ рядок кнопок разом із крайньою правою кнопкою (`> Join all`, або
+`Apply all` тощо) — і лише коли на тому рядку геть немає місця, падає на свій рядок (теж
+вправо). Це економить рядок висоти. **Row 2** зберігає стару структуру з двох окремих div
+(лівий блок Conflicts/nav/undo-redo + правий блок Auto-focus/Diff), кожен переноситься
+окремо:
 
 ```
 +---------------------------------------------------------------------------+
 |             left aligned                               right aligned      |
 |  +------+------------+------------+--------------+    +----------------+  |
-|  | [<-] | [Keep all] | [Apply al] | [> Join all] |    | Touch-mode [x] |  |
+|  | [<-] | [Keep all] | [Apply al] | [> Join all] |    |       Edit [x] |  |
 |  +------+------------+------------+--------------+    +----------------+  |
 +---------------------------------------------------------------------------+
 
@@ -1655,7 +1673,7 @@ NOTE:  `[<-]`, `[ ↑ ]`, `[ ↓ ]`, `[Undo]`, `[Redo]` - це графічні 
 |        left aligned                                  right aligned        |
 |  +----------+-------+--------+                +------------------------+  | 
 |  |Conflicts:| [ ↑ ] | [Undo] |                |        Auto-focus: [x] |  |
-|  |   NNN    | [ ↓ ] | [Redo] |                | Diff-mode: [Character] |  |
+|  |   NNN    | [ ↓ ] | [Redo] |                |           Diff: [Char] |  |
 |  +----------+-------+--------+                +------------------------+  |
 +---------------------------------------------------------------------------+
 ```
@@ -1663,34 +1681,33 @@ NOTE:  `[<-]`, `[ ↑ ]`, `[ ↓ ]`, `[Undo]`, `[Redo]` - це графічні 
 Ось як відбувається перенесення об'єктів на наступний "рядок", коли ширини екрана недостатньо:
 ```
 [<-] [Keep all] [Apply al] [> Join all]
-                                Touch-mode: [x]
+                                       Edit [x]
 Conflicts: [ ↑ ] [Undo]         Auto-focus: [x]
-   NNN     [ ↓ ] [Redo]  Diff-mode: [Character] 
+   NNN     [ ↓ ] [Redo]            Diff: [Char] 
 ```
 
 ```
 [<-] [Keep all] [Apply al] 
-              [> Join all] 
-           Touch-mode: [x]
+[> Join all]          Edit [x]
 Conflicts: [ ↑ ] [Undo] 
    NNN     [ ↓ ] [Redo] 
-            Auto-focus [x]
-    Diff-mode: [Character]
+                Auto-focus [x]
+                  Diff: [Char]
 ```
 
 а далі:
 
 ```
 [<-] [Keep all] 
-      [Apply al]
-    [> Join all]
- Touch-mode: [x]
+[Apply al]
+[> Join all]
+        Edit [x]
 Conflicts: [ ↑ ]  
    NNN     [ ↓ ]
           [Undo]
           [Redo] 
   Auto-focus [x]
-..e: [Character]
+    Diff: [Char]
 ```
 
 і навіть так:
@@ -1700,7 +1717,7 @@ Conflicts: [ ↑ ]
 [Keep all] 
 [Apply al]
 [> Join all]
-Touch-mode: [x]
+        Edit [x]
 Conflicts:   
    NNN  
      [ ↑ ]
@@ -1733,16 +1750,16 @@ Auto-focus стосується conflicts і ЗАВЖДИ фокусується
 документів в toobar, якщо виникне потреба.
 
 NOTE: Touch-mode дивись п.2.2.14
-NOTE: Diff-mode дивись п.2.2.16
+NOTE: Edit-mode дивись п.2.2.16
 
-І "Touch Mode", і Auto-focus і Diff-mode мають свою (default) значення, які користувач проставляє в settings (які 
-встановлюються у false (Touch Mode встановлюється by default в true для mobile і у false в desktop, для Diff-Mode 
+І "Edit Mode", і Auto-focus і Diff-mode мають свою (default) значення, які користувач проставляє в settings (які 
+встановлюються у false (Edit Mode встановлюється by default в true для mobile і у false в desktop, для Diff-Mode 
 default є character mode) при першій ініціалізації data.json цього plugin), але для відкритого документа їх можна 
 змінювати саме для цієї сесії редагування цього документу. Якщо документ закрити й знову відкрити в diff-editor, ці 
 checkbox знову перечитаються з settings.
 
 
-#### 2.2.16 Diff-mode (Character | Word) — гранулярність підсвітки змін усередині diff-рядка
+#### 2.2.16 Diff-mode (Char | Word) — гранулярність підсвітки змін усередині diff-рядка
 
 Усередині одного diff-рядка (фрагмент ver1 проти фрагмента ver2 в межах diff-group) змінені частини
 підсвічуються сильнішим тінтом. Режим визначає, ЩО саме підсвічувати:

@@ -16,7 +16,7 @@ const cbs = (): DiffToolbarCallbacks => ({
   onNext: noop,
   onUndo: noop,
   onRedo: noop,
-  onToggleTouch: noop,
+  onToggleEditorMode: noop,
   onToggleAutoFocus: noop,
   onSetDiffMode: noop,
 });
@@ -24,7 +24,7 @@ const initial: DiffToolbarInitial = {
   localLabel: "L",
   remoteLabel: "R",
   isMarkdown: true,
-  touchOn: false,
+  editorModeOn: false,
   autoFocusOn: true,
   diffMode: "characters",
 };
@@ -79,6 +79,18 @@ describe("diff-toolbar", () => {
     expect(cbMd.defaultPrevented).toBe(false);
   });
 
+  it("Editor-mode toggle = an 'Edit' checkbox with an 'Editor mode' title (replaces 'Touch-mode')", () => {
+    const c = document.createElement("div");
+    renderDiffToolbar(c, initial, cbs());
+    // short "Edit" caption + fuller "Editor mode" hint as the label title
+    const wrap = c.querySelector('label[title="Editor mode"]');
+    expect(wrap).toBeTruthy();
+    expect(wrap!.textContent).toContain("Edit");
+    expect(wrap!.querySelector('input[type="checkbox"]')).toBeTruthy();
+    // the old "Touch-mode" caption is gone entirely
+    expect(c.textContent).not.toContain("Touch");
+  });
+
   it("markdown → Join button present; non-markdown (onJoinAll omitted) → absent", () => {
     const md = document.createElement("div");
     renderDiffToolbar(md, initial, cbs());
@@ -92,16 +104,16 @@ describe("diff-toolbar", () => {
     const c = document.createElement("div");
     let back = false;
     let mode = "";
-    let touch: boolean | null = null;
+    let editorMode: boolean | null = null;
     renderDiffToolbar(c, initial, {
       ...cbs(),
       onBack: () => (back = true),
       onSetDiffMode: (m) => (mode = m),
-      onToggleTouch: (on) => (touch = on),
+      onToggleEditorMode: (on) => (editorMode = on),
     });
     const checks = Array.from(c.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
-    // first checkbox = Touch-mode (off), the Auto-focus = on
-    expect(checks[0].checked).toBe(false); // touch off
+    // first checkbox = Editor-mode (off = read-only), the Auto-focus = on
+    expect(checks[0].checked).toBe(false); // editor mode off → read-only
     expect(checks.some((x) => x.checked)).toBe(true); // auto-focus on
     const sel = c.querySelector("select")!;
     expect(sel.value).toBe("characters");
@@ -112,7 +124,7 @@ describe("diff-toolbar", () => {
     sel.value = "words";
     sel.dispatchEvent(new Event("change"));
     expect(back).toBe(true);
-    expect(touch).toBe(true);
+    expect(editorMode).toBe(true); // checked = editing ENABLED
     expect(mode).toBe("words");
   });
 });

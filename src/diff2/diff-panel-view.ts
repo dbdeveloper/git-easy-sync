@@ -57,8 +57,9 @@ export interface DiffEditViewDeps {
   // Local device label for the top-marker / "Keep all local
   // (<label>)" button text. Falls back to "local" when undefined.
   localDeviceLabel?: () => string;
-  // §2.2.14 — read the current "Touch mode (read-only)" setting at view open. Optional
-  // (test fixtures omit it → editable as before).
+  // §2.2.14 — read the current read-only setting at view open (stored as diffEditorTouchMode;
+  // surfaced to the user as the inverse "Editor mode" toggle). Optional (test fixtures omit it
+  // → editable as before).
   touchOnly?: () => boolean;
   // Diff highlight granularity: true → word-level, false → char-level (default). Read at open.
   diffWordLevel?: () => boolean;

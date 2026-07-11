@@ -175,9 +175,8 @@ export const diffViewConfigFacet = Facet.define<DiffViewConfig, DiffViewConfig>(
 // (the §2.2.2 spec); only the emitted class maps to top/middle/bottom.
 const MARKER_CLASS: Record<MarkerKind, string> = { open: "top", mid: "middle", close: "bottom" };
 const MARKER_GLYPH: Record<MarkerKind, string> = {
-  open: "<<<<<",
-  mid: "=====",
-  close: ">>>>>",
+  open: "<<<<<<", mid: "======",
+  close: ">>>>>>",
 };
 
 const IS_MAC =

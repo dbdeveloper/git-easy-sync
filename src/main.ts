@@ -2388,7 +2388,8 @@ export default class GitHubSyncPlugin extends Plugin {
       // §5.0.e one-side-silent exit logs here instead of a Notice.
       logger: this.logger,
       localDeviceLabel: () => this.settings.deviceLabel ?? "Obsidian",
-      // §2.2.14 — live-read the Touch mode setting at each view open.
+      // §2.2.14 — live-read the read-only setting at each view open (UI surfaces its inverse
+      // as the "Editor mode" toggle; stored read-only-positive).
       touchOnly: () => this.settings.diffEditorTouchMode ?? false,
       // Diff highlight mode: "words" → word-level, else char-level (default).
       diffWordLevel: () => this.settings.diffEditorDiffMode === "words",

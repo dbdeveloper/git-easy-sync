@@ -174,11 +174,15 @@
 .diff2-tb-row {
     display: flex;
     justify-content: space-between;
-    /* center the left vs right group vertically — bug-54: row 1's single-line Touch-mode
+    /* center the left vs right group vertically — bug-54: row 1's single-line Editor-mode
      * was top-aligned against the taller buttons. (Columns within each group are already
      * centered by .diff2-tb-left/right; row 2's groups are both ~2-line so this is a no-op.) */
     align-items: center;
-    gap: 6px 16px;
+    /* row-gap 6px = spacing when the right group WRAPS below the left. column-gap 1px = the
+     * left↔right MIN horizontal gap, which only bites when the row is cramped (margin-left:auto
+     * on .diff2-tb-right eats free space otherwise) — so the right group can slide right up to
+     * the left group before wrapping instead of stopping 16px short. */
+    gap: 6px 1px;
     flex-wrap: wrap;
 }
 .diff2-tb-left,
@@ -196,6 +200,19 @@
 .diff2-tb-right {
     margin-left: auto; /* push right group to the far edge; wrapped items stay right-aligned */
     justify-content: flex-end;
+    font-size: 0.9em;
+    color: var(--text-muted);
+}
+/* Row 1 flattens its buttons + the trailing Edit toggle into ONE wrap flow (no left/right
+ * sub-groups) so the Edit checkbox rides on the LAST button line, right-aligned, instead of
+ * wrapping to a separate line — saves a row of height. Buttons keep their 14px finger-spacing;
+ * the row-level 1px column-gap (base rule, for row 2) is overridden here. */
+.diff2-tb-row1 {
+    justify-content: flex-start;
+    column-gap: 14px;
+}
+.diff2-tb-editmode {
+    margin-left: auto; /* right-align + wrap WITH the last button, not as its own group */
     font-size: 0.9em;
     color: var(--text-muted);
 }

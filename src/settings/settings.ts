@@ -62,9 +62,10 @@ export interface GitHubSyncSettings {
   // OFF keeps the accent tint (still shows "syncing") but suppresses the rotation — a
   // motion/battery preference (idea borrowed from Obsidian Sync's battery note).
   spinSyncIcon?: boolean;
-  // §2.2.14 — diff-editor "Touch mode" default: open conflict views read-only
-  // (resolve via buttons only; edits/typing blocked; mobile soft keyboard suppressed;
-  // selection + copy + undo/redo still work). Default OFF.
+  // §2.2.14 — diff-editor read-only mode: open conflict views read-only (resolve via buttons
+  // only; edits/typing blocked; mobile soft keyboard suppressed; selection + copy + undo/redo
+  // still work). Stored read-only-positive (true = read-only); the UI shows the INVERSE
+  // "Editor mode" toggle (checked = editing enabled). Platform-dependent default (see main.ts).
   diffEditorTouchMode?: boolean;
   // Intra-chunk diff highlight granularity: "characters" (precise per-character; default)
   // or "words" (whole changed words). Large diff-groups auto-fall-back to word-level
