@@ -115,3 +115,43 @@ describe("§2.2.17 / TODO §15 — F3 / Shift+F3 next/prev", () => {
     expect(selectAll!.style.display).toBe("none"); // … but hidden
   });
 });
+
+// §2.2.17 — the opt-in "replace" checkbox. Replace is rare in a conflict editor, so the whole
+// replace row is CSS-hidden until this box is ticked (and the editor is editable). The box drives
+// no CM6 state — only the `.diff2-replace-on` class on the panel that the CSS keys off.
+describe("§2.2.17 — opt-in 'replace' checkbox", () => {
+  it("opening the panel injects an unchecked 'replace' box right after the 'by word' toggle", () => {
+    const v = mount("x\nAAA\ny\n", "x\nBBB\ny\n");
+    openSearchPanel(v);
+    const panel = v.dom.querySelector(".cm-search")!;
+    const toggle = panel.querySelector(".diff2-replace-toggle");
+    expect(toggle).not.toBeNull();
+    // positioned immediately after the "by word" label
+    const wordLabel = panel.querySelector('[name="word"]')!.closest("label")!;
+    expect(wordLabel.nextElementSibling).toBe(toggle);
+    // its checkbox is unchecked, and the panel is not yet in replace mode
+    const cb = toggle!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(cb.checked).toBe(false);
+    expect(panel.classList.contains("diff2-replace-on")).toBe(false);
+  });
+
+  it("carries NO name attr (must not collide with the [name=\"replace\"] hide selector)", () => {
+    const v = mount("x\nAAA\ny\n", "x\nBBB\ny\n");
+    openSearchPanel(v);
+    const cb = v.dom.querySelector('.diff2-replace-toggle input[type="checkbox"]') as HTMLInputElement;
+    expect(cb.getAttribute("name")).toBeNull();
+  });
+
+  it("ticking the box toggles .diff2-replace-on on the panel (drives the CSS gate)", () => {
+    const v = mount("x\nAAA\ny\n", "x\nBBB\ny\n");
+    openSearchPanel(v);
+    const panel = v.dom.querySelector(".cm-search")!;
+    const cb = panel.querySelector('.diff2-replace-toggle input[type="checkbox"]') as HTMLInputElement;
+    cb.checked = true;
+    cb.dispatchEvent(new Event("change"));
+    expect(panel.classList.contains("diff2-replace-on")).toBe(true);
+    cb.checked = false;
+    cb.dispatchEvent(new Event("change"));
+    expect(panel.classList.contains("diff2-replace-on")).toBe(false);
+  });
+});

@@ -849,11 +849,22 @@
     background: var(--background-modifier-hover);
     color: var(--text-normal);
 }
-/* §2.2.17 Touch-mode ON — replace is blocked by the changeFilter, so drop the whole replace row
- * (incl. the <br> break; !important to beat the base br's forced display:block). Find stays. */
+/* §2.2.17 Replace is OPT-IN and edit-only. The whole replace row (its <br>, the replace field,
+ * Replace, Replace all) is hidden UNLESS both hold: the user ticks the injected "replace"
+ * checkbox (adds .diff2-replace-on to the panel) AND the editor is editable (Edit-mode ON, i.e.
+ * NOT .diff2-touch-search). So it's hidden when the box is off (default) OR when read-only.
+ * !important beats the base br's forced display:block. */
+.diff2-edit-view-root .cm-search:not(.diff2-replace-on) br,
+.diff2-edit-view-root .cm-search:not(.diff2-replace-on) [name="replace"],
+.diff2-edit-view-root .cm-search:not(.diff2-replace-on) [name="replaceAll"],
 .diff2-touch-search .cm-search br,
 .diff2-touch-search .cm-search [name="replace"],
 .diff2-touch-search .cm-search [name="replaceAll"] {
+    display: none !important;
+}
+/* The injected "replace" opt-in checkbox itself is shown only in edit mode (there's nothing to
+ * opt into when read-only, where replace is blocked by the changeFilter). */
+.diff2-touch-search .cm-search .diff2-replace-toggle {
     display: none !important;
 }
 

@@ -547,13 +547,20 @@ export const wordLevelComp = new Compartment();
 // TODO §15/§17 — tweak the default CM6 search panel when it opens. The buttons live in the
 // panel DOM under the view (`.cm-search button[name="…"]`), already mounted by the time the
 // updateListener fires; the panel's DOM is stable for its lifetime (rebuilt only on
-// close/reopen), so doing this once per open is enough. Two tweaks:
+// close/reopen), so doing this once per open is enough. Three tweaks:
 //   1. Tag next/prev (relabeled ">>"/"<<" via phrases, no native tooltip) with their
 //      find-again hotkeys so the glyphs are self-explanatory.
 //   2. Hide the [All] button (name="select" → selectMatches). It selects every match as a
 //      MULTI-selection, but diff2 never enables allowMultipleSelections (multi-cursor would
 //      fight the resolve/merge cascade), so CM6 collapses it to one range — the button does
 //      nothing useful. Hidden to avoid a dead control.
+//   3. Inject an opt-in "replace" checkbox after the "by word" toggle. Replace is a rare
+//      action in a conflict editor, so the whole replace row (field + Replace + Replace all)
+//      is hidden by default; it shows ONLY when this box is ticked AND the editor is editable
+//      (Edit-mode ON). The box itself is hidden read-only. It's a pure VISIBILITY gate — it
+//      drives NO CM6 search state, only the `.diff2-replace-on` class on the panel that
+//      styles.css keys the replace row off. (CM6 builds the replace row unconditionally here
+//      because our editor is never state.readOnly — see the changeFilter note above.)
 export const configureSearchPanel: Extension = EditorView.updateListener.of((u) => {
   if (!searchPanelOpen(u.state) || searchPanelOpen(u.startState)) return;
   const panel = u.view.dom.querySelector(".cm-search");
@@ -565,6 +572,17 @@ export const configureSearchPanel: Extension = EditorView.updateListener.of((u) 
     ?.setAttribute("title", "Previous match (⇧F3)");
   const selectAll = panel?.querySelector('button[name="select"]');
   if (selectAll instanceof HTMLElement) selectAll.style.display = "none";
+  // opt-in "replace" checkbox — inserted after the "by word" label, unchecked by default.
+  const wordLabel = panel?.querySelector('[name="word"]')?.closest("label");
+  if (panel && wordLabel && !panel.querySelector(".diff2-replace-toggle")) {
+    const label = document.createElement("label");
+    label.className = "diff2-replace-toggle";
+    const cb = label.appendChild(document.createElement("input"));
+    cb.type = "checkbox"; // NO `name` — must not match the [name="replace"] CSS/selectors
+    label.appendChild(document.createTextNode("replace"));
+    cb.addEventListener("change", () => panel.classList.toggle("diff2-replace-on", cb.checked));
+    wordLabel.after(label);
+  }
 });
 
 // §2.2.15 — scroll to a conflict group (2-line lead) + caret at ver1.from (its `from`). The
