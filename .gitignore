@@ -157,9 +157,11 @@ data.json
 
 benchmark_result.json
 
-.claude
+.claude/*
+!.claude/rules/
 
 # Temporary files
+tmp/
 *.tmp
 *.old
 *.my
