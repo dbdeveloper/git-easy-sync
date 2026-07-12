@@ -110,8 +110,8 @@ Triggered by a pushed tag matching `[0-9].[0-9]+.[0-9]+*`; a `-beta` suffix cuts
 
 - **Codebase architecture, module layout, and the design-doc map** (which spec covers what, with section-number navigation for [`SYNC2.md`](./docs/SYNC2.md) / [`PSEUDO-MERGE-MODE.md`](./docs/PSEUDO-MERGE-MODE.md) / the diff2 specs): [`ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 - **Current diff2 state / resume point:** memory `project-diff2-resume-point` + [`tasks/DIFF-EDITOR-V2.md`](./docs/tasks/DIFF-EDITOR-V2.md). This — not any prose in this repo — is the live truth for where diff2 stands.
-- **Historical build log** (milestone-by-milestone diff2 history — a frozen archive, not a living doc): [`BUILDLOG.md`](./docs/BUILDLOG.md). Do not extend it; new milestones go to `CHANGELOG.md` + git.
-- **User-facing docs** (install, settings, conflict-resolution UX, migration): [`README.md`](./README.md). **Per-release notes** (Keep-a-Changelog): [`CHANGELOG.md`](./CHANGELOG.md).
+- **Development-path log** (a LIVING, compact milestone-by-milestone diff2 summary): [`BUILDLOG.md`](./docs/BUILDLOG.md). Append a distilled entry as each milestone lands — the *why* and shape of a change that's hard to reconstruct from `git log`. The DETAILED path is the commit messages themselves (§7); `BUILDLOG.md` is their compact narrative. It is NOT frozen and NOT an archive.
+- **User-facing docs** (install, settings, conflict-resolution UX, migration): [`README.md`](./README.md). **Per-release notes — RELEASES ONLY** (Keep-a-Changelog; per-shipped-version, NOT day-to-day dev progress): [`CHANGELOG.md`](./CHANGELOG.md).
 - **Module-specific rules load automatically by path** (`.claude/rules/`) — you don't need to open them, Claude Code injects them when you touch matching files:
   - engine work (`src/sync2/`, `src/github/`, `src/worker/`, `src/errors.ts`) → `sync2-engine.md`
   - conflict-UI work (`src/diff2/`) → `diff2-ui.md`
