@@ -49,7 +49,29 @@ export function installMobileHeaderClamp(
   };
 
   // #3 instrumentation — the last scrollTop a real scroll left us at (before any relayout resizes).
+  // Semantics after the tab-switch fix: the user's INTENDED header position, clamped only for display.
   let lastUserScrollTop = 0;
+
+  // Tab-switch fix: only a REAL user gesture may update lastUserScrollTop. Re-showing a tab makes
+  // Obsidian zero root.scrollTop, which fires a 'scroll' event — that involuntary 0 must NOT overwrite
+  // the chosen position (device-traced: `scroll→0 {was:138}` clobbered the saved 138). Track an active
+  // touch, kept alive briefly after touchend so momentum-fling scroll still counts as the user's.
+  let gestureActive = false;
+  let gestureTail: ReturnType<typeof setTimeout> | null = null;
+  const beginGesture = (): void => {
+    gestureActive = true;
+    if (gestureTail) {
+      clearTimeout(gestureTail);
+      gestureTail = null;
+    }
+  };
+  const endGesture = (): void => {
+    if (gestureTail) clearTimeout(gestureTail);
+    gestureTail = setTimeout(() => {
+      gestureActive = false;
+      gestureTail = null;
+    }, 400); // momentum tail — safe here: the shutter range is tiny (~200px), it never flings for long
+  };
 
   // Keyboard detection: the Android soft keyboard shrinks the view (visualViewport doesn't fire on the
   // device). Track the tallest view seen at the CURRENT width as the "no-keyboard" height; a view now
@@ -72,8 +94,18 @@ export function installMobileHeaderClamp(
     if (!tail) return;
     const cap = contentTop(tail);
     if (root.scrollTop > cap) root.scrollTop = cap; // hard snap-back at the tail
-    lastUserScrollTop = root.scrollTop;
-    updateOffFold(); // the toolbar is collapsing/expanding → the off-fold amount changes
+    if (gestureActive) {
+      lastUserScrollTop = root.scrollTop; // a REAL user scroll → this is the new chosen position
+    } else if (cap > 0 && root.scrollTop < lastUserScrollTop) {
+      // Involuntary scroll (tab re-show zeroed scrollTop) while the layout is valid → restore the
+      // user's position RIGHT HERE, don't accept it and hope a later relayout undoes it. Handles both
+      // the clobber and any relayout↔zero ordering race in one place. Re-setting scrollTop fires
+      // onScroll again, but at the restored value it's no longer < lastUserScrollTop → it settles.
+      root.scrollTop = Math.min(lastUserScrollTop, cap);
+    }
+    // When cap==0 (tab collapsing to view 0) we neither save nor restore — just leave the saved
+    // position intact for the re-show. updateOffFold always runs (toolbar collapse/expand geometry).
+    updateOffFold();
   };
 
   const relayout = (): void => {
@@ -116,6 +148,9 @@ export function installMobileHeaderClamp(
   };
 
   root.addEventListener("scroll", onScroll, { passive: true });
+  root.addEventListener("touchstart", beginGesture, { passive: true });
+  root.addEventListener("touchend", endGesture, { passive: true });
+  root.addEventListener("touchcancel", endGesture, { passive: true });
   const ro = new ResizeObserver(() => relayout()); // keyboard open/close, rotation
   ro.observe(root);
   // Search panel is a direct child of .cm-editor — watch it appear/disappear (childList only, so CM6
@@ -127,6 +162,10 @@ export function installMobileHeaderClamp(
 
   return () => {
     root.removeEventListener("scroll", onScroll);
+    root.removeEventListener("touchstart", beginGesture);
+    root.removeEventListener("touchend", endGesture);
+    root.removeEventListener("touchcancel", endGesture);
+    if (gestureTail) clearTimeout(gestureTail);
     ro.disconnect();
     mo.disconnect();
     body.style.flex = "";
