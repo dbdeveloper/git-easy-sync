@@ -38,6 +38,7 @@ import {
   EditorView,
   keymap,
   ViewPlugin,
+  type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
 import { buildModel, type VerRange } from "./diff-model";
@@ -803,57 +804,90 @@ export const caretOffTerminalListener: Extension = EditorView.updateListener.of(
 // for every diff-group in one editor, ONE global decision determines how ALL groups render.
 export const markerLayoutController: Extension = ViewPlugin.fromClass(
   class {
-    ro: ResizeObserver | null = null;
+    readonly root: HTMLElement;
     widths: Omit<MarkerWidths, "gutter"> | null = null; // CACHED — constant per font/labels
-    last = "";
+    gutter = 0;
+    ro: ResizeObserver | null = null;
+    debounce: ReturnType<typeof setTimeout> | null = null;
+    lastMode = "";
     constructor(readonly view: EditorView) {
-      // The widths are CONSTANT (monospace font, fixed strings/labels), so measure only when they
-      // could have changed: the initial layout + the late settles where the stylesheet / web
-      // fonts may land AFTER first layout (measuring pre-CSS would cache undersized widths). On a
-      // plain resize we DON'T re-measure — a desktop drag would otherwise rebuild 3 offscreen
-      // markers (incl. setIcon SVG) every frame.
-      this.view.requestMeasure({ read: () => null, write: () => this.remeasure() });
-      if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(() => this.remeasure());
-      if (typeof document !== "undefined") document.fonts?.ready?.then(() => this.remeasure());
+      // The mode is TWO classes (diff2-btns-icon / diff2-marker-slid) on the OUTER root — the
+      // .diff2-edit-view-root div, NOT view.dom (.cm-editor). The root is OUR element and survives
+      // CM6's inner re-renders, so the mode is not "forgotten on tab/app switch": the markers
+      // re-render underneath a root that still carries the class, and the STATIC CSS in styles.css
+      // re-applies the mode with zero JS. One class-set per document — the type is one for ALL
+      // panels. The widths are CONSTANT (measured once); on a REAL width change the RO recomputes
+      // from the LIVE avail (exact — no baked offset), DEBOUNCED so only the SETTLED width triggers
+      // a recompute (a resize/scrollbar burst collapses to one; the flip↔scrollbar oscillation
+      // can't loop). Width is stable ~all the time → near-zero work; the persistent root class is
+      // what keeps it correct across re-renders, the live read is what makes it precise.
+      this.root = view.dom.closest<HTMLElement>(".diff2-edit-view-root") ?? view.dom;
+      this.view.requestMeasure({ read: () => null, write: () => this.measureAndApply() });
+      if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(() => this.measureAndApply());
+      if (typeof document !== "undefined") document.fonts?.ready?.then(() => this.measureAndApply());
       if (typeof ResizeObserver !== "undefined") {
-        this.ro = new ResizeObserver(() => this.apply()); // width/gutter changes here — cheap re-pick
+        this.ro = new ResizeObserver(() => this.scheduleApply());
         this.ro.observe(this.view.contentDOM);
       }
     }
-    remeasure() {
-      const root = this.view.dom.closest<HTMLElement>(".diff2-edit-view-root") ?? this.view.dom;
-      const cs = getComputedStyle(this.view.contentDOM);
-      const w = measureMarkerWidths(root, this.view.state.facet(diffViewConfigFacet), {
-        size: cs.fontSize,
-        sizeAdjust: cs.fontSizeAdjust,
-      });
-      if (w.buttonsText === 0) return; // pre-layout / happy-dom → keep default text/normal, no crash
-      this.widths = w;
-      this.last = ""; // force the next apply to run against the fresh widths
+    update(u: ViewUpdate) {
+      // Recovery-only trigger. When the tab mounts HIDDEN (deferred/background leaf) the width reads
+      // 0, so both the early measures AND the offscreen measure cache nothing → widths stays null.
+      // The RO fire on reveal is the primary re-measure, but it proved unreliable (the device
+      // "reopen-stuck-at-default" bug); CM6's own post-reveal geometry update is an independent
+      // second chance. GUARDED by !widths so it runs ONLY during the pre-measure window, then stays
+      // inert forever — no per-scroll work, none of the update-hook storm/freeze from before.
+      if (!this.widths && (u.geometryChanged || u.viewportChanged)) this.measureAndApply();
+    }
+    measureAndApply() {
+      if (!this.widths) {
+        const cs = getComputedStyle(this.view.contentDOM);
+        const w = measureMarkerWidths(this.root, this.view.state.facet(diffViewConfigFacet), {
+          size: cs.fontSize,
+          sizeAdjust: cs.fontSizeAdjust,
+        });
+        if (w.buttonsText === 0) return; // pre-layout / happy-dom → retry on the next trigger
+        this.widths = w;
+      }
+      this.gutter = (this.view.dom.querySelector(".cm-gutters") as HTMLElement | null)?.offsetWidth ?? 0;
       this.apply();
     }
-    apply() {
-      if (!this.widths) return; // not measured yet (RO can fire before the first remeasure)
-      const gutter = (this.view.dom.querySelector(".cm-gutters") as HTMLElement | null)?.offsetWidth ?? 0;
-      const avail = this.view.contentDOM.clientWidth;
-      const key = `${avail}:${gutter}`;
-      if (key === this.last) return; // pure height-only RO tick — nothing to recompute
-      this.last = key;
-      this.view.dom.style.setProperty("--diff2-gutter-w", `${gutter}px`);
-      const mode = chooseMarkerMode(avail, { ...this.widths, gutter });
-      const hadIcon = this.view.dom.classList.contains("diff2-btns-icon");
-      const hadSlid = this.view.dom.classList.contains("diff2-marker-slid");
-      this.view.dom.classList.toggle("diff2-btns-icon", mode.icons);
-      this.view.dom.classList.toggle("diff2-marker-slid", mode.slid);
-      if (hadIcon !== mode.icons || hadSlid !== mode.slid) {
-        // The mode flip changes marker HEIGHT (text↔icon can wrap differently) with NO CM6
-        // transaction → the heightmap goes stale and drawSelection would measure a live selection
-        // against the wrong line tops (bug-47: band shift/tear, no repaint). Poke CM6 to re-measure.
-        this.view.requestMeasure();
+    scheduleApply() {
+      // First widths acquisition is EAGER — when the tab mounts hidden the early measures read 0
+      // and cache nothing, so the ONLY chance to set a mode is the RO fire on reveal; debouncing it
+      // would leave the panel stuck at default if anything cut the timer short. Once the (constant)
+      // widths are cached, steady-state resizes DEBOUNCE: recompute only for the SETTLED width —
+      // collapses a resize/scrollbar burst into one and breaks any flip↔scrollbar oscillation.
+      if (!this.widths) {
+        this.measureAndApply();
+        return;
       }
+      if (this.debounce != null) clearTimeout(this.debounce);
+      this.debounce = setTimeout(() => {
+        this.debounce = null;
+        this.measureAndApply();
+      }, 120);
+    }
+    apply() {
+      if (!this.widths) return;
+      const avail = this.view.contentDOM.clientWidth;
+      if (avail === 0) return; // not laid out
+      const mode = chooseMarkerMode(avail, { ...this.widths, gutter: this.gutter });
+      const key = `${mode.icons ? "i" : "t"}${mode.slid ? "s" : "n"}`;
+      if (key === this.lastMode) return; // same mode — the root class is already correct
+      this.lastMode = key;
+      this.root.style.setProperty("--diff2-gutter-w", `${this.gutter}px`); // for the slide margin
+      this.root.classList.toggle("diff2-btns-icon", mode.icons);
+      this.root.classList.toggle("diff2-marker-slid", mode.slid);
+      // The mode flip changes marker HEIGHT (text↔icon can wrap differently) with NO CM6 transaction
+      // → the heightmap goes stale and drawSelection would measure a live selection against the wrong
+      // line tops (bug-47: band shift/tear, no repaint). Poke CM6 to re-measure.
+      this.view.requestMeasure();
     }
     destroy() {
       this.ro?.disconnect();
+      if (this.debounce != null) clearTimeout(this.debounce);
+      this.root.classList.remove("diff2-btns-icon", "diff2-marker-slid");
     }
   },
 );
