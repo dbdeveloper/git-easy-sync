@@ -387,6 +387,15 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
      * as the old inline `vertical-align:middle` did. */
     display: flex;
     align-items: center;
+    /* marker-panel rebuild (§2.2.15 flow model) — ONE flex-wrap flow of MONOLITHIC atoms
+     * (glyph · each button · label). Each atom is flex:0 0 auto + nowrap (below), so nothing
+     * splits mid-atom (the glyph never breaks into single `<`) and the LAST atom that doesn't
+     * fit wraps to the next line — the toolbar row-1 principle. On DESKTOP everything fits on
+     * one line, so the layout is unchanged; wrapping only kicks in when width is tight (mobile).
+     * col-gap 6px + the glyph's margin-right:8px / label's margin-left:8px below reproduce the
+     * old 14/6/14px spacing EXACTLY; row-gap 4px separates wrapped lines. */
+    flex-wrap: wrap;
+    gap: 4px 6px;
 }
 
 /* The marker rows share the SAME tint as the ver-block lines they border, so
@@ -464,21 +473,67 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
     bottom: 0;
     height: 50%;
 }
-/* lift the row's interactive content above the ::before selection overlay. */
+/* lift the row's interactive content above the ::before selection overlay. Each atom
+ * (glyph / every button / label) is lifted directly now that the buttons live in the
+ * marker's own flow (no `.diff2-marker-buttons` sub-container). */
 .diff2-marker-glyph,
-.diff2-marker-buttons,
+.diff2-marker-btn,
 .diff2-marker-label {
     position: relative;
     z-index: 1;
 }
 
-/* TODO §6 — ≥5px between the action buttons in the marker rows. */
-.diff2-marker-buttons {
+/* marker-panel rebuild — each button is a MONOLITHIC atom in the marker's flex-wrap flow:
+ * flex:0 0 auto so it never shrinks, nowrap so its label never splits. It wraps to the next
+ * line as a WHOLE unit (the toolbar §2.2.15 principle), the col-gap 6px from .diff2-marker
+ * replaces the old wrapper's internal gap. */
+.diff2-marker-btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
     display: inline-flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    vertical-align: middle;
-    margin: 0 6px;
+    align-items: center;
+}
+/* п.3 — HYBRID text↔icon. WIDE (default): show the FULL word+arrows text, hide the compact
+ * form → the button is byte-identical to the pre-rebuild one, so desktop is unchanged. The
+ * @container rule below flips this when the editor is too narrow for the text to fit. */
+.diff2-marker-btn-compact {
+    display: none;
+    align-items: center;
+    gap: 3px; /* separates the lucide glyph from the direction arrows */
+}
+.diff2-marker-btn-full {
+    display: inline;
+}
+/* the lucide verb icon (check / trash-2), sized to the button text (~1em) and inheriting the
+ * button colour, so it reads as a monochrome glyph, not a chunky 24px icon. */
+.diff2-marker-btn-icon {
+    display: inline-flex;
+    align-items: center;
+}
+.diff2-marker-btn-icon svg {
+    width: 1.1em;
+    height: 1.1em;
+}
+/* marker-panel rebuild — the mode is chosen in JS (markerLayoutController measures the constant
+ * widths once, then runs the priority ladder chooseMarkerMode on every real width change) and
+ * applied as two classes on the editor DOM. CSS just renders each mode:
+ *
+ * SLIDE — `.diff2-marker-slid` slides every marker row LEFT into the empty gutter zone opposite
+ * it (no line numbers beside a <<<<< / ===== / >>>>> row) by the measured gutter width
+ * (--diff2-gutter-w), reclaiming that space so the text/labels keep fitting to a narrower editor.
+ * z-index lifts the row above CM6's sticky gutter, which otherwise paints over it. */
+.diff2-marker-slid .diff2-marker {
+    margin-inline-start: calc(-1 * var(--diff2-gutter-w, 0px));
+    z-index: 250; /* above .cm-gutters (sticky, ~z-index 200) */
+}
+
+/* ICONS — `.diff2-btns-icon` swaps every button from its full word+arrows text to its compact
+ * icon+arrows form. */
+.diff2-btns-icon .diff2-marker-btn-full {
+    display: none;
+}
+.diff2-btns-icon .diff2-marker-btn-compact {
+    display: inline-flex;
 }
 
 /* §6.3 — marker action buttons hover the same as the toolbar [Keep all RED/
@@ -499,6 +554,9 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
 .diff2-marker-glyph {
     font-weight: bold;
     margin-right: 8px;
+    /* marker-panel rebuild — the glyph is ONE atom: never split into single `<` chars,
+     * even when the row is squeezed (the editor has line-wrap on, which used to break it). */
+    white-space: nowrap;
 }
 
 /* §1.8.a: marker chars become a click hit-target when the adjacent
@@ -520,6 +578,9 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
     margin-block: -2px;
     display: flex;
     align-items: center;
+    /* marker-panel rebuild — the glyph zone never shrinks: it stays a whole atom on the
+     * first line so buttons/label wrap around it, rather than the glyph being squeezed. */
+    flex: 0 0 auto;
 }
 .diff2-marker-clickable {
     /* text I-beam, not a pointer finger: the zone POSITIONS the text caret (into the
@@ -562,6 +623,15 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
 .diff2-marker-label {
     margin-left: 8px;
     opacity: 0.85;
+    /* marker-panel rebuild — the device label is a semibold, tag-like atom (distinct from the
+     * editable text), and the LAST atom in the flow, so it is the first to wrap to its own line
+     * when width is tight. flex:0 0 auto + nowrap → it moves as a whole unit (no mid-word break).
+     * NOTE: how heavy `font-weight:600` actually RENDERS is font-dependent — a monospace font with
+     * no matching weight face (and a theme with `font-synthesis:none`) shows it lighter. That's an
+     * environment thing (differs per vault by the configured monospace font), not this rule. */
+    font-weight: 600;
+    flex: 0 0 auto;
+    white-space: nowrap;
 }
 
 /* Line decorations — subtle red tint for ours, green for theirs (TODO §6). */

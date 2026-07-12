@@ -6,7 +6,7 @@
 // --outfile=harness/diff-pane-harness.js
 import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { mountDiffPaneV2, scrollToConflict, touchOnlyComp, wordLevelComp } from "../src/diff2/diff-pane-v2";
+import { measureMarkerWidths, mountDiffPaneV2, scrollToConflict, touchOnlyComp, wordLevelComp } from "../src/diff2/diff-pane-v2";
 import { readStructure, touchOnlyFacet, wordLevelFacet } from "../src/diff2/diff-structure";
 import { groupsOf } from "../src/diff2/diff-selection";
 import { copyClipboardText } from "../src/diff2/diff-clipboard";
@@ -102,7 +102,7 @@ const H = {
     const noop = () => {};
     const h = renderDiffToolbar(
       tb,
-      { localLabel: "Macbook", remoteLabel: "Pixel 6", isMarkdown: true, editorModeOn: true, autoFocusOn: true, diffMode: "characters" },
+      { localLabel: "Desktop-vault", remoteLabel: "Mobile-vault", isMarkdown: true, editorModeOn: true, autoFocusOn: true, diffMode: "characters" },
       {
         onBack: noop, onSearch: noop, onKeepAll: noop, onApplyAll: noop, onJoinAll: noop,
         onPrev: noop, onNext: noop, onUndo: noop, onRedo: noop,
@@ -129,6 +129,45 @@ const H = {
   peek(forward: boolean) {
     const cur = view.state.selection.main;
     return { anchor: cur.anchor, head: cur.head, native: view.moveVertically(cur, forward).head };
+  },
+  // marker-layout (§ marker-panel rebuild) — mount a representative 4-conflict doc
+  // (spec §2.2.2 file1/file2: empty ver1, modify/modify, modify/empty-ver2, empty-ver1)
+  // with REAL device labels so the marker-row flow-wrap can be screenshotted at any
+  // container width. `mode` drives the button verbs (conflict vs history/deleted).
+  markerDemo(localLabel = "Desktop-vault", remoteLabel = "Mobile-vault", mode: "conflict" | "history" = "conflict") {
+    const base = "line 0\nline 1\nline2\nline 3\nline 4\n\nline 5\n";
+    const sibling = "line 0\n\nline 1\nother line\nyet another\nline 3\nline 5\nline 6\n\n";
+    const root = document.getElementById("editor")!;
+    root.innerHTML = "";
+    const host = document.createElement("div");
+    host.className = "diff2-edit-view-root";
+    root.appendChild(host);
+    view = mountDiffPaneV2(host, base, sibling, {
+      config: { localLabel, remoteLabel, date: "", isMarkdown: true, mode },
+    });
+    view.focus();
+    return H.struct();
+  },
+  // marker-layout calibration — the live avail/gutter + measured intrinsic widths + applied
+  // mode classes, so the ladder transitions can be checked against reality in the harness.
+  mlDebug() {
+    const root = document.querySelector(".diff2-edit-view-root") as HTMLElement;
+    const cm = document.querySelector(".cm-editor") as HTMLElement;
+    const content = document.querySelector(".cm-content") as HTMLElement;
+    const gutter = document.querySelector(".cm-gutters") as HTMLElement | null;
+    const cs = getComputedStyle(content);
+    const w = measureMarkerWidths(
+      root,
+      { localLabel: "Desktop-vault", remoteLabel: "Mobile-vault", date: "", isMarkdown: true, mode: "conflict" },
+      { size: cs.fontSize, sizeAdjust: cs.fontSizeAdjust },
+    );
+    return {
+      avail: content.clientWidth,
+      gutter: gutter?.offsetWidth ?? 0,
+      icon: cm.classList.contains("diff2-btns-icon"),
+      slid: cm.classList.contains("diff2-marker-slid"),
+      w,
+    };
   },
 };
 (window as unknown as { H: typeof H }).H = H;

@@ -37,6 +37,7 @@ import {
   drawSelection,
   EditorView,
   keymap,
+  ViewPlugin,
   WidgetType,
 } from "@codemirror/view";
 import { buildModel, type VerRange } from "./diff-model";
@@ -58,6 +59,8 @@ import {
   terminalProtectionFilter,
   toRangeSet,
 } from "./diff-structure";
+import { setIcon } from "obsidian";
+import { chooseMarkerMode, type MarkerWidths } from "./marker-layout";
 import { type MarkerKind, glyphDiffLine, markerSpecs, selectionAppearance, verLineDecisions } from "./diff-decorations";
 import { type Zone, mouseDragSelection } from "./diff-mouse-select";
 import { nextConflict, prevConflict } from "./diff-nav";
@@ -175,8 +178,8 @@ export const diffViewConfigFacet = Facet.define<DiffViewConfig, DiffViewConfig>(
 // (the §2.2.2 spec); only the emitted class maps to top/middle/bottom.
 const MARKER_CLASS: Record<MarkerKind, string> = { open: "top", mid: "middle", close: "bottom" };
 const MARKER_GLYPH: Record<MarkerKind, string> = {
-  open: "<<<<<<", mid: "======",
-  close: ">>>>>>",
+  open: "<<<<<", mid: "=====",
+  close: ">>>>>",
 };
 
 const IS_MAC =
@@ -193,8 +196,17 @@ function fmtHotkey(spec: string): string {
 // choice: apply/remove are context-sensitive, so [Keep ↓] and [Apply ↑] share
 // Ctrl+Enter = "apply this block"). `desc` undefined → built from the remote label
 // at render time (Join only).
+// marker-panel rebuild (п.3) — a button shows a compact ICON for its verb plus the
+// direction ARROWS (which are load-bearing and ALWAYS visible): the word is replaced by a
+// lucide icon (`check` for keep/apply/restore = "take this", `trash-2` for remove/discard),
+// the arrows (↓ this side / ↑ the other / ↓↑ both) stay as text. Join keeps NO icon — its
+// `> ↓` glyph is the verb. `label` is the full word+arrows, kept for the accessible name
+// (aria-label / the tooltip's descriptive half). `desc` undefined → built from the remote
+// label at render time (Join only).
 interface BtnSpec {
-  label: string;
+  label: string; // accessible name (word + arrows), e.g. "Keep ↓"
+  arrows: string; // ALWAYS-visible direction text: "↓" / "↑" / "↓↑" (or "> ↓" for Join)
+  icon: string | null; // lucide icon name; null → arrows/glyph only (Join)
   choice: ResolveChoice;
   hotkey: string; // §1.9 CM6 key spec (matches diffResolveKeymap)
   desc?: string;
@@ -202,17 +214,17 @@ interface BtnSpec {
 // Conflict-mode verbs: ver1 = local (ours), ver2 = remote (theirs); Join merges both (markdown).
 const MARKER_BUTTONS_CONFLICT: Record<MarkerKind, BtnSpec[]> = {
   open: [
-    { label: "Keep ↓", choice: "keep1", hotkey: "Ctrl-Enter", desc: "Keep this local change" },
-    { label: "Remove ↓", choice: "keep2", hotkey: "Ctrl-Backspace", desc: "Remove this local change" },
+    { label: "Keep ↓", arrows: "↓", icon: "check", choice: "keep1", hotkey: "Ctrl-Enter", desc: "Keep this local change" },
+    { label: "Remove ↓", arrows: "↓", icon: "trash-2", choice: "keep2", hotkey: "Ctrl-Backspace", desc: "Remove this local change" },
   ],
   mid: [
-    { label: "Apply ↓↑", choice: "both", hotkey: "Ctrl-Shift-Enter", desc: "Apply both local and remote changes" },
-    { label: "Remove ↓↑", choice: "neither", hotkey: "Ctrl-Shift-Backspace", desc: "Remove both local and remote changes" },
-    { label: "> Join ↓", choice: "join", hotkey: "Ctrl-Shift-." }, // desc built from remoteLabel
+    { label: "Apply ↓↑", arrows: "↓↑", icon: "check", choice: "both", hotkey: "Ctrl-Shift-Enter", desc: "Apply both local and remote changes" },
+    { label: "Remove ↓↑", arrows: "↓↑", icon: "trash-2", choice: "neither", hotkey: "Ctrl-Shift-Backspace", desc: "Remove both local and remote changes" },
+    { label: "> Join ↓", arrows: "> ↓", icon: null, choice: "join", hotkey: "Ctrl-Shift-." }, // desc built from remoteLabel
   ],
   close: [
-    { label: "Apply ↑", choice: "keep2", hotkey: "Ctrl-Enter", desc: "Apply this remote change" },
-    { label: "Remove ↑", choice: "keep1", hotkey: "Ctrl-Backspace", desc: "Remove this remote change" },
+    { label: "Apply ↑", arrows: "↑", icon: "check", choice: "keep2", hotkey: "Ctrl-Enter", desc: "Apply this remote change" },
+    { label: "Remove ↑", arrows: "↑", icon: "trash-2", choice: "keep1", hotkey: "Ctrl-Backspace", desc: "Remove this remote change" },
   ],
 };
 
@@ -221,16 +233,16 @@ const MARKER_BUTTONS_CONFLICT: Record<MarkerKind, BtnSpec[]> = {
 // and there is NO Join (a version-restore never merges, even for markdown).
 const MARKER_BUTTONS_RESTORE: Record<MarkerKind, BtnSpec[]> = {
   open: [
-    { label: "Restore ↓", choice: "keep1", hotkey: "Ctrl-Enter", desc: "Restore this version's change" },
-    { label: "Remove ↓", choice: "keep2", hotkey: "Ctrl-Backspace", desc: "Discard this version's change" },
+    { label: "Restore ↓", arrows: "↓", icon: "check", choice: "keep1", hotkey: "Ctrl-Enter", desc: "Restore this version's change" },
+    { label: "Remove ↓", arrows: "↓", icon: "trash-2", choice: "keep2", hotkey: "Ctrl-Backspace", desc: "Discard this version's change" },
   ],
   mid: [
-    { label: "Apply ↓↑", choice: "both", hotkey: "Ctrl-Shift-Enter", desc: "Apply both changes" },
-    { label: "Remove ↓↑", choice: "neither", hotkey: "Ctrl-Shift-Backspace", desc: "Remove both changes" },
+    { label: "Apply ↓↑", arrows: "↓↑", icon: "check", choice: "both", hotkey: "Ctrl-Shift-Enter", desc: "Apply both changes" },
+    { label: "Remove ↓↑", arrows: "↓↑", icon: "trash-2", choice: "neither", hotkey: "Ctrl-Shift-Backspace", desc: "Remove both changes" },
   ],
   close: [
-    { label: "Keep ↑", choice: "keep2", hotkey: "Ctrl-Enter", desc: "Keep the actual (current) change" },
-    { label: "Remove ↑", choice: "keep1", hotkey: "Ctrl-Backspace", desc: "Remove the actual change" },
+    { label: "Keep ↑", arrows: "↑", icon: "check", choice: "keep2", hotkey: "Ctrl-Enter", desc: "Keep the actual (current) change" },
+    { label: "Remove ↑", arrows: "↑", icon: "trash-2", choice: "keep1", hotkey: "Ctrl-Backspace", desc: "Remove the actual change" },
   ],
 };
 
@@ -262,6 +274,159 @@ export function verBlockCaretTarget(
   if (!r) return null;
   if (end === "first" || r.to - r.from <= 1) return r.from; // first line / empty caret slot
   return doc.lineAt(r.to - 2).from; // last content line col 0
+}
+
+// Build a marker row's inner atoms — glyph-hit, resolve buttons (each carrying BOTH a text
+// FULL span and a compact ICON span), and the device label — into `el`. Shared by
+// MarkerWidget.toDOM (pass the live `view` → click listeners wired for caret-into-block +
+// resolve) and measureMarkerWidths (no `view` → geometry only, no listeners). The text/icon
+// swap and the slide are driven by classes on an ANCESTOR (see markerLayoutController), so the
+// DOM is identical in both modes — only CSS visibility differs.
+function appendMarkerParts(
+  el: HTMLElement,
+  kind: MarkerKind,
+  group: number,
+  config: DiffViewConfig,
+  view?: EditorView,
+): void {
+  const glyph = document.createElement("span");
+  glyph.className = "diff2-marker-glyph";
+  glyph.textContent = MARKER_GLYPH[kind];
+  // §2.2.4.9 — a hit div that stretches to the marker's FULL HEIGHT (align-self:stretch) and
+  // moves the caret INTO a ver-block (the only way to reach an EMPTY, collapsed one):
+  //   open(<<<<<) → ver1 first line; close(>>>>>) → ver2 last line; mid(=====) is DUAL — a
+  //   click in the TOP half → ver1 LAST line, the BOTTOM half → ver2 FIRST line.
+  // §2.2.6 п.7c — DOM `click` (never after a drag) + NO preventDefault, so a click+drag from
+  // this zone starts a mouse SELECTION via mouseSelectionStyle. Same for the buttons below.
+  const hit = document.createElement("div");
+  hit.className = "diff2-marker-glyph-hit diff2-marker-clickable";
+  hit.appendChild(glyph);
+  if (view) {
+    hit.addEventListener("click", (e) => {
+      if (isTouchOnly(view.state)) return; // §2.2.14(3) — no caret-into-block in read-only mode
+      const d = view.state.doc;
+      const rs = readStructure(view.state);
+      let target: number | null;
+      if (kind === "open") target = verBlockCaretTarget(d, rs, group, 1, "first");
+      else if (kind === "close") target = verBlockCaretTarget(d, rs, group, 2, "last");
+      else {
+        const rect = hit.getBoundingClientRect();
+        const topHalf = e.clientY - rect.top < rect.height / 2;
+        target = topHalf
+          ? verBlockCaretTarget(d, rs, group, 1, "last") // ===== top → ver1 last line
+          : verBlockCaretTarget(d, rs, group, 2, "first"); // ===== bottom → ver2 first line
+      }
+      if (target !== null) {
+        view.dispatch({ selection: { anchor: target }, scrollIntoView: true });
+        view.focus();
+      }
+    });
+  }
+  el.appendChild(hit);
+
+  const resolveOpts = { label: config.remoteLabel, date: config.date };
+  // marker-panel rebuild (§2.2.15 flow model) — buttons appended DIRECTLY to the row (no
+  // sub-container), so glyph/button/label are MONOLITHIC atoms in ONE flex-wrap flow: the glyph
+  // never splits into single `<` chars, and the LAST atom that doesn't fit wraps to the next line.
+  for (const b of markerButtonsFor(config.mode)[kind]) {
+    // Join is markdown-only (a blockquote join corrupts non-markdown files) AND conflict-only.
+    if (b.choice === "join" && !config.isMarkdown) continue;
+    const btn = document.createElement("button");
+    btn.className = `diff2-btn diff2-marker-btn diff2-marker-btn-${b.choice}`;
+    // п.3 — each button carries BOTH forms; markerLayoutController toggles which shows:
+    //   • FULL  — the word+arrows text ("Keep ↓" / "> Join ↓") — shown when there's room.
+    //   • COMPACT — a lucide verb icon (check = keep/apply/restore, trash-2 = remove) + the
+    //     ALWAYS-visible direction arrows — shown when tight. Join has no icon (`> ↓` = verb).
+    const full = btn.appendChild(document.createElement("span"));
+    full.className = "diff2-marker-btn-full";
+    full.textContent = b.label;
+    const compact = btn.appendChild(document.createElement("span"));
+    compact.className = "diff2-marker-btn-compact";
+    if (b.icon) {
+      const ic = compact.appendChild(document.createElement("span"));
+      ic.className = "diff2-marker-btn-icon";
+      setIcon?.(ic, b.icon); // stubbed (undefined) in unit tests, as the toolbar does
+    }
+    const arr = compact.appendChild(document.createElement("span"));
+    arr.className = "diff2-marker-btn-arrows";
+    arr.textContent = b.arrows;
+    const desc =
+      b.choice === "join"
+        ? `Keep local changes and join changes from "${config.remoteLabel}"`
+        : (b.desc ?? "");
+    btn.setAttribute("aria-label", b.label); // full word survives for a11y even in icon mode
+    btn.title = `${desc} (${fmtHotkey(b.hotkey)})`;
+    btn.setAttribute("data-diff2-resolve", b.choice);
+    btn.setAttribute("data-diff2-group", String(group));
+    // §2.2.9 — pointer resolve; §2.2.6 п.7c DOM `click` (drag → selection instead).
+    if (view) {
+      btn.addEventListener("click", () => {
+        applyResolve(view, group, b.choice, resolveOpts, "pointer");
+      });
+    }
+    el.appendChild(btn);
+  }
+
+  // Device label on top/bottom only (R7.2): top = local (ver1), bottom = remote (ver2).
+  const label = kind === "open" ? config.localLabel : kind === "close" ? config.remoteLabel : "";
+  if (label) {
+    const lab = document.createElement("span");
+    lab.className = "diff2-marker-label";
+    lab.textContent = `(${label})`;
+    el.appendChild(lab);
+  }
+}
+
+// marker-panel rebuild — measure the CONSTANT intrinsic widths of the marker rows ONCE (per
+// mount / config), so markerLayoutController can pick the layout by exact arithmetic. For each
+// marker kind we lay an offscreen clone at its natural single-line width and read four
+// configurations: text/icon buttons × label/no-label. The globals are the widest over the
+// three kinds (mid = the 3-button ===== row binds the buttons-only widths; open/close bind the
+// label-row widths). `mountPoint` is our OWN outer root (never CM6's managed .cm-content — a
+// foreign child there would fight CM6's reconciler); `fontSizePx` is .cm-content's resolved
+// font-size, set on the host so the marker's `0.85em` resolves against the SAME base as the
+// real rows. `gutter` is filled by the caller (it tracks the live gutter). Returns 0s before
+// layout (e.g. happy-dom) — harmless: chooseMarkerMode then picks the widest (text/normal) rung.
+export function measureMarkerWidths(
+  mountPoint: HTMLElement,
+  config: DiffViewConfig,
+  font: { size: string; sizeAdjust: string },
+): Omit<MarkerWidths, "gutter"> {
+  const host = mountPoint.appendChild(document.createElement("div"));
+  host.style.cssText = "position:absolute;left:-99999px;top:0;visibility:hidden;pointer-events:none;";
+  host.style.fontSize = font.size; // .diff2-marker is 0.85em → resolve against .cm-content's size
+  // font-size-adjust lives on .cm-content (an INHERITED property that changes glyph width per the
+  // configured monospace font) — the host is NOT inside .cm-content, so copy it or the measured
+  // widths diverge from the real rows for a user whose monospace font is materially adjusted.
+  host.style.fontSizeAdjust = font.sizeAdjust;
+  let labelRowText = 0;
+  let labelRowIcon = 0;
+  let buttonsText = 0;
+  let buttonsIcon = 0;
+  for (const kind of ["open", "mid", "close"] as MarkerKind[]) {
+    const wrap = host.appendChild(document.createElement("div"));
+    wrap.style.cssText = "display:inline-block;width:max-content;"; // let the flex row size to content
+    const marker = wrap.appendChild(document.createElement("div"));
+    marker.className = `diff2-marker diff2-marker-${MARKER_CLASS[kind]}`;
+    appendMarkerParts(marker, kind, 0, config); // no view → no listeners, geometry only
+    const lab = marker.querySelector<HTMLElement>(".diff2-marker-label");
+    for (const icons of [false, true]) {
+      marker.classList.toggle("diff2-btns-icon", icons);
+      if (lab) lab.style.display = ""; // with label (one-line requirement)
+      const withLabel = marker.offsetWidth;
+      if (lab) lab.style.display = "none"; // without label (line-1 = glyph+buttons)
+      const noLabel = marker.offsetWidth;
+      if (icons) {
+        labelRowIcon = Math.max(labelRowIcon, withLabel);
+        buttonsIcon = Math.max(buttonsIcon, noLabel);
+      } else {
+        labelRowText = Math.max(labelRowText, withLabel);
+        buttonsText = Math.max(buttonsText, noLabel);
+      }
+    }
+  }
+  host.remove();
+  return { labelRowText, labelRowIcon, buttonsText, buttonsIcon };
 }
 
 class MarkerWidget extends WidgetType {
@@ -305,88 +470,7 @@ class MarkerWidget extends WidgetType {
     if (this.selTop && this.selBottom) el.classList.add("diff2-marker-sel-full");
     else if (this.selTop) el.classList.add("diff2-marker-sel-top");
     else if (this.selBottom) el.classList.add("diff2-marker-sel-bottom");
-
-    const glyph = document.createElement("span");
-    glyph.className = "diff2-marker-glyph";
-    glyph.textContent = MARKER_GLYPH[this.kind];
-    // §2.2.4.9 — wrap EVERY marker glyph in a hit div that stretches to the marker's FULL
-    // HEIGHT (CSS `.diff2-marker-glyph-hit` → align-self:stretch) and is the click/tap
-    // target — an easy target that stops at the first button (NOT the whole row: a click
-    // drops the caret at the NEAREST line's col 0, so the zone stays near the start). It
-    // moves the caret INTO a ver-block (the only way to reach an EMPTY, collapsed one):
-    //   open(<<<<<)  → ver1 first line; close(>>>>>) → ver2 last line.
-    //   mid(=====) is DUAL — it borders BOTH blocks: a click in the TOP half → ver1 LAST
-    //     line; the BOTTOM half → ver2 FIRST line.
-    // §2.2.6 п.7c — uses DOM `click` (fires ONLY on a clean click, never after a drag) and
-    // NO mousedown/preventDefault/stopPropagation, so a click+drag from this zone instead
-    // starts a mouse SELECTION via mouseSelectionStyle. Same for the buttons below.
-    const hit = document.createElement("div");
-    hit.className = "diff2-marker-glyph-hit diff2-marker-clickable";
-    hit.appendChild(glyph);
-    hit.addEventListener("click", (e) => {
-      if (isTouchOnly(view.state)) return; // §2.2.14(3) — no caret-into-block in read-only mode
-      const d = view.state.doc;
-      const rs = readStructure(view.state);
-      let target: number | null;
-      if (this.kind === "open") target = verBlockCaretTarget(d, rs, this.group, 1, "first");
-      else if (this.kind === "close") target = verBlockCaretTarget(d, rs, this.group, 2, "last");
-      else {
-        const rect = hit.getBoundingClientRect();
-        const topHalf = e.clientY - rect.top < rect.height / 2;
-        target = topHalf
-          ? verBlockCaretTarget(d, rs, this.group, 1, "last") // ===== top → ver1 last line
-          : verBlockCaretTarget(d, rs, this.group, 2, "first"); // ===== bottom → ver2 first line
-      }
-      if (target !== null) {
-        view.dispatch({ selection: { anchor: target }, scrollIntoView: true });
-        view.focus();
-      }
-    });
-    el.appendChild(hit);
-
-    const resolveOpts = { label: this.config.remoteLabel, date: this.config.date };
-    const buttons = document.createElement("span");
-    buttons.className = "diff2-marker-buttons";
-    for (const b of markerButtonsFor(this.config.mode)[this.kind]) {
-      // Join is markdown-only (a blockquote join corrupts non-markdown files) AND
-      // conflict-only (a version-restore never merges). markerButtonsFor already drops it for
-      // history/deleted; the isMarkdown guard stays for non-markdown conflicts.
-      if (b.choice === "join" && !this.config.isMarkdown) continue;
-      const btn = document.createElement("button");
-      btn.className = `diff2-btn diff2-marker-btn diff2-marker-btn-${b.choice}`;
-      btn.textContent = b.label;
-      const desc =
-        b.choice === "join"
-          ? `Keep local changes and join changes from "${this.config.remoteLabel}"`
-          : (b.desc ?? "");
-      btn.title = `${desc} (${fmtHotkey(b.hotkey)})`;
-      btn.setAttribute("data-diff2-resolve", b.choice);
-      btn.setAttribute("data-diff2-group", String(this.group));
-      // §2.2.9 — pointer resolve (caret synthesized at ver1.from). §2.2.6 п.7c: DOM `click`
-      // (fires ONLY on a clean click, never after a drag) + NO preventDefault/stopPropagation,
-      // so a click+drag from a button starts a mouse SELECTION (the button sits on a marker
-      // row → that marker's drag zone) instead of resolving.
-      btn.addEventListener("click", () => {
-        applyResolve(view, this.group, b.choice, resolveOpts, "pointer");
-      });
-      buttons.appendChild(btn);
-    }
-    el.appendChild(buttons);
-
-    // Device label on top/bottom only (R7.2): top = local (ver1), bottom = remote
-    // (ver2); the middle separator stays unlabeled.
-    const label =
-      this.kind === "open"
-        ? this.config.localLabel
-        : this.kind === "close"
-          ? this.config.remoteLabel
-          : "";
-    if (label) {
-      const lab = document.createElement("span");
-      lab.className = "diff2-marker-label";
-      lab.textContent = `(${label})`;
-      el.appendChild(lab);
-    }
+    appendMarkerParts(el, this.kind, this.group, this.config, view);
     return el;
   }
   // bug-47 — a selection-only change flips selTop/selBottom → eq() returns false. WITHOUT
@@ -707,6 +791,73 @@ export const caretOffTerminalListener: Extension = EditorView.updateListener.of(
   }
 });
 
+// marker-panel rebuild — the layout controller. Measures the CONSTANT marker widths ONCE
+// (measureMarkerWidths), then on every REAL width change (a ResizeObserver on .cm-content — not
+// a per-frame cost; it fires only when the size actually changes) picks the layout by exact
+// arithmetic (chooseMarkerMode: one-line ≻ text ≻ normal-offset) and toggles two classes on the
+// editor DOM: `diff2-btns-icon` (compact icon buttons) and `diff2-marker-slid` (slide the rows
+// left into the empty gutter zone). It reads the LIVE available width + gutter each time, so it
+// stays correct when the vertical scrollbar appears/hides or the gutter grows a digit during
+// resolution — cases a baked CSS breakpoint (which sees only the container width) would miss.
+// Also publishes `--diff2-gutter-w` for the slide margin. Because the device labels are the same
+// for every diff-group in one editor, ONE global decision determines how ALL groups render.
+export const markerLayoutController: Extension = ViewPlugin.fromClass(
+  class {
+    ro: ResizeObserver | null = null;
+    widths: Omit<MarkerWidths, "gutter"> | null = null; // CACHED — constant per font/labels
+    last = "";
+    constructor(readonly view: EditorView) {
+      // The widths are CONSTANT (monospace font, fixed strings/labels), so measure only when they
+      // could have changed: the initial layout + the late settles where the stylesheet / web
+      // fonts may land AFTER first layout (measuring pre-CSS would cache undersized widths). On a
+      // plain resize we DON'T re-measure — a desktop drag would otherwise rebuild 3 offscreen
+      // markers (incl. setIcon SVG) every frame.
+      this.view.requestMeasure({ read: () => null, write: () => this.remeasure() });
+      if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(() => this.remeasure());
+      if (typeof document !== "undefined") document.fonts?.ready?.then(() => this.remeasure());
+      if (typeof ResizeObserver !== "undefined") {
+        this.ro = new ResizeObserver(() => this.apply()); // width/gutter changes here — cheap re-pick
+        this.ro.observe(this.view.contentDOM);
+      }
+    }
+    remeasure() {
+      const root = this.view.dom.closest<HTMLElement>(".diff2-edit-view-root") ?? this.view.dom;
+      const cs = getComputedStyle(this.view.contentDOM);
+      const w = measureMarkerWidths(root, this.view.state.facet(diffViewConfigFacet), {
+        size: cs.fontSize,
+        sizeAdjust: cs.fontSizeAdjust,
+      });
+      if (w.buttonsText === 0) return; // pre-layout / happy-dom → keep default text/normal, no crash
+      this.widths = w;
+      this.last = ""; // force the next apply to run against the fresh widths
+      this.apply();
+    }
+    apply() {
+      if (!this.widths) return; // not measured yet (RO can fire before the first remeasure)
+      const gutter = (this.view.dom.querySelector(".cm-gutters") as HTMLElement | null)?.offsetWidth ?? 0;
+      const avail = this.view.contentDOM.clientWidth;
+      const key = `${avail}:${gutter}`;
+      if (key === this.last) return; // pure height-only RO tick — nothing to recompute
+      this.last = key;
+      this.view.dom.style.setProperty("--diff2-gutter-w", `${gutter}px`);
+      const mode = chooseMarkerMode(avail, { ...this.widths, gutter });
+      const hadIcon = this.view.dom.classList.contains("diff2-btns-icon");
+      const hadSlid = this.view.dom.classList.contains("diff2-marker-slid");
+      this.view.dom.classList.toggle("diff2-btns-icon", mode.icons);
+      this.view.dom.classList.toggle("diff2-marker-slid", mode.slid);
+      if (hadIcon !== mode.icons || hadSlid !== mode.slid) {
+        // The mode flip changes marker HEIGHT (text↔icon can wrap differently) with NO CM6
+        // transaction → the heightmap goes stale and drawSelection would measure a live selection
+        // against the wrong line tops (bug-47: band shift/tear, no repaint). Poke CM6 to re-measure.
+        this.view.requestMeasure();
+      }
+    }
+    destroy() {
+      this.ro?.disconnect();
+    }
+  },
+);
+
 // ── §2.2.9 explicit resolution-caret restore ─────────────────────────────────
 // `resolveCaret` rides the forward resolution and (via cursorHistory) every undo/
 // redo hop. On undo restore `before`, on redo restore `after` — a selection-only
@@ -816,6 +967,7 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
         return !(tr.isUserEvent("input") || tr.isUserEvent("delete"));
       }),
       diffLineNumbers, // §2.2.10 per-side −/+ gutter (replaces lineNumbers())
+      markerLayoutController, // marker-panel — measure once + pick text/icon + slide by width
       history(),
       // §2.2.17 — standard CM6 search panel (the same engine Obsidian's editor uses), opened
       // with Mod+F. selectionLegalizeFilter skips the `select.search` userEvent so find-next/prev
