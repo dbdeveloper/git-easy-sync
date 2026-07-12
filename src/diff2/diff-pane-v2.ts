@@ -583,6 +583,14 @@ export const configureSearchPanel: Extension = EditorView.updateListener.of((u) 
     cb.addEventListener("change", () => panel.classList.toggle("diff2-replace-on", cb.checked));
     wordLabel.after(label);
   }
+  // Mobile "tail2" — a 16px grab-strip at the very bottom of the search panel. When the search panel
+  // is open, mobile-header-clamp.ts clamps the outer scroll here so the search chrome scrolls off but
+  // this tail stays as a handle. Hidden (display:none) off-mobile.
+  if (panel && !panel.querySelector(".diff2-search-kbd-strip")) {
+    const tail = document.createElement("div");
+    tail.className = "diff2-search-kbd-strip";
+    panel.appendChild(tail);
+  }
 });
 
 // §2.2.15 — scroll to a conflict group (2-line lead) + caret at ver1.from (its `from`). The

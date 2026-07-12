@@ -150,6 +150,54 @@
 .diff2-detail-body .cm-editor {
     height: 100%;
 }
+/* Android soft-keyboard fix (docs/tasks/imgs/screenshot-mobile-1..3): the keyboard shrank the view,
+ * the tall flex toolbar ate the height, the editor body collapsed to 0 → blank content (+ reversed
+ * IME typing). Mobile: the view-root scrolls the [toolbar + body] block; mobile-header-clamp.ts sizes
+ * the body (so the editor never collapses) and hard-clamps that scroll at the header bottom, leaving a
+ * grab-tail. Uniform across ALL mobile modes (keyboard or not). Desktop keeps the bug-23 layout. */
+body.is-mobile .diff2-edit-view-root {
+    overflow-y: auto;
+}
+/* Mobile #4 — decouple the two nested scrolls. The text scroller must NEVER chain its leftover
+ * overscroll delta into the outer (view-root) scroll, or scrolling the text at its top/bottom edge
+ * would drag the toolbar. `contain` stops the chaining (keeps native rubber-band); the toolbar then
+ * moves ONLY by dragging the toolbar body or the tail (both are outside .cm-scroller). */
+body.is-mobile .diff2-edit-view-root .cm-scroller {
+    overscroll-behavior: contain;
+}
+/* Mobile #2/#5 — the last lines sat under Obsidian's floating navbar (screenshot-mobile-4), and with
+ * the toolbar OPEN the scroller's bottom hangs below the fold so its inner scroll can't push them into
+ * view (screenshot-mobile-5). Pad the content bottom by: a fixed base (navbar + home-indicator safe
+ * area) PLUS --diff2-offfold, which mobile-header-clamp.ts sets to how far the scroller currently hangs
+ * below the fold (≈ toolbar height when open, 0 when collapsed → no excess overscroll gap). This grows
+ * the INNER scrollHeight only, never the outer content — so no feedback with the view-root scroll. */
+body.is-mobile .diff2-edit-view-root .cm-content {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 4em + var(--diff2-offfold, 0px));
+}
+/* Keyboard open → the Obsidian navbar is gone (the keyboard is there instead), so drop the navbar
+ * clearance base and keep only the off-fold padding (still needed to reach the end with the toolbar
+ * open). mobile-header-clamp.ts toggles .diff2-kbd-open on view shrink. */
+body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
+    padding-bottom: var(--diff2-offfold, 0px);
+}
+/* Mobile keyboard grab-strips — 16px bars that are the bottom continuation of the collapsible header,
+ * NOT floating stickies. mobile-header-clamp.ts hard-clamps the outer scroll at the header bottom, so
+ * the header scrolls fully off but the tail stays as a handle. Two of them (the header is split:
+ * toolbar is a view-root child, the CM6 search panel is inside the editor), toggled by search state
+ * (no keyboard gate — uniform across all mobile modes):
+ *   mobile + no search → tail1 (under toolbar); search open → tail2 (bottom of .cm-search).
+ * Hidden by default; JS adds .is-visible. Colour/pattern is a placeholder (accent). */
+.diff2-detail-kbd-strip,
+.diff2-search-kbd-strip {
+    display: none;
+    flex: 0 0 auto;
+    height: 16px;
+    background: var(--interactive-accent);
+}
+.diff2-detail-kbd-strip.is-visible,
+.diff2-search-kbd-strip.is-visible {
+    display: block;
+}
 
 .diff2-detail-error {
     color: var(--text-error);

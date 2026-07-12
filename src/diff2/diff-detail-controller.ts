@@ -316,6 +316,11 @@ export class DiffDetailController {
     const remoteSideLabel = mode === "conflict" ? entry.deviceLabel : "Actual";
     const toolbar = parent.createDiv({ cls: "diff2-detail-toolbar" });
     this.renderToolbar(toolbar, entry, localSideLabel, remoteSideLabel, mode);
+    // Mobile keyboard grab-strip ("tail1"): a 16px bar between the toolbar and the editor. It is the
+    // bottom continuation of the collapsible header — mobile-header-clamp.ts hard-clamps the outer
+    // scroll at the toolbar bottom, so the toolbar scrolls fully off but this strip stays as a handle
+    // to drag it back. Shown only under body.is-mobile; a no-op (display:none) on desktop.
+    parent.createDiv({ cls: "diff2-detail-kbd-strip" });
     // §title (Screenshot-17): the file identity lives in the VIEW HEADER
     // (getDisplayText), so the old in-body title row is dropped — saving a row for the
     // editor itself.

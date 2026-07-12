@@ -27,6 +27,7 @@ import {
   type DiffDetailHost,
 } from "./diff-detail-controller";
 import type { DiffEditViewDeps } from "./diff-panel-view";
+import { installMobileHeaderClamp } from "./mobile-header-clamp";
 import {
   openDescFor,
   persistedEditorState,
@@ -250,7 +251,14 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       // R-C2 — a restored leaf carries no `openMode` (getState strips it) → silent resume;
       // a user-reopen has `openMode:"user"` → the ResumeRecoveryModal.
       const silentResume = !this.state.openMode;
-      void this.controller.mount(container, entry, { silentResume });
+      void this.controller.mount(container, entry, { silentResume }).then(() => {
+        // Mobile header clamp (tail1) — install after the CM6 scroller exists. Editor-tab only;
+        // no-op on desktop. register() auto-disposes on view close.
+        requestAnimationFrame(() => {
+          const dispose = installMobileHeaderClamp(container, () => this.controller.getView()?.scrollDOM, this.deps.logger);
+          if (dispose) this.register(dispose);
+        });
+      });
     } catch (err) {
       this.deps.logger?.info("diff2 editor tryMount failed — detaching", { err: String(err) });
       this.leaf.detach();
