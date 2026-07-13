@@ -300,14 +300,21 @@ function insideVerBlock(ranges: VerRange[], pos: number): boolean {
 // segments at the insertion point, then run the FULL multi-run adjacency cascade
 // (the paste tx carries setStructure, so autoResolveFilter skips it — paste must
 // resolve its own adjacencies, incl. §2.2.12.1 case 4 two-run). Caret = paste-end.
-export function pasteSpec(state: EditorState, text: string): TransactionSpec | null {
+// `range` overrides the insertion point (default = the primary selection). The
+// inputHandler path (§29 Android first-paste) supplies CM6's [from,to] because the
+// selection may not be synced to the IME insertion point yet.
+export function pasteSpec(
+  state: EditorState,
+  text: string,
+  range?: { from: number; to: number },
+): TransactionSpec | null {
   const segments = parseClipboard(text);
   if (!segments.some((s) => s.kind === "group")) return null; // plain → default paste
 
   const ranges = readStructure(state);
   const sel = state.selection.main;
-  const insFrom = sel.from;
-  const insTo = sel.to;
+  const insFrom = range ? range.from : sel.from;
+  const insTo = range ? range.to : sel.to;
   if (insideVerBlock(ranges, insFrom)) return null; // §3b — paste as-is into a ver-block
   // paste-over-a-group-spanning selection is deferred (= selection-delete + paste).
   if (insFrom !== insTo && ranges.some((r) => insFrom <= r.to - 1 && r.to - 1 < insTo)) return null;
@@ -363,7 +370,10 @@ export function pasteSpec(state: EditorState, text: string): TransactionSpec | n
 
 // Thin edge: intercept paste of a clipboard that carries a fenced group. Pure
 // pasteSpec is the testable core; the DOM paste event (clipboardData.getData) is a
-// device-gate (happy-dom can't deliver a real paste into CM6).
+// device-gate (happy-dom can't deliver a real paste into CM6). On desktop and on a
+// mobile paste that fires a real `paste` event (§29: the SECOND Android paste after
+// a copy), this is the path. The FIRST Android paste arrives as IME input instead —
+// handled by diffClipboardInput below.
 export const diffClipboardPaste = EditorView.domEventHandlers({
   paste(event, view) {
     if (isTouchOnly(view.state)) return false; // §2.2.14 — read-only: paste disabled (native paste → input.paste → changeFilter blocks)
@@ -375,4 +385,31 @@ export const diffClipboardPaste = EditorView.domEventHandlers({
     event.preventDefault();
     return true;
   },
+});
+
+// §29 FIX — Android delivers the FIRST paste after a copy as IME text input
+// (beforeinput inputType "insertText"), NOT a `paste` ClipboardEvent: no
+// clipboardData, but the whole fenced text sits in the insert string. The `paste`
+// domEventHandler above never sees it → CM6 inserts raw text (screenshot-mobile-10).
+// Device-traced: the working 2nd paste fires a real `paste` event; the failing 1st
+// arrives as {beforeinput insertText, no clipboardData, data=the fence}.
+//
+// EditorView.inputHandler is CM6's sanctioned hook for exactly this: it fires at the
+// point CM6 turns an IME/beforeinput insertion into a change, and returning true lets
+// us substitute our own transaction while CM6 reverts the raw DOM mutation (raw
+// beforeinput.preventDefault is unreliable on Android — Gboard mutates the DOM anyway).
+//
+// Only engages when the inserted text PARSES as a fenced group (clipboardHasGroup) —
+// ordinary typing / IME composition of normal text falls through to the default
+// (parseClipboard on a 1-char keystroke is O(1)). Mutually exclusive per-paste with
+// the `paste` handler: a real paste event preventDefaults before CM6 reaches here
+// (device-trace: a working paste logs no input-handler line). The insert string may
+// lack the fence's trailing "\n" (IME drops it) — parseClipboard tolerates that.
+export const diffClipboardInput = EditorView.inputHandler.of((view, from, to, text) => {
+  if (isTouchOnly(view.state)) return false; // §2.2.14 — read-only: no paste
+  if (!clipboardHasGroup(text)) return false; // normal typing / non-group input → default
+  const spec = pasteSpec(view.state, text, { from, to });
+  if (!spec) return false; // into-ver-block / over-group-selection → default
+  view.dispatch(spec);
+  return true;
 });

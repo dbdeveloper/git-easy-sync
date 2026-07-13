@@ -74,7 +74,7 @@ import {
 } from "./diff-edits";
 import { groupsOf, selectionLegalizeFilter } from "./diff-selection";
 import { autoResolveFilter, diffSelectionDelete } from "./diff-auto-resolve";
-import { diffClipboardCopy, diffClipboardPaste } from "./diff-clipboard";
+import { diffClipboardCopy, diffClipboardInput, diffClipboardPaste } from "./diff-clipboard";
 import { computeWordDiff } from "./word-level-diff";
 import { diffLineNumbers } from "./diff-line-numbers";
 import { type ResolveChoice, type ResolveOpts, applyResolve, diffResolveKeymap } from "./diff-resolve";
@@ -1066,6 +1066,7 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       ]),
       diffClipboardCopy, // §2.2.7 — copy a group-spanning selection as a fenced block
       diffClipboardPaste, // §2.2.7 п.3a — paste fenced groups into normal → materialize + cascade
+      diffClipboardInput, // §29 — Android first-paste arrives as IME insertText (no paste event) → reconstitute
       // §2.2.17 / TODO §15 — Mod+F open, Esc close, and BOTH find-again pairs next/prev:
       // Mod+G / Shift+Mod+G AND F3 / Shift+F3. The F3 pair already ships inside searchKeymap
       // (@codemirror/search 6.5.6, the pinned version — scope "editor search-panel" is active

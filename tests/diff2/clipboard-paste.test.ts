@@ -103,6 +103,26 @@ describe("§2.2.7 п.3a — paste into normal (case 3)", () => {
     const s0 = st("a\nL\nc\n", "a\nR\nc\n", { anchor: v1.from, head: v1.from });
     expect(pasteSpec(s0, G("L\n", "R\n"))).toBeNull();
   });
+
+  // §29 — the inputHandler path (Android first-paste as IME insertText) supplies an
+  // EXPLICIT [from,to] because the selection may not be synced to the insertion point.
+  it("explicit range overrides the selection as the insertion point", () => {
+    // caret sits at 0, but the range says insert after "one\n" (pos 4).
+    const s0 = st("one\ntwo\n", "one\ntwo\n", { anchor: 0, head: 0 });
+    const spec = pasteSpec(s0, G("L\n", "R\n"), { from: 4, to: 4 })!;
+    const s1 = s0.update(spec).state;
+    // materializes AT the range (after "one"), not at the caret (before "one").
+    expect(split(s1)).toEqual({ base: "one\nL\ntwo\n", sibling: "one\nR\ntwo\n" });
+  });
+
+  // §29 — a group-carrying insert string missing its trailing "\n" (IME insertText
+  // drops it) still parses + reconstitutes — parseClipboard tolerates the last line.
+  it("group text without a trailing newline still reconstitutes", () => {
+    const s0 = st("one\ntwo\n", "one\ntwo\n", { anchor: 4, head: 4 });
+    const noTrailingNL = G("L\n", "R\n").replace(/\n$/, ""); // strip the final \n
+    const s1 = paste(s0, noTrailingNL)!;
+    expect(split(s1)).toEqual({ base: "one\nL\ntwo\n", sibling: "one\nR\ntwo\n" });
+  });
 });
 
 // view-level undo/redo + crash→replay (the resolveCaret/setStructure path).
