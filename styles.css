@@ -139,6 +139,45 @@
     flex: 0 0 auto; /* bug-23 — fixed toolbar, never scrolls off-screen */
 }
 
+/* §31 (TODO) — loading state while the editor body mounts asynchronously (big diff or
+ * crash-replay). controller.mount adds `.diff2-detail-loading` + a spinner overlay, then
+ * removes both (revealReady) once the CM6 owner is mounted — so a slow open shows
+ * "Loading…" instead of an inert default toolbar over a blank body. */
+.diff2-edit-view-root {
+    position: relative; /* containing block for the absolute loading overlay */
+}
+.diff2-detail-loading .diff2-detail-toolbar {
+    display: none; /* keep the toolbar hidden until the editor is ready */
+}
+.diff2-detail-loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 500; /* above the CM6 body + its markers (max z-index 250) */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: var(--background-primary);
+}
+.diff2-detail-spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--background-modifier-border);
+    border-top-color: var(--interactive-accent);
+    border-radius: 50%;
+    animation: diff2-detail-spin 0.8s linear infinite;
+}
+@keyframes diff2-detail-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+.diff2-detail-loading-text {
+    color: var(--text-muted);
+    font-size: 0.9em;
+}
+
 /* bug-23 — the detail body fills the remaining height; the CM6 editor inside it
  * owns the ONLY scrollbar. No fixed calc() (toolbar height varies with wrap), no
  * own overflow:auto (that was the second scrollbar). */

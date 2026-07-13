@@ -326,6 +326,29 @@ export class DiffDetailController {
     // editor itself.
     const body = parent.createDiv({ cls: "diff2-detail-body" });
 
+    // §31 (TODO) — LOADING STATE. The toolbar above is built synchronously, but the
+    // editor body loads asynchronously (read files → compact → classify → replay/resume
+    // → mount the CM6 owner). On a slow load (big diff or a crash-recovery replay) the
+    // user otherwise saw an inert default toolbar over a blank body, which read as a
+    // freeze. Two moves: (1) hide the toolbar SYNCHRONOUSLY here — before the first
+    // await, i.e. before the first paint — so the inert toolbar NEVER flashes; (2) delay
+    // only the SPINNER 150 ms, so a fast open (small diff) shows nothing (blank →
+    // document), not a spinner flash — revealReady clears the timer first. revealReady
+    // runs in the `finally` below → always swaps both out (success / error / early
+    // return). classList (not Obsidian's addClass) so the happy-dom test host works too.
+    parent.classList.add("diff2-detail-loading");
+    let loadingOverlay: HTMLElement | null = null;
+    const showLoadingTimer = setTimeout(() => {
+      loadingOverlay = parent.createDiv({ cls: "diff2-detail-loading-overlay" });
+      loadingOverlay.createDiv({ cls: "diff2-detail-spinner" });
+      loadingOverlay.createDiv({ cls: "diff2-detail-loading-text", text: "Loading…" });
+    }, 150);
+    const revealReady = (): void => {
+      clearTimeout(showLoadingTimer);
+      loadingOverlay?.remove();
+      parent.classList.remove("diff2-detail-loading");
+    };
+
     const adapter = this.deps.vault.adapter;
     try {
       // bug-59 — the model hardcodes `\n` (and CM6 strips `\r`). Normalize the live
@@ -689,6 +712,8 @@ export class DiffDetailController {
         cls: "diff2-detail-error",
         text: `Failed to load diff: ${String(err)}`,
       });
+    } finally {
+      revealReady(); // §31 — always swap the spinner for the real UI (success / error / early return)
     }
   }
 
