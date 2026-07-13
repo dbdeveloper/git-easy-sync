@@ -317,14 +317,25 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       container.empty();
       container.addClass("diff2-edit-view-root");
       const silentResume = !state.openMode;
-      void this.controller.mount(container, entry, {
-        silentResume,
-        history: {
-          versionSha: version.id,
-          fetchBytes: () =>
-            this.deps.fetchHistoryVersionBytes!(currentFile, version),
-        },
-      });
+      void this.controller
+        .mount(container, entry, {
+          silentResume,
+          history: {
+            versionSha: version.id,
+            fetchBytes: () =>
+              this.deps.fetchHistoryVersionBytes!(currentFile, version),
+          },
+        })
+        .then(() => {
+          // Mobile header clamp — MUST install for History too. Was conflict-path-only
+          // (tryMount); the History path forgot it, so a History editor had no toolbar
+          // shutter AND hit the Android keyboard-shrink blank (white screen) that the
+          // clamp fixes. Same install as tryMount; no-op on desktop; auto-disposed on close.
+          requestAnimationFrame(() => {
+            const dispose = installMobileHeaderClamp(container, () => this.controller.getView()?.scrollDOM, this.deps.logger);
+            if (dispose) this.register(dispose);
+          });
+        });
     } catch (err) {
       this.deps.logger?.info("diff2 history tryMount failed — detaching", {
         err: String(err),
