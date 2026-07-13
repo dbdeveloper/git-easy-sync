@@ -453,6 +453,13 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
         var(--background-primary);
     color: var(--text-normal);
     /*border-top: 1px solid var(--background-modifier-border);*/
+    /* TODO §33 — ver1 (<<<<<) ONLY: when the device label wraps to its own line it must go
+     * ABOVE the glyph+buttons row, not below (below reads as ver1-block text, esp. for an
+     * empty ver1). `wrap-reverse` stacks the wrapped flex line on top of line 1 (label →
+     * top, `<<<<< [buttons]` → bottom). No effect on the single-line case (rungs 1-4).
+     * Uniform for every group (this class), matching the marker-panel one-mode-per-document
+     * rule. >>>>> (ver2/remote) is intentionally left wrapping downward (§33 = ver1 only). */
+    flex-wrap: wrap-reverse;
 }
 
 /* §6.6 — split the ===== separator background: top half = ours (red), bottom
