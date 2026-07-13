@@ -52,10 +52,13 @@ export function installMobileHeaderClamp(
   // Semantics after the tab-switch fix: the user's INTENDED header position, clamped only for display.
   let lastUserScrollTop = 0;
 
-  // Tab-switch fix: only a REAL user gesture may update lastUserScrollTop. Re-showing a tab makes
-  // Obsidian zero root.scrollTop, which fires a 'scroll' event — that involuntary 0 must NOT overwrite
-  // the chosen position (device-traced: `scroll→0 {was:138}` clobbered the saved 138). Track an active
-  // touch, kept alive briefly after touchend so momentum-fling scroll still counts as the user's.
+  // Only a REAL scroll gesture may update lastUserScrollTop. Two involuntary moves must NOT be saved:
+  //   • tab re-show zeroes root.scrollTop (down to 0) — device-traced `scroll→0 {was:138}`;
+  //   • a `view.focus()` after a next-conflict jump drags it UP to cap (collapsing the toolbar).
+  // The gesture is a touch-MOVE, NOT a touch-start — a TAP on a toolbar button is a touch on root but
+  // not a scroll, and if touchstart opened the window the focus-scroll it triggers would be mis-saved
+  // as the user's position (device-traced: tap [next]→last set lastUserScrollTop 9.7→199.7). Kept
+  // alive briefly after touchend so momentum-fling scroll still counts as the user's.
   let gestureActive = false;
   let gestureTail: ReturnType<typeof setTimeout> | null = null;
   const beginGesture = (): void => {
@@ -96,12 +99,17 @@ export function installMobileHeaderClamp(
     if (root.scrollTop > cap) root.scrollTop = cap; // hard snap-back at the tail
     if (gestureActive) {
       lastUserScrollTop = root.scrollTop; // a REAL user scroll → this is the new chosen position
-    } else if (cap > 0 && root.scrollTop < lastUserScrollTop) {
-      // Involuntary scroll (tab re-show zeroed scrollTop) while the layout is valid → restore the
-      // user's position RIGHT HERE, don't accept it and hope a later relayout undoes it. Handles both
-      // the clobber and any relayout↔zero ordering race in one place. Re-setting scrollTop fires
-      // onScroll again, but at the restored value it's no longer < lastUserScrollTop → it settles.
-      root.scrollTop = Math.min(lastUserScrollTop, cap);
+    } else if (cap > 0 && root.scrollTop !== lastUserScrollTop) {
+      // The outer shutter scroll changes ONLY by a user gesture. ANY involuntary move away from the
+      // chosen position — while the layout is valid — snaps straight back, in EITHER direction:
+      //   • DOWN to 0: a tab re-show zeroes root.scrollTop (device-traced clobber);
+      //   • UP to cap: `view.focus()` after a next-conflict jump to the LAST conflict fires a native
+      //     focus-scroll (Android ignores preventScroll) that drags the outer root, collapsing the
+      //     toolbar — touch-only only, since edit-mode is already focused so focus() is a no-op.
+      // Restoring RIGHT HERE (not via a later relayout) also kills any relayout↔scroll ordering race.
+      // Re-setting scrollTop fires onScroll again, but then it equals the target → it settles.
+      const target = Math.min(lastUserScrollTop, cap);
+      if (root.scrollTop !== target) root.scrollTop = target;
     }
     // When cap==0 (tab collapsing to view 0) we neither save nor restore — just leave the saved
     // position intact for the re-show. updateOffFold always runs (toolbar collapse/expand geometry).
@@ -148,7 +156,7 @@ export function installMobileHeaderClamp(
   };
 
   root.addEventListener("scroll", onScroll, { passive: true });
-  root.addEventListener("touchstart", beginGesture, { passive: true });
+  root.addEventListener("touchmove", beginGesture, { passive: true }); // MOVE, not start — a tap ≠ a scroll
   root.addEventListener("touchend", endGesture, { passive: true });
   root.addEventListener("touchcancel", endGesture, { passive: true });
   const ro = new ResizeObserver(() => relayout()); // keyboard open/close, rotation
@@ -162,7 +170,7 @@ export function installMobileHeaderClamp(
 
   return () => {
     root.removeEventListener("scroll", onScroll);
-    root.removeEventListener("touchstart", beginGesture);
+    root.removeEventListener("touchmove", beginGesture);
     root.removeEventListener("touchend", endGesture);
     root.removeEventListener("touchcancel", endGesture);
     if (gestureTail) clearTimeout(gestureTail);
