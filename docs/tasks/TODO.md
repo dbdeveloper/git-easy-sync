@@ -314,9 +314,14 @@
       ВИМКНУТИ нативне виділення (`user-select:none`+`touch-action:none` на .cm-content) і збудувати власну систему
       (long-press, автоскрол, власні ручки/кінці) — окремий великий проєкт. Advisor+Claude рекомендували проти повного A.
 
-31. Дуже прикольний баг! - Коли в Settings встановити для diff-editor "Edit-mode": OFF, тоді при recovery не програються
+31. ✅ DONE (2026-07-13). Дуже прикольний баг! - Коли в Settings встановити для diff-editor "Edit-mode": OFF, тоді при recovery не програються
     зміни й файл НЕ ВІДНОВЛЮЄТЬСЯ після збою!!! (replay не відбувається — файл залишається незмінним). Тобто "read-only"
     mode спрацював навіть на replay (а не мусив)! Помилка проявляється як на мобільному пристрої, так і на desktop.
+    ПРИЧИНА: touch-only `changeFilter` (`diff-pane-v2.ts`) ріже input/delete userEvents, а recovery-replay
+    re-dispatch-ить записані правки з userEvent "input.type" → в read-only їх блокувало. ФІКС: фільтр тепер
+    пропускає транзакції з анотацією `replayDispatch` (дзеркалить diff-edits/diff-auto-resolve). Анотація стоїть
+    ЛИШЕ на replay-dispatch-ах, не на живих правках → read-only для користувача лишається. Тести (RED-GREEN):
+    recovery-forward.test.ts — replay у touch-only view відтворює правку; живий edit у touch-only лишається заблокованим.
 
 32. ✅ DONE: Відкриття diff-editor часом може займати певний час. Особливо якщо багато змін і diff "задумався" чи при replay
     після аварійного закриття табу (replay досить повільний, бо неоптимальний (p.II)). При цьому видно порожній default 
@@ -334,16 +339,16 @@
     Хочу, щоб у такому випадку label переносився "вгору" над panel, як тут:
     ```
        <label>
-       <<<<< [Keep ↓] і  [Remove ↓]
-       ===== 
+       <<<<< [Keep ↓] [Remove ↓]
+       ===== [Apply ↓↑] [Remove ↓↑] 
        ...
     ```
     Objection: зараз є конфуз, коли маємо порожній ver1-block з перенесеним <label> вниз. Можна подумати що цей 
     `<label>` і є текстом у ver1-block:
     ```
-       <<<<< [Keep ↓] і  [Remove ↓]
+       <<<<< [Keep ↓] [Remove ↓]
        <label>
-       ===== 
+       ===== [Apply ↓↑] [Remove ↓↑] 
        ...
     ```
 

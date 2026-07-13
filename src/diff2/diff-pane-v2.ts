@@ -79,6 +79,7 @@ import { computeWordDiff } from "./word-level-diff";
 import { diffLineNumbers } from "./diff-line-numbers";
 import { type ResolveChoice, type ResolveOpts, applyResolve, diffResolveKeymap } from "./diff-resolve";
 import { type HistorySink, type ReplayFlag, historyFeedListener } from "./history-feed";
+import { replayDispatch } from "./history-log-v2";
 import type { CursorActivity } from "./cursor-timer";
 
 // §0.5.6 step-2 — OPTIONAL persistence wiring. When the owner (Phase-6 DiffPaneOwner)
@@ -998,6 +999,12 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       // they don't consume a key like Ctrl+Y (= redo).
       EditorState.changeFilter.of((tr) => {
         if (!tr.startState.facet(touchOnlyFacet)) return true;
+        // TODO §31 — recovery/resume REPLAY re-applies recorded edits verbatim with a
+        // userEvent "input.type" (history-replay-v2). Read-only must NOT block that, or a
+        // crash isn't restored while Edit-mode is OFF (the file stays unchanged). The
+        // annotation rides ONLY replay dispatches, never live user edits (undo/redo also
+        // pass — they carry undo/redo userEvents). Mirrors diff-edits/diff-auto-resolve.
+        if (tr.annotation(replayDispatch)) return true;
         return !(tr.isUserEvent("input") || tr.isUserEvent("delete"));
       }),
       diffLineNumbers, // §2.2.10 per-side −/+ gutter (replaces lineNumbers())
