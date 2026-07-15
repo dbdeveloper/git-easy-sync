@@ -3536,3 +3536,227 @@ describe("Sync2Manager — reconcileRemoteIdentity", () => {
     expect(f.store.getLastSyncCommitSha()).toBe("BRANCH_HEAD_INIT");
   });
 });
+
+// ── §28: plugin-dir atomic resolution — NEVER a conflict sibling ──────
+//
+// The gitignore-bounded synced set of a plugin folder — {main.js,
+// manifest.json, styles.css, data.json} — must never register a
+// conflict; it resolves atomically. These drive real pulls (via the
+// private pullIfNeeded, so a locally-changed plugin file hits the
+// PULL-side resolver rather than being committed → reconcile) with the
+// real ChangeDetector + real gitignore (GI), and assert the resolution
+// AND that no `*.conflict-from.*` sibling appears anywhere.
+describe("Sync2Manager — §28 plugin-dir atomic resolution", () => {
+  const MANI = ".obsidian/plugins/acme/manifest.json";
+  const MAIN = ".obsidian/plugins/acme/main.js";
+  const STY = ".obsidian/plugins/acme/styles.css";
+  const DATA = ".obsidian/plugins/acme/data.json";
+  const semverTieManifest = JSON.stringify({ id: "acme", version: "1.0.0", name: "Acme" });
+
+  // Recursively find any conflict sibling written under the vault.
+  function listConflictSiblings(root: string): string[] {
+    const out: string[] = [];
+    const walk = (dir: string): void => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.name.includes(".conflict-from-")) out.push(p);
+      }
+    };
+    walk(root);
+    return out;
+  }
+  function setMtime(root: string, rel: string, iso: string): void {
+    const s = Date.parse(iso) / 1000;
+    fs.utimesSync(path.join(root, rel), s, s);
+  }
+  function conflicts(f: ReturnType<typeof fixture>): unknown[] {
+    return f.manager["conflictStore"]?.getAll() ?? [];
+  }
+  // Call the pull-side directly so a locally-changed plugin file is
+  // resolved by the pull resolver (syncAll would commit it → reconcile).
+  async function pull(f: ReturnType<typeof fixture>): Promise<void> {
+    await (f.manager as unknown as { pullIfNeeded: () => Promise<unknown> }).pullIfNeeded();
+  }
+
+  it("RULE 1 + ordering: a remote bundle change drags styles.css to the server — even though main.js is applied FIRST and the local styles.css is newer", async () => {
+    const f = fixture();
+    const baseMain = "module.exports={V:'BASE'};";
+    const remoteMain = "module.exports={V:'REMOTE'};";
+    const baseSty = "a{color:base}";
+    const localSty = "a{color:LOCAL}";
+    const remoteSty = "a{color:REMOTE}";
+
+    // Local: manifest == remote (semver tie), main.js UNCHANGED (== base),
+    // styles.css locally edited and FRESH.
+    writeVaultFile(f.root, MANI, semverTieManifest);
+    writeVaultFile(f.root, MAIN, baseMain);
+    writeVaultFile(f.root, STY, localSty);
+    f.store.set(MANI, { path: MANI, remoteSha: await shaOf(semverTieManifest), mtime: 0, size: semverTieManifest.length });
+    f.store.set(MAIN, { path: MAIN, remoteSha: await shaOf(baseMain), mtime: 0, size: baseMain.length });
+    f.store.set(STY, { path: STY, remoteSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
+    f.store.setLastSync("BASE", "BASE_TREE");
+    f.client.setBranchHead("NEW");
+    f.client.setTreeShaForCommit("NEW", "NEW_TREE");
+    f.client.setContentAtRef("BASE", MAIN, baseMain);
+    f.client.setContentAtRef("NEW", MAIN, remoteMain);
+    f.client.setContentAtRef("BASE", STY, baseSty);
+    f.client.setContentAtRef("NEW", STY, remoteSty);
+    f.client.setContentAtRef("BASE", MANI, semverTieManifest);
+    f.client.setContentAtRef("NEW", MANI, semverTieManifest);
+    // Local bundle mtime EARLY, remote bundle last-change LATE → theirs.
+    setMtime(f.root, MAIN, "2026-01-01T00:00:00Z");
+    f.client.setLatestCommitDateForPath("NEW", MAIN, Date.parse("2026-07-01T12:00:00Z"));
+    // Local styles.css is FRESH — would win rule 3, must be overridden.
+    setMtime(f.root, STY, "2026-07-10T00:00:00Z");
+    f.client.setLatestCommitDateForPath("NEW", STY, Date.parse("2026-06-01T00:00:00Z"));
+    // main.js FIRST in the compare so it is applied before styles resolves.
+    f.client.setCompareResult("BASE", "NEW", {
+      status: "diverged",
+      files: [
+        { filename: MAIN, status: "modified", sha: await shaOf(remoteMain) },
+        { filename: STY, status: "modified", sha: await shaOf(remoteSty) },
+      ],
+    });
+
+    await pull(f);
+
+    expect(fs.readFileSync(path.join(f.root, MAIN), "utf8")).toBe(remoteMain);
+    // styles.css FOLLOWED the bundle winner (server) despite its fresher mtime.
+    expect(fs.readFileSync(path.join(f.root, STY), "utf8")).toBe(remoteSty);
+    expect(conflicts(f)).toEqual([]);
+    expect(listConflictSiblings(f.root)).toEqual([]);
+  });
+
+  it("RULE 3: when the bundle is byte-identical on both sides, styles.css falls back to its own later mtime", async () => {
+    const f = fixture();
+    const sameMain = "module.exports={V:'SAME'};";
+    const baseSty = "a{color:base}";
+    const localSty = "a{color:LOCAL}";
+    const remoteSty = "a{color:REMOTE}";
+    writeVaultFile(f.root, MANI, semverTieManifest);
+    writeVaultFile(f.root, MAIN, sameMain);
+    writeVaultFile(f.root, STY, localSty);
+    f.store.set(MANI, { path: MANI, remoteSha: await shaOf(semverTieManifest), mtime: 0, size: semverTieManifest.length });
+    f.store.set(MAIN, { path: MAIN, remoteSha: await shaOf(sameMain), mtime: 0, size: sameMain.length });
+    f.store.set(STY, { path: STY, remoteSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
+    f.store.setLastSync("BASE", "BASE_TREE");
+    f.client.setBranchHead("NEW");
+    f.client.setTreeShaForCommit("NEW", "NEW_TREE");
+    f.client.setContentAtRef("NEW", MAIN, sameMain); // bundle identical → codeDiffers false
+    f.client.setContentAtRef("NEW", MANI, semverTieManifest);
+    f.client.setContentAtRef("BASE", STY, baseSty);
+    f.client.setContentAtRef("NEW", STY, remoteSty);
+    setMtime(f.root, STY, "2026-07-10T00:00:00Z"); // local styles newer
+    f.client.setLatestCommitDateForPath("NEW", STY, Date.parse("2026-06-01T00:00:00Z"));
+    f.client.setCompareResult("BASE", "NEW", {
+      status: "diverged",
+      files: [{ filename: STY, status: "modified", sha: await shaOf(remoteSty) }],
+    });
+
+    await pull(f);
+
+    expect(fs.readFileSync(path.join(f.root, STY), "utf8")).toBe(localSty); // ours kept (newer)
+    expect(conflicts(f)).toEqual([]);
+    expect(listConflictSiblings(f.root)).toEqual([]);
+  });
+
+  it("RULE 4: data.json resolves purely by later mtime — no conflict sibling", async () => {
+    const f = fixture();
+    const baseData = '{"n":0}';
+    const localData = '{"n":1}';
+    const remoteData = '{"n":2}';
+    writeVaultFile(f.root, DATA, localData);
+    f.store.set(DATA, { path: DATA, remoteSha: await shaOf(baseData), mtime: 0, size: baseData.length });
+    f.store.setLastSync("BASE", "BASE_TREE");
+    f.client.setBranchHead("NEW");
+    f.client.setTreeShaForCommit("NEW", "NEW_TREE");
+    f.client.setContentAtRef("BASE", DATA, baseData);
+    f.client.setContentAtRef("NEW", DATA, remoteData);
+    setMtime(f.root, DATA, "2026-07-10T00:00:00Z"); // ours newer → ours wins
+    f.client.setLatestCommitDateForPath("NEW", DATA, Date.parse("2026-06-01T00:00:00Z"));
+    f.client.setCompareResult("BASE", "NEW", {
+      status: "diverged",
+      files: [{ filename: DATA, status: "modified", sha: await shaOf(remoteData) }],
+    });
+
+    await pull(f);
+
+    expect(fs.readFileSync(path.join(f.root, DATA), "utf8")).toBe(localData);
+    expect(conflicts(f)).toEqual([]);
+    expect(listConflictSiblings(f.root)).toEqual([]);
+  });
+
+  it("delete-vs-modify: local deleted a plugin file, remote modified it → resurrects (modify wins), no sibling", async () => {
+    const f = fixture();
+    const baseSty = "a{color:base}";
+    const remoteSty = "a{color:REMOTE}";
+    // Local: styles.css DELETED (snapshot present, no file on disk).
+    f.store.set(STY, { path: STY, remoteSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
+    f.store.setLastSync("BASE", "BASE_TREE");
+    f.client.setBranchHead("NEW");
+    f.client.setTreeShaForCommit("NEW", "NEW_TREE");
+    f.client.setContentAtRef("NEW", STY, remoteSty);
+    f.client.setCompareResult("BASE", "NEW", {
+      status: "diverged",
+      files: [{ filename: STY, status: "modified", sha: await shaOf(remoteSty) }],
+    });
+
+    await pull(f);
+
+    expect(fs.existsSync(path.join(f.root, STY))).toBe(true);
+    expect(fs.readFileSync(path.join(f.root, STY), "utf8")).toBe(remoteSty);
+    expect(conflicts(f)).toEqual([]);
+    expect(listConflictSiblings(f.root)).toEqual([]);
+  });
+
+  it("GITIGNORE: a gitignored plugin file is never pulled or resolved (no update, no sibling)", async () => {
+    const f = fixture();
+    const BLK = ".obsidian/plugins/blocked/main.js";
+    // Block the whole 'blocked' plugin via a root .gitignore.
+    writeVaultFile(f.root, ".gitignore", ".obsidian/plugins/blocked/\n");
+    const localMain = "module.exports={V:'LOCAL'};";
+    const remoteMain = "module.exports={V:'REMOTE'};";
+    writeVaultFile(f.root, BLK, localMain);
+    f.store.set(BLK, { path: BLK, remoteSha: await shaOf(localMain), mtime: 0, size: localMain.length });
+    f.store.setLastSync("BASE", "BASE_TREE");
+    f.client.setBranchHead("NEW");
+    f.client.setTreeShaForCommit("NEW", "NEW_TREE");
+    f.client.setContentAtRef("NEW", BLK, remoteMain);
+    f.client.setCompareResult("BASE", "NEW", {
+      status: "diverged",
+      files: [{ filename: BLK, status: "modified", sha: await shaOf(remoteMain) }],
+    });
+
+    await pull(f);
+
+    // Untouched — gitignore filtered it out of syncableChanges entirely.
+    expect(fs.readFileSync(path.join(f.root, BLK), "utf8")).toBe(localMain);
+    expect(conflicts(f)).toEqual([]);
+    expect(listConflictSiblings(f.root)).toEqual([]);
+  });
+
+  it("GITIGNORE: our own plugin's data.json is never synced (holds the token — hard-excluded)", async () => {
+    const f = fixture();
+    const SELF_DATA = `.obsidian/plugins/${SELF_PLUGIN_ID}/data.json`;
+    const localData = '{"githubToken":"secret"}';
+    const remoteData = '{"githubToken":"LEAKED"}';
+    writeVaultFile(f.root, SELF_DATA, localData);
+    f.store.set(SELF_DATA, { path: SELF_DATA, remoteSha: await shaOf(localData), mtime: 0, size: localData.length });
+    f.store.setLastSync("BASE", "BASE_TREE");
+    f.client.setBranchHead("NEW");
+    f.client.setTreeShaForCommit("NEW", "NEW_TREE");
+    f.client.setContentAtRef("NEW", SELF_DATA, remoteData);
+    f.client.setCompareResult("BASE", "NEW", {
+      status: "diverged",
+      files: [{ filename: SELF_DATA, status: "modified", sha: await shaOf(remoteData) }],
+    });
+
+    await pull(f);
+
+    // Never overwritten by the remote — isSyncable hard-excludes it.
+    expect(fs.readFileSync(path.join(f.root, SELF_DATA), "utf8")).toBe(localData);
+    expect(conflicts(f)).toEqual([]);
+    expect(listConflictSiblings(f.root)).toEqual([]);
+  });
+});
