@@ -56,6 +56,54 @@ export function isAtomicPluginFile(
 }
 
 /**
+ * Role of a file inside `<configDir>/plugins/<id>/` for §28 conflict
+ * resolution. The synced set of a plugin folder is gitignore-bounded
+ * to exactly {main.js, manifest.json, styles.css, data.json} (see
+ * gitignore-invariants.ts), and §28's absolute rule is that NONE of
+ * them may ever produce a `*.conflict-from.*` sibling — they resolve
+ * atomically instead. This predicate classifies which resolution rule
+ * a path follows:
+ *
+ *   - "code"   → the version-coupled bundle: any `.js` (at any depth)
+ *                or `manifest.json`. Resolved by plugin semver, then a
+ *                canonical mtime tie-break. This is the old
+ *                `isAtomicPluginFile` set.
+ *   - "styles" → the top-level `styles.css`. Version-coupled to the
+ *                bundle (updated JS may need updated CSS), so it FOLLOWS
+ *                the "code" winner (§28 rule 1); only when the bundle is
+ *                byte-identical on both sides does it fall back to its
+ *                own mtime (§28 rule 3).
+ *   - "data"   → the top-level `data.json` (synced only when the user
+ *                opts in). Per-plugin state, resolved purely by mtime
+ *                (§28 rule 4) — never version-coupled.
+ *   - null     → anything else (normal 3-way / binary path).
+ *
+ * styles.css and data.json are matched only at the plugin root (a
+ * nested `sub/styles.css` isn't the plugin's stylesheet and isn't
+ * synced); `.js`/manifest.json match at any depth, mirroring
+ * isAtomicPluginFile.
+ */
+export type PluginDirFileRole = "code" | "styles" | "data";
+
+export function pluginDirFileRole(
+  path: string,
+  configDir: string,
+): PluginDirFileRole | null {
+  const pluginsRoot = `${configDir}/plugins/`;
+  if (!path.startsWith(pluginsRoot)) return null;
+  const tail = path.slice(pluginsRoot.length);
+  const segs = tail.split("/");
+  // Need at least `<id>/<file>`.
+  if (segs.length < 2) return null;
+  const name = segs[segs.length - 1];
+  const isTopLevel = segs.length === 2;
+  if (isTopLevel && name === "styles.css") return "styles";
+  if (isTopLevel && name === "data.json") return "data";
+  if (name.endsWith(".js") || name === "manifest.json") return "code";
+  return null;
+}
+
+/**
  * Given a `<configDir>/plugins/<id>/...` path, return the plugin's
  * root folder (`<configDir>/plugins/<id>`). Used to locate the
  * sibling `manifest.json` carrying the plugin's semver. Returns

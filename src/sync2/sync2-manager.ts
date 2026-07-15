@@ -29,7 +29,12 @@ import GitignoreInvariants from "./gitignore-invariants";
 import PushQueue, { EnqueueMeta } from "./push-queue";
 import SnapshotStore, { RemoteIdentity } from "./snapshot-store";
 import TreeBuilder from "./tree-builder";
-import { isAtomicPluginFile, pluginRootOf, readPluginVersion } from "./plugin-js";
+import {
+  pluginDirFileRole,
+  pluginRootOf,
+  readPluginVersion,
+  type PluginDirFileRole,
+} from "./plugin-js";
 import {
   commitMessageForBatch,
   formatConflictMessage,
@@ -42,7 +47,7 @@ import ConflictStore, { ConflictKind } from "./conflict-store";
 import PendingDeletionsStore from "./pending-deletions-store";
 import {
   attemptAutoMerge,
-  PluginJsContext,
+  PluginResolveContext,
   MergeTextFn,
 } from "./conflict-detection";
 import { evaluateConflictState } from "./conflict-classifier";
@@ -1997,6 +2002,21 @@ export class Sync2Manager {
 
     // Case 2: ours deleted, theirs modified → delete-vs-modify.
     if (localChange.kind === "deleted") {
+      // §28: a plugin folder must NEVER grow a conflict sibling. If the
+      // deleted-then-modified file is one of the plugin's synced files,
+      // the modify wins and the file resurrects locally (e.g. the plugin
+      // was uninstalled on this device while another device updated it).
+      // Note: if only one bundle member was remote-modified, only that
+      // member resurrects — an accepted stray, not data loss.
+      if (pluginDirFileRole(path, this.configDir) !== null) {
+        await this.writeBinaryRemote(path, blob.content);
+        await this.detector.recordSync(path, blob.sha);
+        this.logger.info(
+          "Sync2 §28 plugin delete-vs-modify: modify wins, file resurrected",
+          { path },
+        );
+        return;
+      }
       await this.registerConflictAndDropPath({
         vaultPath: path,
         kind: "delete-vs-modify",
@@ -2020,9 +2040,10 @@ export class Sync2Manager {
       ? (await this.workerClient.decodeBase64(baseFetched.content))
       : null;
 
-    let pluginJs: PluginJsContext | undefined;
-    if (isAtomicPluginFile(path, this.configDir)) {
-      pluginJs = await this.readPluginJsContext(path, headRef);
+    const pullRole = pluginDirFileRole(path, this.configDir);
+    let pluginResolve: PluginResolveContext | undefined;
+    if (pullRole !== null) {
+      pluginResolve = await this.readPluginResolveContext(path, pullRole, baseRef, headRef);
     }
 
     const auto = await attemptAutoMerge({
@@ -2032,7 +2053,7 @@ export class Sync2Manager {
       base: baseBytes,
       configDir: this.configDir,
       mergeFn: this.mergeViaWorker,
-      pluginJs,
+      pluginResolve,
     });
 
     if (auto.type === "clean") {
@@ -2301,46 +2322,121 @@ export class Sync2Manager {
     }
   }
 
-  // Read both sides' manifest.json for a plugin-js path and return
-  // the (version, mtime) pair attemptAutoMerge needs. Either side may
-  // be null when the manifest is missing or unparseable — the
-  // detection helper falls back to mtime.
-  private async readPluginJsContext(
+  // §28 PULL-side plugin-dir resolve context. Gathers only what the
+  // file's role needs so the atomic resolver can pick a winner without
+  // ever registering a conflict:
+  //   - data   → the file's own mtime on each side (rule 4).
+  //   - code   → manifest versions + the canonical bundle mtime.
+  //   - styles → the above PLUS `codeDiffers` (does the bundle differ
+  //              ours-vs-theirs?) so styles.css follows the bundle
+  //              winner (rule 1) or its own mtime when the bundle is
+  //              identical (rule 3).
+  // "ours" = the local vault, "theirs" = the remote head.
+  private async readPluginResolveContext(
     path: string,
+    role: PluginDirFileRole,
+    _baseRef: string,
     headRef: string,
-  ): Promise<PluginJsContext | undefined> {
+  ): Promise<PluginResolveContext | undefined> {
     const root = pluginRootOf(path, this.configDir);
     if (root === null) return undefined;
+
+    // The resolving file's own mtime (local vs remote last-change).
+    const fileOursMtime = (await this.vault.adapter.stat(path))?.mtime ?? 0;
+    const fileTheirsMtime = await this.remoteChangeMtime(path, headRef);
+
+    if (role === "data") {
+      return this.dataOnlyResolveContext(fileOursMtime, fileTheirsMtime);
+    }
+
     const manifestPath = `${root}/manifest.json`;
+    const mainJsPath = `${root}/main.js`;
 
     let oursVersion: string | null = null;
-    let oursMtime = 0;
     if (await this.vault.adapter.exists(manifestPath)) {
-      const text = await this.vault.adapter.read(manifestPath);
-      oursVersion = readPluginVersion(text);
+      oursVersion = readPluginVersion(await this.vault.adapter.read(manifestPath));
     }
-    const oursStat = await this.vault.adapter.stat(path);
-    if (oursStat) oursMtime = oursStat.mtime;
-
-    let theirsVersion: string | null = null;
     const remoteManifest = await this.safeFetchContents(manifestPath, headRef);
-    if (remoteManifest) {
-      theirsVersion = readPluginVersion(
-        decodeBase64String(remoteManifest.content),
-      );
+    const theirsVersion = remoteManifest
+      ? readPluginVersion(decodeBase64String(remoteManifest.content))
+      : null;
+
+    // Canonical bundle mtime = main.js's (fallback manifest). ONE value
+    // per side for the whole plugin, so main.js/manifest/styles.css can
+    // never split to different sides on a semver tie. theirs mtime = the
+    // file's LAST-CHANGE commit date, never the branch HEAD date (SYNC2
+    // §7 — HEAD moving past the file wrongly favours the remote).
+    const codeOursMtime =
+      (await this.vault.adapter.stat(mainJsPath))?.mtime ??
+      (await this.vault.adapter.stat(manifestPath))?.mtime ??
+      0;
+    const codeTheirsMtime =
+      (await this.remoteChangeMtime(mainJsPath, headRef)) ||
+      (await this.remoteChangeMtime(manifestPath, headRef));
+
+    // codeDiffers only affects styles.css (rule 1 vs rule 3); computing
+    // it costs a local blob-SHA (may hash a multi-MB main.js), so skip
+    // it for "code" files, which are the bundle themselves.
+    let codeDiffers = true;
+    if (role === "styles") {
+      codeDiffers =
+        (await this.localVsRemoteDiffers(mainJsPath, headRef)) ||
+        (await this.localVsRemoteDiffers(manifestPath, headRef));
     }
-    // theirs mtime = when `path` was LAST CHANGED on the remote, NOT the branch
-    // HEAD date. Using the HEAD date wrongly favoured the remote whenever HEAD moved
-    // past the file (a later unrelated commit made the remote bundle look "newer" than
-    // a genuinely newer local build → spurious self-update/downgrade). SYNC2 §7. null →
-    // 0 (epoch) → ours wins on uncertainty (the safe direction).
-    const theirsMtime =
-      (await this.client.getLatestCommitDateForPath({
-        path,
-        ref: headRef,
-        retry: true,
-      })) ?? 0;
-    return { oursVersion, theirsVersion, oursMtime, theirsMtime };
+
+    return {
+      oursVersion,
+      theirsVersion,
+      codeDiffers,
+      codeOursMtime,
+      codeTheirsMtime,
+      fileOursMtime,
+      fileTheirsMtime,
+    };
+  }
+
+  // A plugin-dir resolve context carrying only the resolving file's own
+  // mtimes — used for data.json (rule 4) and as the shape both readers
+  // return for that role.
+  private dataOnlyResolveContext(
+    fileOursMtime: number,
+    fileTheirsMtime: number,
+  ): PluginResolveContext {
+    return {
+      oursVersion: null,
+      theirsVersion: null,
+      codeDiffers: false,
+      codeOursMtime: 0,
+      codeTheirsMtime: 0,
+      fileOursMtime,
+      fileTheirsMtime,
+    };
+  }
+
+  // Remote last-change commit date for a path (NOT the branch HEAD
+  // date; SYNC2 §7). null → 0.
+  private async remoteChangeMtime(path: string, ref: string): Promise<number> {
+    return (
+      (await this.client.getLatestCommitDateForPath({ path, ref, retry: true })) ?? 0
+    );
+  }
+
+  // Does a plugin file differ between the LOCAL vault and a remote ref?
+  // Compares git blob SHAs; the remote side is a metadata-only fetch so
+  // a big main.js is never downloaded. Missing on either side counts as
+  // "differs".
+  private async localVsRemoteDiffers(path: string, ref: string): Promise<boolean> {
+    const localSha = (await this.vault.adapter.exists(path))
+      ? await this.workerClient.computeGitBlobSHA(
+          await this.vault.adapter.readBinary(path),
+        )
+      : null;
+    const remoteMeta = await this.client.getContentsMetadataAtRef({
+      path,
+      ref,
+      retry: true,
+    });
+    return localSha !== (remoteMeta?.sha ?? null);
   }
 
   // Register a conflict in the ConflictStore and remove the path from
@@ -3751,7 +3847,7 @@ export class Sync2Manager {
     // Snapshot the iteration list once so for-of stays immune to
     // in-loop mutations of `batch.files`. `batch.files` is then kept
     // canonical with disk state via splice on every drop site below,
-    // so helper reads (readReconcilePluginJsContext, etc.) that
+    // so helper reads (readReconcilePluginResolveContext, etc.) that
     // consult `batch.files` see the same view the disk has.
     const toProcess = [...batch.files];
     const dropFromBatchInMemory = (path: string): void => {
@@ -3993,18 +4089,17 @@ export class Sync2Manager {
         continue;
       }
 
-      let pluginJs: PluginJsContext | undefined;
-      if (
-        theirsFetched !== null &&
-        isAtomicPluginFile(path, this.configDir)
-      ) {
-        pluginJs = await this.readReconcilePluginJsContext(
+      const reconcileRole = pluginDirFileRole(path, this.configDir);
+      let pluginResolve: PluginResolveContext | undefined;
+      if (theirsFetched !== null && reconcileRole !== null) {
+        pluginResolve = await this.readReconcilePluginResolveContext(
           batchId,
           batch.files,
           path,
+          reconcileRole,
           expectedHead,
           currentHead,
-          batch.fileMtimes?.[path] ?? 0,
+          batch.fileMtimes ?? {},
         );
       }
 
@@ -4015,7 +4110,7 @@ export class Sync2Manager {
         base: baseBytes,
         configDir: this.configDir,
         mergeFn: this.mergeViaWorker,
-        pluginJs,
+        pluginResolve,
       });
 
       if (auto.type === "modify-wins") {
@@ -4097,8 +4192,21 @@ export class Sync2Manager {
       if (base !== null && base.sha === theirs.sha) {
         continue;
       }
-      // Remote modified since base → register delete-vs-modify.
-      // ours = "deleted", theirs = remote bytes.
+      // Remote modified since base → delete-vs-modify.
+      // §28: a plugin folder never grows a conflict sibling — the modify
+      // wins and the file resurrects (apply remote to the live vault,
+      // drop the deletion).
+      if (pluginDirFileRole(path, this.configDir) !== null) {
+        await this.queue.removeDeletion(batchId, path);
+        await this.writeBinaryRemote(path, theirs.content);
+        await this.detector.recordSync(path, theirs.sha);
+        this.logger.info(
+          "Sync2 §28 plugin delete-vs-modify (reconcile): modify wins, resurrected",
+          { path },
+        );
+        continue;
+      }
+      // ours = "deleted", theirs = remote bytes → register conflict.
       const theirsBytes = await this.workerClient.decodeBase64(theirs.content) as ArrayBuffer;
       await this.queue.removeDeletion(batchId, path);
       await this.registerConflictAndDropPath({
@@ -4125,68 +4233,108 @@ export class Sync2Manager {
     });
   }
 
-  // Push-side plugin-js context. Reads the manifest as it WAS at
-  // click time, not what's currently in the live vault — pull may
-  // have just overwritten the live manifest with the remote version,
-  // which would make oursVersion == theirsVersion and silently flip
-  // resolution. Two cases:
-  //   - User bumped the manifest themselves (it's in this batch): use
-  //     the batch's snapshot.
-  //   - Otherwise: fetch from expectedHead (lastSync) — the version
-  //     the user was effectively on.
-  // For mtime, oursMtime comes from batch.fileMtimes (captured at
-  // enqueue BEFORE canonical-write-back), theirsMtime from current
-  // head's committer date.
-  private async readReconcilePluginJsContext(
+  // §28 PUSH-side (reconcile) plugin-dir resolve context. Same shape as
+  // the pull-side reader, but "ours" is the batch snapshot as it WAS at
+  // click time — pull may have just overwritten the live manifest with
+  // the remote version, which would make oursVersion == theirsVersion
+  // and silently flip resolution. Two cases for the ours version/code:
+  //   - User bumped/changed it themselves (it's in this batch): use the
+  //     batch's snapshot.
+  //   - Otherwise: fetch from expectedHead (lastSync) — the version the
+  //     user was effectively on.
+  // Ours mtimes come from batch.fileMtimes (captured at enqueue BEFORE
+  // canonical-write-back); theirs mtimes from the current head's
+  // last-change commit date.
+  private async readReconcilePluginResolveContext(
     batchId: string,
     batchFiles: string[],
     path: string,
+    role: PluginDirFileRole,
     expectedHead: string,
     currentHead: string,
-    oursMtime: number,
-  ): Promise<PluginJsContext | undefined> {
+    fileMtimes: Record<string, number>,
+  ): Promise<PluginResolveContext | undefined> {
     const root = pluginRootOf(path, this.configDir);
     if (root === null) return undefined;
     const manifestPath = `${root}/manifest.json`;
+    const mainJsPath = `${root}/main.js`;
+
+    const fileOursMtime = fileMtimes[path] ?? 0;
+    const fileTheirsMtime = await this.remoteChangeMtime(path, currentHead);
+
+    if (role === "data") {
+      return this.dataOnlyResolveContext(fileOursMtime, fileTheirsMtime);
+    }
 
     let oursVersion: string | null = null;
     if (batchFiles.includes(manifestPath)) {
       const buf = await this.queue.readFile(batchId, manifestPath);
       oursVersion = readPluginVersion(new TextDecoder().decode(buf));
     } else {
-      const baseManifestBlob = await this.safeFetchContents(
-        manifestPath,
-        expectedHead,
-      );
+      const baseManifestBlob = await this.safeFetchContents(manifestPath, expectedHead);
       if (baseManifestBlob) {
-        oursVersion = readPluginVersion(
-          decodeBase64String(baseManifestBlob.content),
-        );
+        oursVersion = readPluginVersion(decodeBase64String(baseManifestBlob.content));
       }
     }
 
     let theirsVersion: string | null = null;
-    const remoteManifestBlob = await this.safeFetchContents(
-      manifestPath,
-      currentHead,
-    );
+    const remoteManifestBlob = await this.safeFetchContents(manifestPath, currentHead);
     if (remoteManifestBlob) {
-      theirsVersion = readPluginVersion(
-        decodeBase64String(remoteManifestBlob.content),
-      );
+      theirsVersion = readPluginVersion(decodeBase64String(remoteManifestBlob.content));
     }
 
-    // theirs mtime = when `path` was LAST CHANGED on the remote (NOT the branch HEAD
-    // date — that wrongly favours the remote when HEAD moved past the file). SYNC2 §7.
-    // null → 0 (epoch) → ours wins on uncertainty (the safe direction).
-    const theirsMtime =
-      (await this.client.getLatestCommitDateForPath({
-        path,
-        ref: currentHead,
-        retry: true,
-      })) ?? 0;
+    // Canonical bundle mtime = main.js's (fallback manifest, then the
+    // resolving file). ONE value per side keeps the group atomic.
+    const codeOursMtime =
+      fileMtimes[mainJsPath] ?? fileMtimes[manifestPath] ?? fileOursMtime;
+    const codeTheirsMtime =
+      (await this.remoteChangeMtime(mainJsPath, currentHead)) ||
+      (await this.remoteChangeMtime(manifestPath, currentHead));
 
-    return { oursVersion, theirsVersion, oursMtime, theirsMtime };
+    // codeDiffers only affects styles.css (rule 1 vs rule 3).
+    let codeDiffers = true;
+    if (role === "styles") {
+      codeDiffers =
+        (await this.reconcileCodeDiffers(batchId, batchFiles, mainJsPath, expectedHead, currentHead)) ||
+        (await this.reconcileCodeDiffers(batchId, batchFiles, manifestPath, expectedHead, currentHead));
+    }
+
+    return {
+      oursVersion,
+      theirsVersion,
+      codeDiffers,
+      codeOursMtime,
+      codeTheirsMtime,
+      fileOursMtime,
+      fileTheirsMtime,
+    };
+  }
+
+  // Does a plugin code file differ between OUR side (the batch snapshot
+  // if it's in this batch, else the lastSync/expectedHead version) and
+  // the remote currentHead? SHAs only — the remote side is a
+  // metadata-only fetch so a big main.js is never downloaded.
+  private async reconcileCodeDiffers(
+    batchId: string,
+    batchFiles: string[],
+    path: string,
+    expectedHead: string,
+    currentHead: string,
+  ): Promise<boolean> {
+    let oursSha: string | null;
+    if (batchFiles.includes(path)) {
+      oursSha = await this.workerClient.computeGitBlobSHA(
+        await this.queue.readFile(batchId, path),
+      );
+    } else {
+      oursSha =
+        (await this.client.getContentsMetadataAtRef({ path, ref: expectedHead, retry: true }))
+          ?.sha ?? null;
+    }
+    const theirsSha =
+      (await this.client.getContentsMetadataAtRef({ path, ref: currentHead, retry: true }))
+        ?.sha ?? null;
+    return oursSha !== theirsSha;
   }
 
   // Propagate every resolution from a just-reconciled batch into the
@@ -4232,9 +4380,20 @@ export class Sync2Manager {
           await this.queue.overwriteFile(id, path, auto.content);
           continue;
         }
-        // atomic or register-conflict during cascade → can't silently
-        // pick a winner; register the conflict and drop the path from
-        // this batch (and any later batches that also carry it).
+        if (auto.type === "atomic") {
+          // §28: only plugin-dir files reach "atomic" in a cascade, and
+          // they must NEVER register a conflict. "theirs" is the earlier
+          // batch's already-resolved bytes; adopt them when they win so
+          // this later batch pushes the resolved value (side "ours" =
+          // keep this batch's version).
+          if (auto.side === "theirs") {
+            await this.queue.overwriteFile(id, path, newOurs);
+          }
+          continue;
+        }
+        // register-conflict during cascade → can't silently pick a
+        // winner; register the conflict and drop the path from this
+        // batch (and any later batches that also carry it).
         await this.registerConflictAndDropPath({
           vaultPath: path,
           kind: "modify-vs-modify",

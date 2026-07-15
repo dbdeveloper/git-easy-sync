@@ -4,7 +4,7 @@
 
 import { hasTextExtension } from "../utils";
 import {
-  isAtomicPluginFile,
+  pluginDirFileRole,
   compareSemver,
 } from "./plugin-js";
 import { mergeText, MergeOutcome } from "./three-way-merge";
@@ -76,15 +76,31 @@ export type AutoMergeResult =
   | { type: "modify-wins" }
   | { type: "register-conflict" };
 
-// Plugin-js context — caller pre-reads the matching manifest.json on
-// each side and extracts (version, mtime) before invoking
-// attemptAutoMerge. We don't read disk here. `null` version means the
-// manifest was missing or malformed; the resolver falls back to mtime.
-export interface PluginJsContext {
+// Plugin-dir resolve context (§28) — caller pre-reads the plugin's
+// manifest.json version on each side and gathers the mtimes before
+// invoking attemptAutoMerge. We don't read disk here. `null` version
+// means the manifest was missing or malformed; the resolver falls back
+// to the mtime tie-breaks.
+export interface PluginResolveContext {
   oursVersion: string | null;
   theirsVersion: string | null;
-  oursMtime: number;
-  theirsMtime: number;
+  // §28 rule 1 vs rule 3 selector for styles.css: does the
+  // version-coupled bundle (main.js / *.js / manifest.json) differ
+  // between ours and theirs? For "code" files (the bundle itself) this
+  // is inherently true and unused.
+  codeDiffers: boolean;
+  // The canonical bundle mtime PER SIDE — one value at the plugin-id
+  // level, identical for every coupled file of the plugin. Feeding the
+  // SAME mtime to main.js, manifest.json and styles.css is the
+  // atomicity lynchpin: on a semver tie they can never resolve to
+  // different sides (which would ship a Frankenstein plugin).
+  codeOursMtime: number;
+  codeTheirsMtime: number;
+  // The resolving FILE's own mtime — used only for styles.css when the
+  // bundle is byte-identical on both sides (rule 3) and for data.json
+  // (rule 4).
+  fileOursMtime: number;
+  fileTheirsMtime: number;
 }
 
 export interface AttemptAutoMergeArgs {
@@ -99,9 +115,11 @@ export interface AttemptAutoMergeArgs {
   // in that case text auto-merge bails to register-conflict.
   base: ArrayBuffer | null;
   configDir: string;
-  // Required when isAtomicPluginFile(path, configDir) — otherwise the
-  // plugin-js branch can only register-conflict.
-  pluginJs?: PluginJsContext;
+  // Required when pluginDirFileRole(path, configDir) !== null — the
+  // §28 plugin-dir resolver needs it to pick an atomic winner. Missing
+  // it, the resolver defaults to "theirs" rather than registering a
+  // conflict, because a plugin dir must NEVER grow a conflict sibling.
+  pluginResolve?: PluginResolveContext;
   // Optional three-way merge function. Sync2Manager passes the
   // WorkerClient-backed async wrapper so large merges run in the
   // CPU pool; unit tests omit it and the default sync mergeText
@@ -114,20 +132,23 @@ export interface AttemptAutoMergeArgs {
 // short-circuiting delete-vs-modify before reaching here.
 //
 // Strategy dispatch by path:
-//   - theirs === null     → modify-wins (modify-vs-delete: local-
-//                           modify always wins, file resurrects)
-//   - isAtomicPluginFile  → plugin-js semver, mtime tie-break
-//   - hasTextExtension    → 3-way merge via mergeText
-//   - else (binary)       → register-conflict unconditionally
-//                           (2.0.0-beta's silent atomic-mtime is gone)
+//   - theirs === null       → modify-wins (modify-vs-delete: local-
+//                             modify always wins, file resurrects)
+//   - pluginDirFileRole !== null → §28 atomic plugin-dir resolution;
+//                             NEVER register-conflict (no *.conflict-
+//                             from.* sibling may appear in a plugin dir)
+//   - hasTextExtension      → 3-way merge via mergeText
+//   - else (binary)         → register-conflict unconditionally
+//                             (2.0.0-beta's silent atomic-mtime is gone)
 export async function attemptAutoMerge(
   args: AttemptAutoMergeArgs,
 ): Promise<AutoMergeResult> {
   if (args.theirs === null) {
     return { type: "modify-wins" };
   }
-  if (isAtomicPluginFile(args.path, args.configDir)) {
-    return resolvePluginJs(args.pluginJs);
+  const role = pluginDirFileRole(args.path, args.configDir);
+  if (role !== null) {
+    return resolvePluginDirFile(role, args.pluginResolve);
   }
   if (hasTextExtension(args.path)) {
     return await tryTextMerge(
@@ -142,33 +163,65 @@ export async function attemptAutoMerge(
 
 // ── internals ────────────────────────────────────────────────────────
 
-function resolvePluginJs(ctx?: PluginJsContext): AutoMergeResult {
-  if (!ctx) return { type: "register-conflict" };
-  const { oursVersion, theirsVersion, oursMtime, theirsMtime } = ctx;
+// §28 plugin-dir resolver. ALWAYS returns an atomic side — never
+// register-conflict — because the MAIN GOAL is that no plugin folder
+// ever grows a `*.conflict-from.*` sibling. The final tie always
+// resolves to "theirs" so every device converges on the server copy.
+function resolvePluginDirFile(
+  role: "code" | "styles" | "data",
+  ctx?: PluginResolveContext,
+): AutoMergeResult {
+  // No context should be unreachable (the caller reads it for every
+  // plugin-dir file), but if it ever is, converge to the server rather
+  // than register a conflict.
+  if (!ctx) return { type: "atomic", side: "theirs" };
 
-  // Both manifests parsed — compare semver first.
-  if (oursVersion !== null && theirsVersion !== null) {
-    const cmp = compareSemver(oursVersion, theirsVersion);
-    if (cmp > 0) return { type: "atomic", side: "ours" };
-    if (cmp < 0) return { type: "atomic", side: "theirs" };
-    // Semver tie — fall through to mtime.
-  } else if (oursVersion !== null) {
-    // One side has a parseable version, the other doesn't — trust the
-    // parseable side (the unparseable one is either missing or
-    // borked).
-    return { type: "atomic", side: "ours" };
-  } else if (theirsVersion !== null) {
-    return { type: "atomic", side: "theirs" };
+  // data.json (rule 4): per-plugin state, resolved purely by mtime,
+  // never version-coupled.
+  if (role === "data") {
+    return { type: "atomic", side: laterSide(ctx.fileOursMtime, ctx.fileTheirsMtime) };
   }
 
-  // Mtime tiebreak (also covers "both sides unparseable").
-  if (oursMtime > theirsMtime) return { type: "atomic", side: "ours" };
-  if (theirsMtime > oursMtime) return { type: "atomic", side: "theirs" };
+  // Coupled bundle (main.js / manifest.json / styles.css): semver wins
+  // first — this is the whole-group decision.
+  const bySemver = semverSide(ctx.oursVersion, ctx.theirsVersion);
+  if (bySemver !== null) return { type: "atomic", side: bySemver };
 
-  // Versions tied AND mtimes tied → real conflict the user must look
-  // at (spec R5: "plugin-js identical version and identical mtime →
-  // register as conflict").
-  return { type: "register-conflict" };
+  // Semver tie / both unparseable.
+  if (role === "styles" && !ctx.codeDiffers) {
+    // Rule 3: the bundle is byte-identical on both sides, so "which
+    // side changed the code" (rule 1) doesn't apply — the later
+    // styles.css itself wins.
+    return { type: "atomic", side: laterSide(ctx.fileOursMtime, ctx.fileTheirsMtime) };
+  }
+  // Rule 1: the bundle differs → styles.css follows the side whose
+  // bundle is newer (the canonical code mtime, shared by every coupled
+  // file so the group stays atomic).
+  return { type: "atomic", side: laterSide(ctx.codeOursMtime, ctx.codeTheirsMtime) };
+}
+
+// Semver comparison for the coupled bundle. Returns the winning side,
+// or null on a tie / when neither side has a parseable version. A
+// single parseable side wins (the other manifest is missing or borked).
+function semverSide(
+  oursVersion: string | null,
+  theirsVersion: string | null,
+): "ours" | "theirs" | null {
+  if (oursVersion !== null && theirsVersion !== null) {
+    const cmp = compareSemver(oursVersion, theirsVersion);
+    if (cmp > 0) return "ours";
+    if (cmp < 0) return "theirs";
+    return null; // tie
+  }
+  if (oursVersion !== null) return "ours";
+  if (theirsVersion !== null) return "theirs";
+  return null;
+}
+
+// Later-mtime tie-break. A tie resolves to "theirs" so devices
+// converge on the server copy (§28: never leave it unresolved).
+function laterSide(oursMtime: number, theirsMtime: number): "ours" | "theirs" {
+  return oursMtime > theirsMtime ? "ours" : "theirs";
 }
 
 async function tryTextMerge(
