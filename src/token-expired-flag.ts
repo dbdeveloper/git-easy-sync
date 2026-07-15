@@ -12,20 +12,29 @@
 //     read it synchronously while building) and fire-and-forget the file write.
 // This sidesteps any set/clear write race — readers trust memory, not the file.
 //
-// Set on a confirmed AuthError (401/403); cleared on a successful drain /
-// connection probe. A non-auth failure (offline, 404, 422) leaves it unchanged
-// (offline ≠ expired). It is derived in main.ts per-drain from the caught error,
-// NOT from the sticky DrainStatus.lastError (which a later success won't clear).
+// Set on a confirmed AuthError (401/403). Once set it is a STICKY LATCH (TODO
+// §35): a later successful DRAIN/sync call does NOT clear it. A token that just
+// 401'd stays expired until the user acts, and an eventually-consistent success
+// must never unlatch it. There are exactly TWO clear paths, both deliberate
+// user actions in settings/tab.ts:
+//   (a) editing one of the three "Remote Repository" fields — token / owner /
+//       repo (owner/repo count because pointing at a different remote is a
+//       reconfiguration too);
+//   (b) a SUCCESSFUL "Test connection" probe — the one live re-check that is
+//       independent of the marker; in practice it only succeeds (and thus
+//       clears) once the token actually works, else it 401s and re-sets.
+// A non-auth failure (offline, 404, 422) leaves it unchanged (offline ≠ expired).
 
 import { normalizePath, type Vault } from "obsidian";
 import { AuthError } from "./errors";
 
 // Pure mapping for the per-drain outcome — the one wiring bit a unit test can
-// pin (the call SITES live in untestable main.ts). null/undefined = success.
-export type AuthOutcome = "set" | "clear" | "noop";
+// pin (the call SITES live in untestable main.ts). Only an AuthError latches the
+// marker; SUCCESS (null/undefined) DOES NOT clear it (§35 sticky latch — the
+// clear path is a Remote-Repository settings edit, not a later successful call).
+export type AuthOutcome = "set" | "noop";
 
 export function classifyAuthOutcome(err: unknown): AuthOutcome {
-  if (err === null || err === undefined) return "clear";
   if (err instanceof AuthError) return "set";
   return "noop";
 }
@@ -79,11 +88,11 @@ export class TokenExpiredFlag {
     void this.write(false);
   }
 
-  // Apply a per-drain / per-probe auth outcome (success=null/undefined).
+  // Apply a per-drain / per-probe auth outcome. Only latches on an AuthError;
+  // a success (null/undefined) is deliberately NOT a clear (§35 sticky latch —
+  // clearing is a Remote-Repository settings edit, see settings/tab.ts).
   note(err: unknown): void {
-    const o = classifyAuthOutcome(err);
-    if (o === "set") this.set();
-    else if (o === "clear") this.clear();
+    if (classifyAuthOutcome(err) === "set") this.set();
   }
 
   private async write(on: boolean): Promise<void> {

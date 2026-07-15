@@ -1244,7 +1244,9 @@ export default class GitHubSyncPlugin extends Plugin {
       // for enqueueing when the master toggle is false.
       if (forceCommit || (this.settings.syncStartsWithCommit ?? true)) {
         await this.sync2Manager.syncAll();
-        this.tokenExpiredFlag?.note(null); // E1: syncAll always pulls → auth OK
+        // §35: a successful sync does NOT clear the expired latch — only a
+        // Remote-Repository settings edit does (see settings/tab.ts). SET on an
+        // auth error below.
       } else {
         await this.sync2Manager.resumeQueue();
         // E1: resumeQueue is drain-only — an empty queue makes NO authed call
@@ -1305,7 +1307,8 @@ export default class GitHubSyncPlugin extends Plugin {
     if (!(await this.confirmPendingConflictsBeforeSync())) return;
     try {
       await this.sync2Manager.syncFile(path);
-      this.tokenExpiredFlag?.note(null); // E1: authed sync succeeded → clear
+      // §35: a successful sync does NOT clear the expired latch (sticky until a
+      // Remote-Repository settings edit). SET on an auth error below.
     } catch (err) {
       // Log BEFORE the Notice — see sync() rationale above.
       this.logger.error("syncFile click failed", { path, err: describeError(err) });

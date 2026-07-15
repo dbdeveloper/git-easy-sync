@@ -119,6 +119,10 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
             // token that 401s against GitHub for "no apparent reason".
             this.plugin.settings.githubToken = value.trim();
             await this.plugin.saveSettings();
+            // §35: editing a Remote-Repository field is the ONLY thing that
+            // clears the sticky token-expired latch — the user is reconfiguring
+            // credentials, so we're ready to re-check GitHub again.
+            this.plugin.tokenExpiredFlag?.clear();
             this.refreshTokenHelp();
           });
         text.inputEl.type = "password";
@@ -145,6 +149,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.githubOwner = value.trim();
             await this.plugin.saveSettings();
+            this.plugin.tokenExpiredFlag?.clear(); // §35 — see token onChange
             this.refreshTokenHelp();
           }),
       );
@@ -159,6 +164,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.githubRepo = value.trim();
             await this.plugin.saveSettings();
+            this.plugin.tokenExpiredFlag?.clear(); // §35 — see token onChange
             this.refreshTokenHelp();
           }),
       );
@@ -222,9 +228,10 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           .onClick(async () => {
             const { githubToken, githubOwner, githubRepo, githubBranch } =
               this.plugin.settings;
-            // Fresh probe — clear any latched auth flag; the branches
-            // below re-set it on a 401/403. The token-help box still
-            // shows for empty fields via refreshTokenHelp's field check.
+            // Reset the LOCAL token-help-box flag for a fresh probe (the
+            // branches below re-set it on a 401/403). §35: the Test probe is the
+            // ONE live re-check independent of the token-expired marker — it
+            // always runs, SETS the marker on 401/403, and CLEARS it on success.
             this.tokenHelpAuthError = false;
             if (!githubToken || !githubOwner || !githubRepo) {
               setProbeResult(
@@ -309,7 +316,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
                     `Default branch: ${defaultBranch}.\n` +
                     "Branch field is empty — no branch check performed.",
                 );
-                this.plugin.tokenExpiredFlag?.clear(); // E1: probe confirmed auth OK
+                this.plugin.tokenExpiredFlag?.clear(); // §35: successful probe clears the latch
                 return;
               }
               const branchRes = await requestUrl({
@@ -346,7 +353,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
                   `branch \`${githubBranch}\` exists, HEAD ${branchSha}.\n` +
                   "Plugin is ready to sync.",
               );
-              this.plugin.tokenExpiredFlag?.clear(); // E1: probe confirmed auth OK
+              this.plugin.tokenExpiredFlag?.clear(); // §35: successful probe clears the latch
             } catch (err) {
               setProbeResult(
                 "err",

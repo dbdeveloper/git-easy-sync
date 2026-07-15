@@ -47,9 +47,10 @@ async function waitUntil(pred: () => boolean | Promise<boolean>): Promise<void> 
 }
 
 describe("classifyAuthOutcome — per-drain mapping", () => {
-  it("null / undefined (success) → clear", () => {
-    expect(classifyAuthOutcome(null)).toBe("clear");
-    expect(classifyAuthOutcome(undefined)).toBe("clear");
+  // §35 sticky latch: success no longer clears — only an AuthError latches.
+  it("null / undefined (success) → noop (does NOT clear the latch)", () => {
+    expect(classifyAuthOutcome(null)).toBe("noop");
+    expect(classifyAuthOutcome(undefined)).toBe("noop");
   });
   it("AuthError (401/403) → set", () => {
     expect(classifyAuthOutcome(new AuthError("nope", 401))).toBe("set");
@@ -112,7 +113,7 @@ describe("TokenExpiredFlag — in-memory authoritative + file mirror", () => {
     expect(await vault.adapter.exists(MARKER)).toBe(true);
   });
 
-  it("note() applies the outcome: null→clear, AuthError→set, other→leave", async () => {
+  it("note() only latches: AuthError→set, everything else (incl. success)→leave", async () => {
     const vault = fixture();
     const f = new TokenExpiredFlag(vault, PLUGIN_DIR);
     await f.init();
@@ -123,10 +124,19 @@ describe("TokenExpiredFlag — in-memory authoritative + file mirror", () => {
     f.note(new Error("offline")); // non-auth → leave (stays set)
     expect(f.isExpiredCached()).toBe(true);
 
-    f.note(null); // success → clear
+    // §35: a SUCCESS must NOT clear the sticky latch — that regression is the
+    // whole point of §35. Only a Remote-Repository settings edit (→ clear())
+    // unlatches it.
+    f.note(null);
+    expect(f.isExpiredCached()).toBe(true);
+    f.note(undefined);
+    expect(f.isExpiredCached()).toBe(true);
+
+    // The explicit clear() (the settings-edit path) still unlatches.
+    f.clear();
     expect(f.isExpiredCached()).toBe(false);
 
-    f.note(new Error("offline")); // non-auth → leave (stays clear)
+    f.note(null); // a later success on a clear latch is still a no-op
     expect(f.isExpiredCached()).toBe(false);
     await settle();
   });
