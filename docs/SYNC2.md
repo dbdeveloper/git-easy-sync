@@ -1325,6 +1325,11 @@ fallback / empty→null / error→null) and `sync2-manager.test.ts` "plugin-js
 mtime tie-break uses the file's LAST-CHANGE date" (the resolver — proven to
 fail on the old HEAD-date code, pass with the fix).
 
+> **Superseded in part by §7.11 (TODO §28).** `isAtomicPluginFile` +
+> `resolvePluginJs` are gone; `styles.css` is now atomic too and no
+> plugin-dir file ever registers a conflict. The last-change-date
+> tie-break described here lives on as the canonical-bundle-mtime source.
+
 ### 7.9 "conflict with yourself" on a single-writer vault — the push→record crash gap (2026-07-01)
 
 **Symptom.** A one-device vault (no other writers, one-way device → GitHub)
@@ -1474,6 +1479,55 @@ replica-lag hook + a `patchFailuresRemaining` 422 hook).** "multi-batch drain: b
 confirmed head is re-read" (RED: only 1 read, phantom `compare` fires), "push 422
 (concurrent multi-device move) → drain reconciles + retries in-place" (RED: the sync
 throws).
+
+### 7.11 a `*.conflict-from.*` sibling was caught INSIDE a plugin folder (TODO §28, 2026-07-15)
+
+**Symptom.** A diff-conflict sibling appeared inside a plugin directory
+(`<configDir>/plugins/<id>/`). A plugin bundle must swap atomically — a
+half-merged `styles.css`, or a conflict marker in one file, breaks the
+plugin on load.
+
+**Cause.** The gitignore-bounded synced set of a plugin folder is
+exactly `{main.js, manifest.json, styles.css, data.json}`. Only
+`main.js`/`manifest.json` were treated atomically (`isAtomicPluginFile`
+→ `resolvePluginJs`, §7.8). `styles.css` and (opted-in) `data.json` fell
+through to the 3-way text merge, which registers a `*.conflict-from.*`
+sibling when the merge isn't clean. There was also a latent split: on a
+semver tie, `main.js` and `manifest.json` each tie-broke on *their own*
+mtime and could pick different sides — a Frankenstein plugin.
+
+**Fix.** `pluginDirFileRole(path)` classifies every plugin-dir file, and
+`resolvePluginDirFile` (conflict-detection.ts) ALWAYS returns an atomic
+side — never `register-conflict`. The coupled bundle picks ONE winner
+per plugin-id (semver → a single *canonical bundle mtime*, `main.js`'s,
+fed to every coupled file so the group can't split); `styles.css`
+FOLLOWS that winner (rule 1 — the side that changed `main.js`/`manifest`
+wins its `styles.css` too, since CSS can't be decided from its own
+bytes), falling back to its own mtime only when the bundle is identical
+on both sides (rule 3). `data.json` resolves by mtime alone (rule 4).
+Full ties → theirs; delete-vs-modify on a plugin file resurrects (modify
+wins). Wired at all five register sites (pull add/modify + delete;
+reconcile add/modify + deletions; cascade rebase). Supersedes §7.8's
+`register-conflict`-on-double-tie (now atomic-theirs) and its
+`styles.css`-via-text-merge; the §7.8 last-change-date tie-break is
+retained as the canonical-bundle-mtime source.
+
+**Ordering subtlety (pull side).** `pullIfNeeded` applies each remote
+file inline, so a sibling `main.js` resolved earlier overwrites the
+local file a later `styles.css` resolution reads. Reading the "ours"
+bundle signal from the live vault made `codeDiffers` false and split the
+group. Fix: snapshot each plugin's local bundle (`pullBundleSnapshots`)
+BEFORE the apply loop mutates anything; the resolving file's own mtime is
+still read live (a conflict file is never applied before its own
+resolution). The reconcile side already reads "ours" from the immutable
+batch snapshot / `expectedHead`, so it was unaffected.
+
+**Tests.** Pure resolver (`conflict-detection.test.ts`) incl. the
+group-atomicity lock (main.js/manifest/styles → same side) + the worked
+example; manager-level combos over a real vault + real gitignore
+(`sync2-manager.test.ts` "§28 plugin-dir atomic resolution": rule 1 +
+ordering, rule 3, rule 4, delete-vs-modify, gitignored-file-untouched,
+self-data.json-never-synced, all asserting no sibling); integration E5.
 
 ---
 

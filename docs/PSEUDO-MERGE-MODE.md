@@ -487,9 +487,39 @@ divergent path. The full dispatch table is:
 | Classifier match                                       | Strategy                                                                                                 | Outcome on success  | Outcome on failure                                |
 |--------------------------------------------------------|----------------------------------------------------------------------------------------------------------|---------------------|---------------------------------------------------|
 | `theirs === null` (remote deleted, local modified)     | None — short-circuit                                                                                     | `modify-wins`       | (cannot fail)                                     |
-| `isAtomicPluginFile(path)` — plugin's `main.js` / `manifest.json` | Atomic semver from `manifest.json` (higher version wins; identical versions fall back to mtime) | `atomic: ours / theirs` | `register-conflict` (identical version & mtime)   |
+| `pluginDirFileRole(path)` — a plugin's synced file (§28) | Atomic, per role (see below). **NEVER registers a conflict.**                                          | `atomic: ours / theirs` | (cannot fail — always resolves)                |
 | `hasTextExtension(path)`                               | Three-way diff3 (`mergeText(ours, base, theirs)`)                                                        | `clean: <bytes>`    | `register-conflict` (overlapping or no base)      |
 | else (binary)                                          | None                                                                                                     | —                   | `register-conflict` unconditionally               |
+
+**Plugin-dir files never conflict (§28).** A plugin folder's
+gitignore-bounded synced set — `main.js` / `*.js` / `manifest.json` /
+`styles.css` / `data.json` — must **never** grow a `*.conflict-from.*`
+sibling: a half-merged bundle (or a conflict marker in one file) breaks
+the plugin. `pluginDirFileRole` classifies each path and the resolver
+(`resolvePluginDirFile`) always returns an atomic side:
+
+- **coupled bundle** (`main.js` / `*.js` / `manifest.json` / `styles.css`) —
+  ONE winner per plugin-id, applied to every coupled file: higher
+  `manifest.json` semver wins; on a tie, the later *canonical bundle
+  mtime* (one value per side — `main.js`'s, else `manifest.json`'s — so
+  the group can never split). `styles.css` **follows** that bundle
+  winner (rule 1: updated JS may need updated CSS, so it can't be
+  decided from its own bytes) — only when the bundle is byte-identical
+  on both sides does it fall back to its own later mtime (rule 3).
+- **`data.json`** — per-plugin state, resolved purely by later mtime
+  (rule 4), never version-coupled. (Our own plugin's `data.json` is
+  hard-excluded from sync — it holds the token.)
+- A full tie (equal version AND equal mtime) resolves to **theirs**, so
+  every device converges on the server copy. delete-vs-modify on a
+  plugin file resurrects the modified side (the modify wins) rather than
+  registering.
+
+This replaced the old `isAtomicPluginFile` path (which covered only
+`main.js`/`manifest.json`, sent `styles.css` through the 3-way text
+merge, and registered on a version+mtime double-tie). The
+canonical-bundle-mtime is the atomicity lynchpin — feeding each coupled
+file its *own* mtime could split `main.js` and `manifest.json` to
+different sides (a Frankenstein plugin).
 
 A few clarifications on the table:
 
