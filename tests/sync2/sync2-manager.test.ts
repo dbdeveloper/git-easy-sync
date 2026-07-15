@@ -3759,4 +3759,147 @@ describe("Sync2Manager — §28 plugin-dir atomic resolution", () => {
     expect(conflicts(f)).toEqual([]);
     expect(listConflictSiblings(f.root)).toEqual([]);
   });
+
+  // ── RECONCILE side (push): a locally-committed plugin change diverges
+  // from a moved remote HEAD → reconcileBatchAgainstHead. This is the
+  // realistic §28 path (a self-update writes the plugin files locally →
+  // they commit → reconcile). Driven via syncAll (commit → drain).
+  it("RECONCILE: a remote bump (higher semver) drags the locally-edited styles.css to the server bundle, no sibling", async () => {
+    const f = fixture();
+    const baseMani = JSON.stringify({ id: "acme", version: "0.9.0", name: "Acme" });
+    const localMani = JSON.stringify({ id: "acme", version: "1.0.0", name: "Acme" });
+    const remoteMani = JSON.stringify({ id: "acme", version: "2.0.0", name: "Acme" });
+    const baseMain = "module.exports={V:'BASE'};";
+    const localMain = "module.exports={V:'LOCAL'};";
+    const remoteMain = "module.exports={V:'REMOTE'};";
+    const baseSty = "a{color:base}", localSty = "a{color:LOCAL}", remoteSty = "a{color:REMOTE}";
+    // Local edited all three → all enqueued → all reconciled against NEW.
+    writeVaultFile(f.root, MANI, localMani);
+    writeVaultFile(f.root, MAIN, localMain);
+    writeVaultFile(f.root, STY, localSty);
+    f.store.set(MANI, { path: MANI, remoteSha: await shaOf(baseMani), mtime: 0, size: baseMani.length });
+    f.store.set(MAIN, { path: MAIN, remoteSha: await shaOf(baseMain), mtime: 0, size: baseMain.length });
+    f.store.set(STY, { path: STY, remoteSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
+    f.store.setLastSync("BASE", "BASE_TREE");
+    f.client.setBranchHead("NEW");
+    f.client.setTreeShaForCommit("NEW", "NEW_TREE");
+    f.client.setContentAtRef("BASE", MANI, baseMani);
+    f.client.setContentAtRef("NEW", MANI, remoteMani);
+    f.client.setContentAtRef("BASE", MAIN, baseMain);
+    f.client.setContentAtRef("NEW", MAIN, remoteMain);
+    f.client.setContentAtRef("BASE", STY, baseSty);
+    f.client.setContentAtRef("NEW", STY, remoteSty);
+    f.client.setCompareResult("BASE", "NEW", {
+      status: "diverged",
+      files: [
+        { filename: MANI, status: "modified", sha: await shaOf(remoteMani) },
+        { filename: MAIN, status: "modified", sha: await shaOf(remoteMain) },
+        { filename: STY, status: "modified", sha: await shaOf(remoteSty) },
+      ],
+    });
+
+    await f.manager.syncAll();
+
+    // Server bundle (2.0.0) won the whole group — styles.css followed.
+    expect(fs.readFileSync(path.join(f.root, STY), "utf8")).toBe(remoteSty);
+    expect(fs.readFileSync(path.join(f.root, MANI), "utf8")).toBe(remoteMani);
+    expect(conflicts(f)).toEqual([]);
+    expect(listConflictSiblings(f.root)).toEqual([]);
+  });
+
+  it("RECONCILE: data.json resolves by later mtime — no sibling", async () => {
+    const f = fixture();
+    const baseData = '{"n":0}', localData = '{"n":1}', remoteData = '{"n":2}';
+    writeVaultFile(f.root, DATA, localData);
+    f.store.set(DATA, { path: DATA, remoteSha: await shaOf(baseData), mtime: 0, size: baseData.length });
+    f.store.setLastSync("BASE", "BASE_TREE");
+    f.client.setBranchHead("NEW");
+    f.client.setTreeShaForCommit("NEW", "NEW_TREE");
+    f.client.setContentAtRef("BASE", DATA, baseData);
+    f.client.setContentAtRef("NEW", DATA, remoteData);
+    setMtime(f.root, DATA, "2026-07-10T00:00:00Z"); // ours newer → ours wins
+    f.client.setLatestCommitDateForPath("NEW", DATA, Date.parse("2026-06-01T00:00:00Z"));
+    f.client.setCompareResult("BASE", "NEW", {
+      status: "diverged",
+      files: [{ filename: DATA, status: "modified", sha: await shaOf(remoteData) }],
+    });
+
+    await f.manager.syncAll();
+
+    expect(fs.readFileSync(path.join(f.root, DATA), "utf8")).toBe(localData);
+    expect(conflicts(f)).toEqual([]);
+    expect(listConflictSiblings(f.root)).toEqual([]);
+  });
+
+  it("RECONCILE delete-vs-modify: local deleted a plugin file, remote modified → resurrects, no sibling", async () => {
+    const f = fixture();
+    const baseSty = "a{color:base}", remoteSty = "a{color:REMOTE}";
+    // Local deleted styles.css (snapshot present, no disk file) → enqueued
+    // as a deletion; the remote modified it → reconcile deletions loop.
+    f.store.set(STY, { path: STY, remoteSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
+    f.store.setLastSync("BASE", "BASE_TREE");
+    f.client.setBranchHead("NEW");
+    f.client.setTreeShaForCommit("NEW", "NEW_TREE");
+    f.client.setContentAtRef("BASE", STY, baseSty);
+    f.client.setContentAtRef("NEW", STY, remoteSty);
+    f.client.setCompareResult("BASE", "NEW", {
+      status: "diverged",
+      files: [{ filename: STY, status: "modified", sha: await shaOf(remoteSty) }],
+    });
+
+    await f.manager.syncAll();
+
+    expect(fs.existsSync(path.join(f.root, STY))).toBe(true);
+    expect(fs.readFileSync(path.join(f.root, STY), "utf8")).toBe(remoteSty);
+    expect(conflicts(f)).toEqual([]);
+    expect(listConflictSiblings(f.root)).toEqual([]);
+  });
+
+  it("RECONCILE rule 1 via mtime: only styles.css changed locally + remote changed main.js (semver tie) → styles follows the newer bundle, not its own edit time", async () => {
+    const f = fixture();
+    const manifest = JSON.stringify({ id: "acme", version: "1.0.0", name: "Acme" }); // tie, unchanged
+    const baseMain = "module.exports={V:'BASE'};";
+    const remoteMain = "module.exports={V:'REMOTE'};";
+    const baseSty = "a{color:base}", localSty = "a{color:LOCAL}", remoteSty = "a{color:REMOTE}";
+    // Local: manifest + main.js UNCHANGED (not in batch), styles.css edited.
+    writeVaultFile(f.root, MANI, manifest);
+    writeVaultFile(f.root, MAIN, baseMain);
+    writeVaultFile(f.root, STY, localSty);
+    f.store.set(MANI, { path: MANI, remoteSha: await shaOf(manifest), mtime: 0, size: manifest.length });
+    f.store.set(MAIN, { path: MAIN, remoteSha: await shaOf(baseMain), mtime: 0, size: baseMain.length });
+    f.store.set(STY, { path: STY, remoteSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
+    f.store.setLastSync("BASE", "BASE_TREE");
+    f.client.setBranchHead("NEW");
+    f.client.setTreeShaForCommit("NEW", "NEW_TREE");
+    f.client.setContentAtRef("BASE", MANI, manifest);
+    f.client.setContentAtRef("NEW", MANI, manifest);
+    f.client.setContentAtRef("BASE", MAIN, baseMain);
+    f.client.setContentAtRef("NEW", MAIN, remoteMain);
+    f.client.setContentAtRef("BASE", STY, baseSty);
+    f.client.setContentAtRef("NEW", STY, remoteSty);
+    // main.js not in the batch → ours bundle mtime = its last-change at
+    // BASE (EARLY); remote bundle last-change (NEW) is LATE → theirs.
+    f.client.setLatestCommitDateForPath("BASE", MAIN, Date.parse("2026-01-01T00:00:00Z"));
+    f.client.setLatestCommitDateForPath("NEW", MAIN, Date.parse("2026-07-01T00:00:00Z"));
+    // Local styles.css is FRESH — must be overridden by rule 1.
+    setMtime(f.root, STY, "2026-07-10T00:00:00Z");
+    // Only main.js + styles.css diverged remotely (manifest unchanged).
+    f.client.setCompareResult("BASE", "NEW", {
+      status: "diverged",
+      files: [
+        { filename: MAIN, status: "modified", sha: await shaOf(remoteMain) },
+        { filename: STY, status: "modified", sha: await shaOf(remoteSty) },
+      ],
+    });
+
+    await f.manager.syncAll();
+
+    // main.js pull-applied; styles.css followed the newer server bundle
+    // despite its fresher local edit time — the canonical-mtime fallback
+    // used main.js's base date, not styles.css's own.
+    expect(fs.readFileSync(path.join(f.root, MAIN), "utf8")).toBe(remoteMain);
+    expect(fs.readFileSync(path.join(f.root, STY), "utf8")).toBe(remoteSty);
+    expect(conflicts(f)).toEqual([]);
+    expect(listConflictSiblings(f.root)).toEqual([]);
+  });
 });

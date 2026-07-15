@@ -4352,10 +4352,18 @@ export class Sync2Manager {
       theirsVersion = readPluginVersion(decodeBase64String(remoteManifestBlob.content));
     }
 
-    // Canonical bundle mtime = main.js's (fallback manifest, then the
-    // resolving file). ONE value per side keeps the group atomic.
+    // Canonical bundle mtime = main.js's (fallback manifest). ONE value
+    // per side keeps the group atomic. When neither is IN this batch
+    // (the bundle wasn't changed locally — e.g. only styles.css was),
+    // "ours" main.js is the version at expectedHead, so its mtime is
+    // that ref's last-change date — NOT the resolving file's own mtime,
+    // which would compare a local styles-edit time against a remote
+    // commit date and could pick the wrong side on a semver tie.
     const codeOursMtime =
-      fileMtimes[mainJsPath] ?? fileMtimes[manifestPath] ?? fileOursMtime;
+      fileMtimes[mainJsPath] ??
+      fileMtimes[manifestPath] ??
+      ((await this.remoteChangeMtime(mainJsPath, expectedHead)) ||
+        (await this.remoteChangeMtime(manifestPath, expectedHead)));
     const codeTheirsMtime =
       (await this.remoteChangeMtime(mainJsPath, currentHead)) ||
       (await this.remoteChangeMtime(manifestPath, currentHead));
