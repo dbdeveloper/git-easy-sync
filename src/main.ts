@@ -206,12 +206,14 @@ export default class GitHubSyncPlugin extends Plugin {
   // renderer. Synchronous read of this cache sidesteps the issue.
   pushPluginsDataJsonCached: boolean = false;
 
-  // Stage 7 / token-expiry UX. We throttle the
-  // "GitHub token expired" modal to at most once per hour so a
-  // background-drain failure every 5 minutes doesn't spam the
-  // user. Set to 0 (never shown) on plugin onload; updated to
-  // Date.now() each time the modal opens.
-  private lastAuthModalShownMs = 0;
+  // §35 token-expiry UX. The old once-per-hour throttle is GONE: a
+  // user-initiated Sync while the token is expired must re-open the modal
+  // EVERY time (the field-reported "close it once, next Sync stays silent" bug).
+  // Background/automatic surfaces never open the modal at all (they show a brief
+  // "Sync skipped" Notice), so nothing needs throttling. This flag only stops a
+  // DUPLICATE modal stacking while one is already open; it clears via the
+  // modal's onClosed hook so the next Sync re-opens a fresh one.
+  private tokenExpiredModalOpen = false;
 
   // UI elements that come and go with toggle settings.
   statusBarItem: HTMLElement | null = null;
@@ -1214,11 +1216,17 @@ export default class GitHubSyncPlugin extends Plugin {
   // forceCommit (E2 §7 menu "Sync All") — always commit + drain, ignoring the
   // syncStartsWithCommit toggle. The command + ribbon callers pass no arg, so
   // they keep honouring the toggle.
-  async sync(forceCommit = false): Promise<void> {
+  // opts.background (§35) — the interval scheduler's fullSync passes true so a
+  // token-expired short-circuit stays silent (Notice, no modal). The ribbon +
+  // menu callers omit it → "user" origin → recovery modal.
+  async sync(forceCommit = false, opts: { background?: boolean } = {}): Promise<void> {
+    const background = opts.background ?? false;
     if (!this.isConfigured()) {
       new Notice("Sync plugin not configured");
       return;
     }
+    // §35 — pre-flight gate: a latched token short-circuits BEFORE any network.
+    if (this.gateOnTokenExpired(background ? "auto" : "user")) return;
     // 2.0.2-beta2: second click during in-flight drain opens the
     // CancelSyncModal. The previous behaviour ("silently ignore
     // the click") was confusing in field testing — users couldn't
@@ -1264,9 +1272,16 @@ export default class GitHubSyncPlugin extends Plugin {
       // Stage 7: surface in the Settings drain-status section so
       // the user sees "Last error: …" without opening the log.
       this.sync2Manager.recordDrainError(err);
-      this.tokenExpiredFlag?.note(err); // E1: auth outcome → marker (AuthError → set)
-      this.maybeShowTokenExpiredModal(err);
-      new Notice(`Error syncing. ${err}`);
+      this.tokenExpiredFlag?.note(err); // §35: AuthError → latch the marker
+      if (err instanceof AuthError) {
+        // §35: first 401 of this run. User → recovery modal; automatic → brief
+        // "Sync skipped" Notice. Either way SUPPRESS the raw "Error syncing …
+        // 401" toast — the modal/notice is the feedback (field-reported bug).
+        if (background) new Notice("Sync skipped: token expired", BRIEF_NOTICE_MS);
+        else this.showTokenExpiredModal();
+      } else {
+        new Notice(`Error syncing. ${err}`);
+      }
     }
     // Drain may have mutated ConflictStore (Phase A SHA-match
     // cleanup, Phase B path-close drops) without firing the vault
@@ -1282,15 +1297,23 @@ export default class GitHubSyncPlugin extends Plugin {
   // surface a toast.
   async backgroundDrain(): Promise<void> {
     if (!this.isConfigured()) return;
+    // §35 — automatic path: a latched token short-circuits silently (a brief
+    // "Sync skipped" Notice, never the modal).
+    if (this.gateOnTokenExpired("auto")) return;
     try {
       await this.sync2Manager.resumeQueue();
-      // E1: drain-only path — never CLEAR here (an empty queue makes no authed
-      // call; see sync()'s resumeQueue branch). SET on an auth error below.
+      // §35: drain-only path — never CLEAR here (an empty queue makes no authed
+      // call; a successful sync never clears the latch anyway). SET on an auth
+      // error below.
     } catch (err) {
       void this.logger.error("Interval drain failed", `${err}`);
       this.sync2Manager.recordDrainError(err);
-      this.tokenExpiredFlag?.note(err); // E1: auth outcome → marker (set on AuthError)
-      this.maybeShowTokenExpiredModal(err);
+      this.tokenExpiredFlag?.note(err); // §35: AuthError → latch the marker
+      // §35: automatic — never open the modal. Surface the token case as a brief
+      // Notice; non-auth errors stay silent (background network blips are common).
+      if (err instanceof AuthError) {
+        new Notice("Sync skipped: token expired", BRIEF_NOTICE_MS);
+      }
     }
   }
 
@@ -1304,16 +1327,22 @@ export default class GitHubSyncPlugin extends Plugin {
       new Notice("Sync plugin not configured");
       return;
     }
+    // §35 — user path (sync-active-file command): gate before any network.
+    if (this.gateOnTokenExpired("user")) return;
     if (!(await this.confirmPendingConflictsBeforeSync())) return;
     try {
       await this.sync2Manager.syncFile(path);
       // §35: a successful sync does NOT clear the expired latch (sticky until a
-      // Remote-Repository settings edit). SET on an auth error below.
+      // Remote-Repository settings edit / probe). SET on an auth error below.
     } catch (err) {
       // Log BEFORE the Notice — see sync() rationale above.
       this.logger.error("syncFile click failed", { path, err: describeError(err) });
-      this.tokenExpiredFlag?.note(err); // E1: auth outcome → marker
-      new Notice(`Error syncing. ${err}`);
+      this.tokenExpiredFlag?.note(err); // §35: AuthError → latch the marker
+      if (err instanceof AuthError) {
+        this.showTokenExpiredModal(); // §35: user → modal, suppress the raw toast
+      } else {
+        new Notice(`Error syncing. ${err}`);
+      }
     }
     // See markDirty rationale in sync() above.
     this.conflictCounter?.markDirty();
@@ -1797,19 +1826,25 @@ export default class GitHubSyncPlugin extends Plugin {
       );
       return;
     }
+    // §35 — user path (status-menu "Pull from repo and push stored commits"):
+    // a latched token short-circuits before any network → recovery modal.
+    if (this.gateOnTokenExpired("user")) return;
     if (!(await this.confirmPendingConflictsBeforeSync())) return;
     try {
       await this.sync2Manager.resumeQueue();
-      // E1: drain-only path — never CLEAR here (an empty queue makes no authed
-      // call; see sync()'s resumeQueue branch). SET on an auth error below.
+      // §35: drain-only path — a successful sync never clears the latch. SET on
+      // an auth error below.
     } catch (err) {
       this.logger?.error("Upload-only command failed", {
         err: describeError(err),
       });
       this.sync2Manager.recordDrainError(err);
-      this.tokenExpiredFlag?.note(err); // E1: auth outcome → marker (set on AuthError)
-      this.maybeShowTokenExpiredModal(err);
-      new Notice(`Upload failed: ${err}`, 10000);
+      this.tokenExpiredFlag?.note(err); // §35: AuthError → latch the marker
+      if (err instanceof AuthError) {
+        this.showTokenExpiredModal(); // §35: user → modal, suppress the raw toast
+      } else {
+        new Notice(`Upload failed: ${err}`, 10000);
+      }
     }
     this.conflictCounter?.markDirty();
   }
@@ -1918,16 +1953,30 @@ export default class GitHubSyncPlugin extends Plugin {
     new Notice("Sync cancellation requested.", 4000);
   }
 
-  // Detects AuthError (401 / 403) — typically an expired
-  // fine-grained PAT — and opens the TokenExpiredModal with
-  // step-by-step recovery guidance. Throttled to at most once per
-  // hour so a 5-minute background drain doesn't spam the user.
-  private maybeShowTokenExpiredModal(err: unknown): void {
-    if (!(err instanceof AuthError)) return;
-    const now = Date.now();
-    const ONE_HOUR = 60 * 60 * 1000;
-    if (now - this.lastAuthModalShownMs < ONE_HOUR) return;
-    this.lastAuthModalShownMs = now;
+  // §35 — the pre-flight token-expired GATE. Every GitHub-touching sync surface
+  // calls this FIRST; it returns true when the token-expired latch is set, in
+  // which case the caller must abort BEFORE any network. The reaction forks on
+  // WHO triggered the sync:
+  //   • "user"  (ribbon / menu Sync All / Pull-push / sync active file) → the
+  //     recovery modal, EVERY time (unthrottled — the field-reported reshow bug);
+  //   • "auto"  (interval tick / startup) → a brief "Sync skipped: token expired"
+  //     Notice, never the modal (they run silently, §35 addition).
+  // AuthError is non-retriable, so on a latched token this short-circuit is why a
+  // repeat Sync "finishes fast" with no failing network call (and no more of the
+  // ugly "Failed to get branch head sha, status 401" toast).
+  private gateOnTokenExpired(origin: "user" | "auto"): boolean {
+    if (!(this.tokenExpiredFlag?.isExpiredCached() ?? false)) return false;
+    if (origin === "user") this.showTokenExpiredModal();
+    else new Notice("Sync skipped: token expired", BRIEF_NOTICE_MS);
+    return true;
+  }
+
+  // Open the TokenExpiredModal with step-by-step recovery guidance. No throttle
+  // (§35): a user-initiated Sync re-opens it every time. A single open-flag
+  // stops a duplicate stacking while one is already up; it clears via the
+  // modal's onClosed hook so the NEXT Sync gets a fresh modal.
+  private showTokenExpiredModal(): void {
+    if (this.tokenExpiredModalOpen) return;
     try {
       const modal = new TokenExpiredModal(
         this.app,
@@ -1951,12 +2000,18 @@ export default class GitHubSyncPlugin extends Plugin {
             // settings manually.
           }
         },
-        // E1 — auto-dismiss when the token is renewed (flag clears on the next
-        // successful auth: a sync or the Settings connection-probe).
+        // §35 — auto-dismiss when the latch clears (the user edited a
+        // Remote-Repository field or a Test-connection probe succeeded).
         () => this.tokenExpiredFlag?.isExpiredCached() ?? false,
+        // §35 — clear the open-guard so the next Sync can re-open it.
+        () => {
+          this.tokenExpiredModalOpen = false;
+        },
       );
+      this.tokenExpiredModalOpen = true;
       modal.open();
     } catch (modalErr) {
+      this.tokenExpiredModalOpen = false;
       this.logger?.warn("TokenExpiredModal open failed", {
         err: String(modalErr),
       });
@@ -1983,7 +2038,9 @@ export default class GitHubSyncPlugin extends Plugin {
       // so a blocking dialog would surprise the user. Detection
       // still runs; conflicts still land as siblings in the vault.
       drain: () => this.backgroundDrain(),
-      fullSync: () => this.sync(),
+      // §35 — interval/startup full-sync is automatic: a token-expired
+      // short-circuit stays silent (a brief Notice, not the recovery modal).
+      fullSync: () => this.sync(false, { background: true }),
       logError: (label, err) => {
         void this.logger.error(label, err);
       },

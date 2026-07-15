@@ -37,6 +37,9 @@ export class TokenExpiredModal extends Modal {
     // (the user renewed the token and a sync / the Settings connection-probe succeeded), so
     // it doesn't linger after the problem is fixed. Optional (older callers / tests omit it).
     private readonly isExpired?: () => boolean,
+    // §35 — fired from onClose (auto-dismiss, [X], or ESC) so the caller can drop its
+    // "a modal is already open" guard and let the NEXT sync re-open a fresh one.
+    private readonly onClosed?: () => void,
   ) {
     super(app);
   }
@@ -114,5 +117,6 @@ export class TokenExpiredModal extends Modal {
       this.pollTimer = null;
     }
     this.contentEl.empty();
+    this.onClosed?.();
   }
 }
