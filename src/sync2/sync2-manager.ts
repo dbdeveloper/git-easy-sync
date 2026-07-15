@@ -64,6 +64,23 @@ import {
 } from "./push-inflight";
 import { FileChange, QueueBatch } from "./types";
 
+// §28: a plugin's local bundle state, snapshotted before a pull mutates
+// anything, so the atomic resolver reads a stable "ours" signal even
+// after sibling files have been applied inline. `null` SHA/version =
+// the file was absent locally.
+interface LocalPluginBundle {
+  mainSha: string | null;
+  manifestSha: string | null;
+  manifestVersion: string | null;
+  // Canonical bundle mtime source: main.js's, else manifest's.
+  mainMtime: number;
+  manifestMtime: number;
+  // True when styles.css is among this plugin's remote changes — the
+  // only case that needs the (potentially multi-MB) blob SHAs, so we
+  // skip hashing main.js otherwise.
+  hasStylesChange: boolean;
+}
+
 // ── Skip-class taxonomy (SYNC2 §6 + §7.5) ─────────
 //
 // Every `continue` / `return` inside the loops in `pullIfNeeded`,
@@ -558,6 +575,14 @@ export class Sync2Manager {
   // 2.0.2-beta2: accumulated through a drain cycle by maybeMarkPluginAffected.
   // Cleared at drain end after the callback fires.
   private affectedPluginIds: Set<string> = new Set();
+  // §28: local plugin-bundle state captured ONCE before a pull applies
+  // any file, keyed by plugin root. The pull loop applies each remote
+  // file inline, so a sibling main.js/manifest that resolves earlier can
+  // overwrite the local file a later styles.css resolution would read —
+  // making codeDiffers/version/mtime reflect post-apply state and split
+  // the bundle. Reading the "ours" bundle signal from this pre-apply
+  // snapshot keeps the group atomic. Null outside a pull.
+  private pullBundleSnapshots: Map<string, LocalPluginBundle> | null = null;
   // Accumulator for the pull-side phases (bootstrapFromRemote +
   // pullIfNeeded) so onSyncCompleted can report how many files
   // actually came down from the remote. Reset at the start of each
@@ -1245,6 +1270,12 @@ export class Sync2Manager {
       }
     };
 
+    // §28: capture each involved plugin's local bundle state BEFORE the
+    // loop applies any file, so a styles.css conflict resolved after a
+    // sibling main.js/manifest was already written still sees the
+    // pre-pull bundle (keeps the atomic group from splitting).
+    this.pullBundleSnapshots = await this.snapshotLocalPluginBundles(syncableChanges);
+
     try {
       for (const f of syncableChanges) {
         // Pre-op tick: advance the counter BEFORE this file is handled,
@@ -1408,6 +1439,7 @@ export class Sync2Manager {
       }
     } finally {
       if (ownPullProgress) pullProgress?.hide();
+      this.pullBundleSnapshots = null;
     }
 
     if (anyOverlapDeferred) {
@@ -2043,7 +2075,7 @@ export class Sync2Manager {
     const pullRole = pluginDirFileRole(path, this.configDir);
     let pluginResolve: PluginResolveContext | undefined;
     if (pullRole !== null) {
-      pluginResolve = await this.readPluginResolveContext(path, pullRole, baseRef, headRef);
+      pluginResolve = await this.readPluginResolveContext(path, pullRole, headRef);
     }
 
     const auto = await attemptAutoMerge({
@@ -2331,17 +2363,21 @@ export class Sync2Manager {
   //              ours-vs-theirs?) so styles.css follows the bundle
   //              winner (rule 1) or its own mtime when the bundle is
   //              identical (rule 3).
-  // "ours" = the local vault, "theirs" = the remote head.
+  // "ours" bundle signal = the PRE-APPLY snapshot (pullBundleSnapshots),
+  // NOT the live vault — a sibling may already have been applied inline.
+  // "theirs" = the remote head.
   private async readPluginResolveContext(
     path: string,
     role: PluginDirFileRole,
-    _baseRef: string,
     headRef: string,
   ): Promise<PluginResolveContext | undefined> {
     const root = pluginRootOf(path, this.configDir);
     if (root === null) return undefined;
 
-    // The resolving file's own mtime (local vs remote last-change).
+    // The resolving file's own mtime — read live. The file being
+    // resolved is the conflict itself, NOT yet applied this drain, so
+    // its local state is intact; only its SIBLING bundle files may
+    // already be overwritten (those come from the snapshot below).
     const fileOursMtime = (await this.vault.adapter.stat(path))?.mtime ?? 0;
     const fileTheirsMtime = await this.remoteChangeMtime(path, headRef);
 
@@ -2349,43 +2385,44 @@ export class Sync2Manager {
       return this.dataOnlyResolveContext(fileOursMtime, fileTheirsMtime);
     }
 
-    const manifestPath = `${root}/manifest.json`;
-    const mainJsPath = `${root}/main.js`;
+    // Pre-apply local bundle snapshot (defensive live fallback if
+    // absent — the pull loop always populates it).
+    const snap =
+      this.pullBundleSnapshots?.get(root) ??
+      (await this.snapshotOneBundle(root, role === "styles"));
 
-    let oursVersion: string | null = null;
-    if (await this.vault.adapter.exists(manifestPath)) {
-      oursVersion = readPluginVersion(await this.vault.adapter.read(manifestPath));
-    }
+    const manifestPath = `${root}/manifest.json`;
     const remoteManifest = await this.safeFetchContents(manifestPath, headRef);
     const theirsVersion = remoteManifest
       ? readPluginVersion(decodeBase64String(remoteManifest.content))
       : null;
 
     // Canonical bundle mtime = main.js's (fallback manifest). ONE value
-    // per side for the whole plugin, so main.js/manifest/styles.css can
-    // never split to different sides on a semver tie. theirs mtime = the
-    // file's LAST-CHANGE commit date, never the branch HEAD date (SYNC2
-    // §7 — HEAD moving past the file wrongly favours the remote).
-    const codeOursMtime =
-      (await this.vault.adapter.stat(mainJsPath))?.mtime ??
-      (await this.vault.adapter.stat(manifestPath))?.mtime ??
-      0;
+    // per side so main.js/manifest/styles.css can never split on a
+    // semver tie. theirs mtime = the file's LAST-CHANGE commit date,
+    // never the branch HEAD date (SYNC2 §7).
+    const codeOursMtime = snap.mainMtime || snap.manifestMtime;
     const codeTheirsMtime =
-      (await this.remoteChangeMtime(mainJsPath, headRef)) ||
+      (await this.remoteChangeMtime(`${root}/main.js`, headRef)) ||
       (await this.remoteChangeMtime(manifestPath, headRef));
 
-    // codeDiffers only affects styles.css (rule 1 vs rule 3); computing
-    // it costs a local blob-SHA (may hash a multi-MB main.js), so skip
-    // it for "code" files, which are the bundle themselves.
+    // codeDiffers only affects styles.css (rule 1 vs rule 3). Compare
+    // the snapshot's local SHAs against remote metadata — no big
+    // download, and immune to the sibling already being applied.
     let codeDiffers = true;
     if (role === "styles") {
+      const remoteMain = await this.client.getContentsMetadataAtRef({
+        path: `${root}/main.js`,
+        ref: headRef,
+        retry: true,
+      });
       codeDiffers =
-        (await this.localVsRemoteDiffers(mainJsPath, headRef)) ||
-        (await this.localVsRemoteDiffers(manifestPath, headRef));
+        snap.mainSha !== (remoteMain?.sha ?? null) ||
+        snap.manifestSha !== (remoteManifest?.sha ?? null);
     }
 
     return {
-      oursVersion,
+      oursVersion: snap.manifestVersion,
       theirsVersion,
       codeDiffers,
       codeOursMtime,
@@ -2421,22 +2458,54 @@ export class Sync2Manager {
     );
   }
 
-  // Does a plugin file differ between the LOCAL vault and a remote ref?
-  // Compares git blob SHAs; the remote side is a metadata-only fetch so
-  // a big main.js is never downloaded. Missing on either side counts as
-  // "differs".
-  private async localVsRemoteDiffers(path: string, ref: string): Promise<boolean> {
-    const localSha = (await this.vault.adapter.exists(path))
-      ? await this.workerClient.computeGitBlobSHA(
-          await this.vault.adapter.readBinary(path),
-        )
+  // §28: snapshot every involved plugin's local bundle state BEFORE the
+  // pull applies anything. Only plugins with a coupled-file (main.js /
+  // manifest.json / styles.css) change need it — data.json resolves by
+  // its own mtime. The blob SHAs (which may hash a multi-MB main.js) are
+  // taken only when styles.css is among the plugin's changes, the sole
+  // case codeDiffers is consulted.
+  private async snapshotLocalPluginBundles(
+    changes: Array<{ filename: string }>,
+  ): Promise<Map<string, LocalPluginBundle>> {
+    const roots = new Map<string, boolean>(); // root → hasStylesChange
+    for (const f of changes) {
+      const role = pluginDirFileRole(f.filename, this.configDir);
+      if (role === null || role === "data") continue;
+      const root = pluginRootOf(f.filename, this.configDir);
+      if (!root) continue;
+      roots.set(root, (roots.get(root) ?? false) || role === "styles");
+    }
+    const out = new Map<string, LocalPluginBundle>();
+    for (const [root, hasStyles] of roots) {
+      out.set(root, await this.snapshotOneBundle(root, hasStyles));
+    }
+    return out;
+  }
+
+  private async snapshotOneBundle(
+    root: string,
+    needSha: boolean,
+  ): Promise<LocalPluginBundle> {
+    const manifestPath = `${root}/manifest.json`;
+    const mainJsPath = `${root}/main.js`;
+    const manifestVersion = (await this.vault.adapter.exists(manifestPath))
+      ? readPluginVersion(await this.vault.adapter.read(manifestPath))
       : null;
-    const remoteMeta = await this.client.getContentsMetadataAtRef({
-      path,
-      ref,
-      retry: true,
-    });
-    return localSha !== (remoteMeta?.sha ?? null);
+    return {
+      mainSha: needSha ? await this.localBlobShaOrNull(mainJsPath) : null,
+      manifestSha: needSha ? await this.localBlobShaOrNull(manifestPath) : null,
+      manifestVersion,
+      mainMtime: (await this.vault.adapter.stat(mainJsPath))?.mtime ?? 0,
+      manifestMtime: (await this.vault.adapter.stat(manifestPath))?.mtime ?? 0,
+      hasStylesChange: needSha,
+    };
+  }
+
+  private async localBlobShaOrNull(path: string): Promise<string | null> {
+    if (!(await this.vault.adapter.exists(path))) return null;
+    return this.workerClient.computeGitBlobSHA(
+      await this.vault.adapter.readBinary(path),
+    );
   }
 
   // Register a conflict in the ConflictStore and remove the path from
