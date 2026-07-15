@@ -114,7 +114,17 @@ export function buildStatusMenu(input: StatusMenuInput): StatusMenuItem[] {
   // only reach Settings (nothing else would work).
   if (state !== "uninitialized") {
     const headed = state === "token-expired";
-    items.push({ key: "sync-all", label: "Sync All", separatorBefore: headed });
+    // §35 — while the token is expired, the two GitHub-network actions are
+    // meaningless (the pre-flight gate would just short-circuit them), so grey
+    // them out. The LOCAL actions (Commit…) and the UI ones (open diff/history,
+    // Settings — where the user fixes the token) stay live.
+    const tokenExpired = state === "token-expired";
+    items.push({
+      key: "sync-all",
+      label: "Sync All",
+      separatorBefore: headed,
+      disabled: tokenExpired,
+    });
     items.push({ key: "commit-all", label: "Commit all changed files" });
     // current-file-bound → greyed when there is no active file (instead of
     // clicking through to a "No active file to commit" Notice).
@@ -123,7 +133,11 @@ export function buildStatusMenu(input: StatusMenuInput): StatusMenuItem[] {
       label: "Commit active file",
       disabled: !hasActiveFile,
     });
-    items.push({ key: "pull-push", label: pullPushLabel(queueDepth) });
+    items.push({
+      key: "pull-push",
+      label: pullPushLabel(queueDepth),
+      disabled: tokenExpired,
+    });
     items.push({
       key: "open-diff",
       label: `Open diff-panel${openDiffSuffix(conflictCount)}`,

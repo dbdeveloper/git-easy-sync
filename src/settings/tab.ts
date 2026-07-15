@@ -15,6 +15,7 @@ import GitHubSyncPlugin from "src/main";
 import { logFileNameFor } from "src/logger";
 import { formatSyncMessage } from "src/sync2/commit-message";
 import { renderTokenHelpBox } from "src/sync2/views/token-help";
+import { tokenExpiredMessage } from "src/token-expired-flag";
 import manifest from "../../manifest.json";
 
 // Sync2-only settings tab. Mirrors the shape of GitHubSyncSettings —
@@ -32,6 +33,12 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
   // when the user toggles a setting that re-renders the page).
   private drainStatusUnsubscribe: (() => void) | null = null;
   private drainStatusTickTimer: ReturnType<typeof setInterval> | null = null;
+  // §35 — repaint the "GitHub sync status" card on demand. The card's error line
+  // is driven by the sticky token-expired marker (not only DrainStatus.lastError,
+  // which is in-memory and null after a reload while the marker persists). The
+  // marker changes on a Remote-Repository field edit / probe WITHOUT a
+  // drain-status event, so those sites call this to update the card live.
+  private drainStatusRefresh: (() => void) | null = null;
 
   // Token-help affordance near the connection probe. The box appears
   // proactively when any required credential field is empty (so a
@@ -123,6 +130,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
             // clears the sticky token-expired latch — the user is reconfiguring
             // credentials, so we're ready to re-check GitHub again.
             this.plugin.tokenExpiredFlag?.clear();
+            this.drainStatusRefresh?.(); // §35: repaint the sync-status card live
             this.refreshTokenHelp();
           });
         text.inputEl.type = "password";
@@ -150,6 +158,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
             this.plugin.settings.githubOwner = value.trim();
             await this.plugin.saveSettings();
             this.plugin.tokenExpiredFlag?.clear(); // §35 — see token onChange
+            this.drainStatusRefresh?.();
             this.refreshTokenHelp();
           }),
       );
@@ -165,6 +174,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
             this.plugin.settings.githubRepo = value.trim();
             await this.plugin.saveSettings();
             this.plugin.tokenExpiredFlag?.clear(); // §35 — see token onChange
+            this.drainStatusRefresh?.();
             this.refreshTokenHelp();
           }),
       );
@@ -261,7 +271,8 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
                     "Generate a new token on GitHub → Settings → Developer settings.",
                 );
                 this.tokenHelpAuthError = true;
-                this.plugin.tokenExpiredFlag?.set(); // E1: probe confirmed expired
+                this.plugin.tokenExpiredFlag?.set("invalid"); // §35: 401 → invalid/expired
+                this.drainStatusRefresh?.();
                 return;
               }
               if (repoRes.status === 403) {
@@ -272,7 +283,8 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
                     "Classic PAT needs: repo.",
                 );
                 this.tokenHelpAuthError = true;
-                this.plugin.tokenExpiredFlag?.set(); // E1: probe confirmed expired
+                this.plugin.tokenExpiredFlag?.set("scope"); // §35: 403 → missing scope
+                this.drainStatusRefresh?.();
                 return;
               }
               if (repoRes.status === 404) {
@@ -317,6 +329,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
                     "Branch field is empty — no branch check performed.",
                 );
                 this.plugin.tokenExpiredFlag?.clear(); // §35: successful probe clears the latch
+                this.drainStatusRefresh?.();
                 return;
               }
               const branchRes = await requestUrl({
@@ -354,6 +367,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
                   "Plugin is ready to sync.",
               );
               this.plugin.tokenExpiredFlag?.clear(); // §35: successful probe clears the latch
+              this.drainStatusRefresh?.();
             } catch (err) {
               setProbeResult(
                 "err",
@@ -1011,7 +1025,24 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           this.drainStatusTickTimer = null;
         }
       }
-      if (status.lastError !== null) {
+      // §35 — the token-expired marker is the AUTHORITATIVE source for the
+      // "token expired" state and takes precedence over DrainStatus.lastError:
+      // the marker is sticky and survives a plugin reload (where in-memory
+      // lastError is null), and a gated Sync short-circuits WITHOUT recording a
+      // drain error. So whenever the marker is latched we always show the red,
+      // verbose token-expired line here, exactly as before the §35 gate landed.
+      const tokenExpired =
+        this.plugin.tokenExpiredFlag?.isExpiredCached() ?? false;
+      if (tokenExpired) {
+        // §35: the 401/403 class (persisted in the marker) picks the message,
+        // so it reads the same at occurrence and after a plugin reload.
+        const kind = this.plugin.tokenExpiredFlag?.getKind() ?? "invalid";
+        errorLine.setText(`⚠ ${tokenExpiredMessage(kind)}`);
+      } else if (status.lastError !== null && !status.lastError.isAuthError) {
+        // §35: auth state is ENTIRELY marker-driven (above). A non-auth error
+        // (network, 422, 404) is transient — show it directly. An AUTH lastError
+        // with the marker already cleared means the user just started fixing the
+        // token → suppress the stale 401/403 so the card doesn't contradict.
         const ago = Math.round(
           (Date.now() - status.lastError.whenMs) / 1000,
         );
@@ -1021,10 +1052,9 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       } else {
         errorLine.setText("");
       }
-      // Token-help box under the error line for 401/403 failures, so a
-      // user who doesn't recognise "401" still gets the actionable
-      // links. Re-render only when visibility flips.
-      const wantHelp = status.lastError?.isAuthError === true;
+      // Token-help box under the error line only while the marker is latched —
+      // auth help follows the (marker-driven) auth state, not a stale lastError.
+      const wantHelp = tokenExpired;
       const hasHelp = drainTokenHelpSlot.childElementCount > 0;
       if (wantHelp && !hasHelp) {
         renderTokenHelpBox(drainTokenHelpSlot);
@@ -1032,6 +1062,11 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
         drainTokenHelpSlot.empty();
       }
     };
+
+    // §35 — expose a marker-driven repaint for the field-edit / probe sites,
+    // which change the latch without emitting a drain-status event.
+    this.drainStatusRefresh = () =>
+      render(this.plugin.sync2Manager.getDrainStatus());
 
     this.drainStatusUnsubscribe = this.plugin.sync2Manager.setDrainStatusListener(
       (s) => render(s),

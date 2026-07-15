@@ -4,6 +4,7 @@
 
 import { App, Modal, Setting } from "obsidian";
 import { GITHUB_TOKENS_URL, PLUGIN_README_URL } from "./token-help";
+import type { TokenExpiredKind } from "../../token-expired-flag";
 
 // Surfaced when GitHub returns 401 ("Bad credentials") or 403 on a
 // sync surface — typically because the fine-grained PAT expired.
@@ -40,6 +41,10 @@ export class TokenExpiredModal extends Modal {
     // §35 — fired from onClose (auto-dismiss, [X], or ESC) so the caller can drop its
     // "a modal is already open" guard and let the NEXT sync re-open a fresh one.
     private readonly onClosed?: () => void,
+    // §35 — 401 ("invalid": token expired/revoked/wrong) vs 403 ("scope": valid
+    // token, missing permissions). Picks the intro paragraph so the modal
+    // explains the actual problem. Defaults to the common 401 case.
+    private readonly kind: TokenExpiredKind = "invalid",
   ) {
     super(app);
   }
@@ -54,10 +59,15 @@ export class TokenExpiredModal extends Modal {
     const intro = this.contentEl.createDiv();
     intro.style.marginBottom = "1em";
     intro.setText(
-      "GitHub returned 'Bad credentials' for your last sync. The most " +
-        "likely cause: your fine-grained personal access token reached " +
-        "its expiration date (the maximum lifetime is one year). " +
-        "Sync will keep failing until you renew it.",
+      this.kind === "scope"
+        ? "GitHub returned 403 (Forbidden) for your last sync. Your token is " +
+            "valid but it lacks the permissions this plugin needs: Contents " +
+            "(Read + Write) and Metadata (Read) on your sync repo. Sync will " +
+            "keep failing until you re-scope the token (or generate a new one)."
+        : "GitHub returned 'Bad credentials' for your last sync. The most " +
+            "likely cause: your fine-grained personal access token reached " +
+            "its expiration date (the maximum lifetime is one year). " +
+            "Sync will keep failing until you renew it.",
     );
 
     const steps = this.contentEl.createDiv();

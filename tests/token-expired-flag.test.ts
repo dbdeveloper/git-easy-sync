@@ -1,5 +1,6 @@
 // E1 — `.token_expired` marker (TODO §5 / DIFF2 R2.7.3.a).
-// Tests the two unit-pinnable parts: the pure classifyAuthOutcome mapping and
+// Tests the unit-pinnable parts: the pure authErrorKind mapping, the
+// tokenExpiredMessage copy, and
 // the TokenExpiredFlag (in-memory authoritative + best-effort file mirror).
 // The CALL SITES (main.ts drain catches/success, settings probe) are untestable
 // view/plugin wiring — covered by the manual checklist.
@@ -14,7 +15,8 @@ import type { Vault } from "obsidian";
 import { AuthError } from "../src/errors";
 import {
   TokenExpiredFlag,
-  classifyAuthOutcome,
+  authErrorKind,
+  tokenExpiredMessage,
 } from "../src/token-expired-flag";
 
 const PLUGIN_DIR = ".obsidian/plugins/github-easy-sync";
@@ -46,19 +48,33 @@ async function waitUntil(pred: () => boolean | Promise<boolean>): Promise<void> 
   throw new Error("waitUntil: condition not met within 2s");
 }
 
-describe("classifyAuthOutcome — per-drain mapping", () => {
-  // §35 sticky latch: success no longer clears — only an AuthError latches.
-  it("null / undefined (success) → noop (does NOT clear the latch)", () => {
-    expect(classifyAuthOutcome(null)).toBe("noop");
-    expect(classifyAuthOutcome(undefined)).toBe("noop");
+describe("authErrorKind — 401/403 classification", () => {
+  // §35 sticky latch: success returns null (does NOT clear) — only an AuthError
+  // latches, and its status picks the class.
+  it("null / undefined (success) → null (does NOT clear the latch)", () => {
+    expect(authErrorKind(null)).toBeNull();
+    expect(authErrorKind(undefined)).toBeNull();
   });
-  it("AuthError (401/403) → set", () => {
-    expect(classifyAuthOutcome(new AuthError("nope", 401))).toBe("set");
-    expect(classifyAuthOutcome(new AuthError("nope", 403))).toBe("set");
+  it("AuthError 401 → invalid (bad credentials / expired / wrong token)", () => {
+    expect(authErrorKind(new AuthError("nope", 401))).toBe("invalid");
   });
-  it("non-auth error → noop (offline ≠ expired)", () => {
-    expect(classifyAuthOutcome(new Error("network down"))).toBe("noop");
-    expect(classifyAuthOutcome("plain string")).toBe("noop");
+  it("AuthError 403 → scope (valid token, missing permissions)", () => {
+    expect(authErrorKind(new AuthError("nope", 403))).toBe("scope");
+  });
+  it("non-auth error → null (offline ≠ expired)", () => {
+    expect(authErrorKind(new Error("network down"))).toBeNull();
+    expect(authErrorKind("plain string")).toBeNull();
+  });
+});
+
+describe("tokenExpiredMessage — user-facing copy", () => {
+  it("invalid mentions setting a new token", () => {
+    expect(tokenExpiredMessage("invalid")).toMatch(/invalid or expired/i);
+    expect(tokenExpiredMessage("invalid")).toMatch(/new token/i);
+  });
+  it("scope mentions the required permissions", () => {
+    expect(tokenExpiredMessage("scope")).toMatch(/permissions|scope/i);
+    expect(tokenExpiredMessage("scope")).toMatch(/Contents/i);
   });
 });
 
@@ -120,9 +136,15 @@ describe("TokenExpiredFlag — in-memory authoritative + file mirror", () => {
 
     f.note(new AuthError("expired", 401));
     expect(f.isExpiredCached()).toBe(true);
+    expect(f.getKind()).toBe("invalid"); // 401 → invalid
 
     f.note(new Error("offline")); // non-auth → leave (stays set)
     expect(f.isExpiredCached()).toBe(true);
+
+    // A 403 while already latched re-classifies to "scope".
+    f.note(new AuthError("forbidden", 403));
+    expect(f.isExpiredCached()).toBe(true);
+    expect(f.getKind()).toBe("scope");
 
     // §35: a SUCCESS must NOT clear the sticky latch — that regression is the
     // whole point of §35. Only a Remote-Repository settings edit (→ clear())
@@ -139,6 +161,48 @@ describe("TokenExpiredFlag — in-memory authoritative + file mirror", () => {
     f.note(null); // a later success on a clear latch is still a no-op
     expect(f.isExpiredCached()).toBe(false);
     await settle();
+  });
+
+  it("persists the kind tag to the file and restores it on init (§35)", async () => {
+    const vault = fixture();
+    const f = new TokenExpiredFlag(vault, PLUGIN_DIR);
+    await f.init();
+    f.set("scope");
+    expect(f.getKind()).toBe("scope");
+    await waitUntil(async () =>
+      (await vault.adapter.exists(MARKER)) &&
+      (await vault.adapter.read(MARKER)).trim() === "scope",
+    );
+    // A fresh flag over the same vault restores the class from the file.
+    const f2 = new TokenExpiredFlag(vault, PLUGIN_DIR);
+    await f2.init();
+    expect(f2.isExpiredCached()).toBe(true);
+    expect(f2.getKind()).toBe("scope");
+  });
+
+  it("a legacy marker (ISO-timestamp content) restores as 'invalid'", async () => {
+    const vault = fixture();
+    await vault.adapter.write(MARKER, "2026-01-01T00:00:00.000Z");
+    const f = new TokenExpiredFlag(vault, PLUGIN_DIR);
+    await f.init();
+    expect(f.isExpiredCached()).toBe(true);
+    expect(f.getKind()).toBe("invalid"); // unknown content → common case
+  });
+
+  it("set() re-writes when the class changes, even while already latched", async () => {
+    const vault = fixture();
+    const f = new TokenExpiredFlag(vault, PLUGIN_DIR);
+    await f.init();
+    f.set("invalid");
+    await waitUntil(async () =>
+      (await vault.adapter.exists(MARKER)) &&
+      (await vault.adapter.read(MARKER)).trim() === "invalid",
+    );
+    f.set("scope"); // class change → re-write
+    await waitUntil(async () =>
+      (await vault.adapter.read(MARKER)).trim() === "scope",
+    );
+    expect(f.getKind()).toBe("scope");
   });
 
   it("in-memory state is authoritative — survives an out-of-band file delete", async () => {

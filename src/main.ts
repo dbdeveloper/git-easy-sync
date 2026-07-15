@@ -98,6 +98,11 @@ import manifest from "../manifest.json";
 // short enough that consecutive Sync clicks don't stack notices.
 const BRIEF_NOTICE_MS = 700;
 
+// §35 — the automatic "Sync skipped: token expired" toast. Longer than
+// BRIEF_NOTICE_MS: it carries actionable words the user must actually read,
+// and (unlike a "Sync done" flash) it's a problem they need to notice.
+const SYNC_SKIPPED_NOTICE_MS = 2000;
+
 // Delay before the startup sync fires after layout-ready. Long enough for
 // (a) an outgoing instance's drain teardown to settle across a disable+enable
 // plugin reload, AND (b) Obsidian's own startup config-write storm to FINISH —
@@ -1277,7 +1282,7 @@ export default class GitHubSyncPlugin extends Plugin {
         // §35: first 401 of this run. User → recovery modal; automatic → brief
         // "Sync skipped" Notice. Either way SUPPRESS the raw "Error syncing …
         // 401" toast — the modal/notice is the feedback (field-reported bug).
-        if (background) new Notice("Sync skipped: token expired", BRIEF_NOTICE_MS);
+        if (background) new Notice("Sync skipped: token expired", SYNC_SKIPPED_NOTICE_MS);
         else this.showTokenExpiredModal();
       } else {
         new Notice(`Error syncing. ${err}`);
@@ -1312,7 +1317,7 @@ export default class GitHubSyncPlugin extends Plugin {
       // §35: automatic — never open the modal. Surface the token case as a brief
       // Notice; non-auth errors stay silent (background network blips are common).
       if (err instanceof AuthError) {
-        new Notice("Sync skipped: token expired", BRIEF_NOTICE_MS);
+        new Notice("Sync skipped: token expired", SYNC_SKIPPED_NOTICE_MS);
       }
     }
   }
@@ -1967,7 +1972,7 @@ export default class GitHubSyncPlugin extends Plugin {
   private gateOnTokenExpired(origin: "user" | "auto"): boolean {
     if (!(this.tokenExpiredFlag?.isExpiredCached() ?? false)) return false;
     if (origin === "user") this.showTokenExpiredModal();
-    else new Notice("Sync skipped: token expired", BRIEF_NOTICE_MS);
+    else new Notice("Sync skipped: token expired", SYNC_SKIPPED_NOTICE_MS);
     return true;
   }
 
@@ -2007,6 +2012,8 @@ export default class GitHubSyncPlugin extends Plugin {
         () => {
           this.tokenExpiredModalOpen = false;
         },
+        // §35 — 401/403 class picks the modal's intro paragraph.
+        this.tokenExpiredFlag?.getKind() ?? "invalid",
       );
       this.tokenExpiredModalOpen = true;
       modal.open();

@@ -90,6 +90,25 @@ describe("buildStatusMenu — §7 three states", () => {
     expect(m[0].label).toBe("GitHub Easy Sync: Token expired");
     expect(m.find((i) => i.key === "sync-all")?.separatorBefore).toBe(true);
     expect(m.find((i) => i.key === "settings")?.separatorBefore).toBe(true);
+    // §35 — the two GitHub-network actions are greyed while the token is expired;
+    // the local (Commit…) and UI actions stay live.
+    expect(m.find((i) => i.key === "sync-all")?.disabled).toBe(true);
+    expect(m.find((i) => i.key === "pull-push")?.disabled).toBe(true);
+    expect(m.find((i) => i.key === "commit-all")?.disabled).toBeFalsy();
+    expect(m.find((i) => i.key === "open-diff")?.disabled).toBeFalsy();
+    expect(m.find((i) => i.key === "settings")?.disabled).toBeFalsy();
+  });
+
+  it("normal state keeps sync-all + pull-push enabled (§35 disable is expired-only)", () => {
+    const m = buildStatusMenu({
+      state: "normal",
+      pluginName: "x",
+      queueDepth: 3,
+      conflictCount: 0,
+      hasActiveFile: true,
+    });
+    expect(m.find((i) => i.key === "sync-all")?.disabled).toBeFalsy();
+    expect(m.find((i) => i.key === "pull-push")?.disabled).toBeFalsy();
   });
 
   it("normal → actions + Settings, no heading, no leading separator", () => {
