@@ -2,9 +2,9 @@
 // Vladyslav Kozlovskyy <dbdevelop@gmail.com>, 2026.
 // AGPL-3.0 — se LICENSE.
 
-import { App, Modal, Setting } from "obsidian";
+import { App, Modal, Platform, Setting } from "obsidian";
 import { GITHUB_TOKENS_URL, PLUGIN_README_URL } from "./token-help";
-import type { TokenExpiredKind } from "../../token-expired-flag";
+import { tokenExpiredMessage, type TokenExpiredKind } from "../../token-expired-flag";
 
 // Surfaced when GitHub returns 401 ("Bad credentials") or 403 on a
 // sync surface — typically because the fine-grained PAT expired.
@@ -51,65 +51,88 @@ export class TokenExpiredModal extends Modal {
 
   open(): void {
     super.open();
+    // §35 — two layouts. Mobile gets a SHORT one (a phone screen can't afford
+    // the desktop intro + 3-step list + 3 buttons): the one-line class message
+    // and the two buttons that actually matter on a phone.
+    const mobile = Platform.isMobile;
+
     this.titleEl.setText(
-      "GitHub Easy Sync — GitHub token expired or invalid",
+      mobile
+        ? "GitHub token expired"
+        : "GitHub Easy Sync — GitHub token expired or invalid",
     );
     this.contentEl.empty();
 
     const intro = this.contentEl.createDiv();
     intro.style.marginBottom = "1em";
-    intro.setText(
-      this.kind === "scope"
-        ? "GitHub returned 403 (Forbidden) for your last sync. Your token is " +
-            "valid but it lacks the permissions this plugin needs: Contents " +
-            "(Read + Write) and Metadata (Read) on your sync repo. Sync will " +
-            "keep failing until you re-scope the token (or generate a new one)."
-        : "GitHub returned 'Bad credentials' for your last sync. The most " +
-            "likely cause: your fine-grained personal access token reached " +
-            "its expiration date (the maximum lifetime is one year). " +
-            "Sync will keep failing until you renew it.",
-    );
+    if (mobile) {
+      // One concise, class-appropriate sentence (shared with the Settings card).
+      intro.setText(tokenExpiredMessage(this.kind));
+    } else {
+      intro.setText(
+        this.kind === "scope"
+          ? "GitHub returned 403 (Forbidden) for your last sync. Your token is " +
+              "valid but it lacks the permissions this plugin needs: Contents " +
+              "(Read + Write) and Metadata (Read) on your sync repo. Sync will " +
+              "keep failing until you re-scope the token (or generate a new one)."
+          : "GitHub returned 'Bad credentials' for your last sync. The most " +
+              "likely cause: your fine-grained personal access token reached " +
+              "its expiration date (the maximum lifetime is one year). " +
+              "Sync will keep failing until you renew it.",
+      );
+    }
 
-    const steps = this.contentEl.createDiv();
-    steps.style.marginBottom = "1em";
-    steps.createEl("p").setText("To restore syncing:");
-    const list = steps.createEl("ol");
-    list.createEl("li").setText(
-      "Open GitHub's token settings page (button below).",
-    );
-    list.createEl("li").setText(
-      "Generate a NEW fine-grained token. Required permissions: " +
-        "Contents (Read + Write) and Metadata (Read) on your sync repo. " +
-        "The README link below walks through this with screenshots.",
-    );
-    list.createEl("li").setText(
-      "Paste the new token into the plugin settings (the Open " +
-        "settings button below jumps you there).",
-    );
+    // The verbose recovery checklist is desktop-only — on a phone it just eats
+    // the screen; the concise intro + buttons carry the same information.
+    if (!mobile) {
+      const steps = this.contentEl.createDiv();
+      steps.style.marginBottom = "1em";
+      steps.createEl("p").setText("To restore syncing:");
+      const list = steps.createEl("ol");
+      list.createEl("li").setText(
+        "Open GitHub's token settings page (button below).",
+      );
+      list.createEl("li").setText(
+        "Generate a NEW fine-grained token. Required permissions: " +
+          "Contents (Read + Write) and Metadata (Read) on your sync repo. " +
+          "The README link below walks through this with screenshots.",
+      );
+      list.createEl("li").setText(
+        "Paste the new token into the plugin settings (the Open " +
+          "settings button below jumps you there).",
+      );
+    }
 
     // ── Buttons ────────────────────────────────────────────────────
-    new Setting(this.contentEl)
-      .addButton((btn) =>
+    // Desktop: [Open GitHub token page (CTA)] [README] [Open settings].
+    // Mobile: [Open settings (CTA)] [README] — dropping the token-page button
+    // (generating a PAT in a phone browser is rare; the primary action is
+    // pasting the renewed token into settings).
+    const buttons = new Setting(this.contentEl);
+    if (!mobile) {
+      buttons.addButton((btn) =>
         btn
           .setButtonText("Open GitHub token page")
           .setCta()
           .onClick(() => {
             window.open(GITHUB_TOKENS_URL, "_blank");
           }),
-      )
-      .addButton((btn) =>
-        btn
-          .setButtonText("How to renew (README)")
-          .onClick(() => {
-            window.open(PLUGIN_README_URL, "_blank");
-          }),
-      )
-      .addButton((btn) =>
-        btn.setButtonText("Open settings").onClick(() => {
-          this.close();
-          this.openSettings();
-        }),
       );
+    }
+    buttons.addButton((btn) =>
+      btn
+        .setButtonText("How to renew (README)")
+        .onClick(() => {
+          window.open(PLUGIN_README_URL, "_blank");
+        }),
+    );
+    buttons.addButton((btn) => {
+      btn.setButtonText("Open settings").onClick(() => {
+        this.close();
+        this.openSettings();
+      });
+      if (mobile) btn.setCta(); // primary action on a phone
+    });
 
     // Auto-dismiss once the token is renewed (the flag clears on the next successful
     // auth). Poll every 1.5s; close when no longer expired. `close()` → onClose clears
