@@ -940,6 +940,18 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
 .github-easy-sync-ribbon-token-expired svg {
     color: var(--text-error) !important;
 }
+/* §35 — the recovery-modal button row wraps + centers so on a narrow (mobile)
+ * screen no button (esp. the first, "Open GitHub token page") is pushed off the
+ * edge. Column direction lets the control span full width; the buttons then wrap
+ * and center within it. Harmless on desktop (they fit on one centered row). */
+.github-easy-sync-token-modal-buttons {
+    flex-direction: column;
+}
+.github-easy-sync-token-modal-buttons .setting-item-control {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5em;
+}
 
 /* §2.2.17 — tidy the CM6 search/replace panel (Mod+F) to match Obsidian's form controls. Scoped
  * to the diff-editor. BLOCK layout (NOT flex) so the panel's native <br> reliably breaks the

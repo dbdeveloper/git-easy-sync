@@ -107,7 +107,11 @@ export class TokenExpiredModal extends Modal {
     // Same three on both platforms — [Open GitHub token page (CTA)] [README]
     // [Open settings]. The token page is needed on mobile too (it's in Settings'
     // token-help box as well); only the intro/steps above are trimmed for phones.
-    new Setting(this.contentEl)
+    // The class makes the button row WRAP + center (styles.css) so on a narrow
+    // phone screen no button is pushed off the edge (field-reported).
+    const buttons = new Setting(this.contentEl);
+    buttons.settingEl.addClass("github-easy-sync-token-modal-buttons");
+    buttons
       .addButton((btn) =>
         btn
           .setButtonText("Open GitHub token page")
