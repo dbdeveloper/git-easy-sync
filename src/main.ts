@@ -364,6 +364,9 @@ export default class GitHubSyncPlugin extends Plugin {
       this.tokenExpiredFlag = new TokenExpiredFlag(
         this.app.vault,
         `${this.app.vault.configDir}/plugins/${manifest.id}`,
+        // §35 — repaint the red status-bar / ribbon on every latch transition
+        // (a failed sync sets it; a Remote-Repository edit / probe clears it).
+        () => this.refreshTokenExpiredUI(),
       );
       await this.tokenExpiredFlag.init();
       this.logger.info("Plugin onload start", {
@@ -412,6 +415,11 @@ export default class GitHubSyncPlugin extends Plugin {
           this.showCommitRibbonIcon();
         if (this.settings.showDiffRibbonButton ?? true)
           this.showDiffRibbonIcon();
+
+        // §35 — the surfaces now exist; paint the persisted token-expired state
+        // (init() already seeded the flag) so a cold start with an expired token
+        // shows the red "GitHub" word + red ribbon icon immediately.
+        this.refreshTokenExpiredUI();
 
         // #7 — the conflict count comes from findAllConflicts (vault.getFiles), whose
         // file index is only reliably populated at LAYOUT-READY. The initSync2 flush ran
@@ -1448,6 +1456,30 @@ export default class GitHubSyncPlugin extends Plugin {
     this.updateStatusBarItem();
   }
 
+  // §35 — the sync ribbon icon turns red + its tooltip reads "Token expired"
+  // while the latch is set. The click still routes through sync(), which the
+  // pre-flight gate turns into the recovery modal, so no special click handler
+  // is needed.
+  private refreshSyncRibbonTokenExpired(): void {
+    const icon = this.syncRibbonIcon;
+    if (!icon) return;
+    const expired = this.tokenExpiredFlag?.isExpiredCached() ?? false;
+    icon.toggleClass("github-easy-sync-ribbon-token-expired", expired);
+    setTooltip(
+      icon,
+      expired ? "Token expired" : syncTooltip(this.currentQueueDepth),
+    );
+  }
+
+  // §35 — repaint every marker-driven surface at once (status-bar "GitHub" word +
+  // sync ribbon icon). Called on each latch transition (the flag's onTransition
+  // hook) AND once at onload after the surfaces exist, so a cold start with a
+  // persisted marker restores the red state.
+  private refreshTokenExpiredUI(): void {
+    this.updateStatusBarItem();
+    this.refreshSyncRibbonTokenExpired();
+  }
+
   // 2.0.2-beta2: paints the badge on whichever ribbon icon the
   // current settings + cached depth dictate. Idempotent — safe to
   // call on every settings toggle.
@@ -1455,7 +1487,15 @@ export default class GitHubSyncPlugin extends Plugin {
     const depth = this.currentQueueDepth;
     // E3 (§8) — keep the sync icon's tooltip showing the commit count (same N as
     // the badge), so hovering explains the number. Runs on every depth change.
-    if (this.syncRibbonIcon) setTooltip(this.syncRibbonIcon, syncTooltip(depth));
+    // §35 — while the token is expired the tooltip reads "Token expired" instead,
+    // so a depth change can't clobber the token-expired hint.
+    if (this.syncRibbonIcon) {
+      const expired = this.tokenExpiredFlag?.isExpiredCached() ?? false;
+      setTooltip(
+        this.syncRibbonIcon,
+        expired ? "Token expired" : syncTooltip(depth),
+      );
+    }
     // Pick the target icon per the routing rule. The chosen icon
     // owns the badge; the other gets cleared.
     let target: HTMLElement | null = null;
@@ -1571,7 +1611,12 @@ export default class GitHubSyncPlugin extends Plugin {
     // call (cheap).
     el.empty();
     el.toggleClass("github-easy-sync-statusbar-syncing", this.drainRunning);
-    el.createSpan({ text: "GitHub" });
+    const ghSpan = el.createSpan({ text: "GitHub" });
+    // §35 — the "GitHub" word turns red while the token is expired (overrides the
+    // syncing-green), so the failure is visible without opening the menu.
+    if (this.tokenExpiredFlag?.isExpiredCached() ?? false) {
+      ghSpan.addClass("github-easy-sync-statusbar-token-expired");
+    }
     const conflicts = this.conflictCounter?.getValue() ?? 0;
     for (const seg of statusBarSuffix(this.currentQueueDepth, conflicts)) {
       const span = el.createSpan({ text: seg.text });
@@ -1678,6 +1723,9 @@ export default class GitHubSyncPlugin extends Plugin {
       );
     }
     this.applySyncIconSpin(); // TODO §14 — seed the -no-spin marker from the setting
+    // §35 — an icon (re)created while the token is already expired (e.g. the user
+    // just toggled the ribbon setting) must paint red + "Token expired" at once.
+    this.refreshSyncRibbonTokenExpired();
   }
 
   // TODO §14 — the sync ribbon icon spins + accent-tints while a drain runs. The spin is

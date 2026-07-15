@@ -928,6 +928,18 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
 .github-easy-sync-statusbar-conflict {
     color: var(--text-error);
 }
+/* §35 — token-expired: the "GitHub" word turns red (sits on the span itself so
+ * it overrides the parent's syncing-green). Toggled by updateStatusBarItem. */
+.github-easy-sync-statusbar-token-expired {
+    color: var(--text-error);
+    font-weight: 600;
+}
+/* §35 — token-expired: the sync ribbon icon turns red. Toggled by
+ * refreshSyncRibbonTokenExpired. Uses !important so it wins over the
+ * syncing-green accent tint if a stale drain class lingers. */
+.github-easy-sync-ribbon-token-expired svg {
+    color: var(--text-error) !important;
+}
 
 /* §2.2.17 — tidy the CM6 search/replace panel (Mod+F) to match Obsidian's form controls. Scoped
  * to the diff-editor. BLOCK layout (NOT flex) so the panel's native <br> reliably breaks the

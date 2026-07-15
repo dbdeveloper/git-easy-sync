@@ -205,6 +205,26 @@ describe("TokenExpiredFlag — in-memory authoritative + file mirror", () => {
     expect(f.getKind()).toBe("scope");
   });
 
+  it("onTransition fires on real set/clear transitions, not on no-ops (§35)", async () => {
+    const vault = fixture();
+    let calls = 0;
+    const f = new TokenExpiredFlag(vault, PLUGIN_DIR, () => {
+      calls++;
+    });
+    await f.init();
+    f.set("invalid"); // false → invalid : transition
+    expect(calls).toBe(1);
+    f.set("invalid"); // same state : no-op
+    expect(calls).toBe(1);
+    f.set("scope"); // class change : transition
+    expect(calls).toBe(2);
+    f.clear(); // expired → clear : transition
+    expect(calls).toBe(3);
+    f.clear(); // already clear : no-op
+    expect(calls).toBe(3);
+    await settle();
+  });
+
   it("in-memory state is authoritative — survives an out-of-band file delete", async () => {
     const vault = fixture();
     const f = new TokenExpiredFlag(vault, PLUGIN_DIR);

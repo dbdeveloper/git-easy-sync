@@ -72,6 +72,11 @@ export class TokenExpiredFlag {
   constructor(
     private readonly vault: Vault,
     pluginDir: string,
+    // §35 — fired on a real latch transition (set that changes state/class, or a
+    // clear). main.ts wires this to repaint the marker-driven UI surfaces
+    // (status-bar "GitHub" word + sync ribbon icon). Not fired by init() — the
+    // onload path repaints once explicitly after the surfaces exist.
+    private readonly onTransition?: () => void,
   ) {
     this.runtimeDir = normalizePath(`${pluginDir}/.runtime`);
     this.path = normalizePath(`${this.runtimeDir}/token_expired`);
@@ -118,12 +123,14 @@ export class TokenExpiredFlag {
     if (this.expired && this.kind === kind) return; // same state — skip churn
     this.expired = true;
     this.kind = kind;
+    this.onTransition?.();
     void this.write(kind);
   }
 
   clear(): void {
     if (!this.expired) return;
     this.expired = false;
+    this.onTransition?.();
     void this.write(null);
   }
 
