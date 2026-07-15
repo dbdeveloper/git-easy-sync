@@ -104,35 +104,31 @@ export class TokenExpiredModal extends Modal {
     }
 
     // ── Buttons ────────────────────────────────────────────────────
-    // Desktop: [Open GitHub token page (CTA)] [README] [Open settings].
-    // Mobile: [Open settings (CTA)] [README] — dropping the token-page button
-    // (generating a PAT in a phone browser is rare; the primary action is
-    // pasting the renewed token into settings).
-    const buttons = new Setting(this.contentEl);
-    if (!mobile) {
-      buttons.addButton((btn) =>
+    // Same three on both platforms — [Open GitHub token page (CTA)] [README]
+    // [Open settings]. The token page is needed on mobile too (it's in Settings'
+    // token-help box as well); only the intro/steps above are trimmed for phones.
+    new Setting(this.contentEl)
+      .addButton((btn) =>
         btn
           .setButtonText("Open GitHub token page")
           .setCta()
           .onClick(() => {
             window.open(GITHUB_TOKENS_URL, "_blank");
           }),
-      );
-    }
-    buttons.addButton((btn) =>
-      btn
-        .setButtonText("How to renew (README)")
-        .onClick(() => {
-          window.open(PLUGIN_README_URL, "_blank");
+      )
+      .addButton((btn) =>
+        btn
+          .setButtonText("How to renew (README)")
+          .onClick(() => {
+            window.open(PLUGIN_README_URL, "_blank");
+          }),
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Open settings").onClick(() => {
+          this.close();
+          this.openSettings();
         }),
-    );
-    buttons.addButton((btn) => {
-      btn.setButtonText("Open settings").onClick(() => {
-        this.close();
-        this.openSettings();
-      });
-      if (mobile) btn.setCta(); // primary action on a phone
-    });
+      );
 
     // Auto-dismiss once the token is renewed (the flag clears on the next successful
     // auth). Poll every 1.5s; close when no longer expired. `close()` → onClose clears
