@@ -2164,6 +2164,9 @@ export default class GitHubSyncPlugin extends Plugin {
       branch: () => this.settings.githubBranch,
       localDeviceLabel: () => this.settings.deviceLabel ?? "Obsidian",
       logger: this.logger,
+      // §35 — history is a GitHub interaction: gate it on the marker + latch on 401.
+      isTokenExpired: () => this.tokenExpiredFlag?.isExpiredCached() ?? false,
+      noteAuthError: (err) => this.tokenExpiredFlag?.note(err),
       openHistoryVersion: (path, version, toRight) =>
         this.openHistoryVersion(path, version, toRight),
     };

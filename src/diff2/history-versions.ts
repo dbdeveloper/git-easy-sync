@@ -32,6 +32,7 @@ import {
   parseDeviceSuffix,
   parseLocalTimestamp,
 } from "../sync2/commit-message";
+import { AuthError } from "../errors";
 
 /** One row in a file's history timeline. */
 export interface HistoryVersion {
@@ -140,14 +141,38 @@ export async function loadHistoryVersions(
   path: string,
   branch: string,
   deviceLabel: string,
-): Promise<{ versions: HistoryVersion[]; githubError: boolean }> {
+  // §35 — every GitHub interaction begins by checking the token-expired latch.
+  // When set, we DON'T touch the network: return local-only + tokenExpired:true
+  // so the view shows the "TOKEN EXPIRED!" variant. noteAuthError latches the
+  // marker if a first-time 401/403 slips through here (marker not yet set), so
+  // this path becomes a full participant in the §35 gate.
+  isTokenExpired?: () => boolean,
+  noteAuthError?: (err: unknown) => void,
+): Promise<{
+  versions: HistoryVersion[];
+  githubError: boolean;
+  tokenExpired: boolean;
+}> {
   const local = await enumeratePushQueueVersions(queue, path, deviceLabel);
+  // Pre-flight gate: a latched token short-circuits before the network.
+  if (isTokenExpired?.() ?? false) {
+    return {
+      versions: mergeVersionList(local, []),
+      githubError: true,
+      tokenExpired: true,
+    };
+  }
   let github: GithubCommit[] = [];
   let githubError = false;
+  let tokenExpired = false;
   try {
     github = await client.listCommitsForPath({ path, branch });
-  } catch {
+  } catch (err) {
     githubError = true;
+    if (err instanceof AuthError) {
+      tokenExpired = true;
+      noteAuthError?.(err); // latch the marker so the rest of the UI reflects it
+    }
   }
-  return { versions: mergeVersionList(local, github), githubError };
+  return { versions: mergeVersionList(local, github), githubError, tokenExpired };
 }

@@ -34,6 +34,10 @@ export interface DiffHistoryViewDeps {
   branch: () => string;
   localDeviceLabel: () => string;
   logger?: { info(message: string, o?: unknown): void };
+  // §35 — token-expired gate for the GitHub history load: skip the network when
+  // set (→ "TOKEN EXPIRED!" message), and latch the marker on a first-time 401.
+  isTokenExpired?: () => boolean;
+  noteAuthError?: (err: unknown) => void;
   // Wired in 7a.3 — open the clicked version in a diff2-editor (origin=history). toRight
   // (Ctrl/⌘): open to the right of this history window (see main.createEditorLeaf).
   openHistoryVersion: (
@@ -224,20 +228,25 @@ export class DiffHistoryView extends ItemView {
 
     // local-always + caught GitHub failure (see loadHistoryVersions). A GitHub throw
     // is logged here (the seam swallows it into `githubError`) so the log still shows why.
-    const { versions, githubError } = await loadHistoryVersions(
+    const { versions, githubError, tokenExpired } = await loadHistoryVersions(
       queue,
       client,
       path,
       this.deps.branch(),
       this.deps.localDeviceLabel(),
+      this.deps.isTokenExpired,
+      this.deps.noteAuthError,
     );
     if (githubError) {
-      this.deps.logger?.info("diff2 history github load failed", { path });
+      this.deps.logger?.info("diff2 history github load failed", {
+        path,
+        tokenExpired,
+      });
     }
     // Superseded by a newer render, OR this leaf was detached mid-fetch (the move-guard
     // detaching a same-path leaf that was still loading) → don't render into a dead node.
     if (gen !== this.gen || !this.contentEl.isConnected) return;
-    this.renderList(container, path, versions, githubError);
+    this.renderList(container, path, versions, githubError, tokenExpired);
   }
 
   private renderList(
@@ -245,11 +254,16 @@ export class DiffHistoryView extends ItemView {
     path: string,
     versions: readonly HistoryVersion[],
     githubError: boolean,
+    tokenExpired: boolean,
   ): void {
     container.empty();
     if (githubError) {
       container.createEl("div", {
-        text: "Couldn't load GitHub history — showing local unpushed versions only.",
+        // §35 — a latched token gets an explicit "TOKEN EXPIRED!" prefix so the
+        // user knows WHY GitHub history is missing (vs a generic network blip).
+        text: tokenExpired
+          ? "TOKEN EXPIRED! Couldn't load GitHub history — showing local unpushed versions only."
+          : "Couldn't load GitHub history — showing local unpushed versions only.",
         cls: "diff2-history-error",
       });
     }

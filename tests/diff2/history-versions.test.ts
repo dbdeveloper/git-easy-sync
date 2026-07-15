@@ -18,6 +18,7 @@ import {
   type GithubCommit,
   type HistoryVersion,
 } from "../../src/diff2/history-versions";
+import { AuthError } from "../../src/errors";
 
 // ---------------------------------------------------------------------------
 // mergeVersionList — pure. Uniform row { local, date, id, deviceLabel }.
@@ -221,10 +222,11 @@ describe("enumeratePushQueueVersions", () => {
           { sha: "c1", date: "2000-01-01T00:00:00Z", message: "old" },
         ],
       };
-      const { versions, githubError } = await loadHistoryVersions(
+      const { versions, githubError, tokenExpired } = await loadHistoryVersions(
         queue, client, "Notes/x.md", "main", "phone",
       );
       expect(githubError).toBe(false);
+      expect(tokenExpired).toBe(false);
       // newest-first: the local batch (2026 clock) above the ancient github commit.
       expect(versions.map((v) => v.id)).toEqual([id, "c1"]);
     });
@@ -239,11 +241,55 @@ describe("enumeratePushQueueVersions", () => {
           throw new Error("offline");
         },
       };
-      const { versions, githubError } = await loadHistoryVersions(
+      const { versions, githubError, tokenExpired } = await loadHistoryVersions(
         queue, client, "Notes/x.md", "main", "phone",
       );
       expect(githubError).toBe(true);
+      expect(tokenExpired).toBe(false); // a plain offline error is NOT token-expired
       expect(versions.map((v) => v.id)).toEqual([id]); // local survived the github failure
+    });
+
+    it("§35 latched marker → skips GitHub entirely, tokenExpired:true, local returned", async () => {
+      writeVaultFile("Notes/x.md", "v1\n");
+      const id = await queue.enqueue([ADD("Notes/x.md")], {
+        parentCommitSha: "p", parentTreeSha: "t",
+      });
+      let called = false;
+      const client = {
+        listCommitsForPath: async (): Promise<GithubCommit[]> => {
+          called = true; // must NOT be reached — the marker short-circuits
+          return [];
+        },
+      };
+      const { versions, githubError, tokenExpired } = await loadHistoryVersions(
+        queue, client, "Notes/x.md", "main", "phone",
+        () => true, // isTokenExpired
+      );
+      expect(called).toBe(false); // no network touched
+      expect(tokenExpired).toBe(true);
+      expect(githubError).toBe(true);
+      expect(versions.map((v) => v.id)).toEqual([id]); // local-always
+    });
+
+    it("§35 first-time 401 (AuthError) → tokenExpired:true + latches via noteAuthError", async () => {
+      writeVaultFile("Notes/x.md", "v1\n");
+      await queue.enqueue([ADD("Notes/x.md")], {
+        parentCommitSha: "p", parentTreeSha: "t",
+      });
+      const client = {
+        listCommitsForPath: async (): Promise<GithubCommit[]> => {
+          throw new AuthError("Bad credentials", 401);
+        },
+      };
+      let noted: unknown = undefined;
+      const { githubError, tokenExpired } = await loadHistoryVersions(
+        queue, client, "Notes/x.md", "main", "phone",
+        () => false, // marker not yet set
+        (err) => { noted = err; }, // noteAuthError
+      );
+      expect(githubError).toBe(true);
+      expect(tokenExpired).toBe(true);
+      expect(noted).toBeInstanceOf(AuthError); // latched the marker
     });
   });
 });
