@@ -652,6 +652,23 @@ When something doesn't behave the way you expect:
 
 ### Common gotchas
 
+- **Sync is "paused" and everything GitHub-related is red** — the
+  plugin detected an expired/invalid token (GitHub `401`) or one
+  missing the required permissions (`403`), and it deliberately
+  **stops touching GitHub until you fix the credentials**. You'll
+  see: the **GitHub** status-bar word and the **Sync** ribbon icon
+  turn red (tooltip "Token expired"), **Sync All** / **Pull from
+  repo…** are greyed in the status menu, the **GitHub sync status**
+  box in Settings explains what happened, automatic (interval /
+  startup) syncs flash **"Sync skipped: token expired"** instead of
+  "Sync done", and file history shows a **"TOKEN EXPIRED!"** notice.
+  The state is **sticky on purpose** — an expired token won't start
+  working again on its own, so the plugin won't silently retry. To
+  clear it, do one of: paste a new token (or change owner/repo) in
+  **Settings → Remote Repository**, or run a successful **Test
+  connection**. Clicking the red Sync icon opens a recovery dialog
+  with links to the GitHub token page, the setup guide, and
+  Settings.
 - **"Sync done" notice right after enabling the plugin** — that's
   the plugin draining a pending batch left over from a previous
   failed session. Happens when a previous push didn't finish

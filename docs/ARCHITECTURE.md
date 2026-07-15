@@ -46,8 +46,10 @@ src/
 │                                    #  before clearAll), pushPluginsDataJsonCached
 ├── gi.ts                            # GI (gitignore matcher) — path-browserify, mobile-safe
 ├── logger.ts                        # Truncated JSON log file
-├── token-expired-flag.ts            # E1 (TODO §5): persistent .token_expired marker
-│                                    #  (in-memory authoritative + file mirror) + classifyAuthOutcome
+├── token-expired-flag.ts            # E1 (TODO §5/§35): sticky .token_expired marker
+│                                    #  (in-memory authoritative + file mirror; file stores the
+│                                    #  401/403 class tag). authErrorKind + tokenExpiredMessage +
+│                                    #  onTransition hook (drives the red status-bar/ribbon UI)
 ├── status-bar-model.ts              # E2 (TODO §6-7): pure statusBarSuffix +
 │                                    #  statusMenuState + buildStatusMenu (status-bar text + menu)
 ├── utils.ts                         # hasTextExtension, retry helpers, calculateGitBlobSHA,
@@ -103,7 +105,7 @@ src/
     ├── types.ts                     # QueueBatch, FileChange, EnqueueMeta
     └── views/
         ├── pre-sync-conflict-modal.ts     # Pre-Sync confirmation modal
-        └── token-expired-modal.ts         # 401 / 403 recovery dialog (Stage 7)
+        └── token-expired-modal.ts         # 401/403 recovery dialog (Stage 7/§35): class-aware intro + shorter mobile layout
 ```
 
 **Keeping it accurate:** this tree drifts every time a file is added, renamed, or its

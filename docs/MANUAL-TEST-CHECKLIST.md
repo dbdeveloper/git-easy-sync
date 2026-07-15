@@ -132,7 +132,10 @@ suite (`pnpm test:integration`).
 - [ ] Changing the **device label** makes new commits carry the new `(label)` suffix.
 - [ ] Switching repositories resets state correctly.
 - [ ] The **max auto-merge size** setting prevents very large files from being auto-merged.
-- [ ] Token expiry (401/403) shows the token-expired recovery dialog.
+- [ ] **Token expired (§35)** — with a bad token, a manual Sync opens the recovery dialog **every time** (closing `[X]` then Sync re-opens it — not a silent toast); the raw "…status 401" toast does NOT appear.
+- [ ] **Token expired — sticky + red UI (§35)** — the marker survives a plugin reload: after reload the **GitHub** status-bar word + **Sync** ribbon icon are red (tooltip "Token expired"), **Sync All** / **Pull from repo…** are greyed, and the **GitHub sync status** box shows the 401 ("invalid or expired") vs 403 ("lacks permissions") message. It clears only on a token/owner/repo edit **or** a successful **Test connection** (a normal successful Sync does NOT clear it).
+- [ ] **Token expired — automatic + history (§35)** — an interval/startup sync flashes **"Sync skipped: token expired"** (no modal); opening a file's history shows **"TOKEN EXPIRED! …"** above the local-only versions.
+- [ ] 📱 **Token expired — mobile modal (§35)** — the recovery dialog is the shorter mobile layout and its buttons wrap + center (none pushed off-screen).
 
 ## 7. Self-update (🖥️📱)
 
