@@ -3955,4 +3955,36 @@ describe("Sync2Manager — §40 no duplicate commit for an unchanged file", () =
     // commits). (Under oldest-first this matched v1 → silently dropped.)
     expect((await f.queue.list()).length).toBe(before + 1);
   });
+
+  it("V1 → V2 → V1 makes THREE consecutive commits — a revert to the PUSHED version still commits (user repro)", async () => {
+    const f = fixture();
+    // Synced at v1: snapshot.remoteSha = the last PUSH (v1).
+    writeVaultFile(f.root, PMAIN, "v1");
+    f.store.set(PMAIN, { path: PMAIN, remoteSha: await shaOf("v1"), mtime: 0, size: 1 });
+    const count = async (): Promise<number> => (await f.queue.list()).length;
+
+    // 1. add a char → v2 → commit
+    writeVaultFile(f.root, PMAIN, "v2");
+    await f.manager.commitOnly();
+    expect(await count()).toBe(1);
+
+    // 2. commit again, nothing changed → no new batch
+    await f.manager.commitOnly();
+    expect(await count()).toBe(1);
+
+    // 3. remove the char → back to v1 (== the last PUSH, but ≠ the queued
+    //    v2) → the revert MUST commit. THIS is the bug the partial fix missed.
+    writeVaultFile(f.root, PMAIN, "v1");
+    await f.manager.commitOnly();
+    expect(await count()).toBe(2);
+
+    // 4. re-add the same char → v2 (≠ the queued v1) → commit
+    writeVaultFile(f.root, PMAIN, "v2");
+    await f.manager.commitOnly();
+    expect(await count()).toBe(3);
+
+    // 5. nothing changed → no new batch
+    await f.manager.commitOnly();
+    expect(await count()).toBe(3);
+  });
 });

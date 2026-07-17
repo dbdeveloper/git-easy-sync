@@ -750,5 +750,28 @@ describe("ChangeDetector", () => {
       const out = await f.detector.findChanges();
       expect(out.find((c) => c.path === "a.md")?.kind).toBe("modified");
     });
+
+    it("revert to the last-PUSHED bytes while a NEWER version is queued → emitted (TODO §40 step 3)", async () => {
+      // Disk reverted to v1; snapshot.remoteSha == sha(v1) (v1 is the last
+      // PUSH). But the newest queued commit is v2 → the revert v2→v1 is a
+      // real change and must be emitted even though it matches the remote.
+      writeFile(f.root, "a.md", "v1");
+      setMtime(f.root, "a.md", AHEAD);
+      f.store.set("a.md", { path: "a.md", remoteSha: await shaOf("v1"), mtime: 1, size: 1 });
+      f.store.setLastCommitMtime(WATERMARK);
+      const det = detectorWithQueue(async () => await shaOf("v2")); // last commit = v2
+      const out = await det.findChanges();
+      expect(out.find((c) => c.path === "a.md")?.kind).toBe("modified");
+    });
+
+    it("matches the last push AND nothing newer is queued → NOT emitted", async () => {
+      writeFile(f.root, "a.md", "v1");
+      setMtime(f.root, "a.md", AHEAD);
+      f.store.set("a.md", { path: "a.md", remoteSha: await shaOf("v1"), mtime: 1, size: 1 });
+      f.store.setLastCommitMtime(WATERMARK);
+      const det = detectorWithQueue(async () => null); // nothing queued for a.md
+      const out = await det.findChanges();
+      expect(out.find((c) => c.path === "a.md")).toBeUndefined();
+    });
   });
 });

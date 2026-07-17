@@ -263,25 +263,33 @@ export default class ChangeDetector {
       const buf = await this.readBinaryOrSkip(file.path);
       if (buf === null) continue; // SYNC2 §6 skip-class — vanished mid-walk
       const sha = await calculateGitBlobSHA(buf);
-      if (sha === snap.remoteSha) {
-        // Touched (mtime/size moved) but content matches the remote
-        // we already know about. Refresh cache so subsequent syncs
-        // short-circuit cleanly.
-        this.store.set(file.path, {
-          ...snap,
-          mtime: file.stat.mtime,
-          size: file.stat.size,
-        });
-        continue;
-      }
 
-      // Same "in-flight in queue" check as the "added" branch above —
-      // covers the case where a previous syncAll enqueued this path
-      // (without modifying snapshot yet) and the user did NOT edit it
-      // between the failed push and this retry.
-      if (this.queue) {
-        const inQueueSha = await this.queue.peekLatestPathSha(file.path);
-        if (inQueueSha === sha) continue;
+      // The file's LAST COMMITTED state is the newest queued batch that
+      // holds it (a pending local commit), falling back to the last
+      // PUSHED sha (snapshot.remoteSha) only when nothing is queued.
+      // "Changed" = differs from that reference. Comparing against the
+      // queue-latest (not just the snapshot) is what makes a REVERT to
+      // the last-pushed bytes correctly count as a change when a newer,
+      // different version is already queued but hasn't pushed (TODO §40:
+      // add char → commit → remove char → must commit the revert, even
+      // though it matches the last push). It ALSO subsumes the plain
+      // dedup (unchanged since the last commit → skip).
+      const queuedSha = this.queue
+        ? await this.queue.peekLatestPathSha(file.path)
+        : null;
+      const lastCommittedSha = queuedSha ?? snap.remoteSha;
+      if (sha === lastCommittedSha) {
+        // Unchanged since the last commit. When it also matches the
+        // pushed remote (nothing pending, or the pending IS the remote),
+        // refresh the stat-cache so later walks short-circuit cheaply.
+        if (sha === snap.remoteSha) {
+          this.store.set(file.path, {
+            ...snap,
+            mtime: file.stat.mtime,
+            size: file.stat.size,
+          });
+        }
+        continue;
       }
 
       out.push({
