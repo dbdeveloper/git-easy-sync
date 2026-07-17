@@ -1578,6 +1578,46 @@ verified], revert, skip-batches-without-path, null, uploadedBlobs) +
 `change-detector.test.ts` queue-dedup over a stub (unchanged→skip,
 changed→emit, revert→emit, added-branch, no-queue fallback).
 
+### 7.13 an unchanged tracked-conflict base re-committed on every commit (TODO §26, 2026-07-17)
+
+**Symptom.** A file under an open tracked conflict was committed on every
+`Commit`, even untouched, and re-pushed to the conflict branch on every
+sync — an endless stream of identical conflict-branch commits (field
+repro: `~/Obsidian` `test.md`).
+
+**Cause.** `findChanges` compares a file against `snapshot.remoteSha`
+(main). But a tracked-conflict **base** diverges from main by nature — it
+is filtered out of main by split-push and lives on the conflict branch.
+So `disk ≠ snapshot.remoteSha` → "modified" every commit → routed to the
+branch every sync. Same class as §40/§7.12: comparing against the wrong
+reference. (Because the base never pushes to main, `recordSync` never
+advances its snapshot, so the mismatch is permanent.)
+
+**Fix.** The base's "home" while in conflict is the conflict BRANCH; it
+should commit iff it changed vs its OWN last value there, not main (main
+is consulted only to know it's a tracked conflict). New `ConflictRecord`
+field `branchBaseSha` = the base as last pushed to the branch — distinct
+from `baseSha`, which the classifier keeps as a disk-base stat-cache and
+refreshes on sibling edits (repurposing it would let a sibling change
+silently drop an edited base). `ChangeDetector` takes a
+`conflictBaseSha(path)` resolver (`ConflictStore.latestPendingBranchBaseSha`
+— the **single newest** pending record, NOT a set-of-all: a set would
+match a revert to an older baseSha and drop it, the §40 revert-drop;
+derived from the same `byPath` index as the split-push router's
+`hasPending`, so detection and routing can't diverge). For a conflict
+base the reference is `queuedSha ?? branchValue`, excluding main.
+`pushConflictPathsToBranch` advances `branchBaseSha` to the pushed sha so
+an edited base converges instead of re-pushing. The "unresolved tracked
+conflicts" reminder is unaffected (it is `ConflictCounter`-driven, not
+enqueue-driven).
+
+**Tests.** e2e `commitOnly` over a real ConflictStore + real queue + real
+detector (unchanged base → no batch [RED-verified — the exact repro];
+edited → batch; revert-while-branch-newer → batch); change-detector
+units (essence: "disk == main but ≠ branch value → still emitted");
+ConflictStore units (create seeds `branchBaseSha`, single-latest,
+`recordBranchBasePush`, legacy `baseSha` fallback).
+
 ---
 
 ## 8. Worker Orchestra
