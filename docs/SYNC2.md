@@ -1529,6 +1529,46 @@ example; manager-level combos over a real vault + real gitignore
 ordering, rule 3, rule 4, delete-vs-modify, gitignored-file-untouched,
 self-data.json-never-synced, all asserting no sibling); integration E5.
 
+### 7.12 unbounded duplicate commits while the token is expired — oldest-vs-latest queue dedup (TODO §40, 2026-07-17)
+
+**Symptom.** On a vault with a deliberately-expired token, every `Commit`
+— even with nothing changed on disk — created a new batch, and the last
+6–7 held byte-identical content (field repro: 21 batches queued, the
+self-plugin's own `main.js`/`styles.css`, the tail all `ebcf637c…`).
+
+**Cause.** The queue can't drain (expired token) → `recordSync` never
+runs → the snapshot's `mtime`/`remoteSha` never advance past the last
+*pushed* state. So `findChanges` keeps classifying the (untouched) file
+as "modified" (disk sha ≠ stale snapshot `remoteSha`). The guard against
+re-enqueuing is the queue-dedup: skip if the current bytes already sit in
+a pending batch. But `peekPathSha` returned the sha from the **oldest**
+batch holding the path. With many un-pushed batches from successive
+builds (each a different `main.js`), the oldest was always a stale build
+→ never matched the current bytes → the dedup never fired → a new,
+duplicate commit every time. Doubly wrong: oldest-first also silently
+**dropped a revert** — `v1→v2→v3→v1`, the 4th matched the oldest (`v1`)
+batch and was suppressed, violating preserve-all-commits.
+
+The full unit + integration suites missed it because in every test the
+drain **succeeds** → `recordSync` advances the snapshot → the next
+commit sees no change. The expired-token + repeated-commit combination
+had no coverage.
+
+**Fix.** `peekPathSha` → `peekLatestPathSha`, iterating **newest-first**.
+It answers the real question: "has this file changed since its LAST
+commit?" — current bytes == the newest queued batch's bytes → skip;
+differ (including a revert to an older version) → enqueue a new commit.
+The "last committed sha" already lives in the queue (the batch holds the
+exact committed bytes), so no snapshot mutation is needed — which is
+deliberately safer: advancing a snapshot to a not-yet-pushed sha would
+make a later *dropped* batch leave the file looking committed → the
+change lost from detection. Commits are NEVER gated on the token —
+piling up *distinct* offline commits is correct; only the *duplicate*
+was the bug. Tests: `push-queue.test.ts` (newest-not-oldest [RED-
+verified], revert, skip-batches-without-path, null, uploadedBlobs) +
+`change-detector.test.ts` queue-dedup over a stub (unchanged→skip,
+changed→emit, revert→emit, added-branch, no-queue fallback).
+
 ---
 
 ## 8. Worker Orchestra
