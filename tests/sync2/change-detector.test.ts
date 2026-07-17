@@ -669,4 +669,86 @@ describe("ChangeDetector", () => {
       expect(affected).toEqual([]);
     });
   });
+
+  // ── push-queue dedup (TODO §40) ──────────────────────────────────────
+  // When a queue is wired, findChanges must suppress re-emitting a file
+  // whose current bytes match its LAST commit (the newest queued batch),
+  // but MUST still emit it when the bytes differ — even a revert to an
+  // older version. The bug: with an expired token the queue never drains
+  // (recordSync never advances the snapshot), so every commit re-detected
+  // the same file → an unbounded pile of identical commits.
+  describe("findChanges() — push-queue dedup (TODO §40)", () => {
+    const WATERMARK = 1_500_000_000_000;
+    const AHEAD = 2_000_000_000_000;
+
+    const detectorWithQueue = (
+      peek: (path: string) => Promise<string | null>,
+    ): ChangeDetector =>
+      new ChangeDetector({
+        vault: f.vault as unknown as import("obsidian").Vault,
+        store: f.store,
+        gi: f.gi,
+        configDir: CONFIG_DIR,
+        selfPluginId: SELF_PLUGIN_ID,
+        vaultRoot: f.root,
+        syncConfigDir: () => true,
+        queue: { peekLatestPathSha: peek },
+      });
+
+    // Stage a modified candidate: file ahead of watermark, snapshot at a
+    // DIFFERENT (stale) sha so it reaches the queue-dedup check.
+    const stageModified = (content: string): void => {
+      writeFile(f.root, "a.md", content);
+      setMtime(f.root, "a.md", AHEAD);
+      f.store.set("a.md", { path: "a.md", remoteSha: "STALE_REMOTE_SHA", mtime: 1, size: 1 });
+      f.store.setLastCommitMtime(WATERMARK);
+    };
+
+    it("modified: current bytes == last commit → NOT re-emitted", async () => {
+      stageModified("current");
+      const det = detectorWithQueue(async () => await shaOf("current"));
+      const out = await det.findChanges();
+      expect(out.find((c) => c.path === "a.md")).toBeUndefined();
+    });
+
+    it("modified: current bytes != last commit → emitted", async () => {
+      stageModified("current");
+      const det = detectorWithQueue(async () => "A_DIFFERENT_SHA");
+      const out = await det.findChanges();
+      expect(out.find((c) => c.path === "a.md")?.kind).toBe("modified");
+    });
+
+    it("revert: current == an OLD version but the last commit is a newer, different version → emitted (preserve-all-commits)", async () => {
+      stageModified("v1"); // disk reverted to v1
+      // The queue's LATEST commit of a.md is v3, not v1.
+      const det = detectorWithQueue(async () => await shaOf("v3"));
+      const out = await det.findChanges();
+      expect(out.find((c) => c.path === "a.md")?.kind).toBe("modified");
+    });
+
+    it("added (no snapshot): current bytes == last commit → NOT re-emitted", async () => {
+      writeFile(f.root, "a.md", "current");
+      setMtime(f.root, "a.md", AHEAD);
+      f.store.setLastCommitMtime(WATERMARK);
+      const det = detectorWithQueue(async () => await shaOf("current"));
+      const out = await det.findChanges();
+      expect(out.find((c) => c.path === "a.md")).toBeUndefined();
+    });
+
+    it("added (no snapshot): current bytes != last commit → emitted as added", async () => {
+      writeFile(f.root, "a.md", "current");
+      setMtime(f.root, "a.md", AHEAD);
+      f.store.setLastCommitMtime(WATERMARK);
+      const det = detectorWithQueue(async () => "A_DIFFERENT_SHA");
+      const out = await det.findChanges();
+      expect(out.find((c) => c.path === "a.md")?.kind).toBe("added");
+    });
+
+    it("no queue wired → falls back to snapshot-only (emits the change)", async () => {
+      stageModified("current");
+      // f.detector has NO queue → no dedup, the change flows through.
+      const out = await f.detector.findChanges();
+      expect(out.find((c) => c.path === "a.md")?.kind).toBe("modified");
+    });
+  });
 });

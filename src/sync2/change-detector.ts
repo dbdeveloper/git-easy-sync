@@ -102,7 +102,10 @@ export interface ChangeDetectorDeps {
 // tests inject a stub without dragging the full queue (which would
 // also drag its disk layout).
 export interface PeekableQueue {
-  peekPathSha(path: string): Promise<string | null>;
+  // SHA of `path` as it sits in the LATEST queued batch containing it
+  // (its "last commit"). Newest-first is load-bearing — see
+  // PushQueue.peekLatestPathSha (TODO §40).
+  peekLatestPathSha(path: string): Promise<string | null>;
 }
 
 // Path + stat tuple findChanges' main loop consumes. Identical shape
@@ -233,7 +236,7 @@ export default class ChangeDetector {
           const buf = await this.readBinaryOrSkip(file.path);
           if (buf === null) continue; // SYNC2 §6 skip-class — vanished mid-walk
           const localSha = await calculateGitBlobSHA(buf);
-          const inQueueSha = await this.queue.peekPathSha(file.path);
+          const inQueueSha = await this.queue.peekLatestPathSha(file.path);
           if (inQueueSha === localSha) continue;
         }
         out.push({
@@ -277,7 +280,7 @@ export default class ChangeDetector {
       // (without modifying snapshot yet) and the user did NOT edit it
       // between the failed push and this retry.
       if (this.queue) {
-        const inQueueSha = await this.queue.peekPathSha(file.path);
+        const inQueueSha = await this.queue.peekLatestPathSha(file.path);
         if (inQueueSha === sha) continue;
       }
 

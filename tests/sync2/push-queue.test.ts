@@ -1168,4 +1168,62 @@ describe("PushQueue", () => {
       ).rejects.toThrow();
     });
   });
+
+  // ── peekLatestPathSha — the §40 dedup source ─────────────────────────
+  // findChanges uses this to answer "has this file changed since its
+  // LAST commit?". It MUST return the sha from the NEWEST batch that
+  // holds the path — not the oldest (which caused unbounded duplicate
+  // commits) and not "any" (which would silently drop a revert).
+  describe("peekLatestPathSha (TODO §40)", () => {
+    // Expected sha = the git-blob sha of the bytes the queue actually
+    // STORED for that path in a given batch (robust to any canonical-
+    // isation enqueue applies). peekLatestPathSha hashes the same bytes.
+    const shaInBatch = async (id: string, p: string): Promise<string> => {
+      const { calculateGitBlobSHA } = await import("../../src/utils");
+      return calculateGitBlobSHA(await f.queue.readFile(id, p));
+    };
+    const enqueueVersion = async (p: string, content: string): Promise<string> => {
+      writeVaultFile(f.root, p, content);
+      return f.queue.enqueue([ADD(p)], { parentCommitSha: "p", parentTreeSha: "t" });
+    };
+
+    it("returns the NEWEST batch's content, not the oldest", async () => {
+      const oldest = await enqueueVersion("a.md", "v1");
+      await enqueueVersion("a.md", "v2");
+      const newest = await enqueueVersion("a.md", "v3");
+      const peek = await f.queue.peekLatestPathSha("a.md");
+      // Oldest-first (the bug) would return v1's sha; newest-first → v3's.
+      expect(peek).toBe(await shaInBatch(newest, "a.md"));
+      expect(peek).not.toBe(await shaInBatch(oldest, "a.md"));
+    });
+
+    it("after a revert (v1→v2→v3→v1) returns the newest (reverted) content, not v3", async () => {
+      await enqueueVersion("a.md", "v1");
+      await enqueueVersion("a.md", "v2");
+      const v3 = await enqueueVersion("a.md", "v3");
+      const reverted = await enqueueVersion("a.md", "v1"); // a NEW 4th commit
+      const peek = await f.queue.peekLatestPathSha("a.md");
+      expect(peek).toBe(await shaInBatch(reverted, "a.md"));
+      expect(peek).not.toBe(await shaInBatch(v3, "a.md"));
+    });
+
+    it("returns the newest batch that CONTAINS the path (skips batches without it)", async () => {
+      const withA = await enqueueVersion("a.md", "vA"); // batch 1: has a.md
+      await enqueueVersion("b.md", "vB"); // batch 2 (newer): no a.md
+      expect(await f.queue.peekLatestPathSha("a.md")).toBe(await shaInBatch(withA, "a.md"));
+    });
+
+    it("returns null when no batch holds the path", async () => {
+      const only = await enqueueVersion("a.md", "v1");
+      expect(await f.queue.peekLatestPathSha("other.md")).toBeNull();
+      expect(await f.queue.peekLatestPathSha("a.md")).toBe(await shaInBatch(only, "a.md"));
+    });
+
+    it("prefers uploadedBlobs[path] (the GitHub-validated sha) over re-hashing", async () => {
+      await enqueueVersion("a.md", "v1");
+      const id = (await f.queue.list())[0];
+      await f.queue.recordBlobUpload(id, "a.md", "VALIDATED_SHA");
+      expect(await f.queue.peekLatestPathSha("a.md")).toBe("VALIDATED_SHA");
+    });
+  });
 });

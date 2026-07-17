@@ -263,25 +263,30 @@ export default class PushQueue {
     return out;
   }
 
-  // Return the Git blob SHA of `path` as it sits in any queued batch
-  // (any state — pending available, in-progress, attempted). Used by
-  // ChangeDetector.findChanges to suppress duplicate enqueue when a
-  // file the user "already committed locally" (= already snapshotted
-  // into the queue) hasn't been mutated since: the batch will push
-  // its content when its turn comes, no need to enqueue again.
+  // Return the Git blob SHA of `path` as it sits in the LATEST (most
+  // recently created) queued batch that contains it. Used by
+  // ChangeDetector.findChanges to answer "has this file changed since
+  // the last time I committed it?" — the dedup skips a re-enqueue only
+  // when the current bytes match the last commit's bytes.
   //
-  // Resolution order per batch:
-  //   1. If `uploadedBlobs[path]` exists, return it — that's the SHA
-  //      GitHub already validated (the byte upload happened in a
-  //      prior attempt). No disk read needed.
-  //   2. Otherwise read `vault/<path>` from the batch directory and
-  //      compute the Git blob SHA from those bytes.
+  // **Must be the LATEST batch, not the oldest** (SYNC2 §7.12 / TODO
+  // §40). The queue can hold many batches for the same path from
+  // successive builds/edits that haven't pushed yet (e.g. a device with
+  // an expired token). Comparing against the OLDEST batch was doubly
+  // wrong: (1) a genuinely-unchanged file whose oldest queued version
+  // is stale never deduped → an unbounded pile of identical commits on
+  // every no-op commit; (2) a revert to an older version (v1→v2→v3→v1)
+  // matched the oldest batch → the v1-restore commit was silently
+  // dropped, violating preserve-all-commits. The latest batch is the
+  // file's true "last commit".
   //
-  // Returns the first match found across batches (oldest first, by
-  // FIFO ordering — but since duplicates across batches are an
-  // invariant we don't preserve, just the first match is enough).
-  async peekPathSha(path: string): Promise<string | null> {
-    const ids = await this.list();
+  // Resolution order per batch (newest first, first match wins):
+  //   1. If `uploadedBlobs[path]` exists, return it — the SHA GitHub
+  //      already validated (upload happened in a prior attempt).
+  //   2. Otherwise read `vault/<path>` and compute the Git blob SHA.
+  async peekLatestPathSha(path: string): Promise<string | null> {
+    // list() is chronological ascending → reverse for newest-first.
+    const ids = (await this.list()).reverse();
     for (const id of ids) {
       const batchDir = `${this.queueRoot}/${id}`;
       const meta = await this.readMeta(batchDir);
