@@ -1554,10 +1554,19 @@ drain **succeeds** → `recordSync` advances the snapshot → the next
 commit sees no change. The expired-token + repeated-commit combination
 had no coverage.
 
-**Fix.** `peekPathSha` → `peekLatestPathSha`, iterating **newest-first**.
-It answers the real question: "has this file changed since its LAST
-commit?" — current bytes == the newest queued batch's bytes → skip;
-differ (including a revert to an older version) → enqueue a new commit.
+**Fix (two parts — the first was partial).** (a) `peekPathSha` →
+`peekLatestPathSha`, iterating **newest-first** — the last commit is the
+NEWEST batch holding the path, not the oldest. (b) `findChanges` had TWO
+short-circuits to the skip, and part (a) only covered `sha !==
+snap.remoteSha`; the other — `sha === snap.remoteSha` (the file matches
+the last PUSHED bytes) — skipped WITHOUT consulting the queue, so a
+**revert to the pushed version while a newer version sits un-pushed in
+the queue** was dropped (`V1→V2→V1` committed only twice, not three
+times). Unified both into one comparison against the last COMMIT:
+`lastCommittedSha = peekLatestPathSha(path) ?? snap.remoteSha`; changed
+iff the current sha differs from it. Together they answer the real
+question: "has this file changed since its LAST commit?" — current
+bytes == that reference → skip; differ (including a revert) → new commit.
 The "last committed sha" already lives in the queue (the batch holds the
 exact committed bytes), so no snapshot mutation is needed — which is
 deliberately safer: advancing a snapshot to a not-yet-pushed sha would
