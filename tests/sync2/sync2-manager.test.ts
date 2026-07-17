@@ -3903,3 +3903,56 @@ describe("Sync2Manager — §28 plugin-dir atomic resolution", () => {
     expect(listConflictSiblings(f.root)).toEqual([]);
   });
 });
+
+// ── §40: commitOnly must not re-commit an unchanged file (end-to-end) ─
+// The real PushQueue + real ChangeDetector composition that broke: with
+// an undrained multi-batch queue (expired token), commitOnly re-detected
+// an untouched file as "modified" and the oldest-first dedup let it
+// through → an unbounded pile of identical commits.
+describe("Sync2Manager — §40 no duplicate commit for an unchanged file", () => {
+  const PMAIN = ".obsidian/plugins/acme/main.js";
+
+  // Enqueue a batch holding `content` for PMAIN (writes disk, then snapshots).
+  async function enqueueVersion(
+    f: ReturnType<typeof fixture>,
+    content: string,
+    kind: "added" | "modified",
+  ): Promise<void> {
+    writeVaultFile(f.root, PMAIN, content);
+    const change =
+      kind === "added"
+        ? { kind: "added" as const, path: PMAIN, size: 0, mtime: 0 }
+        : { kind: "modified" as const, path: PMAIN, size: 0, mtime: 0, previousRemoteSha: "x" };
+    await f.queue.enqueue([change], { parentCommitSha: "p", parentTreeSha: "t" });
+  }
+
+  it("commitOnly makes NO new batch when the file matches its LATEST queued commit (oldest≠newest)", async () => {
+    const f = fixture();
+    await enqueueVersion(f, "v1", "added"); // oldest batch = v1
+    await enqueueVersion(f, "v2", "modified"); // newest batch = v2; disk = v2
+    // Stale snapshot → findChanges flags PMAIN "modified" absent the dedup.
+    f.store.set(PMAIN, { path: PMAIN, remoteSha: "STALE", mtime: 0, size: 1 });
+    const before = (await f.queue.list()).length;
+
+    await f.manager.commitOnly();
+
+    // Deduped against the LATEST (v2 == disk) → no duplicate commit.
+    // (Under the oldest-first bug the dedup compared to v1 → a new batch.)
+    expect((await f.queue.list()).length).toBe(before);
+  });
+
+  it("commitOnly DOES make a new batch when the file was reverted to an older, non-latest version", async () => {
+    const f = fixture();
+    await enqueueVersion(f, "v1", "added");
+    await enqueueVersion(f, "v2", "modified"); // newest = v2
+    writeVaultFile(f.root, PMAIN, "v1"); // disk reverted to v1 (an OLD version)
+    f.store.set(PMAIN, { path: PMAIN, remoteSha: "STALE", mtime: 0, size: 1 });
+    const before = (await f.queue.list()).length;
+
+    await f.manager.commitOnly();
+
+    // v1 ≠ the latest commit (v2) → the revert IS committed (preserve-all-
+    // commits). (Under oldest-first this matched v1 → silently dropped.)
+    expect((await f.queue.list()).length).toBe(before + 1);
+  });
+});
