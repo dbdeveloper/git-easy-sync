@@ -16,6 +16,10 @@ import { logFileNameFor } from "src/logger";
 import { formatSyncMessage } from "src/sync2/commit-message";
 import { renderTokenHelpBox } from "src/sync2/views/token-help";
 import { tokenExpiredMessage } from "src/token-expired-flag";
+import {
+  probeGitHubConnection,
+  type ProbeHttpGet,
+} from "src/settings/connection-probe";
 import manifest from "../../manifest.json";
 
 // Sync2-only settings tab. Mirrors the shape of GitHubSyncSettings —
@@ -254,120 +258,47 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
             setProbeResult("info", "Probing…");
             button.setDisabled(true);
             try {
-              const repoRes = await requestUrl({
-                url: `https://api.github.com/repos/${githubOwner}/${githubRepo}`,
-                method: "GET",
-                headers: {
-                  Accept: "application/vnd.github+json",
-                  Authorization: `Bearer ${githubToken}`,
-                  "X-GitHub-Api-Version": "2022-11-28",
-                },
-                throw: false,
+              // Transport adapter — normalises requestUrl into the shape
+              // probeGitHubConnection expects (the SAME shape the
+              // integration test's fetch adapter produces, so an
+              // extracted-probe test can't pass while production
+              // misreads a response). `json` is defensively guarded: the
+              // Obsidian getter throws on a non-JSON body.
+              const httpGet: ProbeHttpGet = async (url, headers) => {
+                const res = await requestUrl({ url, method: "GET", headers, throw: false });
+                let json: unknown;
+                try {
+                  json = res.json;
+                } catch {
+                  json = undefined;
+                }
+                return {
+                  status: res.status,
+                  json,
+                  text: res.text ?? "",
+                  headers: (res.headers ?? {}) as Record<string, string>,
+                };
+              };
+              const outcome = await probeGitHubConnection({
+                owner: githubOwner,
+                repo: githubRepo,
+                branch: githubBranch,
+                token: githubToken,
+                httpGet,
               });
-              if (repoRes.status === 401) {
-                setProbeResult(
-                  "err",
-                  "✗ 401 Unauthorized — token invalid or expired.\n" +
-                    "Generate a new token on GitHub → Settings → Developer settings.",
-                );
+              setProbeResult(outcome.level, outcome.message);
+              // §35 auth semantics — preserved exactly: 401→invalid /
+              // 403→scope SET the latch (+ token-help), a successful probe
+              // CLEARS it; drainStatusRefresh fires on those paths only
+              // (not on non-auth errors), matching the pre-extraction code.
+              if (outcome.authKind) {
                 this.tokenHelpAuthError = true;
-                this.plugin.tokenExpiredFlag?.set("invalid"); // §35: 401 → invalid/expired
+                this.plugin.tokenExpiredFlag?.set(outcome.authKind);
                 this.drainStatusRefresh?.();
-                return;
-              }
-              if (repoRes.status === 403) {
-                setProbeResult(
-                  "err",
-                  "✗ 403 Forbidden — token lacks the required scope.\n" +
-                    "Fine-grained PAT needs: Contents (R/W), Metadata (R).\n" +
-                    "Classic PAT needs: repo.",
-                );
-                this.tokenHelpAuthError = true;
-                this.plugin.tokenExpiredFlag?.set("scope"); // §35: 403 → missing scope
+              } else if (outcome.level === "ok") {
+                this.plugin.tokenExpiredFlag?.clear();
                 this.drainStatusRefresh?.();
-                return;
               }
-              if (repoRes.status === 404) {
-                setProbeResult(
-                  "err",
-                  `✗ 404 Not Found — \`${githubOwner}/${githubRepo}\` ` +
-                    "is unreachable for this token.\n" +
-                    "Likely causes:\n" +
-                    "  • Typo in owner or repo (case-sensitive on REST API).\n" +
-                    "  • Fine-grained PAT doesn't include this repo in its " +
-                    "Repository access list.\n" +
-                    "  • Repo is private and token belongs to a different user.",
-                );
-                return;
-              }
-              if (repoRes.status >= 500) {
-                const reqId = repoRes.headers?.["X-GitHub-Request-Id"] ?? "";
-                setProbeResult(
-                  "err",
-                  `✗ ${repoRes.status} GitHub server error. Retry later.\n` +
-                    (reqId ? `Request ID: ${reqId}` : ""),
-                );
-                return;
-              }
-              if (repoRes.status < 200 || repoRes.status >= 400) {
-                setProbeResult(
-                  "err",
-                  `✗ Unexpected status ${repoRes.status}.\n` +
-                    String(repoRes.text ?? "").slice(0, 200),
-                );
-                return;
-              }
-              const repoJson = repoRes.json ?? {};
-              const visibility = repoJson.private ? "private" : "public";
-              const defaultBranch = repoJson.default_branch ?? "?";
-              const fullName = repoJson.full_name ?? `${githubOwner}/${githubRepo}`;
-              if (!githubBranch) {
-                setProbeResult(
-                  "ok",
-                  `✓ Repo \`${fullName}\` accessible (${visibility}).\n` +
-                    `Default branch: ${defaultBranch}.\n` +
-                    "Branch field is empty — no branch check performed.",
-                );
-                this.plugin.tokenExpiredFlag?.clear(); // §35: successful probe clears the latch
-                this.drainStatusRefresh?.();
-                return;
-              }
-              const branchRes = await requestUrl({
-                url: `https://api.github.com/repos/${githubOwner}/${githubRepo}/branches/${encodeURIComponent(githubBranch)}`,
-                method: "GET",
-                headers: {
-                  Accept: "application/vnd.github+json",
-                  Authorization: `Bearer ${githubToken}`,
-                  "X-GitHub-Api-Version": "2022-11-28",
-                },
-                throw: false,
-              });
-              if (branchRes.status === 404) {
-                setProbeResult(
-                  "err",
-                  `✗ Repo OK, but branch \`${githubBranch}\` not found.\n` +
-                    `Default branch on this repo: ${defaultBranch}.\n` +
-                    "Check for typos or create the branch on GitHub first.",
-                );
-                return;
-              }
-              if (branchRes.status < 200 || branchRes.status >= 400) {
-                setProbeResult(
-                  "err",
-                  `✗ Branch check failed: status ${branchRes.status}.`,
-                );
-                return;
-              }
-              const branchSha =
-                String(branchRes.json?.commit?.sha ?? "").slice(0, 7) || "?";
-              setProbeResult(
-                "ok",
-                `✓ All good. Repo \`${fullName}\` (${visibility}), ` +
-                  `branch \`${githubBranch}\` exists, HEAD ${branchSha}.\n` +
-                  "Plugin is ready to sync.",
-              );
-              this.plugin.tokenExpiredFlag?.clear(); // §35: successful probe clears the latch
-              this.drainStatusRefresh?.();
             } catch (err) {
               setProbeResult(
                 "err",

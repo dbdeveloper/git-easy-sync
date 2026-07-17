@@ -726,7 +726,9 @@ export default class GitHubSyncPlugin extends Plugin {
     this.settings.githubToken = (this.settings.githubToken ?? "").trim();
     this.settings.githubOwner = (this.settings.githubOwner ?? "").trim();
     this.settings.githubRepo = (this.settings.githubRepo ?? "").trim();
-    this.settings.githubBranch = (this.settings.githubBranch ?? "").trim();
+    // bug-60: an empty branch field defaults to `main` — the branch the
+    // first sync creates on a fresh repo, and what the Test-probe assumes.
+    this.settings.githubBranch = (this.settings.githubBranch ?? "").trim() || "main";
     const after = JSON.stringify({
       t: this.settings.githubToken,
       o: this.settings.githubOwner,
