@@ -50,6 +50,7 @@ function rec(
     baseMtime: null,
     baseSize: null,
     baseSha: null,
+    branchBaseSha: null,
     lastEvaluated: 0,
     ...over,
   };

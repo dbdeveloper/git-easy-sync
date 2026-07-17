@@ -77,6 +77,17 @@ export interface ConflictRecord {
   baseSize: number | null;
   baseSha: string | null;
 
+  // TODO §26 — the base content as last PUSHED to the conflict branch
+  // (the base file's "home" while it's in conflict). Distinct from
+  // `baseSha` (which the classifier keeps as a DISK-base stat-cache and
+  // refreshes on sibling edits): `branchBaseSha` moves ONLY when
+  // pushConflictPathsToBranch routes the base to the branch. ChangeDetector
+  // compares the live base against THIS to decide whether an edit is a new
+  // commit, so an unchanged tracked-conflict base never re-commits. Null
+  // for legacy records / delete-vs-modify (no base pushed); readers fall
+  // back to `baseSha`.
+  branchBaseSha: string | null;
+
   lastEvaluated: number;
 }
 
@@ -122,6 +133,7 @@ export interface CacheUpdate {
   baseMtime?: number | null;
   baseSize?: number | null;
   baseSha?: string | null;
+  branchBaseSha?: string | null;
   lastEvaluated?: number;
 }
 
@@ -277,6 +289,10 @@ export default class ConflictStore {
       baseMtime: args.baseMtime,
       baseSize: args.baseSize,
       baseSha: args.baseSha,
+      // At registration the base IS pushed to the conflict branch
+      // (pushConflictPathsToBranch runs right after create), so its
+      // initial branch value == the base snapshot sha.
+      branchBaseSha: args.baseSha,
       lastEvaluated: ts,
     };
     await this.persistRecord(recordDir, record);
@@ -496,6 +512,47 @@ export default class ConflictStore {
     return set !== undefined && set.size > 0;
   }
 
+  // TODO §26 — the base's last value on the conflict branch, taken from
+  // the NEWEST pending record for the path (SINGLE-latest, so a revert to
+  // an OLDER version still reads as a change — the §40 revert-drop lesson;
+  // NOT a set-of-all-baseShas). Returns `undefined` when the path has no
+  // pending conflict (i.e. it is NOT a tracked-conflict base) — derived
+  // from the SAME `byPath` index as `hasPending`, so ChangeDetector's
+  // "is this a conflict base?" predicate can never diverge from the
+  // split-push router's. Falls back to `baseSha` for legacy records.
+  latestPendingBranchBaseSha(vaultPath: string): string | null | undefined {
+    const ids = this.byPath.get(vaultPath);
+    if (ids === undefined || ids.size === 0) return undefined;
+    let newest: ConflictRecord | undefined;
+    for (const id of ids) {
+      const rec = this.records.get(id);
+      if (rec === undefined) continue;
+      if (newest === undefined || rec.createdAt > newest.createdAt) newest = rec;
+    }
+    if (newest === undefined) return undefined;
+    return newest.branchBaseSha ?? newest.baseSha;
+  }
+
+  // TODO §26 — record that `vaultPath`'s base was just pushed to the
+  // conflict branch carrying content `sha`. Advances the NEWEST pending
+  // record's `branchBaseSha` (the one ChangeDetector reads) so a base
+  // that hasn't changed since this push is no longer re-committed, while
+  // a later edit still differs and commits once. No-op when the path has
+  // no pending record.
+  async recordBranchBasePush(vaultPath: string, sha: string): Promise<void> {
+    const ids = this.byPath.get(vaultPath);
+    if (ids === undefined || ids.size === 0) return;
+    let newest: ConflictRecord | undefined;
+    for (const id of ids) {
+      const rec = this.records.get(id);
+      if (rec === undefined) continue;
+      if (newest === undefined || rec.createdAt > newest.createdAt) newest = rec;
+    }
+    if (newest !== undefined) {
+      await this.updateCache(newest.id, { branchBaseSha: sha });
+    }
+  }
+
   // O(1) sibling lookup — drives ConflictWatcher's fast-path check.
   // Returns the record whose siblingPath equals the argument, or
   // undefined when the path is not a known sibling.
@@ -693,6 +750,10 @@ function coerceRecord(raw: Record<string, unknown>): ConflictRecord | null {
     baseMtime: nullableNumber(raw.baseMtime),
     baseSize: nullableNumber(raw.baseSize),
     baseSha: stringOrNull(raw.baseSha),
+    // Legacy records (pre-§26) have no branchBaseSha → fall back to the
+    // creation-time baseSha, which WAS the value pushed to the branch at
+    // registration.
+    branchBaseSha: stringOrNull(raw.branchBaseSha) ?? stringOrNull(raw.baseSha),
     lastEvaluated: numberOr(raw.lastEvaluated, 0),
   };
 }

@@ -774,4 +774,65 @@ describe("ChangeDetector", () => {
       expect(out.find((c) => c.path === "a.md")).toBeUndefined();
     });
   });
+
+  // ── §26: tracked-conflict base reference is the conflict-branch value,
+  // not main. Only consult main to know it's tracked.
+  describe("findChanges() — §26 tracked-conflict base", () => {
+    const WM = 1_500_000_000_000;
+    const AHEAD_TS = 2_000_000_000_000;
+
+    const detectorWithConflictBase = (
+      resolver: (path: string) => string | null | undefined,
+    ): ChangeDetector =>
+      new ChangeDetector({
+        vault: f.vault as unknown as import("obsidian").Vault,
+        store: f.store,
+        gi: f.gi,
+        configDir: CONFIG_DIR,
+        selfPluginId: SELF_PLUGIN_ID,
+        vaultRoot: f.root,
+        syncConfigDir: () => true,
+        conflictBaseSha: resolver,
+      });
+
+    const stage = (content: string, remoteSha: string): void => {
+      writeFile(f.root, "a.md", content);
+      setMtime(f.root, "a.md", AHEAD_TS);
+      f.store.set("a.md", { path: "a.md", remoteSha, mtime: 1, size: 1 });
+      f.store.setLastCommitMtime(WM);
+    };
+
+    it("UNCHANGED base (disk == branch value) → NOT emitted, even though disk ≠ main", async () => {
+      stage("V1", "MAIN-SHA");
+      const v1 = await shaOf("V1"); // branch value == disk sha
+      const det = detectorWithConflictBase(() => v1);
+      const out = await det.findChanges();
+      expect(out.find((c) => c.path === "a.md")).toBeUndefined();
+    });
+
+    it("EDITED base (disk ≠ branch value) → emitted", async () => {
+      stage("V2", "MAIN-SHA");
+      const det = detectorWithConflictBase(() => "OLD-BRANCH-SHA"); // ≠ disk
+      const out = await det.findChanges();
+      expect(out.find((c) => c.path === "a.md")?.kind).toBe("modified");
+    });
+
+    it("disk == MAIN but ≠ branch value → emitted (main is NOT the reference)", async () => {
+      // The essence of §26: matching main does not make a conflict base
+      // "unchanged" — only its branch value does.
+      const v1 = await shaOf("V1");
+      stage("V1", v1); // snapshot.remoteSha == disk (matches main)
+      const det = detectorWithConflictBase(() => "DIFFERENT-BRANCH-SHA");
+      const out = await det.findChanges();
+      expect(out.find((c) => c.path === "a.md")?.kind).toBe("modified");
+    });
+
+    it("resolver returns undefined (not a conflict base) → normal §40 behavior (unchanged vs main → skip)", async () => {
+      const v1 = await shaOf("V1");
+      stage("V1", v1); // disk == main
+      const det = detectorWithConflictBase(() => undefined);
+      const out = await det.findChanges();
+      expect(out.find((c) => c.path === "a.md")).toBeUndefined();
+    });
+  });
 });

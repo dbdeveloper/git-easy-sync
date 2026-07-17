@@ -2679,6 +2679,9 @@ export class Sync2Manager {
     //    (delete-vs-modify), the tree entry directly records the
     //    delete against base_tree.
     const treeEntries: NewTreeRequestItem[] = [];
+    // TODO §26 — the git-blob sha each base was pushed to the branch with,
+    // so we can advance its record's branchBaseSha after the push lands.
+    const pushedShaByPath = new Map<string, string>();
     for (const e of entries) {
       if (e.content === null) {
         treeEntries.push({
@@ -2700,6 +2703,7 @@ export class Sync2Manager {
           type: "blob",
           sha,
         });
+        pushedShaByPath.set(e.path, sha);
       }
     }
 
@@ -2728,6 +2732,13 @@ export class Sync2Manager {
     });
     this.store.setConflictBranch({ name: cb.name, head: commitSha });
     await this.store.save();
+    // TODO §26 — advance each routed base's branch value so the change-
+    // detector stops re-committing the (now unchanged) base every sync.
+    if (this.conflictStore) {
+      for (const [path, sha] of pushedShaByPath) {
+        await this.conflictStore.recordBranchBasePush(path, sha);
+      }
+    }
     this.logger.info("Sync2 conflict-branch commit pushed", {
       branch: cb.name,
       newHead: commitSha,

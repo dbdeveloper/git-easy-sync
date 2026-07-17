@@ -96,6 +96,16 @@ export interface ChangeDetectorDeps {
   // Without this dep, the detector falls back to snapshot-only
   // behaviour — fine for unit tests that don't build a queue.
   queue?: PeekableQueue;
+  // TODO §26 — resolves a path's tracked-conflict base reference: the
+  // base's last value on the CONFLICT BRANCH (its "home" while in
+  // conflict), or `undefined` when the path is NOT a tracked-conflict
+  // base. When present (path is a conflict base), the file is "changed"
+  // iff it differs from THIS (or the last queued commit) — NOT from main
+  // (snapshot.remoteSha), which only tells us it's a tracked conflict. So
+  // an unchanged base never re-commits, and an edited one commits once
+  // (routed to the branch). Same source as the split-push router's
+  // `hasPending`, so the two can't diverge. Wired from ConflictStore.
+  conflictBaseSha?: (path: string) => string | null | undefined;
 }
 
 // Minimal surface ChangeDetector consumes from PushQueue. Lets
@@ -126,6 +136,9 @@ export default class ChangeDetector {
   private readonly vaultRoot: string;
   private readonly syncConfigDir: () => boolean;
   private readonly queue: PeekableQueue | undefined;
+  private readonly conflictBaseSha:
+    | ((path: string) => string | null | undefined)
+    | undefined;
 
   constructor(deps: ChangeDetectorDeps) {
     this.vault = deps.vault;
@@ -136,6 +149,7 @@ export default class ChangeDetector {
     this.vaultRoot = deps.vaultRoot;
     this.syncConfigDir = deps.syncConfigDir;
     this.queue = deps.queue;
+    this.conflictBaseSha = deps.conflictBaseSha;
   }
 
   // Walk the vault, return everything that needs to flow remote-ward,
@@ -232,12 +246,23 @@ export default class ChangeDetector {
         // on the very next enqueue. Reading + hashing the bytes is
         // the same cost the upcoming push would pay; we just bring
         // it forward.
-        if (this.queue) {
+        const addConflictRef = this.conflictBaseSha
+          ? this.conflictBaseSha(file.path)
+          : undefined;
+        if (this.queue || addConflictRef !== undefined) {
           const buf = await this.readBinaryOrSkip(file.path);
           if (buf === null) continue; // SYNC2 §6 skip-class — vanished mid-walk
           const localSha = await calculateGitBlobSHA(buf);
-          const inQueueSha = await this.queue.peekLatestPathSha(file.path);
-          if (inQueueSha === localSha) continue;
+          const inQueueSha = this.queue
+            ? await this.queue.peekLatestPathSha(file.path)
+            : null;
+          // Conflict base (§26): unchanged iff it matches its branch value
+          // or the last queued commit — never main. Else: plain dedup.
+          if (addConflictRef !== undefined) {
+            if (localSha === (inQueueSha ?? addConflictRef)) continue;
+          } else if (inQueueSha === localSha) {
+            continue;
+          }
         }
         out.push({
           kind: "added",
@@ -277,6 +302,30 @@ export default class ChangeDetector {
       const queuedSha = this.queue
         ? await this.queue.peekLatestPathSha(file.path)
         : null;
+
+      // TODO §26 — a tracked-conflict base lives on the CONFLICT BRANCH,
+      // not main. Its "changed?" reference is the last value pushed there
+      // (conflictBaseSha), or the last queued commit if one is pending.
+      // snap.remoteSha (main) is NOT a valid unchanged-reference here —
+      // the base differs from main by nature, so comparing against it
+      // re-committed the unchanged base to the branch on EVERY sync. An
+      // edited base differs from its branch value → committed once (then
+      // pushConflictPathsToBranch advances branchBaseSha).
+      const conflictRef = this.conflictBaseSha
+        ? this.conflictBaseSha(file.path)
+        : undefined;
+      if (conflictRef !== undefined) {
+        if (sha === (queuedSha ?? conflictRef)) continue; // unchanged vs branch
+        out.push({
+          kind: "modified",
+          path: file.path,
+          size: file.stat.size,
+          mtime: file.stat.mtime,
+          previousRemoteSha: snap.remoteSha,
+        });
+        continue;
+      }
+
       const lastCommittedSha = queuedSha ?? snap.remoteSha;
       if (sha === lastCommittedSha) {
         // Unchanged since the last commit. When it also matches the

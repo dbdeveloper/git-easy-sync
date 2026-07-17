@@ -235,6 +235,44 @@ describe("ConflictStore", () => {
     });
   });
 
+  describe("branchBaseSha (§26)", () => {
+    it("create() seeds branchBaseSha = baseSha (base pushed to the branch at registration)", async () => {
+      const rec = await f.store.create(baseArgs({ baseSha: "base-x" }));
+      expect(rec.branchBaseSha).toBe("base-x");
+    });
+
+    it("latestPendingBranchBaseSha → newest pending record's value; undefined when the path has none", async () => {
+      expect(f.store.latestPendingBranchBaseSha("Notes/note.md")).toBeUndefined();
+      await f.store.create(baseArgs({ theirsBlobSha: "t1", baseSha: "b1" }));
+      await f.store.create(baseArgs({ theirsBlobSha: "t2", baseSha: "b2" })); // newer (clock ticks)
+      // Single-latest, NOT a set — so a revert to b1 would still read as a
+      // change (the §40 revert-drop lesson).
+      expect(f.store.latestPendingBranchBaseSha("Notes/note.md")).toBe("b2");
+    });
+
+    it("recordBranchBasePush advances the newest record's branchBaseSha", async () => {
+      await f.store.create(baseArgs({ baseSha: "b1" }));
+      await f.store.recordBranchBasePush("Notes/note.md", "pushed-sha");
+      expect(f.store.latestPendingBranchBaseSha("Notes/note.md")).toBe("pushed-sha");
+    });
+
+    it("legacy record without branchBaseSha falls back to baseSha on load", async () => {
+      const rec = await f.store.create(baseArgs({ baseSha: "legacy-base" }));
+      // Simulate a pre-§26 on-disk record: strip the field from meta.json.
+      const metaPath = path.join(f.conflictsRoot, rec.id, "meta.json");
+      const raw = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+      delete raw.branchBaseSha;
+      fs.writeFileSync(metaPath, JSON.stringify(raw));
+      const reloaded = new ConflictStore({
+        vault: f.vault as unknown as import("obsidian").Vault,
+        configDir: CONFIG_DIR,
+        selfPluginId: SELF_PLUGIN_ID,
+      });
+      await reloaded.load();
+      expect(reloaded.getAll()[0].branchBaseSha).toBe("legacy-base");
+    });
+  });
+
   describe("dedup", () => {
     it("same (vaultPath, theirsBlobSha) returns the existing record without touching disk", async () => {
       await f.store.load();

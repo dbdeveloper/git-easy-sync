@@ -411,6 +411,17 @@ function fixture(opts?: {
     selfPluginId: SELF_PLUGIN_ID,
     now: () => clock.tick(),
   });
+  // Default ConflictStore so detection paths that would auto-register
+  // a conflict don't throw "no store wired". Tests can override via
+  // opts.conflictStore. Created BEFORE the detector so the detector can
+  // wire the §26 conflict-base resolver to it (mirrors main.ts).
+  const defaultConflictStore =
+    opts?.conflictStore ??
+    new ConflictStoreNew({
+      vault: vault as unknown as import("obsidian").Vault,
+      configDir: CONFIG_DIR,
+      selfPluginId: SELF_PLUGIN_ID,
+    });
   const detector = new ChangeDetector({
     vault: vault as unknown as import("obsidian").Vault,
     store,
@@ -420,6 +431,7 @@ function fixture(opts?: {
     vaultRoot: root,
     syncConfigDir: () => true,
     queue,
+    conflictBaseSha: (path) => defaultConflictStore.latestPendingBranchBaseSha(path),
   });
   const client = makeFakeClient();
   const builder = new TreeBuilder({
@@ -429,16 +441,6 @@ function fixture(opts?: {
     configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
   });
-  // Default ConflictStore so detection paths that would auto-register
-  // a conflict don't throw "no store wired". Tests can override via
-  // opts.conflictStore.
-  const defaultConflictStore =
-    opts?.conflictStore ??
-    new ConflictStoreNew({
-      vault: vault as unknown as import("obsidian").Vault,
-      configDir: CONFIG_DIR,
-      selfPluginId: SELF_PLUGIN_ID,
-    });
   const manager = new Sync2Manager({
     vault: vault as unknown as import("obsidian").Vault,
     store,
@@ -3986,5 +3988,82 @@ describe("Sync2Manager — §40 no duplicate commit for an unchanged file", () =
     // 5. nothing changed → no new batch
     await f.manager.commitOnly();
     expect(await count()).toBe(3);
+  });
+});
+
+// ── §26: tracked-conflict base commits only if changed vs its BRANCH
+// value (its home while in conflict), never vs main. Real ConflictStore
+// + real PushQueue + real ChangeDetector via commitOnly (no stubbing the
+// collaborator — the §40 false-green lesson).
+describe("Sync2Manager — §26 tracked-conflict base", () => {
+  const TC = "Notes/tc.md";
+  const arr = (s: string): ArrayBuffer => {
+    const u = new TextEncoder().encode(s);
+    return u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength) as ArrayBuffer;
+  };
+  const baseInAnyBatch = async (
+    f: ReturnType<typeof fixture>,
+    p: string,
+  ): Promise<boolean> => {
+    for (const id of await f.queue.list()) {
+      const b = await f.queue.read(id);
+      if (b.files.includes(p)) return true;
+    }
+    return false;
+  };
+
+  // Register a tracked conflict for TC with `baseContent` on disk, and a
+  // snapshot pointing at main's DIFFERENT version — so findChanges would
+  // flag the base "modified" absent the §26 conflict-base reference.
+  async function registerConflict(
+    f: ReturnType<typeof fixture>,
+    baseContent: string,
+  ): Promise<void> {
+    const cs = f.manager["conflictStore"]!;
+    writeVaultFile(f.root, TC, baseContent);
+    const st = fs.statSync(path.join(f.root, TC));
+    await cs.create({
+      vaultPath: TC,
+      kind: "modify-vs-modify",
+      theirsContent: arr("THEIRS-CONTENT"),
+      theirsBlobSha: await shaOf("THEIRS-CONTENT"),
+      oursBlobSha: await shaOf(baseContent),
+      baseMtime: st.mtimeMs,
+      baseSize: st.size,
+      baseSha: await shaOf(baseContent),
+      remoteDevice: "Phone",
+    });
+    f.store.set(TC, { path: TC, remoteSha: "MAIN-OLD-SHA", mtime: 0, size: 1 });
+  }
+
+  it("UNCHANGED base → NOT committed (matches its branch value, though ≠ main)", async () => {
+    const f = fixture();
+    await registerConflict(f, "BASE-V1");
+    await f.manager.commitOnly();
+    // Disk == the branch value (baseSha) → no re-commit, even though disk
+    // ≠ snapshot.remoteSha (main). (Pre-§26 this committed every time.)
+    expect(await baseInAnyBatch(f, TC)).toBe(false);
+  });
+
+  it("EDITED base → IS committed (differs from its branch value)", async () => {
+    const f = fixture();
+    await registerConflict(f, "BASE-V1");
+    writeVaultFile(f.root, TC, "BASE-V2-edited"); // user edits base while resolving
+    await f.manager.commitOnly();
+    expect(await baseInAnyBatch(f, TC)).toBe(true);
+  });
+
+  it("base reverted to an OLDER value but the branch value is newer → committed (preserve-all-commits)", async () => {
+    const f = fixture();
+    await registerConflict(f, "BASE-V1");
+    // Simulate the base having advanced on the branch to V2 (as a later
+    // edit would): advance branchBaseSha to V2's sha.
+    const cs = f.manager["conflictStore"]!;
+    const rec = cs.getAll().find((r) => r.vaultPath === TC)!;
+    await cs.updateCache(rec.id, { branchBaseSha: await shaOf("BASE-V2") });
+    // Now the user reverts the disk base back to V1 (≠ the branch's V2).
+    writeVaultFile(f.root, TC, "BASE-V1");
+    await f.manager.commitOnly();
+    expect(await baseInAnyBatch(f, TC)).toBe(true);
   });
 });

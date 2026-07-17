@@ -888,6 +888,11 @@ export default class GitHubSyncPlugin extends Plugin {
       vaultRoot,
       syncConfigDir: () => this.settings.syncConfigDir ?? true,
       queue,
+      // TODO §26 — lazy: conflictStore is constructed just below this, and
+      // the resolver only runs at findChanges time (long after onload). A
+      // path with a pending tracked conflict compares against its conflict-
+      // branch value, not main. undefined → not a conflict base.
+      conflictBaseSha: (path) => this.conflictStore?.latestPendingBranchBaseSha(path),
     });
     const builder = new TreeBuilder({
       vault: this.app.vault,
