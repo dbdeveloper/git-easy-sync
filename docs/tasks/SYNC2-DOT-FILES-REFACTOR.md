@@ -321,6 +321,45 @@ pull). НЕ «pull-only».
 dot-файл — конкретним іменем (`!.editorconfig`); glob-и й «сховані в підтеці» dot-и не
 підтримуються (README, пастка §7).
 
+### 4.3 Синтетичні конфлікти над dot-простором — АСИНХРОННИЙ скан (окремий споживач discovery)
+
+Той самий dot-простір-discovery (§4) споживає ще один клієнт — детекція
+**синтетичних** конфліктів (`findAllConflicts`, `src/diff2/synthetic-detector.ts`).
+Треба зважити, бо вона тепер мусить сканувати й **дозволений dot-простір**.
+
+**tracked vs synthetic — лише synthetic потребує скану.**
+- **tracked-конфлікти** зареєстровані в `ConflictStore` → відслідковуються **напряму**,
+  без сканування ФС. Це — реальні git-конфлікти, невидимі на інших пристроях, що
+  блокують публікацію в `main`.
+- **synthetic-конфлікти** — суто локальні orphan-siblings (echo вже вирішеного; GitHub
+  про них не знає) → їх видно ЛИШЕ скануванням vault на sibling-файли. І цей скан тепер
+  має покривати **дозволені dot-файли + файли в дозволених dot-теках** (той самий
+  `readRootGitignore`-набір + `walkDotDir`).
+
+**Sync-бейдж → TRACKED-ONLY (це рішення закриває наявний TODO #7).** Сьогодні бейдж/
+статус-бар рахують tracked + synthetic (`ConflictCounter` override у `main.ts:~1027` на
+`findAllConflicts`). АЛЕ:
+- gate/модал уже tracked-only (`pendingConflictSummary`, TODO §24: synthetic не блокує
+  синк) — бо лише tracked впливають на публікацію;
+- synthetic тепер потребують ДОРОГОГО dot-простір-скану (~22с Android walk, §14) — не
+  можна ним гейтити бейдж.
+→ Перемкнути sync-бейдж на **store-only count** (`ConflictCounter` без synthetic-override,
+дешево, синхронно). **Компроміс:** бейдж більше не натякає на synthetic-only leftover-и —
+вони спливають лише в панелі. Прийнятно.
+
+**Асинхронний, eventual-consistent скан synthetic.** Оновлення списку синтетичних
+конфліктів (дорогий dot-простір-скан) робиться:
+- при **відкритті diff-panel**, і
+- за **командою «refresh»** у панелі (Ctrl+R — **ДОДАТИ**, ще нема).
+Процес async: спершу показуємо все, що маємо **станом на зараз** (миттєво), а виявлені
+далі синтетичні конфлікти з'являються в списку **трохи згодом** — це допустимо (eventual;
+жодного блокування UI на dot-простір-walk). Sibling-cycle/symlink-безпека — той самий
+MUST-FIX §4.1.
+
+**diff-panel-іконки бейдж** (окремий, `main.ts:~238`, E3/R2.7.4) відображає СПИСОК панелі
+(tracked + synthetic) → природно оновлюється async разом зі списком. Його лишаємо
+synthetic-inclusive (це його призначення); async-затримка там очікувана.
+
 ---
 
 ## 5. Плаский `.gitignore` (whitelist) і таймінг
@@ -600,6 +639,13 @@ D: user-літерал !./.gitignore → .gitignore ЛИШИВСЯ ignored → '
     симетрія push/pull (3.3). Код посилатиметься на нього за номером секції (як решта SYNC2.md).
   - **CHANGELOG.md** — міграція + ризик приватності (§8).
   - Прибрати Model-B/depth із SYNC2-METAFILE-REFACTOR §2.0+§2.1 (крос-лінк сюди).
+- **Крок C — synthetic-конфлікти над dot-простором (diff2-шар, §4.3).** `findAllConflicts`
+  (`synthetic-detector.ts`) розширити на дозволений dot-простір (той самий
+  `readRootGitignore`+`walkDotDir`); **sync-бейдж → store-only** (прибрати synthetic-override
+  `ConflictCounter` у `main.ts:~1027` — закриває TODO #7); **додати команду refresh
+  (Ctrl+R)** у diff-panel; скан async/eventual (open + refresh). Дотримати `sync2 ↛ diff2`
+  (лічильник у sync2 керується ін'єкцією з diff2). Тести: badge=tracked-only; synthetic у
+  dot-теці спливає в списку; gate лишається tracked-only (§24, без регресії).
 - **Крок E — auto-міграція вкладених `.gitignore` (§8.1) — ОКРЕМО, НЕ блокер.** Власний
   дизайн-пас (трансляція + верифікація еквівалентності + руйнівне видалення local+remote
   + маркер). Робиться ПІСЛЯ ядра (A–D); до того міграція ручна (§8).
