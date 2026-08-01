@@ -30,6 +30,8 @@ verification.
 
 7. **Document and commit every step.** One logical change per commit. Commit messages are documentation — write them for someone who will have to debug this alone, months from now, with no other context.
 
+   **Commit messages are ALWAYS in English — subject and body, no exceptions.** This holds even when the change is a Ukrainian-language design doc, and even when the whole conversation was in Ukrainian: `git log` is the project's permanent public record, and it stays in one language so it is greppable and readable by anyone. The same goes for code, comments, identifiers, branch names, and PR titles/bodies. Prose written *for the human owner* — design docs under `docs/tasks/`, and your replies in chat — follows whatever language the owner is using; that is the only place Ukrainian belongs. If a doc-internal term has no English form (e.g. a section marker like `ПАС 0`), transliterate or gloss it rather than switching the message's language.
+
 8. **Don't invent — check.** If you are unsure how an API behaves, what a library does, or what's in a file: read it, run it, or look it up. Never fill a gap with a plausible guess presented as fact.
 
 9. **Doubt everything — including yourself, the human, and the advisor.** Verify against reality, not against confidence. "It should work" is not evidence; a green test, a real run, actual output is. If a claim can't be checked, treat it as unproven and say so.
