@@ -47,8 +47,8 @@ dot-простір **невидимий за замовчуванням**, а к
 **спільний, симетричний scope**, керований `.gitignore` (спільним, у repo) + явним
 opt-in. Depth не потрібен узагалі.
 
-**Що тепер обмежує вартість (замість depth).** SYNC2-METAFILE-REFACTOR існує, бо
-сканування dot-простору коштувало ~22 с на Android; depth був cost-ножем. Прибравши
+**Що тепер обмежує вартість (замість depth).** Сканування dot-простору коштувало ~22 с
+на Android (виміри — §14); depth був cost-ножем. Прибравши
 depth з міркувань коректності, ми **не втратили обмеження вартості — воно тепер інше**:
 повільний walk (§4) виконується **лише** над `<configDir>/` (обмежене, як зараз) та над
 явно опт-іненими анкорованими dot-теками. Тобто **вартість ∝ тому, що користувач явно
@@ -162,13 +162,30 @@ walk-target-множині, а не лише `!gi.ignored`.
 `walkRootDotfiles`) стануть невидимими, доки юзер не додасть `!.editorconfig`. Це — та
 сама зміна поведінки, що в §8; покрити в CHANGELOG.
 
+**Робастність — блок не може зникнути назавжди (поправка власника).** Незмінна секція —
+самолікувальна: `GitignoreInvariants.enforce()` **авто-створює** root `.gitignore` якщо
+його нема й **переписує** блок до канону на КОЖНОМУ завантаженні (як зараз). Тож dot-hide
+завжди відновлюється: видалив юзер файл — наступний `enforce()` відтворює його з блоком
+(`.*`/`.*/`/`!/.gitignore`/`!<configDir>/`). `enforce()` (onload) передує будь-якій
+sync-операції.
+
+**Ключове: навіть у вікні «файл зник ПОСЕРЕД сесії» dot-простір НЕ відкривається для
+синку — його страхує D7.** Той самий відсутній `.gitignore` → **порожній opt-in-набір**
+(нема `!`-правил) → крок 5 (D7) блокує кожен non-configDir dot-шлях (не в наборі →
+`false`), навіть якщо `.*` теж зник і `gi.ignored` вертає false. `.obsidian/` при цьому
+синкається як завжди (walk-target із data.json + власний `.obsidian/.gitignore`, не
+залежить від root-блоку). Тобто відсутній блок — питання **консистентності з реальним
+git** (§8.1) і вердикту `gi.ignored` для D3, а НЕ безпеки даних. `readRootGitignore` усе
+ж варто гарантувати блок (verify/enforce) перед парсингом — але як гігієну git-консистентності, не як data-safety gate.
+
 ### 3.2 `isSyncable` (єдиний предикат)
 
 Форма (доповнює наявний `src/sync2/change-detector.ts:isSyncable`; приймає поточний
-walk-target-набір, обчислений на старті commit — §5):
+**opt-in-набір** із `readRootGitignore` — dot-файли + walk-targets, обчислений на старті
+sync-операції — §5):
 
 ```
-isSyncable(path, walkTargets):
+isSyncable(path, optIn):   # optIn = {dotFiles, walkTargets} з readRootGitignore (§4.2)
   # 1. hardcoded blocklist (без змін): manifest, self data.json, .runtime/, .git, siblings
   # 2. D2.1: path == "<root>/.gitignore"  → TRUE  (керуючий файл ЗАВЖДИ; hardcoded,
   #          НЕ через порядок правил — юзерський рядок `.gitignore` у власному root-файлі
@@ -176,11 +193,10 @@ isSyncable(path, walkTargets):
   # 3. configDir gate (без змін): !syncConfigDir && path під <configDir>/  → false
   # 4. D6: basename == ".gitignore" && локація НЕ whitelisted             → false
   # 5. D7 (discoverability gate): якщо isDotPath(path) І НЕ під <configDir>/:
-  #        discoverable = isRootDotFile(path)                       # single-segment dot
-  #                       || underAnchoredWalkTarget(path, walkTargets)
+  #        discoverable = optIn.dotFiles.has(path)                  # адресований !-file-rule
+  #                       || underWalkTarget(path, optIn.walkTargets) # анкерований !-dir
   #        якщо !discoverable → return false        # немає дозволу без discovery
-  # 6. дозвіл: return !gi.ignored(path)   # gi має синтетичний dot-hide (3.1) →
-  #            рекурсивний hide D3 + within-target re-hides
+  # 6. дозвіл: return !gi.ignored(path)   # gi має dot-hide (3.1) → рекурсивний hide D3
 ```
 
 Кроки 1, 3 — уже в коді. Крок 2 — hardcode `.gitignore` (менший фікс: не покладатись на
@@ -219,14 +235,17 @@ walk-target-префіксом, walk якого **не завершився ус
 (повільний `adapter.list`+`stat`). Форма `findChanges` на `[commit]`:
 
 ```
-ПАС 0 (старт commit): інвалідувати whitelisted-gitignore (§5); з root .gitignore
-        витягти walk-targets (§4.2) ДО скану.
+ПАС 0 (readRootGitignore): прочитати root .gitignore → з !-правил ПОРОДИТИ явний
+        opt-in-набір dot-шляхів (§4.2): {dot-файли} + {dot-теки/walk-targets}.
+        Це — ЄДИНЕ джерело того, ЩО взагалі шукати. Нема !-правила → dot-шлях НЕВИДИМИЙ
+        (ми його навіть не розглядаємо). + інвалідація whitelisted-gitignore (§5).
 ПАС 1 (миттєвий):  ordinal-файли через getFiles() → mtime/sha vs снапшот.
-ПАС 2 (root-dots): walkRootDotfiles() лістить root; isSyncable фільтрує
-        (лишає .gitignore + !-опт-інені root-dotfiles). Без змін у walkRootDotfiles.
-ПАС 3 (dot-dirs):  для кожного walk-target-префікса → walkDotDir(prefix); isSyncable
-        фільтрує кожен файл.
-ПАС 4 (deletions): set-diff (getFiles ∪ walks) vs снапшот.
+ПАС 2 (dot-файли): root .gitignore (hardcoded) + КОЖЕН dot-файл з opt-in-набору →
+        `adapter.stat` за КОНКРЕТНИМ шляхом НАПРЯМУ (mtime/size vs снапшот; нема на
+        диску → deleted). ЖОДНОГО лістингу кореня. (Нема `walkRootDotfiles`.)
+ПАС 3 (dot-теки): для кожного dir-walk-target з opt-in-набору → walkDotDir(prefix);
+        isSyncable фільтрує кожен файл усередині.
+ПАС 4 (deletions): set-diff (getFiles ∪ stat-ені dot-файли ∪ walks) vs снапшот.
 ```
 
 ### 4.1 `walkDotDir(prefix)` — уніфікований `walkConfigDir`
@@ -244,32 +263,53 @@ walk-targets = { <configDir>  якщо syncConfigDir }
 опт-інена (`!gi.ignored(subdir)`). Так повільний walk строго в межах явно дозволеного
 dot-простору.
 
-### 4.2 Витяг walk-targets із `!`-правил — і чому «pull-only» НЕ існує
+**⚠️ MUST-FIX — cycle-detection (перенесено з METAFILE §7).** Наявний `walkConfigDir`
+НЕ має захисту від циклів. `walkDotDir` рекурсує глибше (опт-ін dot-теки), тож
+**symlink-цикл** (`a/link→a`, лише desktop через Node `fs`; mobile-vault у пісочниці без
+симлінків) **зациклив би walk** (hang/OOM). Обов'язково: **visited-set (за реальним
+шляхом) або depth-cap** у `walkDotDir`, незалежно від інших оптимізацій. Дотично:
+mtime симлінка = час створення лінка, не змін цілі; `adapter.stat` follow-vs-lstat не
+перевірено — тест desktop-only, низький пріоритет.
 
-Щоб walk-нути dot-**теку**, потрібен **конкретний шлях**. Класифікація `!`-правил, що
-опт-інять dot-**теку**:
+### 4.2 `readRootGitignore` — opt-in-набір з `!`-правил (файли + теки); чому «pull-only» НЕ існує
 
-| `!`-правило | Тип | Наслідок |
+**`readRootGitignore`** читає root `.gitignore` і з його `!`-правил породжує opt-in-набір.
+Кожне `!`-правило класифікується — і мусить дати **безпосередньо адресований** шлях,
+інакше не дає нічого (D7 «немає дозволу без discoverability»):
+
+| `!`-правило | Ціль | Наслідок |
 |---|---|---|
-| `!/.myconfig/`, `!notes/.hidden/` | анкорований конкретний dir-префікс | **walk-target** — дозвіл push+pull |
-| `!.myconfig/` (без слеша) | матчить на будь-якій глибині — неоднозначно | **дозволу НЕ дає** (D7) |
-| `!**/.foo`, `!*.x` | glob | **дозволу НЕ дає** (D7) |
+| `!/.editorconfig`, `!.editorconfig` | **dot-ФАЙЛ** — конкретний root-шлях | ПАС 2: `stat` НАПРЯМУ (push+pull) |
+| `!/.myconfig/`, `!notes/.hidden/` | **dot-ТЕКА** — анкерований конкретний dir-префікс | ПАС 3: walk-target (push+pull) |
+| `!.myconfig/` (тека без `/`) | неоднозначно — на будь-якій глибині | **нічого** (D7) |
+| `!notes/.secret` (dot-файл у звичайній підтеці) | не адресується без скану підтеки | **нічого** (D7) |
+| `!**/.foo`, `!*.x` (glob) | не конкретний шлях | **нічого** (D7) |
 
-**Правило (виправлене — Блокер 1):** лише **анкоровані конкретні dir-префікси** стають
-walk-targets, і `isSyncable` (крок 5, D7) дозволяє dot-dir шлях **тільки** якщо він під
-таким walk-target. Неанкоровані `!name/` і glob-и для dot-**тек** — **не дають нічого**
-(ані push, ані pull). НЕ «pull-only».
+- **dot-ФАЙЛИ** беруться з opt-in-набору й адресуються `stat`-ом за конкретним шляхом
+  (ПАС 2) — **жодного лістингу кореня**. `!.editorconfig`/`!/.editorconfig` обидва
+  адресують root `.editorconfig` напряму; nested `sub/.editorconfig` не адресується → не
+  синкається (D7-обмеження).
+- **dot-ТЕКИ** — лише анкеровані конкретні dir-префікси стають walk-targets (ПАС 3);
+  `isSyncable` (крок 5, D7) дозволяє dot-dir шлях лише під таким target.
+- **`.obsidian/` приєднується до ТОГО САМОГО opt-in-набору автоматично — АЛЕ з іншого
+  джерела:** якщо `syncConfigDir` увімкнено в Settings (`data.json`, **per-device**), а
+  НЕ з `!`-правила gitignore (§6). Тобто фінальний набір walk-targets =
+  `{анкеровані !-dir-префікси з root .gitignore}` ∪ `{<configDir> якщо syncConfigDir}`.
+  `.obsidian/` — єдиний член набору не з gitignore (бо рішення «ділитися конфігом»
+  per-machine, а gitignore спільний — §6).
 
-**Чому не «pull-only»:** якби неанкороване правило давало pull-дозвіл без
-push-discovery, `isSyncable` вертав би `true` для шляху, якого walk не знаходить → Pass 2
-фантомно видаляє його з remote (§2 D7). Тому «дозвіл без discoverability» заборонено —
-краще правило, що нічого не робить, ніж таке, що напів-працює й видаляє дані.
+**Правило (виправлене — Блокер 1):** усе, що НЕ дає безпосередньо адресованого шляху
+(неанкероване, glob, dot-файл у звичайній підтеці), **не дає НІЧОГО** (ані push, ані
+pull). НЕ «pull-only».
 
-**Наслідок для UX:** щоб опт-інити dot-теку, юзер має писати **анкоровано**:
-`!/.myconfig/` (а не `!.myconfig/`). Документується в README (пастка §7). Root
-dot-**файли** (`!.editorconfig`) — досяжні завжди (`walkRootDotfiles` лістить root), тож
-для них anchor не потрібен; але dot-файл у **звичайній** підтеці (`!notes/.secret`)
-теж дозволу не дає (не досяжний жодним walk — §2 D7).
+**Чому не «pull-only»:** якби таке правило давало pull-дозвіл без push-discovery,
+`isSyncable` вертав би `true` для шляху, якого скан не знаходить → Pass 2 фантомно
+видаляє його з remote (§2 D7). Краще правило, що нічого не робить, ніж таке, що
+напів-працює й видаляє дані.
+
+**Наслідок для UX:** dot-теку опт-інити **анкеровано** (`!/.myconfig/`, не `!.myconfig/`);
+dot-файл — конкретним іменем (`!.editorconfig`); glob-и й «сховані в підтеці» dot-и не
+підтримуються (README, пастка §7).
 
 ---
 
@@ -410,15 +450,15 @@ dot-теки провалюють крок 5) → D4 зламано в pull-бі
 ## 9. Що ЗБЕРІГАЄТЬСЯ / ПРИБИРАЄТЬСЯ / ДОДАЄТЬСЯ
 
 **Зберігається:** симетрія push/pull (`isSyncable` на обох боках); тихий drop
-поза-scope (Pass 2); per-device `syncConfigDir`; anchoring seeded-invariants;
-`walkRootDotfiles` (**сам код лістингу root — без змін**); поведінка `.obsidian/`.
+поза-scope (Pass 2); per-device `syncConfigDir`; anchoring seeded-invariants; поведінка
+`.obsidian/`.
 
-> **Уточнення про `walkRootDotfiles` (звірка з рішенням власника).** Записане рішення
-> звучало як «звузити `walkRootDotfiles` до одного `.gitignore`». Кінцевий стан той самий
-> (синкаються лише `.gitignore` + `!`-опт-інені root-dotfiles), але **звуження досягається
-> у permission-шарі** (`isSyncable` крок 6 із синтетичним dot-hide), а НЕ вирізанням коду
-> walk-у. `walkRootDotfiles` і далі лістить усі root-dotfiles як кандидатів; `isSyncable`
-> відкидає неопт-інені. Так менше змін коду й один консистентний фільтр.
+**ПРИБИРАЄТЬСЯ `walkRootDotfiles` (поправка власника).** Root dot-файли БІЛЬШЕ не
+знаходяться лістингом кореня. Натомість **`readRootGitignore`** (ПАС 0) породжує opt-in-
+набір із `!`-правил, і кожен dot-файл із нього `stat`-иться за конкретним шляхом
+НАПРЯМУ (ПАС 2). Правило: **нема `!`-правила → dot-файл НЕВИДИМИЙ** (навіть не
+розглядається). Це замінює «лістимо корінь → фільтруємо» на «gitignore-`!`-правила
+породжують список → адресуємо напряму».
 
 **Прибирається:** ієрархічний вкладений `.gitignore` (`gi.ts` walk кожного рівня);
 Model-B / «dot-scan depth» (не існував у коді — лише проєкт).
@@ -530,12 +570,14 @@ D: user-літерал !./.gitignore → .gitignore ЛИШИВСЯ ignored → '
   розширити на реальні seed-и); ~10 ієрархічних тестів `gi.test.ts` **інвертувати**
   (nested НЕ шанується, root перемагає), пришпилити whitelist через наявний
   read-instrumentation (`gi.test.ts:126-140`).
-- **Крок B2 — discovery.** Узагальнити `walkConfigDir` → `walkDotDir(prefix)` з пруном
-  (4.1); витяг **анкорованих** walk-targets із root `.gitignore` (4.2); інвалідація на
-  старті commit (§5); **пасок Pass 2** (§3.3 — walk-target налаштований, але walk не
-  відпрацював → drop, не delete). Тести: прун вкладених dots; **втрата anchor
+- **Крок B2 — discovery.** **`readRootGitignore`** (ПАС 0): з `!`-правил root `.gitignore`
+  породити opt-in-набір = dot-файли + анкеровані dir-walk-targets, ∪ `.obsidian/` якщо
+  `syncConfigDir` (data.json). **ВИДАЛИТИ `walkRootDotfiles`** → root dot-файли `stat`-ити
+  за конкретним шляхом напряму (ПАС 2). Узагальнити `walkConfigDir` → `walkDotDir(prefix)`
+  з пруном (4.1) + cycle-detection MUST-FIX (4.1); інвалідація на старті sync-операції
+  (§5); **пасок Pass 2** (§3.3). Тести: прун вкладених dots; **втрата anchor
   `!/.myconfig/`→`!.myconfig/` → тихий drop, НЕ mass-delete** (регресія Блокера 1);
-  збій walk-у → drop не delete.
+  збій walk-у → drop не delete; **нема `!`-правила → dot-файл невидимий**.
 - **Крок D — доки.**
   - **README.md** — окремий параграф «Як плагін обробляє dot-файли (і `.gitignore`
     зокрема)»: default-invisible (D1), три джерела дозволу (D2), рекурсивність (D3),
@@ -550,7 +592,8 @@ D: user-літерал !./.gitignore → .gitignore ЛИШИВСЯ ignored → '
   + маркер). Робиться ПІСЛЯ ядра (A–D); до того міграція ручна (§8).
 
 **Зачеплений код:** `src/gi.ts` (whitelist), `src/sync2/change-detector.ts`
-(`isSyncable`, `walkConfigDir`→`walkDotDir`, `findChanges`, Pass 2 belt),
+(`isSyncable`, `findChanges`, **`walkRootDotfiles` ВИДАЛИТИ** → `readRootGitignore` +
+direct-stat, `walkConfigDir`→`walkDotDir` + cycle-detection, Pass 2 belt),
 `src/sync2/gitignore-invariants.ts` (**`ROOT_INVARIANT_BLOCK` отримує dot-hide** — §3.1),
 можливо `src/main.ts:876` (конструкція `GI`).
 
@@ -640,3 +683,48 @@ push-candidati + Pass 2); **[int]** інтеграція (реальний GitHu
 > у Кроках A/B/B2; [int] — у наявні `tests/integration/scenarios/sync2/` (нова корзина
 > `dot-files/` або розширення `gitignore/`). Пріоритет-guard: **TD4.2, TD5.3, TD7.5** —
 > три найдеструктивніші; мають бути GREEN перед мержем.
+
+---
+
+## 14. On-device виміри dot-простору (перенесено з SYNC2-METAFILE-REFACTOR)
+
+Виміряні числа (dev-бенчмарк, 2000-тек дерево × 22k файлів), що обґрунтовують форму
+discovery §4 і cost-параграф §1. Джерело істини для «22с Android», на яке §1 посилається.
+
+| метрика | macOS (desktop) | Android (Capacitor) |
+|---|---|---|
+| рекурсивний `adapter.list` walk (2001 тек) | ~1.9 с | **~22 с** (16-34, мінлива) |
+| `adapter.stat` per-file (20k regular) | 1.2 с (~0.06 мс) | **~59 с** (~2.94 мс) |
+| ті самі regular через `getFiles()`-індекс | 19-30 мс | 30 мс |
+| **index vs adapter.stat (regulars)** | **~64×** | **~1966×** 🔥 |
+| `adapter.list` бачить dot-файли? | 2000/2000 ✅ | 2000/2000 ✅ |
+| dir-mtime бампає на create/delete/rename? | RELIABLE ✅ | **RELIABLE ✅** (modify — ні) |
+| **`vault.on` спрацьовує для dot-файлів?** | **НІ ❌** | **НІ ❌** |
+
+**dot-scan cost vs ГЛИБИНА** (лінійно за к-стю тек; ~0.9 мс/тека macOS, ~4 мс/тека
+Android-IPC; +1 рівень ≈ ×8):
+
+| depth | dirs | macOS | Android |
+|---|---|---|---|
+| 0 | 1 | 1 мс | 9 мс |
+| 1 | 9 | 18 мс | 91 мс |
+| 2 | 73 | 103 мс | 554 мс |
+| 3 | 585 | 718 мс | ~4 с |
+| 4 (повне) | 2001 | ~2 с | ~10 с |
+
+**Висновки, що диктують дизайн:**
+- **Повний `**/.*` walk щокоміт — неможливий на mobile** (~10-22 с лише list) → тому
+  dot-walk лише над явно опт-іненими префіксами (§4), не над усім деревом.
+- **`adapter.stat` на sync-шляху regulars — заборонено** (Android ~59с; index ~2000×
+  швидше). Regular-файли → ЗАВЖДИ `getFiles()`-індекс (~5 мс/20k, ПАС 1 §4).
+- **`vault.on` СЛІПИЙ до dot-простору на обох платформах** (event-тест: `.dotfile` /
+  `.dotdir/inside.md` — нуль подій; прив'язаний до індексу, що dots виключає) → dot-простір
+  ТІЛЬКИ через скан (getFiles не бачить, події не спрацьовують) — обґрунтовує polling §4.
+- **getFiles()-скан — БЕЗКОШТОВНИЙ** (macOS 3.4 / Android 5.4 мс на 20k, нуль I/O) →
+  ПАС 1 не bottleneck.
+- **dir-mtime RELIABLE (macOS+Android)** → потенційний прун обходу для `walkDotDir` як
+  майбутня оптимізація (за probe; Windows ще не міряно; екзотичні ФС крихкі → backstop).
+
+(Adapter-I/O прив'язаний до MAIN-потоку — worker не має доступу до `vault.adapter`,
+правило `sync2-engine.md`; async-yield → не жорсткий фриз, але повільно. Єдиний важіль —
+мінімізувати adapter-виклики, що discovery §4 і робить.)
