@@ -128,9 +128,16 @@ export default class Logger {
     else if (level === "WARN") console.warn(mirror);
     else console.log(mirror);
 
+    // Use safeStringify (NOT plain JSON.stringify) for the on-disk write:
+    // the log file is JSONL, so a torn or lossy line breaks line-by-line
+    // parsing. Plain JSON.stringify renders an Error in `additional_data`
+    // as `{}` (fields live on the prototype) and THROWS on a circular ref
+    // — the throw would silently drop the whole line (fire-and-forget
+    // rejection). safeStringify preserves Error fields and emits
+    // "[Circular]" instead, matching what the console mirror already shows.
     await this.vault.adapter.append(
       this.logFile,
-      JSON.stringify(logEntry) + "\n",
+      safeStringify(logEntry) + "\n",
     );
   }
 

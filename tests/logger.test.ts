@@ -187,4 +187,52 @@ describe("Logger", () => {
     expect(contents).toContain("hello world");
     expect(contents).toContain('"level":"INFO"');
   });
+
+  // ── JSONL faithfulness (safeStringify on the disk write) ──────────
+
+  it("Error in additional_data is written faithfully (not {}) and the line stays valid JSON", async () => {
+    const logger = new Logger(
+      vault as unknown as import("obsidian").Vault,
+      PLUGIN_ID,
+      true,
+    );
+    await logger.init();
+    logger.error("boom", { err: new Error("kaboom") });
+    await new Promise((r) => setTimeout(r, 50));
+    const contents = fs.readFileSync(
+      path.join(tmp, `${PLUGIN_ID}.log`),
+      "utf8",
+    );
+    const lines = contents.trim().split("\n").filter(Boolean);
+    // Every line must parse — the file is JSONL.
+    const entry = JSON.parse(lines[lines.length - 1]);
+    // Error is preserved (message/stack), NOT flattened to `{}` — plain
+    // JSON.stringify would have written `"err":{}`.
+    const dumped = JSON.stringify(entry.additional_data);
+    expect(dumped).toContain("kaboom");
+    expect(entry.additional_data.err).not.toEqual({});
+  });
+
+  it("circular ref in additional_data does NOT drop the line; emits [Circular] as valid JSON", async () => {
+    const logger = new Logger(
+      vault as unknown as import("obsidian").Vault,
+      PLUGIN_ID,
+      true,
+    );
+    await logger.init();
+    const cyclic: Record<string, unknown> = { name: "a" };
+    cyclic.self = cyclic;
+    logger.info("cycle", cyclic);
+    await new Promise((r) => setTimeout(r, 50));
+    const contents = fs.readFileSync(
+      path.join(tmp, `${PLUGIN_ID}.log`),
+      "utf8",
+    );
+    const lines = contents.trim().split("\n").filter(Boolean);
+    // Plain JSON.stringify would THROW on the cycle → fire-and-forget
+    // rejection → the whole line silently lost. safeStringify keeps it.
+    expect(lines.length).toBeGreaterThan(0);
+    const entry = JSON.parse(lines[lines.length - 1]); // valid JSON
+    expect(JSON.stringify(entry.additional_data)).toContain("[Circular]");
+  });
 });
