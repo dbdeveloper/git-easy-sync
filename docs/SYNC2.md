@@ -1512,6 +1512,33 @@ reconcile add/modify + deletions; cascade rebase). Supersedes §7.8's
 `styles.css`-via-text-merge; the §7.8 last-change-date tie-break is
 retained as the canonical-bundle-mtime source.
 
+**Precondition — when the resolver runs at all.** It is a *conflict*
+resolver, not a version guard: it is consulted only when BOTH sides
+diverged from the base. When a change is recorded on one side only,
+that side wins unconditionally and no version comparison happens. Two
+short-circuits enforce this:
+
+- **pull** — the both-modified branch is reached only if the path is in
+  `cmp.files`, i.e. the remote touched it after `lastSyncCommitSha`;
+- **reconcile** — Branch 1 returns early on
+  `baseMeta.sha === theirsMeta.sha` ("no remote change → batch pushes
+  through unchanged").
+
+This is deliberate and must stay: a one-sided change *is* user intent.
+A downgrade can be entirely on purpose — BRAT installs a pinned older
+version — and a user who rolls a plugin back expects that rollback to
+reach their other devices. Do NOT "harden" this by refusing a version
+decrease on push; it would break that feature, and it would not fix the
+case below anyway.
+
+Consequence when `semverSide` appears not to have fired: the resolver is
+not where to look. Look at why the BASELINE diverged from reality — a
+stale or wrong snapshot row turns "nothing changed" into "one side
+changed", and the engine then correctly propagates it. Worked example:
+[`tasks/PLUGIN-UPDATE-COMPAT.md`](./tasks/PLUGIN-UPDATE-COMPAT.md) §5.9.1,
+where a bootstrap-recorded baseline makes a BRAT reinstall look like a
+deliberate edit and rolls the repo back on every device.
+
 **Ordering subtlety (pull side).** `pullIfNeeded` applies each remote
 file inline, so a sibling `main.js` resolved earlier overwrites the
 local file a later `styles.css` resolution reads. Reading the "ours"
