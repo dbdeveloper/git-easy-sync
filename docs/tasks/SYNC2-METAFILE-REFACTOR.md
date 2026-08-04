@@ -23,9 +23,10 @@
 ### A. Глобальні sync-параметри («hot») — кілька крихітних, критичних
 
 `lastSyncCommitSha`, `lastSyncTreeSha`, `lastCommitMtime` (watermark), `remoteIdentity`
-(owner/repo/branch), `conflictBranch`. Разом — кількасот байт. **Незамінні:** втрата =
-плагін «забув, де він» відносно GitHub → перезалив увесь vault / насипав фальш-конфліктів.
-Окремо: **`lastSyncTreeSha` — це ще й ЯКІР до merge-баз** (див. B).
+(owner/repo/branch), `conflictBranch`, `heldPluginUpdates` (див.[`PLUGIN-UPDATE-COMPAT.md, п.5.5`](./PLUGIN-UPDATE-COMPAT.md#55-форма-запису)). 
+Разом — кількасот байт. **Незамінні:** втрата = плагін «забув, де він» відносно 
+GitHub → перезалив увесь vault / насипав фальш-конфліктів. Окремо: **`lastSyncTreeSha` — 
+це ще й ЯКІР до merge-баз** (див. B).
 
 `invariantState` — **НЕ в hot і НЕ в cold: власний файл у `.runtime/`** (рішення власника,
 2026-08-02; повна специфікація — §5).
