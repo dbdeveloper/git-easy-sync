@@ -209,7 +209,12 @@ Per DOT-FILES: dot-файли + normal-файли в дозволених dot-т
 
 **Майбутнє — у per-device `.runtime/`** (`<configDir>/plugins/<plugin-id>/.runtime/` — уже
 hardcoded-excluded зі синку як per-device runtime-стан, `change-detector.ts:45`):
-- **hot** → `.runtime/metadata-a.json` + `.runtime/metadata-b.json` (ping-pong пара, див. вище);
+- **hot** → `.runtime/metadata-a.json` + `.runtime/metadata-b.json` (ping-pong пара, див. вище).
+  Окремого правила виключення зі синку **не потрібно**: гейт стоїть на КОРЕНІ `.runtime/`
+  (`change-detector.ts:45` — префіксна перевірка, за коментарем «covers every current AND
+  future runtime artifact without a per-item list»), тож обидва слоти під нього підпадають
+  автоматично. Це умова працездатності, а не гігієна: якби один слот виїхав на GitHub і
+  приїхав на інший пристрій, він приніс би з собою чужий `seq`;
 - **cold** → каталог `.runtime/file-baselines/` з файлами-кошиками `<hash>.json`.
 
 > **Назва cold-каталогу** (власник просив «кращу для розуміння»): пропоную **`file-baselines/`**
