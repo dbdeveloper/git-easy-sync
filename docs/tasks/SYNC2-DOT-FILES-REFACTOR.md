@@ -30,7 +30,7 @@ dot-простір **невидимий за замовчуванням**, а к
 ## 1. Проблема, що вбила depth-підхід (чому Model-B ВІДХИЛено)
 
 Параметр «глибина сканування» задумувався **per-device** (жив би в `data.json`, як
-`syncConfigDir`). Це створює **асиметрію scope** між машинами:
+`syncConfigDir`). Однак, це створює **асиметрію scope** між машинами:
 
 > Машина A має depth 0, машина B — depth 1. B бачить і пушить `notes/.hidden/foo.md`.
 > Файл лягає в repo. Якби pull ігнорував scope — drain записав би `foo.md` на A, де його
@@ -260,20 +260,26 @@ Root-блок ховає `.*` на будь-якій глибині, тож пі
 той самий прийом, яким self-seed уже рятує себе через `!.gitignore`.
 
 ```
-### BEGIN <plugin> invariants — do not edit ###
+### BEGIN <.obsidian> invariants — do not edit ###
 !/.gitignore
-...(наявні: github-easy-sync-metadata.json, workspace.json, ...)...
+...(наявні: workspace.json, plugins/*/data.json, ...)...
 ### END <plugin> invariants ###
-...(recommended defaults, зокрема `plugins/*/*` — юзерська територія)...
-!/plugins/*/.gitignore          ← МУСИТЬ бути НИЖЧЕ `plugins/*/*`
+...(recommended defaults — юзерська територія)...
+```
+або (для plugins):
+```
+### BEGIN <plugins> invariants — do not edit ###
+!/.gitignore
+### END <plugin> invariants ###
+...(recommended defaults: — юзерська територія)
 ```
 
 **Перевірено (реальний пакет `ignore`, багаторівнева оцінка як у `gi.ts:100-112`):**
 
-| рядок | без нього | з ним |
-|---|---|---|
-| `!/.gitignore` | `.obsidian/.gitignore` → `true` (`root:IG`) | → `false` (`root:IG → .obsidian:UN`) |
-| `!/plugins/*/.gitignore` | `plugins/other/.gitignore` → `true` | → `false` |
+| рядок          | без нього                                               | з ним                                              |
+|----------------|---------------------------------------------------------|----------------------------------------------------|
+| `!/.gitignore` | `.obsidian/.gitignore` → `true` (`root:IG`)             | → `false` (`root:IG → .obsidian:UN`)               |
+| `!/.gitignore` | `.obsidian/plugins/<id>/.gitignore` → `true` (root:IG)  | → `false` (`root:IG → .obsidian/plugins/<id>/:UN`) |
 
 ⚠️ **Форма — анкерована, не гола.** Голе `!.gitignore` на цьому вузлі заразом воскрешає
 `.obsidian/snippets/.gitignore` → пряме порушення D6. Анкероване `!/.gitignore` лишає його
@@ -320,7 +326,7 @@ last-match:
    `.obsidian/snippets/.gitignore` чіпати не треба — D5 їх не читає.
 
 **Форма застосування — ідемпотентно в `enforce()`, від ПОТОЧНОГО стану**, а не «на
-перехід true↔false»: `false` → пара присутня, `true` → пари немає. Той самий результат,
+перехід true ↔ false»: `false` → пара присутня, `true` → пари немає. Той самий результат,
 але не треба ловити переходи, воно само-лікується (чужий плагін перезаписав свій
 `.gitignore` і стер рядок → наступний `enforce()` повертає), і це один код замість двох
 гілок. Той самий патерн, за яким уже живе `configDirInvariantBlock({pushPluginsDataJson})`.

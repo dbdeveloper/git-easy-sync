@@ -366,13 +366,13 @@ snap.mtime === stat.mtime && snap.size === stat.size  → однакові, ви
 
 #### Три reference-и, з якими звіряється SHA — і чи є в них size
 
-`findChanges` порівнює локальний SHA не з одним значенням, а з `queuedSha ?? snap.remoteSha`
+`findChanges` порівнює локальний SHA не з одним значенням, а з `queuedSha ?? snap.baselineSha`
 (рядок 329) або з `conflictRef` (§26, рядок 317). Тому відсічка можлива лише там, де для
 reference-а відомий і розмір:
 
 | reference | звідки size | вердикт |
 |---|---|---|
-| `snap.remoteSha` (`files{}`) | `snap.size`, пишеться в `recordSync` зі `stat` | **вже є** |
+| `snap.baselineSha` (`files{}`) | `snap.size`, пишеться в `recordSync` зі `stat` | **вже є** |
 | queued-версія (`peekLatestPathSha`) | `adapter.stat` реального файлу батча `<batchDir>/vault/<path>` (`push-queue.ts:121`, читається на 295) | **є, просто не питаємо** — зміни схеми НЕ потрібно |
 | `conflictRef` (`latestPendingBranchBaseSha`) | голий SHA у `ConflictRecord` (`conflict-store.ts:533`), файлу-двійника нема | **прогалина схеми** — потрібне парне поле + новий інваріант |
 
@@ -403,7 +403,7 @@ reference-а відомий і розмір:
 читання файлу і хеш.
 
 **`findChangeForPath` (414-431) — безумовний виграш:** черги там немає взагалі, reference
-тільки `snap.remoteSha`, тож `stat.size !== snap.size → return modified` ставиться просто так.
+тільки `snap.baselineSha`, тож `stat.size !== snap.size → return modified` ставиться просто так.
 
 **Бонус усередині самої `peekLatestPathSha`:** її fallback-гілка (295-298), коли в
 `meta.uploadedBlobs` нема кешованого SHA, робить `readBinary` **snapshot-файлу** батча +

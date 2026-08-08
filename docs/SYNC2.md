@@ -219,8 +219,8 @@ The protocol covers all four crash points uniformly:
 |--------------------------------|----------------------------------------------------------------------------|---------------------------------------------------------------------------------------|
 | Step 1 and Step 2              | `.sync-tmp` exists; live file unchanged; no `.sync-bak`.                   | `.sync-tmp` is a transient artefact — delete it. Next sync repeats the operation.     |
 | Step 2 and Step 3              | `.sync-tmp` exists; `.sync-bak` exists; live path missing.                 | Restore `.sync-bak` → live path; delete `.sync-tmp`. Pre-write state recovered.       |
-| Step 3 and Step 4              | Live file = new bytes; `.sync-bak` = old bytes; snapshot still says "old". | SHA(live) ≠ snapshot.remoteSha → restore `.sync-bak`. Conservative; treats Step 4 as "did not commit." |
-| Step 4 and Step 5              | Live file = new bytes; `.sync-bak` = old bytes; snapshot says "new".       | SHA(live) === snapshot.remoteSha → delete `.sync-bak`. Cleanup leftover only.         |
+| Step 3 and Step 4              | Live file = new bytes; `.sync-bak` = old bytes; snapshot still says "old". | SHA(live) ≠ snapshot.baselineSha → restore `.sync-bak`. Conservative; treats Step 4 as "did not commit." |
+| Step 4 and Step 5              | Live file = new bytes; `.sync-bak` = old bytes; snapshot says "new".       | SHA(live) === snapshot.baselineSha → delete `.sync-bak`. Cleanup leftover only.         |
 
 ### 2.4 Path B — Sibling Registration via `ConflictStore.create` (Three Steps)
 
@@ -322,18 +322,18 @@ the file unconditionally.
 
 **`.sync-bak` pass — snapshot-based recovery only.** Because Path B
 never produces `.sync-bak`, there is no ownership question to ask.
-The witness is always `snapshot.remoteSha`:
+The witness is always `snapshot.baselineSha`:
 
 | Vault state                                                | Recovery action                                                                                                                                                                                  |
 |------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | finalPath missing                                          | Rename `.sync-bak` → finalPath; restore the pre-write state. (Crash between Steps 2 and 3 of Path A.)                                                                                              |
-| finalPath exists, SHA(file) === `snapshot.remoteSha`       | Delete `.sync-bak`; the write committed (Step 4 ran), only the cleanup (Step 5) did not.                                                                                                          |
-| finalPath exists, SHA(file) ≠ `snapshot.remoteSha`         | Restore from `.sync-bak`: delete finalPath, rename `.sync-bak` → finalPath. The new write was partial or the snapshot update never ran; the backup is the trustable copy.                          |
+| finalPath exists, SHA(file) === `snapshot.baselineSha`       | Delete `.sync-bak`; the write committed (Step 4 ran), only the cleanup (Step 5) did not.                                                                                                          |
+| finalPath exists, SHA(file) ≠ `snapshot.baselineSha`         | Restore from `.sync-bak`: delete finalPath, rename `.sync-bak` → finalPath. The new write was partial or the snapshot update never ran; the backup is the trustable copy.                          |
 | finalPath exists, no snapshot entry                        | Conservative restore: same as the row above. An unverified live file is worth less than a known-good backup.                                                                                       |
 
 The two integrity witnesses — `record.theirsBlobSha` for the
 `.sync-tmp` ownership-dispatched-to-Path-B branch,
-`snapshot.remoteSha` for the `.sync-bak` branch and the
+`snapshot.baselineSha` for the `.sync-bak` branch and the
 Path-A-orphan `.sync-tmp` branch — are themselves the durable
 artefacts that make the protocol work. Both are written *before* the
 corresponding staging file is finalised (the record in Path B's
@@ -500,7 +500,7 @@ available non-zero version*, searched in this order:
    and re-typed it in a later still-unpushed batch, that fresher
    good copy is the correct thing to keep. The newest non-zero
    frozen copy wins.
-2. **GitHub, by the snapshot's `remoteSha`.** Fetched by blob SHA
+2. **GitHub, by the snapshot's `baselineSha`.** Fetched by blob SHA
    (`getBlob`) so it is exactly the pre-collapse bytes regardless
    of where the branch HEAD has since moved.
 
@@ -1067,6 +1067,14 @@ a `throw`, not a `continue`.
 ---
 
 ## 7. Field Postmortems
+
+> 📛 **Naming note.** These postmortems deliberately keep the field name
+> `snapshot.remoteSha`, which is what it was called when each incident happened. The field
+> was renamed to **`baselineSha`** on 2026-08-08 (rationale: `remoteSha` reads as "the SHA on
+> the remote *now*", while the value records the state as of our last sync; see
+> [`tasks/SYNC2-METAFILE-REFACTOR.md`](./tasks/SYNC2-METAFILE-REFACTOR.md) §1.C). Sections
+> outside this one use the new name. A postmortem is testimony about the past — substituting
+> present-day identifiers into it would corrupt the record — so the old name stays here.
 
 The design as described across PSEUDO-MERGE-MODE.md and §1–§12 here reads as a single coherent
 protocol, but the path to that protocol passed through specific
@@ -1905,7 +1913,7 @@ Considered for symmetry and rejected. The rename strategy
 already has a unique "in-flight" signal: the `.sync-bak` file
 itself, which only exists during steps 2-5. Adding a marker on
 top would be redundant. The existing SHA-based bak orphan
-recovery (snapshot.remoteSha matches → cleanup, mismatches →
+recovery (snapshot.baselineSha matches → cleanup, mismatches →
 restore) handles all cases correctly.
 
 The modify-in-place strategy has NO bak (the live file is
@@ -2113,7 +2121,7 @@ to reinstall via BRAT or the Community Plugins store.
 The classic `AtomicWriteRecovery.sweep` avoids this trap by
 comparing SHA(sync-tmp) to a TRUSTED expected SHA — either the
 `theirsBlobSha` on a ConflictStore record (Path B) or the
-`remoteSha` on a SnapshotStore entry (rename-strategy bak
+`baselineSha` on a SnapshotStore entry (rename-strategy bak
 recovery). The bootloader can't use either: it runs at the very
 top of `onload()`, BEFORE settings load, BEFORE logger init,
 BEFORE the snapshot store opens. There is no trusted source of

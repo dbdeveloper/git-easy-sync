@@ -511,7 +511,7 @@ if (seenIgnored.has(path)) {
 4. → **push старої локальної версії в репо** і даунгрейд на всіх пристроях.
 
 Тому в записі зберігається baseline кожного файла папки — за формою снапшота
-`{path, remoteSha, mtime, size}` (`src/sync2/snapshot-store.ts:149`), — і **першою** дією
+`{path, baselineSha, mtime, size}` (`src/sync2/snapshot-store.ts:149`), — і **першою** дією
 розморозки повертається на місце.
 
 ### 5.5 Форма запису
@@ -531,7 +531,7 @@ heldPluginUpdates: {
     minAppVersion: string,        // умова зняття
     heldVersion:   string,        // тільки для лог-рядка; може застаріти — див. §7
     frozenBeforeCommit: string,   // база для compare при розморозці (§5.6)
-    baselines: Array<{ path, remoteSha, mtime, size }>   // §5.4
+    baselines: Array<{ path, baselineSha, mtime, size }>   // §5.4
   }
 }
 ```
