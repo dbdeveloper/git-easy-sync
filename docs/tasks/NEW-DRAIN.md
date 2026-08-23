@@ -474,11 +474,23 @@ Vault ------- [] -> зберігаємо D_{*} як conflict-sibling-file до C
    системі вже присутній previous tracked manual conflict):
 Vault ------- (_diff3(conflict_base, prev_conflict_sibling_file, D_{last}) -> D_{conflict}:
                          - OK: 1. видаляємо previous conflict-sibling-file;
-                               2. зберігаємо D_{conflict} як нoвий conflict-sibling-file, base-file в Vault - НЕ чіпаємо!     
+                               2. зберігаємо D_{conflict} як нoвий conflict-sibling-file (timestamp у назві —
+                                  R_m.mtime, дата ОСТАННЬОГО remote-коміту, що увійшов у D_{conflict}; див.
+                                  примітку нижче), base-file в Vault - НЕ чіпаємо!     
                          - ERROR: 1. залишаємо на файловій системі previous conflict-sibling-file;
-                                  2. зберігаємо D_{last} як новий conflict-sibling-file (з власним timestamp!) в Vault, 
+                                  2. зберігаємо D_{last} як новий conflict-sibling-file (timestamp у назві —
+                                     R_m.mtime, ТА САМА дата, що й вище) в Vault, 
                                      base-file в Vault - НЕ чіпаємо  
 ```
+
+> **Рішення власника (2026-08-23): timestamp у назві sibling-файлу — це ЗАВЖДИ дата remote-файлу
+> (`tracked.remote.mtime`, тобто дата коміту на GitHub), НІКОЛИ не "власний"/поточний момент запису
+> на диск.** Це стосується ОБОХ гілок STEP3 (OK і ERROR) так само, як і першого виявлення конфлікту
+> в не-конфліктній гілці Vault-step (§III) — раніше текст тут (і нижче, у пп.4-6) казав "з власним
+> timestamp", що суперечило другому шляху й було виправлено як реальна розбіжність, не стилістика.
+> Наслідок для STEP3 "OK": `_diff3()` повертає `D_{conflict}.mtime = null` (§III, `_diff3()` завжди
+> ставить `mtime=null` для свіжозлитого результату — "файл не закомічено") — той, хто зберігає
+> sibling, мусить явно проставити `tracked.remote.mtime` при записі, а не покладатись на поле D.
 Якщо збій відбувся після успішного push (після успішної обробки batch, який складається з однієї операції):
 ```
 *STEP1*. Як виникає manual conflict: 
@@ -530,7 +542,7 @@ sibling-file в diff-editor
 ВАЖЛИВО! вирішення, яким буде conflict-sibling-file визначається в момент запису в Vault. Ця особливість витікає з того,
 що конфлікт-файли ніколи не потрапляють в commit-batches і в push/pull. А отже, під час drain приймаємо (pull)
 нові версії remote-file і тільк в самому кінці drain вирішуємо що з ними робити: чи об'єднувати з останнім
-(за timestamp) tracked conflict-sibling-file через diff3, видаляємо старий і пишемо новий з новим timestmap,
+(за timestamp) tracked conflict-sibling-file через diff3, видаляємо старий і пишемо новий з датою нового remote-коміту,
 чи додаємо ще один conflict-sibling-file до вже існуючого (розрізняються за timestamp). В будь-якому випадку,
 після одного drain може з'являтись тільки один conflict-sibling-file для конкретного base-file.
 
@@ -544,10 +556,11 @@ sibling-file в diff-editor
    для яких є завантажені remote file з репо, зберігаються як conflict-sibling-file.
 4. Якщо conflict-sibling-file вже існує в Vault, тоді робиться
    `_diff3(conflict_base, prev_conflict_sibling_file, D_{last})` (спроба замінити попередній конфлікт файл).
-5. Якщо спроба п.4 - вдала, тоді новий conflict-sibling-file (з власним timestamp) зберігається з результатом _diff3
+5. Якщо спроба п.4 - вдала, тоді новий conflict-sibling-file (timestamp у назві — `tracked.remote.mtime`,
+   дата remote-коміту, НЕ момент запису на диск) зберігається з результатом _diff3
    на файловій системі, а старий — видаляється(!).
 6. Якщо спроба п.4 - не вдала, тоді на файловій системі просто зберігається ще один (новий, додатковий)
-   conflict-sibling-file (з власним timestamp) як додаток до вже існуючого.
+   conflict-sibling-file (той самий `tracked.remote.mtime`) як додаток до вже існуючого.
 7. І після п.5 і в п.6 оновлюємо conflict metadata list і зберігаємо на файловій системі.
 
 ## II.7 Crash-safe запис у conflict-branch — ім'я ПЕРЕД мережею, жива перевірка ЗАМІСТЬ bulk-diff
@@ -585,8 +598,10 @@ head=…)`) працює тільки коли `base` — це справжня,
        atomicWrite(metadata.conflictBranchName = conflictBranchName)   # ПЕРШИЙ крок, до мережі
    conflict_head_hash = getBranchHeadSha(conflictBranchName)  # null, якщо 404 (ще не створена)
    ```
-   `conflict_hash` (SHA) і надалі важливий (див. II.6, §III), але для ВІДКРИТТЯ гілки після краху
-   достатньо самого ІМЕНІ — воно discoverable незалежно від того, чи відомий SHA.
+   Персистований SHA-pointer (`conflict_hash`) на цьому й закінчується — його більше НЕ зберігаємо
+   взагалі: `conflictBranchName` повністю його замінює, а `conflict_head_hash` завжди читається
+   живим (`getBranchHeadSha`), ніколи з диска. Для ВІДКРИТТЯ гілки після краху достатньо самого
+   ІМЕНІ — воно discoverable незалежно від того, чи був колись відомий SHA.
 
 2. **Guard на push у conflict-branch — журнал як швидкий шлях, жива перевірка як crash-safe fallback,
    ЄДИНА функція для STEP1 і STEP2:**
@@ -745,7 +760,7 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
        base = tracked.base
        remote = tracked.remote   
        
-    if local_file is null:
+    if local is null:
        local = FileInfo()
        
     if (base.path is not null and local.path is not null and base.path != local.path) or 
@@ -761,13 +776,13 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
        remote.sha = DELETED_SHA_HASH # усе constant SHA for deleted files if needed  
        
     if base.sha is null:
-       if local.sha is not null and remote.sha == local.sha):                                             # 1 
+       if local.sha is not null and remote.sha == local.sha:                                              # 1 
              return (local, null)       
              
        if local.sha is not null and remote.sha != local.sha:                                              # 2
              return (null, MANUAL_CONFLICT) 
     else:   
-       if local.sha == base.sha and remote.sha == base.sha):                                              # 3 
+       if local.sha == base.sha and remote.sha == base.sha:                                               # 3 
              return (base, null)
              
        if remote.sha is not null and local.sha == base.sha and remote.sha != base.sha:                    # 4
@@ -825,7 +840,7 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
                                                      # він є і його SHA збігається з SHA в назві, тоді отримуємо 
                                                      # цей blob, інакше null
         if local.blob is null:
-           return (null, LOCAL_FILE_IS_NOT_FOUND_ERROR(local.path)
+           return (null, LOCAL_FILE_IS_NOT_FOUND_ERROR(local.path))
                                                       
     if remote.blob is null:        
         # remote.mode=DELETED НЕ МОЖЕ потрапити на цей рівень — те саме доведення, що й для local вище.
@@ -843,7 +858,7 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
                return (null, error)                                                
               
            if remote.blob is null:
-               return (null, REMOTE_FILE_IS_NOT_EXIST_IN_REPO_ERROR(remote.path)   
+               return (null, REMOTE_FILE_IS_NOT_EXIST_IN_REPO_ERROR(remote.path))   
               
            if not existInSyncStore(remote.sha): 
                saveBlobToSyncStore(remote)
@@ -860,7 +875,7 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
                 return (null, error)                                                
                
             if base.blob is null:
-               return (null,  BASE_FILE_IS_NOT_EXIST_IN_REPO_ERROR(base.path)   
+               return (null, BASE_FILE_IS_NOT_EXIST_IN_REPO_ERROR(base.path))   
     
             if not existInSyncStore(base.sha): 
                 saveBlobToSyncStore(base)
@@ -873,12 +888,12 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
     d_sha = getSha(d)
     d_file =  FileInfo(
                    path= base.path,  # filename
-                   size= len(size),  # filesize 
+                   size= len(d),  # filesize — довжина фактичного вмісту diff3-результату
                    mtime= null,      # файл не закомічено і не збережено в Vault
                    sha=  d_sha,
                    mode= ""
                    blob= d )                
-    if not existInSyncStore(sha): 
+    if not existInSyncStore(d_sha): 
         saveBlobToSyncStore(d_file)
         
     return (d_file, null)
@@ -945,9 +960,11 @@ def drain2():
             # перший крок - це обробка старих (з попередніх sync) tracked manual conflicts
             #==========================================================================================
             manual_conflicts = process_conflicts() # manual_conflicts[] може бути порожній, якщо нема нерозв'язаних 
-                                                   # tracked manual conflicts. Якщо в цей же час conflict_hash != null, 
-                                                   # значить, що нерозв'язаних tracked manual conflicts вже нема, але 
-                                                   # conflict_branch ще не merged з main branch
+                                                   # tracked manual conflicts. Якщо в цей же час
+                                                   # metadata.conflictBranchName != null, значить, що
+                                                   # нерозв'язаних tracked manual conflicts вже нема, але
+                                                   # conflict_branch ще не merged з main branch (FINALIZE,
+                                                   # наприкінці drain, §III)
 
             #==========================================================================================
             # перевіряємо чи GitHub token expired (файл-мітка). Припиняємо drain з відповідними 
@@ -957,23 +974,17 @@ def drain2():
             if file_mark.token_expired: return TOKEN_EXPIRED          
             
             #==========================================================================================
-            # отримуємо commits head hash (main та (якщо є) conflict branches)
+            # отримуємо commits head hash для MAIN. Для CONFLICT branch персистованого SHA-pointer
+            # більше нема (§II.7) — conflictBranchName + жива getBranchHeadSha() замінюють його
+            # повністю, читаються нижче, коли треба.
             #==========================================================================================
             base_hash = metadata.getLastSyncCommitSha() 
             if base_hash == null: return NEED_BOOTSTRAP              # треба bootstrap
-            
-            conflict_hash = metadata.getLastSyncConflictCommitSha()  # conflict_hash може бути null, якщо не створено 
-                                                                     # conflict branch. А може бути not null, навіть
-                                                                     # коли conflict_list - порожній. Якщо список буде
-                                                                     # і далі порожнім на кінець цього drain, a 
-                                                                     # conflict_hash is not null, тодо conflict_branch 
-                                                                     # буде merge до main i conflict_hach зберігається 
-                                                                     # в conflict metadata file, як null знову
- 
+
             #==========================================================================================
             # завантажуємо попередній стабільний стан з файлової системи
             #==========================================================================================
-            tracked_files = restoreTrackedFilesFromDiskOrCreateNewOne(manual_conflicts) 
+            TrackedFiles = restoreTrackedFilesFromDiskOrCreateNewOne(manual_conflicts) 
                                                                   # Відновлюєммо tracked files з диску якщо був збій   
                                                                   # або створюємо порожній список TrackedFiles  
                                                                   # TrackedFile зберігає інформацію про remote файл
@@ -981,6 +992,27 @@ def drain2():
                                                                   # sha, size, type, is_manual_conflict...
                                                                   # принагідно додаємо до них manual conflicts, які
                                                                   # на файловій системі зберігаються окремо(!) 
+                                                                  #
+                                                                  # ⚠️ RECONCILE (закриває "ЦЕ НОРМАЛЬНО???" STEP2
+                                                                  # і безгардовий сайт STEP3 — один фікс на джерелі,
+                                                                  # не два патчі на споживачах): для кожного
+                                                                  # tracked.is_manual_conflict==true, чийого шляху
+                                                                  # НЕМА у свіжому `manual_conflicts` (щойно
+                                                                  # повернутому `process_conflicts()` — реальний
+                                                                  # скан файлової системи, авторитетний), скидаємо
+                                                                  # is_manual_conflict=false тут, з гучним логом.
+                                                                  # Це ЛЕГІТИМНИЙ випадок — користувач вручну
+                                                                  # вирішив конфлікт (видалив/змержив sibling) між
+                                                                  # drain-ами; трактувати як критичний збій означало
+                                                                  # б блокувати drain через штатну дію користувача
+                                                                  # (порушення I6). Канон: PSEUDO-MERGE-MODE.md
+                                                                  # Scenario C — "конфлікт закритий, коли зникли
+                                                                  # ВСІ siblings". Після цього reconcile обидва
+                                                                  # споживачі (STEP2 рядок ~1189, STEP3 рядок
+                                                                  # ~1444) можуть покладатись на assert, а не на
+                                                                  # захисний код: якщо tracked.is_manual_conflict,
+                                                                  # то запис у manual_conflicts/conflict_list
+                                                                  # ГАРАНТОВАНО є.
                                                                   
             #==========================================================================================
             # Отримуємо SHA найновішої BranchHead для MAIN BRANCH
@@ -1154,7 +1186,7 @@ def drain2():
                        # якщо цього файлу в Vault вже нема, або він змінився - ігноруємо (SYNC-FIX.md, §12.5.B)
                        continue;
                    
-            tracked = tracked_files.get(local_file.path)
+            tracked = TrackedFiles.get(local.path)
             if tracked == null:
                 # додаємо в tracked base-info для нашого local FileInfo. Якщо цей файл вже є в tracked list, він може мати
                 # інші, проміжні значення base_sha/base_size (див §II), тому їх завантажувати з metadata.files, якщо вони 
@@ -1184,32 +1216,26 @@ def drain2():
                 })  
                 
             if tracked.is_manual_conflict:   
-                # згідно §II.6, STEP2:
+                # згідно §II.6, STEP2. Reconcile при restoreTrackedFilesFromDiskOrCreateNewOne
+                # (рядок ~976) гарантує: якщо tracked.is_manual_conflict тут true, запис у
+                # conflict_list ІСНУЄ — випадок "конфлікт розв'язано між drain-ами" уже
+                # відфільтровано на джерелі, тут лишається чистий assert, не захисна гілка.
                 conflict_base = conflict_list.get(tracked.base.path)
-                if conflict_base is null:
-                    # ФАЙЛ був у конфлікті, але зараз він знову вже не у конфлікті!
-                    # ЦЕ НОРМАЛЬНО??? - The mode is manual_confict, but conflict file is not found....
-                    tracked.is_manual_conflict = false
-                    # TODO: записати в лог що ми прийняли таке рішення
-                    # TODO: дослідити і перевірити чи це правильне рішення так чинити, чи краще вважати це критичним 
-                    #       збоєм????
-                    
-                    # continue in ordinal mode (перескакуємо наступну гілку `if conflict_base is null`)
-                else:    
-                    if conflict_base.sha != local.sha:
-                        # §II.7: журнал (conflict_list) як швидкий шлях, жива перевірка як
-                        # crash-safe fallback — замінює колишній bulk-diff conflict_files.
-                        if shouldPushToConflictBranch(local.path, local.sha, conflict_list, conflict_head_hash):
-                            local.mtime = now()  # час, коли файл покладено в список на конфлікт-коміт
-                            savedInRepoBlob = pushBlobWithRetry(local)     # мережеві ретраї як і скрізь;
-                                                                          # NETWORK_ERROR/TOKEN_EXPIRED
-                                                                          # пропагуються так само, як для commit
-                            conflict_commit.add(savedInRepoBlob)
-                            
-                        conflict_list.set(conflict_base.path) = local
-                         
-                    tracked.base = tracked.remote
-                    continue # process next file
+                assert conflict_base is not null
+                if conflict_base.sha != local.sha:
+                    # §II.7: журнал (conflict_list) як швидкий шлях, жива перевірка як
+                    # crash-safe fallback — замінює колишній bulk-diff conflict_files.
+                    if shouldPushToConflictBranch(local.path, local.sha, conflict_list, conflict_head_hash):
+                        local.mtime = now()  # час, коли файл покладено в список на конфлікт-коміт
+                        savedInRepoBlob = pushBlobWithRetry(local)     # мережеві ретраї як і скрізь;
+                                                                       # NETWORK_ERROR/TOKEN_EXPIRED
+                                                                       # пропагуються так само, як для commit
+                        conflict_commit.add(savedInRepoBlob)
+
+                    conflict_list.set(conflict_base.path) = local
+
+                tracked.base = tracked.remote
+                continue # process next file
                 
             #=====================================================================================================    
             # Not in manual conflict:
@@ -1223,7 +1249,7 @@ def drain2():
                continue
                    
             (D, diff_error) = _diff3(tracked, local)  # tracked має всередині BASE і REMOTE FileInfo-структури
-            if diff_error = TOKEN_EXPIRED:  # при спробі зчитати файли з repo для порівняння виникла помилка 
+            if diff_error == TOKEN_EXPIRED:  # при спробі зчитати файли з repo для порівняння виникла помилка 
                                             # TOKEN_EXPIRED
                 # зберігаємо файл-ознаку TOKEN_EXPIRED і завершуємо drain з помилкою
                 saveTokenExpiredMark()
@@ -1235,7 +1261,16 @@ def drain2():
             
             if diff_error != MANUAL_CONFLICT:
                 # нормальний режим (не НОВИЙ manual conflict). Відпрацьовуємо p.II.3-5 
-                if remote.sha != D.sha:  # потрібно робити push
+                if tracked.remote.sha != D.sha:  # потрібно робити push. (Трасування rolling base:
+                                                 # перший push local-only файлу — tracked.remote.sha
+                                                 # ще null (свіжий слот) ≠ D.sha → push, далі
+                                                 # tracked.remote = D; наступний батч C2, якщо
+                                                 # C2 != C1, не ловить short-circuit рядка 1217 →
+                                                 # diff3(C1,C2,D1=C1) → rule 5 → знову push. Крах-
+                                                 # рестарт: pull-folding (рядки ~1069+) оновлює
+                                                 # tracked.remote власним щойно запушеним вмістом →
+                                                 # short-circuit 1217 спрацьовує → skip. §II.3/II.4
+                                                 # обидва приклади тримаються.)
                     # push D
                     if D.blob is null:  # він може бути null, якщо _diff3 приймав рішення тільки по sha, а отже не було 
                                         # завантажено blob взагалі
@@ -1245,19 +1280,18 @@ def drain2():
                         if D.blob is null: # blob може не бути ще в SyncStore, якщо це remote file. Local files вже всі
                                            # мають бути представлені в SyncStore, ми про це подбали вище
                             # вантажимо цей блоб з repo i зберігаємо його в `.runtime/sync_store`:
-                            (D.blob, error) = getBlobFromRepo(D.sha) # продумати які ще дані потрібно для завантаження.
-                                                                     # чи одного github-sha достатньо для завантаження? 
-                            if diff_error = TOKEN_EXPIRED:
+                            (D.blob, error) = getBlobFromRepo(D.sha)
+                            if error == TOKEN_EXPIRED:
                                 # зберігаємо файл-ознаку TOKEN_EXPIRED і завершуємо drain з помилкою
                                 saveTokenExpiredMark()
-                                return diff_error    
+                                return error
                             if error == NETWORK_ERROR
                                 return error                                                
                                
                             if D.blob is null:
                                 return REMOTE_FILE_IS_NOT_EXIST_IN_REPO_ERROR(D.path)   
                                
-                            if not existInSyncStore(remote.sha): 
+                            if not existInSyncStore(D.sha): 
                                 saveBlobToSyncStore(D)
                         
                     try {    
@@ -1272,15 +1306,16 @@ def drain2():
                         # if network error - repeat or 
                         return NETWORK_ERROR
                    
-                if local.sha is not null or local.sha == tracked.base.sha: # якщо local.sha == null, це значить що 
-                                                                           # вона рівна base, тому нічого присвоювати 
-                                                                           # не треба 
-                    # §II.3-II.4                                                       
-                    tracked.base = local
-                else:
-                    # §II.5
-                    tracked.base = tracked.remote
-                   
+                # §II.3-II.4: безумовно. `local` тут — реальний запис з `batch`, а не placeholder;
+                # sha завжди визначений (DELETED нормалізується в сентинел усередині _diff3(),
+                # мутація видима викликачу; звичайний файл має sha за побудовою content-addressed
+                # store). Умовна else-гілка "§II.5" з чорнового псевдокоду була недосяжна:
+                # §II.5-файли (тільки remote, без жодного batch-запису) сюди взагалі не потрапляють
+                # — їхнє просування бази відбувається окремо, у Vault-step (рядок 1483,
+                # `tracked.base = tracked.remote`). Залишена умова суперечила сама собі (коментар
+                # обіцяв "нічого не присвоювати", код у цій же гілці присвоював).
+                assert local.sha is not null
+                tracked.base = local
                 tracked.remote = D
                    
             else: # NEW MANUAL CONFLICT: 
@@ -1411,52 +1446,94 @@ def drain2():
         if conflict_head_hash is null:
             # 404: гілку вже видалено раніше (напр. crash ПІСЛЯ delete, ДО очищення metadata —
             # див. §IV) — трактуємо як "уже фіналізовано", просто чистимо metadata і не падаємо.
-            atomicWrite(metadata.conflictBranchName = null; metadata.conflict_hash = null)
+            atomicWrite(metadata.conflictBranchName = null)  # persisted SHA-pointer скасовано (§II.7) — нема що ще чистити
         else if isAncestorOf(conflict_head_hash, head_hash):
             # Ідемпотентність: якщо conflict-branch tip вже reachable з main (попередня спроба
             # merge удалась, крах стався ПІСЛЯ merge, ДО delete-branch чи ДО запису на диск) —
             # повторний merge НЕ РОБИМО (GitHub або відмовить "nothing to merge", або мовчки
             # прийме no-op — обидва варіанти зайві мережеві виклики без потреби). Одразу видаляємо.
             deleteBranchIfExists(conflictBranchName)  # 404 = вже видалено = success, не помилка
-            atomicWrite(metadata.conflictBranchName = null; metadata.conflict_hash = null)
+            atomicWrite(metadata.conflictBranchName = null)  # persisted SHA-pointer скасовано (§II.7) — нема що ще чистити
         else:
             client.mergeBranches(conflict_head_hash, head_hash)  # merge-commit, два parent (§4.3
                                                                   # PSEUDO-MERGE-MODE.md)
             deleteBranchIfExists(conflictBranchName)
-            atomicWrite(metadata.conflictBranchName = null; metadata.conflict_hash = null)
+            atomicWrite(metadata.conflictBranchName = null)  # persisted SHA-pointer скасовано (§II.7) — нема що ще чистити
         # Жодних подальших push у цьому drain немає, тому "head_hash застарів після merge" —
         # структурно неможливо: нема наступного кроку, якому він був би потрібен.
 
-    # всі batches оброблено, тепер порівнюємо файли з tracked_files з оригінальними файлами в Vault і замінюємо їх, 
+    # всі batches оброблено, тепер порівнюємо файли з TrackedFiles з оригінальними файлами в Vault і замінюємо їх, 
     # видаляємо, зберігаємо conflict-siblings до них.     
+    vault_step_errors = []   # NETWORK_ERROR per-file — не абортує весь Vault-step (§IV.2 рядок 7)
     for tracked in TrackedFiles:
        if tracked.is_manual_conflict:
           # II.6.STEP3:
-          tracked.base = manual_conflicts.get(tracked.remote.path)
+          tracked.base = manual_conflicts.get(tracked.remote.path)  # conflict_base — push у
+                                                                    # conflict-branch, RECOVERABLE
+                                                                    # з репо (getBlobFromRepo), якщо
+                                                                    # sweep не встиг зачистити
+                                                                    # (§12.5 referenced-множина МУСИТЬ
+                                                                    # включати SHA з conflict_list —
+                                                                    # інакше зайва мережа тут)
           previous_sibling = manual_conflicts.getPreviousConflict(tracked.remote.path)
-          # TODO: blob мають бути вже правильно підвантажені, бо _diff3 вміє підвантажувати тільки з репо.  
+                                                                    # ⚠️ на відміну від conflict_base,
+                                                                    # sibling-контент ІСНУЄ ТІЛЬКИ у
+                                                                    # Vault (§II.6, "на сервер НЕ ЙДУТЬ")
+                                                                    # — з мережі невідновний. Тому
+                                                                    # getPreviousConflict() МУСИТЬ
+                                                                    # повертати FileInfo з уже
+                                                                    # заповненим `.blob` (прочитаним із
+                                                                    # sibling-файлу на диску), інакше
+                                                                    # _diff3() нижче впаде на
+                                                                    # LOCAL_FILE_IS_NOT_FOUND_ERROR —
+                                                                    # той самий клас бага, що й
+                                                                    # readVaultFileInfo нижче.
           # Vault step (II.6.STEP3):
           (D, diff_error) = _diff3(tracked, previous_sibling)
+          if diff_error == TOKEN_EXPIRED:
+              # Термінально для ВСЬОГО drain (як і скрізь у §III) — токен не відновиться сам між
+              # файлами, продовжувати цикл лише витрачає марні виклики.
+              saveTokenExpiredMark()
+              return diff_error
+          if diff_error == NETWORK_ERROR:
+              # На відміну від TOKEN_EXPIRED — транзієнтне, інші файли можуть пройти. Пропускаємо
+              # ЦЕЙ файл (tracked.base НЕ просувається → §IV.2 рядок 7: наступний drain повторить
+              # рівно цей Vault-крок для нього), збираємо для звіту в кінці, йдемо далі.
+              vault_step_errors.add({path: tracked.remote.path, error: diff_error})
+              continue
           if diff_error != MANUAL_CONFLICT:
              # видаляємо попередній sibling файл і зберігаємо поточний замість нього в Vault і в таблицю
-             manual_conflict.remove(previous_sibling)
+             manual_conflicts.remove(previous_sibling)
+             D.mtime = tracked.remote.mtime  # РІШЕННЯ ВЛАСНИКА (2026-08-23): дата remote-коміту,
+                                             # НЕ момент запису. _diff3() завжди повертає D.mtime=null
+                                             # для свіжозлитого результату — без цього присвоєння
+                                             # timestamp у назві sibling-файлу був би відсутній.
              saveConflictSiblingFile(D)
-             manual_conflict.add(D)
+             manual_conflicts.add(D)
           else:
-             # Зберігаємо новий, старий не чіпаємо:
-             savConflictSiblingFile(tracked.remote)
-             manual_conflict.add(tracked.remote)
+             # Зберігаємо новий, старий не чіпаємо. tracked.remote.mtime вже присутній (заповнюється
+             # при кожному pull-фолдингу, §III) — той самий timestamp-принцип, без додаткового кроку:
+             saveConflictSiblingFile(tracked.remote)
+             manual_conflicts.add(tracked.remote)
        else: 
           if tracked.base.sha != tracked.remote.sha:   
               # Vault-step in II.3 and II.4
               # `local` тут — ЖИВИЙ файл з Vault, прочитаний ЗАРАЗ (в кінці drain), а не файл з
               # батча (той міг бути запушений і забутий десятки batches тому). Читаємо наостанок,
               # бо саме зараз вирішуємо, що йде у Vault.
-              vault_entry = readVaultFileInfo(tracked.remote.path)  # {path, size, sha, mode} або
-                                                                    # {mode: DELETED}, якщо файлу немає
+              vault_entry = readVaultFileInfo(tracked.remote.path)  # {path, size, sha, mode, blob} або
+                                                                    # {exists: false}, якщо файлу немає.
+                                                                    # `.blob` ЗАПОВНЕНИЙ — байти вже
+                                                                    # прочитані, щоб порахувати SHA,
+                                                                    # тримати їх коштує нуль додаткового
+                                                                    # I/O. Без цього _diff3() нижче не
+                                                                    # знайшов би blob цього ЖИВОГО
+                                                                    # vault-вмісту в sync_store/ (він
+                                                                    # там ніколи не був застейджений) і
+                                                                    # впав би на LOCAL_FILE_IS_NOT_FOUND.
               if vault_entry.exists:
                   local = FileInfo(path=vault_entry.path, size=vault_entry.size,
-                                    sha=vault_entry.sha, mode="", blob=null)
+                                    sha=vault_entry.sha, mode="", blob=vault_entry.blob)
               else:
                   # РІШЕННЯ ВЛАСНИКА (2026-08-23): користувач міг видалити файл з Vault, ПОКИ
                   # цей drain ще тривав (файл потрапив у TrackedFiles ще до видалення). Трактуємо
@@ -1470,6 +1547,16 @@ def drain2():
                   # Намір користувача на видалення має ту саму вагу, коли б він не стався.
                   local = FileInfo(path=tracked.remote.path, size=null, sha=null, mode=DELETED, blob=null)
               (D, diff_error) = _diff3(tracked, local)  # tracked має всередині BASE і REMOTE FileInfo-структури
+              if diff_error == TOKEN_EXPIRED:
+                  saveTokenExpiredMark()
+                  return diff_error
+              if diff_error == NETWORK_ERROR:
+                  # тут _diff3() тягне base-blob з репо навіть для §II.5-файлів (тільки-remote) —
+                  # мережева помилка тепер мейнлайн, не рідкість. Пропускаємо файл, tracked.base
+                  # НЕ просувається (не доходимо до рядка "tracked.base = tracked.remote" нижче) →
+                  # §IV.2 рядок 7 покриває безпечний повтор наступним drain.
+                  vault_step_errors.add({path: tracked.remote.path, error: diff_error})
+                  continue
               if diff_error == MANUAL_CONFLICT:
                   # додаємо новий конфлікт для даного файла.
                   # якщо вже були конфлікти - додаємо новий, якщо ще не було - створюємо новий і додаємо його
@@ -1484,6 +1571,11 @@ def drain2():
           else:
               # tracked.base.sha == tracked.remote.sha (змін в Vault не робимо взагалі). base залишається з tracked.base
               null         
+
+    if len(vault_step_errors) > 0:
+        # Не критично для drain (batches вже успішно допушені) — але користувач має знати, що
+        # частина remote-контенту НЕ потрапила у Vault цього разу і чекає наступного sync.
+        logWarning("Vault-step: N файлів пропущено через мережеву помилку", vault_step_errors)
                 
     # зберігаємо всі head правильно в metadata на диск
     # save_metadata() 
@@ -1521,7 +1613,15 @@ def drain2():
 | **Push у CONFLICT-BRANCH** | Так, ПІСЛЯ фіксу §II.7 | `shouldPushToConflictBranch()` (§II.7) не залежить від персистованого `conflict_hash` — за потреби йде живою перевіркою `getContentsMetadataAtRef` проти поточної голови гілки. До фіксу STEP1 не мав цієї перевірки взагалі — саме це й лагодить §II.7. |
 | **Merge conflict-branch → main** (finalize, §III) | Так, через ancestor-check | `isAncestorOf(conflict_head_hash, head_hash)` перед merge (§III, блок FINALIZE) — якщо гілка вже влита, merge не повторюється. |
 | **Delete conflict-branch** | Так, 404-толерантно | `deleteBranchIfExists` трактує "гілки вже нема" як успіх, не помилку — крах МІЖ delete і записом на диск не відрізняється від "ще не видаляли" для наступної спроби. |
-| **Vault-step запис** (`updateFileInVault`, `saveConflictSiblingFile`) | Так, через `atomicWriteFile`/rename | Запис того самого вмісту вдруге — той самий байтовий результат; крах-recovery для atomic write вже покритий існуючим `AtomicWriteRecovery.sweep` (SYNC2.md §10), новий механізм не потрібен. |
+| **Vault-step запис** (`updateFileInVault`, `saveConflictSiblingFile`) | Так, через `atomicWriteFile`/rename | Запис того самого вмісту вдруге — той самий байтовий результат; крах-recovery для atomic write вже покритий існуючим `AtomicWriteRecovery.sweep` (SYNC2.md §10), новий механізм не потрібен. `readVaultFileInfo`/`getPreviousConflict` тепер повертають `.blob` одразу (§III) — без цього `_diff3()` тут падав би на `LOCAL_FILE_IS_NOT_FOUND_ERROR` при КОЖНОМУ виклику, а не лише при краху. NETWORK_ERROR — per-file skip-and-continue (§III), не абортить решту Vault-step; `tracked.base` для пропущеного файлу не просувається, тому рядок 7 нижче однаково коректний і для "крах" і для "мережева помилка на одному файлі серед багатьох". |
+
+**Передумова, на якій тримаються рядки 1/2 нижче (не мережевий side-effect, а чиста in-memory
+реконструкція): reconciliation `is_manual_conflict` при відновленні.** `restoreTrackedFilesFromDiskOrCreateNewOne`
+(§III) скидає `is_manual_conflict` для будь-якого шляху, відсутнього у свіжому `manual_conflicts`
+(реальний скан ФС від `process_conflicts()`). Без цього STEP2/STEP3 могли б впасти в
+неозначену поведінку не лише після краху, а й у ЗВИЧАЙНОМУ випадку "користувач розв'язав конфлікт
+між drain-ами" — це не крах-сценарій, але й для нього потрібна явна відповідь, і вона та сама:
+довіряти щойно відновленому стану, а не застарілому прапорцю.
 
 ### IV.2 Точки краху над послідовністю "один batch"
 
@@ -1533,7 +1633,7 @@ def drain2():
 | 1 | Під час R3b claim (§II.8) | `.attempted-commit` і/або `.attempted` можуть лишитись | `getBatch()` виконує crash-recovery гілку (§II.8) | IV.1 рядок 1 |
 | 2 | Після claim, ДО будь-якого push | Batch у `push_queue/` незмінний | Повний цикл `_diff3` над файлами batch-у з нуля | Читання ідемпотентне (blob-и content-addressed) |
 | 3 | ПІСЛЯ push у MAIN, ДО запису на диск | Remote head УЖЕ рухнувся, локально ще стара `head_hash` | `restart_batch=true` (стартове значення) → свіжий diff бачить власний push як "remote" | IV.1 рядок 3 |
-| 4 | ПІСЛЯ push у CONFLICT-BRANCH, ДО запису на диск | Гілка вже містить коміт, `conflict_list`/`conflict_hash` на диску застарілі | STEP1/STEP2 знову намагаються пушити той самий шлях | IV.1 рядок 4 (`shouldPushToConflictBranch` бачить SHA вже там) |
+| 4 | ПІСЛЯ push у CONFLICT-BRANCH, ДО запису на диск | Гілка вже містить коміт, `conflict_list` на диску застарілий (`conflict_hash` більше не персистується — §II.7) | STEP1/STEP2 знову намагаються пушити той самий шлях | IV.1 рядок 4 (`shouldPushToConflictBranch` бачить SHA вже там) |
 | 5 | Між push MAIN і push CONFLICT-BRANCH (для одного batch) | Одна гілка просунулась, інша — ні | Незалежний redo кожної: MAIN-частина йде по рядку 3, CONFLICT-частина — по рядку 4 | Обидва push незалежні (різні refs, §VI) |
 | 6 | Під час FINALIZE (merge/delete), ДО запису на диск | Гілка може бути влита і/або видалена, metadata — ні | FINALIZE знову запускається на наступному drain (не в циклі по батчах — виконується щоразу, коли `conflictBranchName != null`) | IV.1 рядки 5-6 |
 | 7 | Під час Vault-step, ПОСЕРЕД `for tracked in TrackedFiles` | Частина файлів у Vault уже оновлена, частина — ні; `TrackedFiles`-журнал ще НЕ видалено (він видаляється лише в самому кінці, п.3 фінального блоку §III) | `for`-цикл виконується заново для ВСІХ tracked-файлів; вже записані — записуються тим самим вмістом вдруге | IV.1 рядок 7 (перезапис того самого — no-op) |
@@ -1582,6 +1682,26 @@ recovery-коду.
 різну природу: частина — це чиста CPU-робота чи мережевий I/O за НЕЗАЛЕЖНИМИ шляхами (паралелити
 безпечно й вигідно), частина — послідовна за дизайном (паралелити НЕБЕЗПЕЧНО, а не просто "поки не
 робили").
+
+### VI.0 `diff3()` — НЕ на main thread, навіть для ОДНОГО файлу. Це вже вирішено, не нова вимога
+
+Синхронний стиль §III (`d = diff3(base.blob, local.blob, remote.blob)`, звичайний виклик функції)
+приховує те, що фактичний виклик 3-way merge **зобов'язаний** іти через CPU worker pool — і це не
+паралелізм заради швидкодії (те, про що §VI.1-VI.4 нижче), а окрема, жорсткіша вимога: без цього
+merge ВЕЛИКОГО файлу підвішує UI thread, і користувач не може торкнутись Vault, поки один-єдиний
+diff3-виклик не завершиться. Це вже архітектурно вирішено в проєкті, не нова ідея для NEW-DRAIN:
+`src/worker/cpu-worker.ts` вже виносить `merge-text` (обгортка над `node-diff3`), обчислення SHA і
+base64-decode з main thread у CPU worker pool (SYNC2.md §8, `.claude/rules/sync2-engine.md`,
+"Stage 4-6 … moved every hot-path CPU operation … off the main thread"). Той самий механізм
+застосовний тут без змін — новий алгоритм не міняє, ЩО таке diff3-виклик, лише ЯК drain доходить до
+нього.
+
+Це узгоджується з наявним запобіжником: `maximum_auto_merge_file_size` (§II.1, п.9) уже обмежує, які
+файли взагалі доходять до `diff3()` — а `SYNC2.md §9` документує ту саму турботу з іншого боку
+("single-MB merge cliff still bites… size guard §8.6 covers the worst cases"). Тобто три механізми
+(розмір-кап, worker-виконання, size guard) — про одне й те саме занепокоєння, кожен закриває свою
+частину: кап не пускає геть величезні файли в merge узагалі, worker гарантує, що ті, які пройшли, не
+блокують UI, size guard — запасний рубіж для того, що проскочило повз обидва.
 
 ### VI.1 Дві тверді межі
 
@@ -1682,4 +1802,9 @@ per-file-обробка (нижче) паралельна, але побудов
    якщо ні. Записано тут, щоб не переглядалось повторно.
 3. **Масштаб `TrackedFiles` — ВИРІШЕНО (2026-08-23).** Сотні файлів за один drain — типовий випадок
    (§V). Ping-pong journal достатній; append-log НЕ реалізовувати, доки цей факт не зміниться.
-```
+4. **Timestamp у назві conflict-sibling-file — ВИРІШЕНО (2026-08-23).** Завжди `tracked.remote.mtime`
+   (дата remote-коміту на GitHub), НІКОЛИ не момент запису на диск. Раніше §II.6 STEP3 казав
+   "з власним timestamp" — це була реальна розбіжність із §III (не-конфліктна гілка Vault-step),
+   а не два законних випадки; виправлено в обох місцях (§II.6 прозі та §III STEP3 псевдокоді,
+   явним `D.mtime = tracked.remote.mtime` перед збереженням, бо `_diff3()` завжди повертає
+   `mtime=null` для свіжозлитого результату).
