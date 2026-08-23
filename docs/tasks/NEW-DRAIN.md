@@ -1167,6 +1167,11 @@ def drain2():
     
         commit = createCommit();                       # створюємо порожній список файлів для коміту в main branch
         conflict_commit = createCommit();              # створюємо порожній список файлів для коміту в conflict branch 
+        main_push_tracked = [];                        # tracked-записи, чий .remote щойно замінено на D цього
+                                                        # batch і РЕАЛЬНО пушиться в MAIN — mtime їм проставляємо
+                                                        # НЕ тут (під час цього for), а нижче, ОДИН РАЗ, одразу
+                                                        # після підтвердженого успіху pushCommit() (§III, "mtime
+                                                        # інваріант" нижче)
                                                        
         #=========================================================================================    
         # Обробляємо всі файли в поточному batch. Кожний batch обробляється як одна транзакція - або його обробляємо 
@@ -1302,10 +1307,13 @@ def drain2():
                             if not existInSyncStore(D.sha): 
                                 saveBlobToSyncStore(D)
                         
-                    D.mtime = now()  # TODO: перевірити, чи я правильно вибрав місце зміни mtime. Це час коміту
-                                     #       даного файлу, вірніше час, коли цей файл було покладено в список на 
-                                     #       commit. Може краще пізніше проставляти mtime всіх файлів в коміті 
-                                     #       під час фактичного push? 
+                    # D.mtime НЕ ставимо тут: TODO закрито (2026-08-23, за наводкою advisor) —
+                    # tracked.remote.mtime мусить БУТИ точною датою remote-коміту в будь-якому
+                    # випадку, а не лише коли контент прийшов з pull. Посеред цього for-циклу ми
+                    # ще й не знаємо справжньої дати — GitHub призначає її лише в момент обробки
+                    # pushCommit() нижче, і то ОДНУ на весь batch (commit атомарний). Замість
+                    # локального здогаду — main_push_tracked: єдиний список, якому нижче
+                    # проставляється АВТОРИТЕТНА дата з відповіді GitHub.
                     (savedInRepoBlob, error) = saveBlobToGitHub(D)  # (blob, error) — той самий контракт, що й
                                                                     # getBlobFromRepo вище, для однакової обробки
                     if error == TOKEN_EXPIRED:
@@ -1314,6 +1322,7 @@ def drain2():
                     if error == NETWORK_ERROR:
                         return error
                     commit.add(savedInRepoBlob)
+                    main_push_tracked.add(tracked)  # tracked.remote (=D нижче) отримає mtime після push
                    
                 # §II.3-II.4: безумовно. `local` тут — реальний запис з `batch`, а не placeholder;
                 # sha завжди визначений (DELETED нормалізується в сентинел усередині _diff3(),
@@ -1353,11 +1362,25 @@ def drain2():
         if len(commit)>0:  # якщо commit порожній (нема файів), коміт ігнорується
             while true:
                 try:
-                    new_head_hash = pushCommit(commit, head_hash)  
+                    (new_head_hash, committed_at) = pushCommit(commit, head_hash)  # committed_at =
+                                        # committer.date з відповіді GitHub Create-Commit API —
+                                        # pushCommit() і так парсить цю відповідь заради sha, друге
+                                        # поле дістається майже безкоштовно
                     head_hash = new_head_hash   # ⚠️ ОБОВ'ЯЗКОВО: без цього наступний batch (якщо
                                                 # restart_batch лишився false) пушить проти
                                                 # ЗАСТАРІЛОГО head_hash → гарантований 422 на
                                                 # кожному наступному batch
+                    # mtime-інваріант: tracked.remote.mtime ЗАВЖДИ дата remote-коміту цього
+                    # вмісту — і коли він прийшов з pull (Compare API, `file.mtime`, рядок ~1113),
+                    # і коли це наш власний push (тут, `committed_at`). Обидва джерела — дата, яку
+                    # ФАКТИЧНО призначив GitHub, ніколи не локальний годинник: якщо після
+                    # успішного push drain впаде ДО персисту TrackedFiles, рестарт підбере той
+                    # самий коміт через pull-folding і отримає БУКВАЛЬНО те саме значення з
+                    # Compare API — без цього (з локальним now()) шлях-без-краху і шлях-з-крахом
+                    # дали б різний mtime для того самого вмісту. Один timestamp на весь batch —
+                    # commit на GitHub атомарний, усі його файли мають одну спільну дату.
+                    for t in main_push_tracked:
+                        t.remote.mtime = committed_at
                     error422_count = 0          # 422-CAP: скидаємо лічильник на будь-якому успіху
                     break 
                 catch e: TOKEN_EXPIRED:
@@ -1397,9 +1420,16 @@ def drain2():
             while cnt<3:
                 try:   
                     conflict_head_hash = getBranchHeadSha(conflictBranchName);   # null, якщо гілки ще нема
-                    conflict_head_hash = client.pushCommit(conflict_commit, conflict_head_hash, conflictBranchName); 
-                                                                       # якщо conflict_head_hash = null, отже ще нема 
-                                                                       # conflict branch, тоді він створюється                                                      
+                    (conflict_head_hash, _) = client.pushCommit(conflict_commit, conflict_head_hash, conflictBranchName);
+                                                                       # той самий (hash, committed_at) контракт,
+                                                                       # що й pushCommit() вище — тут committed_at
+                                                                       # свідомо ігнорується (`_`): conflict-branch
+                                                                       # вміст на sibling-timestamp не впливає
+                                                                       # (§II.7 — conflict_list звіряється лише по
+                                                                       # sha, sibling-назви беруть tracked.remote.mtime,
+                                                                       # не дату конфлікт-коміту)
+                                                                       # якщо conflict_head_hash = null, отже ще нема
+                                                                       # conflict branch, тоді він створюється
                     error422_count = 0   # 422-CAP: успіх (у будь-якій з двох гілок) скидає лічильник
                     break
                 catch e: ERROR422:
@@ -1503,7 +1533,12 @@ def drain2():
                                                                     # той самий клас бага, що й
                                                                     # readVaultFileInfo нижче.
           # Vault step (II.6.STEP3):
-          (D, diff_error) = _diff3(tracked, previous_sibling)
+          # Назва навмисно НЕ `D` — на відміну від main-loop D (§III, "Not in manual conflict"),
+          # цей результат ніколи не пушиться на GitHub, він стає вмістом sibling-файлу. Різні D
+          # в різних циклах з однаковою назвою раніше зчитувались як суперечність (власник,
+          # 2026-08-23) — окремі імена усувають плутанину структурно, без коментаря, який треба
+          # пам'ятати читати.
+          (merged_sibling, diff_error) = _diff3(tracked, previous_sibling)
           if diff_error == TOKEN_EXPIRED:
               # Термінально для ВСЬОГО drain (як і скрізь у §III) — токен не відновиться сам між
               # файлами, продовжувати цикл лише витрачає марні виклики.
@@ -1518,12 +1553,16 @@ def drain2():
           if diff_error != MANUAL_CONFLICT:
              # видаляємо попередній sibling файл і зберігаємо поточний замість нього в Vault і в таблицю
              manual_conflicts.remove(previous_sibling)
-             D.mtime = tracked.remote.mtime  # РІШЕННЯ ВЛАСНИКА (2026-08-23): дата remote-коміту,
-                                             # НЕ момент запису. _diff3() завжди повертає D.mtime=null
-                                             # для свіжозлитого результату — без цього присвоєння
-                                             # timestamp у назві sibling-файлу був би відсутній.
-             saveConflictSiblingFile(D)
-             manual_conflicts.add(D)
+             merged_sibling.mtime = tracked.remote.mtime  # РІШЕННЯ ВЛАСНИКА (2026-08-23): дата
+                                             # remote-коміту, НЕ момент запису. _diff3() завжди
+                                             # повертає mtime=null для свіжозлитого результату —
+                                             # без цього присвоєння timestamp у назві sibling-файлу
+                                             # був би відсутній. tracked.remote.mtime тепер ЗАВЖДИ
+                                             # точна дата remote-коміту (і для pull, і для власного
+                                             # push — див. інваріант і фікс нижче, §III main-loop) —
+                                             # це рішення тримається строго, не приблизно.
+             saveConflictSiblingFile(merged_sibling)
+             manual_conflicts.add(merged_sibling)
           else:
              # Зберігаємо новий, старий не чіпаємо. tracked.remote.mtime вже присутній (заповнюється
              # при кожному pull-фолдингу, §III) — той самий timestamp-принцип, без додаткового кроку:
@@ -1560,7 +1599,9 @@ def drain2():
                   #     конфлікт, що й у звичайному, не-drain сценарії §5.2 PSEUDO-MERGE-MODE.md).
                   # Намір користувача на видалення має ту саму вагу, коли б він не стався.
                   local = FileInfo(path=tracked.remote.path, size=null, sha=null, mode=DELETED, blob=null)
-              (D, diff_error) = _diff3(tracked, local)  # tracked має всередині BASE і REMOTE FileInfo-структури
+              # Назва навмисно НЕ `D` — див. коментар біля _diff3(tracked, previous_sibling) вище:
+              # цей результат теж ніколи не пушиться, він йде прямо у Vault.
+              (vault_result, diff_error) = _diff3(tracked, local)  # tracked має всередині BASE і REMOTE FileInfo-структури
               if diff_error == TOKEN_EXPIRED:
                   saveTokenExpiredMark()
                   return diff_error
@@ -1579,8 +1620,9 @@ def drain2():
                   manual_conflicts.add(tracked.remote)
                   saveConflictSiblingFile(tracked.remote) # timestamp в назві файлу беремо з tracked.remote.mtime
               else: 
-                  updateFileInVault(D);  # замінити base-file в Vault на D (атомарно, rename або, якщо файл 
-                                         # відкритий - перезаписом). Якщо D.mode == DELETED, тоді файл локально видаляється
+                  updateFileInVault(vault_result);  # замінити base-file в Vault на vault_result (атомарно,
+                                         # rename або, якщо файл відкритий - перезаписом). Якщо
+                                         # vault_result.mode == DELETED, тоді файл локально видаляється
               tracked.base = tracked.remote 
           else:
               # tracked.base.sha == tracked.remote.sha (змін в Vault не робимо взагалі). base залишається з tracked.base
@@ -1820,5 +1862,28 @@ per-file-обробка (нижче) паралельна, але побудов
    (дата remote-коміту на GitHub), НІКОЛИ не момент запису на диск. Раніше §II.6 STEP3 казав
    "з власним timestamp" — це була реальна розбіжність із §III (не-конфліктна гілка Vault-step),
    а не два законних випадки; виправлено в обох місцях (§II.6 прозі та §III STEP3 псевдокоді,
-   явним `D.mtime = tracked.remote.mtime` перед збереженням, бо `_diff3()` завжди повертає
-   `mtime=null` для свіжозлитого результату).
+   явним `merged_sibling.mtime = tracked.remote.mtime` перед збереженням, бо `_diff3()` завжди
+   повертає `mtime=null` для свіжозлитого результату).
+5. **mtime-інваріант для `tracked.remote` + ім'я `D` розведено — ВИРІШЕНО (2026-08-23, за наводкою
+   advisor, двома раундами).** §III мав ДВІ різні змінні `D` в різних циклах (main-loop
+   push-результат і Vault-step sibling-результат) з однаковою назвою — власник прочитав це як
+   суперечність із п.4 вище. Раунд 1: Vault-step `D` перейменовано на `merged_sibling` /
+   `vault_result` — усуває колізію імен структурно.
+   Раунд 2 — власник слушно засумнівався: "чи ми дійсно маємо зберігати push-time, а не час
+   remote-коміту від пристрою-автора?" Перевірка pull-шляху (рядок ~1113,
+   `tracked_file.remote.mtime = file.mtime`) показала: там mtime — це `file.mtime` з
+   `getChangedFilesFromGitHubRepo()`, АВТОРИТЕТНА дата з GitHub API, не локальний здогад. Перший
+   фікс (`main_push_time = now()`) був асиметричним — локальний годинник замість того самого
+   джерела істини. Виправлено: `pushCommit()` тепер повертає `(new_head_hash, committed_at)`,
+   де `committed_at` = `committer.date` з відповіді GitHub Create-Commit API (та сама відповідь,
+   яку функція і так парсить заради sha); `main_push_tracked` після підтвердженого успіху
+   проставляє САМЕ це значення, не `now()`. Крім симетрії з pull-шляхом, це закриває crash-
+   consistency діру: якщо drain впаде ПІСЛЯ успішного push, ДО персисту TrackedFiles, рестарт
+   підбере той самий коміт через pull-folding і отримає те саме значення з Compare API — з
+   `now()` шлях-без-краху і шлях-з-крахом дали б РІЗНИЙ mtime для того самого вмісту, з
+   `committed_at` вони byte-ідентичні. `conflict_commit`-шлях (`client.pushCommit(...)`, рядок
+   ~1421) отримав той самий `(hash, committed_at)`-контракт для узгодженості, але
+   `committed_at` там свідомо ігнорується (`_`) — conflict-branch вміст на sibling-timestamp не
+   впливає (§II.7: `conflict_list` звіряється лише по sha). Інваріант тепер строгий, без
+   винятків і без локального годинника: `tracked.remote.mtime` = дата GitHub-коміту, який дав
+   цей вміст, хто б його не пушив. Закриває TODO, що висів на цьому рядку з чернетки.
