@@ -851,7 +851,7 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
            # вантажаимо цей блоб з repo i зберігаємо його в `.runtime/sync_store`:
            (remote.blob, error) = getBlobFromRepo(remote.sha) # продумати які ще дані потрібно для завантаження.
                                                               # чи одного github-sha достатньо для завантаження? 
-           if error = TOKEN_EXPIRED:
+           if error == TOKEN_EXPIRED:
                return (null, error)  
                
            if error == NETWORK_ERROR
@@ -871,7 +871,11 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
             # вантажаимо цей блоб з repo i зберігаємо його в `.runtime/sync_store`:
             (base.blob, error) = getBlobFromRepo(base.sha) # продумати які ще дані потрібно для завантаження.
                                                            # чи одного github-sha достатньо для завантаження? 
-            if error == NETWORK_ERROR
+            if error == TOKEN_EXPIRED:  # той самий контракт, що й вище для remote.blob — без цього
+                                        # протухлий токен тут помилково впав би в
+                                        # BASE_FILE_IS_NOT_EXIST_IN_REPO_ERROR нижче
+                return (null, error)
+            if error == NETWORK_ERROR:
                 return (null, error)                                                
                
             if base.blob is null:
@@ -1227,9 +1231,13 @@ def drain2():
                     # crash-safe fallback — замінює колишній bulk-diff conflict_files.
                     if shouldPushToConflictBranch(local.path, local.sha, conflict_list, conflict_head_hash):
                         local.mtime = now()  # час, коли файл покладено в список на конфлікт-коміт
-                        savedInRepoBlob = pushBlobWithRetry(local)     # мережеві ретраї як і скрізь;
-                                                                       # NETWORK_ERROR/TOKEN_EXPIRED
-                                                                       # пропагуються так само, як для commit
+                        (savedInRepoBlob, error) = saveBlobToGitHub(local)  # той самий (blob, error)
+                                                                            # контракт, що й для MAIN push
+                        if error == TOKEN_EXPIRED:
+                            saveTokenExpiredMark()
+                            return error
+                        if error == NETWORK_ERROR:
+                            return error
                         conflict_commit.add(savedInRepoBlob)
 
                     conflict_list.set(conflict_base.path) = local
@@ -1294,17 +1302,18 @@ def drain2():
                             if not existInSyncStore(D.sha): 
                                 saveBlobToSyncStore(D)
                         
-                    try {    
-                        D.mtime = now()  # TODO: перевірити, чи я правильно вибрав місце зміни mtime. Це час коміту
-                                         #       даного файлу, вірніше час, коли цей файл було покладено в список на 
-                                         #       commit. Може краще пізніше проставляти mtime всіх файлів в коміті 
-                                         #       під час фактичного push? 
-                        savedInRepoBlob = saveBlobToGitHub(D)
-                        commit.add(savedInRepoBlob)
-                    }
-                    catch NETWORK_ERRORS # обробляємо тут (чи в самому saveBlobToGitHub() збої мережі з повторами
-                        # if network error - repeat or 
-                        return NETWORK_ERROR
+                    D.mtime = now()  # TODO: перевірити, чи я правильно вибрав місце зміни mtime. Це час коміту
+                                     #       даного файлу, вірніше час, коли цей файл було покладено в список на 
+                                     #       commit. Може краще пізніше проставляти mtime всіх файлів в коміті 
+                                     #       під час фактичного push? 
+                    (savedInRepoBlob, error) = saveBlobToGitHub(D)  # (blob, error) — той самий контракт, що й
+                                                                    # getBlobFromRepo вище, для однакової обробки
+                    if error == TOKEN_EXPIRED:
+                        saveTokenExpiredMark()
+                        return error
+                    if error == NETWORK_ERROR:
+                        return error
+                    commit.add(savedInRepoBlob)
                    
                 # §II.3-II.4: безумовно. `local` тут — реальний запис з `batch`, а не placeholder;
                 # sha завжди визначений (DELETED нормалізується в сентинел усередині _diff3(),
@@ -1323,7 +1332,12 @@ def drain2():
                 # без неї рестарт після краху "push вдався, диск не встиг записати" дублює коміт.
                 if shouldPushToConflictBranch(local.path, local.sha, conflict_list, conflict_head_hash):
                     local.mtime = now()
-                    savedInRepoBlob = pushBlobWithRetry(local)   # мережеві ретраї як і скрізь
+                    (savedInRepoBlob, error) = saveBlobToGitHub(local)
+                    if error == TOKEN_EXPIRED:
+                        saveTokenExpiredMark()
+                        return error
+                    if error == NETWORK_ERROR:
+                        return error
                     conflict_commit.add(savedInRepoBlob)
                 manual_conflicts.add(local)                   # conflict_base це і є запис у форматі FileInfo 
                                                               # в manual_conflicts[filename]
