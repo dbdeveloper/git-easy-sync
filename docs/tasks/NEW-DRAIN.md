@@ -674,7 +674,10 @@ CRASH_RECOVERY(dir):
         return getBatch()   # наступний каталог (якщо є) або null
 
     for (path, sha, size) in batch.entries:
-        if not existsInSyncStore(sha):
+        if not existInSyncStore(sha, size):  # §II.9: та сама функція, той самий (sha, size)
+                                              # контракт — обрізаний після краху batch-blob тепер
+                                              # ловиться тут само (розмір не збігається), а не
+                                              # мовчки трактується як "уже на місці"
             # спробувати долатати з живого Vault (той самий принцип, що й §12.6). Size-перед-SHA
             # (§I.2 примітка, SYNC-FIX.md §12.9): stat дешевий, hash — ні (2 МБ → 6.3 мс,
             # 50 МБ → 107 мс). Розбіжність розміру ОДРАЗУ доводить "ремонт неможливий" — нема
@@ -706,6 +709,80 @@ CRASH_RECOVERY(dir):
 `conflict_commit` і `conflictBranchName`, НІКОЛИ не через `push_queue/` — drain більше не є
 appender-ом ні за яких обставин. Прогалина закрита структурно, не патчем (це саме те, що SYNC-FIX.md
 §12 вже передбачив: "Синтетичні батчі… скасовано, тож відкрита прогалина… закривається окремо").
+
+## II.9 sync_store читання — hash-on-load, а не ім'я-як-доказ
+
+⚠️ §12.1 SYNC-FIX.md стверджує: "ім'я саме себе доводить: SHA(вміст) == назва файлу. Жодних
+додаткових метаданих для перевірки цілісності." Це правда лише ЗА УМОВИ, що запис завжди
+завершується повністю — а на мобільній файловій системі це не гарантовано навіть із
+temp+rename: метадані (розмір, факт rename) можуть журналюватись РАНІШЕ за самі байти даних,
+тож після раптового power-loss файл здатен мати **правильний розмір і сміттєвий вміст
+усередині**. Через Obsidian vault-adapter fsync ми не контролюємо — отже єдина жорстка
+гарантія: хешувати САМІ байти, які підуть у diff3/push, у момент, коли вони й так завантажуються
+в пам'ять (blob уже читається цілком для `_diff3()` — стрімінгу тут ніде немає).
+
+**Триступенева перевірка, найдешевша спочатку:**
+
+```
+getBlobFromSyncStore(sha, size):
+    if sha in verified_shas:             # per-drain in-memory Set — уже пройшов hash цього
+                                          # запуску (типовий випадок "ours став theirs", §12.2:
+                                          # той самий blob читається десятки разів за один drain)
+        return readBytes(sync_store/{sha})   # довіряємо: вміст за цим іменем не змінюється
+                                              # заднім числом (content-addressed)
+    
+    stat = statFile(sync_store/{sha})
+    if stat is null:
+        return null                      # немає взагалі — не помилка, звичайний cache miss
+    if stat.size != size:
+        # §12.9 fast-fail: НЕ тягнемо у RAM файл, довжина якого вже суперечить очікуваній.
+        # Побитий (обрізаний після краху посеред запису) — найімовірніша причина.
+        logWarning("sync_store: розмір не збігається з очікуваним — вважаємо биту копію", sha, stat.size, size)
+        return null
+    
+    bytes = readBytes(sync_store/{sha})    # читаємо — розмір уже дешево підтверджено
+    if getSha(bytes) != sha:               # у cpu-worker, як і всі SHA в цьому проєкті
+        # Розмір міг збігтись випадково (power-loss без fsync лишає ПРАВИЛЬНУ довжину і
+        # сміттєвий вміст — саме той випадок, який крок вище пропускає, а цей ловить).
+        logWarning("sync_store: SHA не збігається після зчитування — бита копія", sha)
+        return null
+    
+    verified_shas.add(sha)                 # хешувати цей SHA цього drain більше не треба
+    return bytes
+```
+
+`verified_shas = new Set()` оголошується там само, де інший drain-scoped стан (поруч із
+`TrackedFiles`, на самому старті `drain2()`) — живе рівно один запуск drain, не персистується
+(наступний запуск перевіряє наново — дешево, бо стосується лише файлів, які реально читаються).
+
+**Виявлення уніфіковане, ВІДНОВЛЕННЯ — ні (§12.3, дві породи):**
+
+- **`remote`/`base` (recoverable мережею):** `getBlobFromSyncStore` повертає `null` однаково і на
+  "нема файлу", і на "є, але битий" — виклику навколо (§II.1, рядки ~845-885) це вже байдуже,
+  обидва випадки однаково падають у `getBlobFromRepo()`. Жодної зміни в логіці виклику не
+  потрібно — вона вже так написана.
+- **`local` (unrecoverable з мережі):** той самий `null` підхоплюється вже наявним vault-repair
+  (§III, "спробуємо його відновити з Vault" — той самий §12.6 рецепт: `SHA(Vault[path]) == sha`
+  ⇒ полагоджено, інакше — шлях просто не їде цього разу). Якщо колись хтось спробує "просто
+  перекачати" і для цієї породи — це мовчазна дірка: локальний вміст існує ЛИШЕ тут, з мережі
+  його нема звідки взяти (§12.3). Записано тут явно, щоб не переплутати породи при реалізації.
+
+**`existInSyncStore(sha, size)` — НАВМИСНО лишається дешевим (лише stat+size, без хешу).**
+Викликається лише там, де ми ВЖЕ тримаємо в пам'яті підтверджено правильні байти (щойно
+скачані з repo, або щойно змерджені diff3) і вирішуємо, чи писати їх у сховище вдруге (дедуп,
+§12.2). Якщо існуюча копія там насправді бита з тим самим розміром — не біда: НАСТУПНЕ читання
+цього SHA (`getBlobFromSyncStore`) все одно проганяє повний hash-on-load і саме тоді виявить і
+повідомить биту копію. Повна перевірка тут нічого б не змінила (ми й так уже маємо правильні
+байти в руках) — лише витратила б CPU на хеш, чий результат ніхто не використає.
+
+**`saveBlobToSyncStore` пише напряму (`open` → `write` → `close`), БЕЗ temp+rename.**
+Content-addressed сховище ніколи не переписує ІНШИЙ вміст під тим самим іменем (колізія SHA —
+окрема, криптографічно нехтувана, проблема) — отже "хто записав останнім" завжди нешкідливо, з
+rename-атомарністю чи без. §VI.4.2 (паралельна SHA-колізія: два шляхи одного batch з ідентичним
+вмістом, обидва не знаходять blob і обидва вантажать) відповідно закривається **in-flight
+promise cache, keyed за sha** (другий запит на той самий SHA чекає на перший замість дублювання
+роботи) — це вже стояло в документі як одна з двох альтернатив; temp+rename більше не потрібен,
+лишається саме ця.
 
 ## III. Приблизна реалізація алгоритму
 
@@ -836,17 +913,16 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
                            # (не обов'язково)
         # local.mode=DELETED НЕ МОЖЕ потрапити на цей рівень — доведено вище (правило 9,
         # коментар "ДОВЕДЕННЯ"): усі DELETED-комбінації повертаються ще в правилах 3-8.
-        local.blob = getBlobFromSyncStore(local.sha) # шукає файл з назвою `{sha}` в `.runtime/sync_store/`, якщо
-                                                     # він є і його SHA збігається з SHA в назві, тоді отримуємо 
-                                                     # цей blob, інакше null
+        local.blob = getBlobFromSyncStore(local.sha, local.size) # §II.9: null і на "нема файлу",
+                                                     # і на "є, але не пройшов hash-on-load" —
+                                                     # звідси нижче різниці не видно, і не треба
         if local.blob is null:
            return (null, LOCAL_FILE_IS_NOT_FOUND_ERROR(local.path))
                                                       
     if remote.blob is null:        
         # remote.mode=DELETED НЕ МОЖЕ потрапити на цей рівень — те саме доведення, що й для local вище.
-        remote.blob = getBlobFromSyncStore(remote.sha) # шукає файл з назвою `{sha}` в `.runtime/sync_store/`, якщо
-                                                       # він є і його SHA збігається з SHA в назві, тоді отримуємо 
-                                                       # цей blob, інакше null
+        remote.blob = getBlobFromSyncStore(remote.sha, remote.size) # §II.9 — biту копію (як і
+                                                       # відсутню) нижче однаково перекачуємо з repo
         if remote.blob is null:
            # вантажаимо цей блоб з repo i зберігаємо його в `.runtime/sync_store`:
            (remote.blob, error) = getBlobFromRepo(remote.sha) # продумати які ще дані потрібно для завантаження.
@@ -860,13 +936,12 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
            if remote.blob is null:
                return (null, REMOTE_FILE_IS_NOT_EXIST_IN_REPO_ERROR(remote.path))   
               
-           if not existInSyncStore(remote.sha): 
+           if not existInSyncStore(remote.sha, remote.size): # §II.9: дешевий stat+size, без хешу —
+                                                              # ми вже тримаємо перевірені байти
                saveBlobToSyncStore(remote)
 
     if base.blob is null:
-        base.blob = getBlobFromSyncStore(base.sha) # шукає файл з назвою `{sha}` в `.runtime/sync_store/`, якщо
-                                                   # він є і його SHA збігається з SHA в назві, тоді отримуємо 
-                                                   # цей blob, інакше null
+        base.blob = getBlobFromSyncStore(base.sha, base.size) # §II.9 — та сама семантика, що й вище
         if base.blob is null:
             # вантажаимо цей блоб з repo i зберігаємо його в `.runtime/sync_store`:
             (base.blob, error) = getBlobFromRepo(base.sha) # продумати які ще дані потрібно для завантаження.
@@ -881,7 +956,7 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
             if base.blob is null:
                return (null, BASE_FILE_IS_NOT_EXIST_IN_REPO_ERROR(base.path))   
     
-            if not existInSyncStore(base.sha): 
+            if not existInSyncStore(base.sha, base.size): # §II.9: дешевий stat+size
                 saveBlobToSyncStore(base)
                                                                    
     d = diff3(base.blob, local.blob, remote.blob) # call the original diff3()
@@ -897,7 +972,7 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
                    sha=  d_sha,
                    mode= ""
                    blob= d )                
-    if not existInSyncStore(d_sha): 
+    if not existInSyncStore(d_sha, d_file.size): # §II.9: дешевий stat+size — d_file.blob уже в руках
         saveBlobToSyncStore(d_file)
         
     return (d_file, null)
@@ -1181,9 +1256,10 @@ def drain2():
         for each local in batch:   # структура local (FileInfo): {path, size, sha, mode, blob=null}
             # перевіряємо чи існує в sync_store blob файлу з даного batch (див. SYNC-FIX, §12)
             if local.mode != DELETED:
-                local.blob = getBlobFromSyncStore(local.sha) # шукає файл з назвою `{sha}` в `.runtime/sync_store/`, якщо
-                                                             # він є і його SHA збігається з SHA в назві, тоді отримуємо 
-                                                             # цей blob, інакше null
+                local.blob = getBlobFromSyncStore(local.sha, local.size) # §II.9: null і на "нема
+                                                             # файлу", і на "є, але битий" — в обох
+                                                             # випадках нижче однаково пробуємо
+                                                             # відновити з Vault
                 if local.blob is null:
                     # намагаємось його відновити з Vault:
                     vault_file = vault.files.get(local.path)  # повертає {path, size, mtime} або null, якщо файл не  
@@ -1287,9 +1363,9 @@ def drain2():
                     # push D
                     if D.blob is null:  # він може бути null, якщо _diff3 приймав рішення тільки по sha, а отже не було 
                                         # завантажено blob взагалі
-                        D.blob = getBlobFromSyncStore(D.sha) # шукає файл з назвою `{sha}` в `.runtime/sync_store/`, якщо
-                                                             # він є і його SHA збігається з SHA в назві, тоді отримуємо 
-                                                             # цей blob, інакше null
+                        D.blob = getBlobFromSyncStore(D.sha, D.size) # §II.9: null і на "нема файлу",
+                                                             # і на "є, але битий" — нижче однаково
+                                                             # перекачуємо з repo
                         if D.blob is null: # blob може не бути ще в SyncStore, якщо це remote file. Local files вже всі
                                            # мають бути представлені в SyncStore, ми про це подбали вище
                             # вантажимо цей блоб з repo i зберігаємо його в `.runtime/sync_store`:
@@ -1304,7 +1380,7 @@ def drain2():
                             if D.blob is null:
                                 return REMOTE_FILE_IS_NOT_EXIST_IN_REPO_ERROR(D.path)   
                                
-                            if not existInSyncStore(D.sha): 
+                            if not existInSyncStore(D.sha, D.size): # §II.9: дешевий stat+size
                                 saveBlobToSyncStore(D)
                         
                     # D.mtime НЕ ставимо тут: TODO закрито (2026-08-23, за наводкою advisor) —
@@ -1621,8 +1697,8 @@ def drain2():
                   saveConflictSiblingFile(tracked.remote) # timestamp в назві файлу беремо з tracked.remote.mtime
               else: 
                   updateFileInVault(vault_result);  # замінити base-file в Vault на vault_result (атомарно,
-                                         # rename або, якщо файл відкритий - перезаписом). Якщо
-                                         # vault_result.mode == DELETED, тоді файл локально видаляється
+                                                    # rename або, якщо файл відкритий - перезаписом). Якщо
+                                                    # vault_result.mode == DELETED, тоді файл локально видаляється
               tracked.base = tracked.remote 
           else:
               # tracked.base.sha == tracked.remote.sha (змін в Vault не робимо взагалі). base залишається з tracked.base
@@ -1813,9 +1889,11 @@ per-file-обробка (нижче) паралельна, але побудов
 2. **Колізія однакового SHA у паралельному `saveBlobToSyncStore`.** Два шляхи одного батчу з
    ідентичним вмістом (дедуплікація — навмисний, очікуваний випадок, §12.2 SYNC-FIX.md) обидва не
    знаходять blob у сховищі, обидва вантажать/рахують, обидва пишуть `sync_store/{sha}` одночасно.
-   Однакові байти роблять "хто останній записав" нешкідливим ТІЛЬКИ якщо сам запис атомарний — тому
-   потрібен write-temp-then-rename (з Capacitor exists-check, як і всюди) АБО in-flight promise
-   cache, keyed за sha, щоб другий запит на той самий SHA чекав на перший замість дублювання роботи.
+   ВИРІШЕНО (2026-08-23, §II.9): temp+rename тут НЕ потрібен — content-addressed запис ніколи не
+   переписує ІНШИЙ вміст під тим самим іменем, тож "хто останній записав" нешкідливо й без
+   rename-атомарності (hash-on-load на читанні, §II.9, ловить будь-яку биту копію незалежно від
+   того, як саме вона туди потрапила). Достатньо **in-flight promise cache, keyed за sha** —
+   другий запит на той самий SHA чекає на перший замість дублювання роботи/мережі.
 3. **Передумова, на якій тримається вся безпека спільних акумуляторів (`commit`, `conflict_commit`,
    `TrackedFiles`)** — **один шлях зустрічається щонайбільше раз в одному батчі.** JS-однопотоковість
    робить конкурентний append у спільний масив/мапу безпечним БЕЗ локів, доки жоден await не
