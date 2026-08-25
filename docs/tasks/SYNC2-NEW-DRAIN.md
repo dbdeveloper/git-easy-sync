@@ -3047,3 +3047,178 @@ base); паралелізм між MAIN-push/CONFLICT-push і між парам�
    впливає (§II.7: `conflicts` звіряється лише по sha). Інваріант тепер строгий, без
    винятків і без локального годинника: `tracked.remote.mtime` = дата GitHub-коміту, який дав
    цей вміст, хто б його не пушив. Закриває TODO, що висів на цьому рядку з чернетки.
+
+---
+
+## VIII. Чек-лист тестових сценаріїв для TDD-розробки `drain()`
+
+**Мотивація (2026-08-25):** реалізація нового `drain()` починається з тестів, не з коду
+(CLAUDE.md §4, "Test-first where you can"). Базою слугує `tests/integration/scenarios/sync2/
+multi-device/G9-concurrent-push-mid-drain.test.ts` — діагностичний тест, який **відтворив
+реальний clobber-баг** у поточному (старому) двигуні: `C7..C10` тихо затирають конкурентні
+remote-зміни `note7..note10`, без жодного конфлікту, стан не самозцілюється навіть після 2
+повторних `syncAll`. Цей та подібні сценарії (нижче, категорія M) — контракт, який новий
+`drain()` МУСИТЬ задовольняти, на відміну від старого.
+
+**Дворівнева стратегія:** швидкий unit-рівень (fake GitHub-клієнт, без мережі, основний TDD-
+цикл для самої логіки — `_diff3`, rolling base, conflict-siblings, NETWORK_ERROR-аборт,
+seeding) + рідший integration-рівень (реальний GitHub, підтвердження контракту й регресія
+відомих дефектів на кшталт G9). Категорія — це НЕ порядок виконання; починати варто з
+категорії A (`_diff3`) — вона чиста функція, найдешевша, і все інше в §III на ній стоїть.
+
+### A. `_diff3()` — чиста функція, правила 1-9 (§II.1, §III) — unit, без мережі
+
+26 сценаріїв, по одному на кожне правило + edge-case:
+1. `base=null`, тільки local → local (правило 1.a)
+2. `base=null`, тільки remote → remote (1.b)
+3. `base=null`, local + `remote=deleted` → local (1.c)
+4. `base=null`, `local=deleted` + remote → remote (1.d)
+5. `base=null`, `local==remote` (однаковий вміст) → цей вміст, без конфлікту (1.e)
+6. `base=null`, `local==remote==deleted` (обидва видалили) → deleted, без конфлікту (1.e, окремий випадок)
+7. `base=null`, `local≠remote`, обидва not-null → MANUAL_CONFLICT (правило 2 — справжня колізія)
+8. `base=A local=A remote=A` → A, без push (правило 3)
+9. `base=A local=A remote=B` → B, чистий pull (правило 4)
+10. `base=A local=B remote=A` → B, чистий push (правило 5)
+11. `base=A local=B remote=B` → B, обидва погодились (правило 6)
+12. `base=A local=null remote=null` → A (7.a, null сприймається як base)
+13. `base=A local=B remote=null` → B (7.b)
+14. `base=A local=null remote=B` → B (7.c)
+15. `base=A local=B remote=deleted` → B перемагає (8.a, local-edit-vs-remote-delete)
+16. `base=A local=deleted remote=B` → MANUAL_CONFLICT (8.b, local-delete-vs-remote-edit — АСИМЕТРІЯ з 15, критичний тест)
+17. `base=A local=deleted remote=deleted` (обидва видалили) → deleted, без конфлікту (сентинел-рівність, правило 3/6)
+18. `maximum_auto_merge_file_size` менший за `max(local.size, remote.size)` → MANUAL_CONFLICT, НАВІТЬ якщо звичайний diff3 зійшовся б без конфлікту (правило 9)
+19. `maximum_auto_merge_file_size=0` → diff3 взагалі не викликається, кожна пара, що відрізняється, стає конфліктом
+20. шляхи `base.path`/`local.path`/`remote.path` розходяться → `COMPARE_WRONG_FILES`
+21. `local.blob` відсутній і не відновлюється з `sync_store/` → `LOCAL_FILE_IS_NOT_FOUND_ERROR`
+22. `remote.blob` відсутній у `sync_store/`, довантажується мережею успішно → результат коректний, blob збережено в `sync_store/`
+23. `remote.blob` NOT_FOUND і в `sync_store/`, і на GitHub → `REMOTE_FILE_IS_NOT_EXIST_IN_REPO_ERROR`
+24. `base.blob` NOT_FOUND і в `sync_store/`, і на GitHub → `BASE_FILE_IS_NOT_EXIST_IN_REPO_ERROR`
+25. NETWORK_ERROR/TOKEN_EXPIRED під час догрузки `remote.blob`/`base.blob` — коректно пропагуються, а не ковтаються
+26. успішний diff3-merge отримує свіжий SHA, зберігається в `sync_store/` лише якщо там ще нема, `mtime=null` (§II.6, "файл не закомічено")
+
+### B. Rolling-base / chaining (§II.3-II.5) — unit з fake GitHub-клієнтом
+
+1. Ланцюжок `C1..Cn` без remote-змін (§II.4): кожен `D_i = C_i`, база просувається щоразу
+2. Ланцюжок з ОДНІЄЮ remote-зміною посеред (§II.3): diff3 на кожному кроці проти "remote" = попередній `D`
+3. ERROR422 mid-chain: приклад "C4" з доку — рестарт з реальним pull, підстановка справжнього remote замість застарілого `D`, ланцюжок продовжується коректно
+4. Crash-after-successful-push-before-persist (усі 3 варіанти II.3/II.4/II.5): рестарт через pull-folding бачить власний push як "remote", повторний push НЕ відбувається (byte-identical drop)
+5. Тільки remote-зміни, `push_queue/` порожній (§II.5): TrackedFile заміщується безумовно, push не потрібен, `base = R_n`
+6. Remote-only сценарій, під час якого з'являється local batch → перехід на гілку §II.3 всередині ОДНОГО drain-у
+7. Vault-step, `base==remote` (не було remote-змін) → Vault не чіпається
+8. Vault-step, `base≠remote`, diff3 OK → Vault оновлюється до злитого результату
+9. Vault-step, локальний файл видалено з Vault ПІД ЧАС drain-у (`local.mode=DELETED`, не `null`) → тихе видалення (правило 5) якщо remote не змінився, MANUAL_CONFLICT (8.b) якщо змінився
+
+### C. Manual Conflict lifecycle (§II.6) — 13 сценаріїв
+
+1. STEP1: конфлікт народжується з `_diff3` ERROR → `conflicts.set(path, {conflictBase, siblings: []})`, push у conflict-branch, `base=remote=R_m`, `is_manual_conflict=true`
+2. STEP2: файл уже в конфлікті, новий local edit → push у conflict-branch з dedup (той самий SHA, що вже в `conflictBase` → пуш пропускається)
+3. STEP2: pull безумовно заміщує remote-половину, поки в конфлікті (blob НЕ довантажується eagerly)
+4. STEP3, випадок "ще не був у конфлікті цього drain-у" (`siblings==[]`): `base(R_last)` зберігається як перший sibling-файл, base-file у Vault не чіпається
+5. STEP3, випадок "sibling уже є" + diff3 OK: старий sibling замінюється новим (довжина списку та сама)
+6. STEP3, випадок "sibling уже є" + diff3 ERROR: новий sibling ДОДАЄТЬСЯ (список росте), старий лишається tracked
+7. Ім'я sibling-файлу (`buildSiblingFilePath`) завжди береться з `tracked.remote.mtime` — НІКОЛИ момент запису на диск
+8. STEP3 NOT_FOUND при `siblings==[]` → скасування `is_manual_conflict`, видалення запису з `conflicts`
+9. STEP3 NOT_FOUND при `siblings≠[]` → лише skip, без скасування (інші tracked siblings лишаються)
+10. Третій сайт народження конфлікту (Vault-step, не-конфліктна гілка, `_diff3` повертає MANUAL_CONFLICT): `conflictBase=tracked.remote`, `siblings=[tracked.remote]`, `is_manual_conflict=true`
+11. Idle lingering-конфлікт (`tracked.remote.sha==null`, нема свіжого pull цього drain-у) → Vault-step чисто пропускає, без побічних ефектів
+12. Кілька drain-ів поспіль, кожен додає ще один sibling при ERROR → список росте коректно, порядок = append-order = порядок за mtime
+13. `device_label` заповнюється на ВСІХ 3 сайтах народження конфлікту (STEP1, pull-folding-refresh, Vault-step-born) і НЕ для звичайних (не-конфліктних) файлів
+
+### D. Крах-відновлення / ідемпотентність (§IV.1-IV.2) — 12+2 точки краху
+
+Крах під час: R3b claim; після claim до будь-якого push; після MAIN push до диску; після
+CONFLICT-BRANCH push до диску; між MAIN і CONFLICT push; під час FINALIZE до диску; посеред
+Vault-step циклу; після Vault-step до видалення журналу; кожен з епілог-переходів 1→2, 2→3,
+3→4, 4→5. Плюс 2 нові вікна навколо сьогоднішнього STEP3 NOT_FOUND-cancel фіксу: крах між
+`conflicts.delete()` (у пам'яті) і епілог-кроком 2; крах між епілог-кроком 2 (durable вже без
+запису) і кроком 4 (журнал ще з прапорцем) — має самолікуватись через RECONCILE.
+
+### E. Уніфікація NETWORK_ERROR (сьогоднішній фікс, 2026-08-25) — ПРІОРИТЕТ, ще не верифіковано тестами
+
+1. Усі 5 Vault-step NETWORK_ERROR-сайтів абортують ВЕСЬ drain (той самий шлях, що й TOKEN_EXPIRED) — параметризований тест на кожен сайт
+2. NOT_FOUND-сайти (підтверджено відсутні дані, не мережева помилка) лишаються вузьким skip/cancel, НЕ абортом
+3. device_label NETWORK_ERROR на STEP1 абортує весь drain
+4. device_label NETWORK_ERROR на pull-folding-refresh абортує весь drain
+5. device_label NETWORK_ERROR на Vault-step-born-конфлікт сайті абортує весь drain (консистентність усіх 3 сайтів)
+6. `retryOnNetworkError`: вичерпання `MAX_ATTEMPTS` з експоненційним backoff, запис `.runtime/sync_network_error`
+7. `retryOnNetworkError`: TOKEN_EXPIRED/ERROR422 НЕ ретраяться, повертаються одразу
+8. Відновлення мережі посеред drain-у: мітка знімається на ПЕРШОМУ успішному виклику, не на старті drain-у
+
+### F. `sync_store/` та sweep (§II.9, SYNC2-FIX.md §12.5) — 9 сценаріїв
+
+1. hash-on-load: розбіжність `size` → бита копія, `null`, без спроби читання (дешевий fail)
+2. hash-on-load: `size` збігається, SHA після читання — ні → бита копія, `null`
+3. hash-on-load: `verified_shas` кеш уникає повторного хешування того самого SHA за один drain
+4. `existInSyncStore`: лише stat+size, без хешу (дешевий dedup fast-path)
+5. Sweep: `candidates \ referenced`, 4 джерела перевірені НЕЗАЛЕЖНО:
+   - blob з metadata батчу в черзі переживає sweep
+   - blob з `baseSha` журналу переживає sweep ("ours став theirs")
+   - blob, який drain зараз тримає "в обробці", переживає sweep
+   - **blob `conflictBase` незавершеного manual conflict переживає sweep через ДОВІЛЬНУ кількість проміжних drain-ів (§12.5.D, сьогоднішній фікс)**
+6. Sweep: щойно конфлікт розв'язується — його `conflictBase`-blob підмітається НАСТУПНИМ sweep-ом (більше не захищений)
+7. Sweep запускається в 3 точках (старт drain-у, кінець drain-у, onload плагіна) з тією самою формулою `referenced`
+8. `local`-blob відсутній у `sync_store/` → ремонт з Vault, якщо SHA збігається; інакше шлях пропускається (не помилка)
+9. `remote`/`base`-blob відсутній у `sync_store/` → перекачується з GitHub, зберігається назад
+
+### G. Crash-safe запис у conflict-branch (§II.7) — 8 сценаріїв
+
+1. `shouldPushToConflictBranch`: журнал підтверджує той самий SHA → push пропускається, без мережі
+2. `shouldPushToConflictBranch`: журнал не підтверджує, `conflict_head_hash is null` (гілки ще нема) → push
+3. `shouldPushToConflictBranch`: журнал не підтверджує, жива перевірка знаходить той самий SHA на ref → push пропускається (crash-recovery випадок)
+4. `shouldPushToConflictBranch`: жива перевірка знаходить інший SHA або 404 → push
+5. Ім'я гілки персистується в журнал ДО першого мережевого виклику, що її торкається
+6. `conflictBranchName` переживає МІЖ-drain'ові рестарти без journal через hot-metadata фолбек
+7. FINALIZE запускається лише коли `conflictBranchName != null` І `len(conflicts) == 0`
+8. FINALIZE: ancestor-check ідемпотентність (гілка вже влита → лише delete) + 404-як-success (гілку вже видалено)
+
+### H. `getBatch()`/R3b claim-протокол (§II.8) — 6 сценаріїв
+
+Пітерсонів протокол (commit claims dir, drain чекає); TOCTOU-вікно (drain ставить `.attempted`
+рівно тоді, коли commit заявляє права); crash-recovery ремонт (size-перед-SHA); unrepairable
+entry випадає з batch-у, решта продовжує; batch, у якого ВСІ entries випали після ремонту →
+пропускається повністю (§11 П11, empty-batch skip).
+
+### I. `process_conflicts()` дедуп TRACKED vs SYNTHETIC (§III) — 9 сценаріїв
+
+1. tracked і synthetic з однаковим SHA в одній групі → tracked завжди переважає
+2. кілька tracked-дублікатів → виживає найновіший, решта видаляється і з диска, і зі списку
+3. кілька synthetic-дублікатів (без tracked у групі) → виживає найновіший за timestamp
+4. SHA sibling-файлу збігається з SHA поточного base-file → auto-resolve, ОДНАКОВО для tracked і synthetic
+5. користувач переносить base-file РАЗОМ з sibling-файлом в інший каталог → стає "synthetic"-парою за новим шляхом, резолюція (п.4) все одно спрацьовує (сценарій, явно описаний у документі)
+6. tracked sibling фізично видалений користувачем (не через збіг SHA) → прибирається зі списку без додаткових дій
+7. **`conflicts.delete(path)` лише на переході непорожній→порожній, НІКОЛИ коли список був порожній на вході** (регресія, сьогоднішній фікс — інакше свіжий STEP1-запис зникав би щоразу при 422-рестарті)
+8. **`conflicts is null` (перезавантажити з диску) відрізняється від `conflicts is {}`** (регресія, сьогоднішній фікс — інакше STEP3 NOT_FOUND-cancel воскресав би скасований запис)
+9. `process_conflicts()` викликається з 4 різних місць (onload, відкриття diff-panel, вихід з diff-editor, старт drain-у) — той самий контракт кожного разу
+
+### J. `restoreTrackedFilesFromDiskOrCreateNewOne` — 7 сценаріїв
+
+1. Журнал присутній (crash recovery) → `TrackedFiles`+`conflictBranchName` відновлені дослівно
+2. Журналу нема, `conflicts` непорожній (лінгеруючий, без краху) → `conflictBranchName` бере hot-metadata фолбек, НЕ `null`
+3. **Seeding для шляху з порожнім `siblings`** — все одно `is_manual_conflict=true` (регресія — "порожній siblings ≠ нема конфлікту")
+4. **Плейсхолдер seeding НЕ пише `base: null`** — alias-об'єкт `{path,sha:null,...}` в обох полях (регресія — інакше STEP2 падає на `null.path`)
+5. Seeding НЕ перезаписує вже наявний у журналі прогрес цього ж drain-у для того самого шляху
+6. RECONCILE: `is_manual_conflict==true`, але шлях відсутній у свіжому скані → прапорець скидається, з логом (легітимне зовнішнє розв'язання)
+7. RECONCILE НЕ спрацьовує для конфлікту, що просто ще не дійшов до STEP3 (`siblings==[]` в процесі, не "розв'язано")
+
+### K. Наскрізні сценарії матриці відновлення (§IV.2) — integration-рівень
+
+1. Повний drain з ін'єктованим крахом У КОЖНІЙ задокументованій точці по черзі — збіжність до того самого фінального стану, що й без краху
+2. 422-CAP: 5 поспіль 422 без жодного успіху між ними → `TOO_MANY_CONCURRENT_PUSHES`, чистий вихід, нічого не втрачено
+
+### L. Модель паралелізму (§VI) — 3 сценарії
+
+Послідовна per-file обробка всередині batch-у (пікова пам'ять O(1 файл) навіть на великих
+вкладеннях); той самий шлях ніколи не трапляється двічі в одному batch (інваріант
+`push_queue/`); MAIN∥CONFLICT-BRANCH push безпечні незалежно один від одного (різні refs).
+
+### M. Відомі/відтворені дефекти — регресійні тести "чому ми це робимо"
+
+1. **G9 clobber** (`tests/integration/scenarios/sync2/multi-device/G9-concurrent-push-mid-drain.test.ts`, відтворено 2026-08-25) — конкурентна remote-зміна `note7..note10` під час push `C6` НЕ повинна тихо затиратись `C7..C10`; має дати конфлікт або коректний merge, ніколи мовчазну втрату даних. **Це головний контракт-тест, який новий `drain()` мусить пройти, а старий — провалює.**
+2. Той самий корінь, інша назва — chaining пропускає per-batch pull / fast-path пропускає reconcile (SYNC-FIX "defect A")
+3. commit/drain race (R3b) — покрито категорією H, але вартий і власного top-level регрес-тесту
+4. Stale head-read (SYNC2 §7.10) — eventually-consistent GitHub head read, "власні дані як конфлікт" — chaining + монотонний guard + 422-retry мусять це запобігати
+
+### N. Заблоковано — НЕ писати GREEN-тест, лише зафіксувати сценарій
+
+1. **§VII.1, Compare API 300-файлів truncation** — рішення власника про підхід (пагінація через `commits[]`, сигнал `length>=300`, чи інше) ще НЕ прийнято; тест написати, коли підхід обрано
+2. Чи досі актуальний відкладений епілог-крок-1 baseline-запис для NETWORK_ERROR-пропущених Vault-файлів (стара "Finding #2, не чіпати зараз") тепер, коли NETWORK_ERROR більше не доходить до епілогу взагалі — імовірно вже само закрилось, варто перепитати власника перед написанням тесту
