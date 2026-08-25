@@ -1134,7 +1134,7 @@ Phase A при drain (`conflict-classifier.ts:235`, `!siblingExists → store.de
    = опційний «глянути» UX.
 5. **Obsidian tab ←/→ для History** (§4.6 backlog) — вирішити на History-фазі.
 6. **⚠️ Conflict-branch версії у History — «петляння-вісімки» (ВІДКРИТЕ, 2026-07).**
-   Крос-лінк: `SYNC-FIX.md` §8.7 (тригер — відновлення per-batch pull → більше
+   Крос-лінк: `SYNC2-FIX.md` §8.7 (тригер — відновлення per-batch pull → більше
    конфліктів → більше conflict-branch-ів).
    - **Проблема.** Кожен епізод конфлікту = окрема приватна conflict-branch (унікальне
      ім'я з timestamp), яка вливається в main **merge-commit-ом з `tree=main.tree`**
@@ -1161,7 +1161,7 @@ Phase A при drain (`conflict-classifier.ts:235`, `!siblingExists → store.de
      дорого ретроспективно); якщо «проти» — лишити History магістраллю, чернетки живуть
      на GitHub.
 7. **⚠️ History не слідує за rename (`git log --follow`) (ВІДКРИТЕ, 2026-07).**
-   Крос-лінк: `SYNC-FIX.md` §8.7 п.7. **Спільний корінь з п.6:** `?path=`-фільтр без
+   Крос-лінк: `SYNC2-FIX.md` §8.7 п.7. **Спільний корінь з п.6:** `?path=`-фільтр без
    `--follow`.
    - **Проблема.** git НЕ зберігає rename — це евристика за схожістю вмісту при
      ЧИТАННІ. `git log --follow -- new.md` простежує через rename, АЛЕ
