@@ -374,7 +374,7 @@ sibling` (SYNC2 §1) — лиш виконаний у момент editor-exit �
 Кожен елемент списку клікабельний → перехід у **detail view** з DiffPane (R7), де є додатковий top-toolbar з тими ж
 операціями, але для одного файлу (R7.9-onepan).
 
-> ⤴ **SUPERSEDED → [`docs/tasks/HISTORY-DELETED.md`](./tasks/HISTORY-DELETED.md)** — канонічна зведена спека History-режиму (data-джерела, view-types, стан коду). R2.3 лишається як data-шар-довідка.
+> ⤴ **SUPERSEDED → [`docs/tasks/HISTORY-DELETED.md`](tasks/DIFF-EDITOR-HISTORY-DELETED.md)** — канонічна зведена спека History-режиму (data-джерела, view-types, стан коду). R2.3 лишається як data-шар-довідка.
 
 **R2.3. File history** — для довільного файлу з vault показати історію його змін. Джерела:
 
@@ -397,7 +397,7 @@ sibling` (SYNC2 §1) — лиш виконаний у момент editor-exit �
 історії `theirsReadOnly: true` (вже передбачено у DiffPane API). Кнопка "Restore this version" у footer DiffPane —
 перезаписує current vault file байтами обраної версії.
 
-> ⤴ **SUPERSEDED → [`docs/tasks/HISTORY-DELETED.md`](./tasks/HISTORY-DELETED.md)** — канонічна зведена спека Deleted-режиму. R2.4 + R3 лишаються як data-шар-довідка (TrashStore).
+> ⤴ **SUPERSEDED → [`docs/tasks/HISTORY-DELETED.md`](tasks/DIFF-EDITOR-HISTORY-DELETED.md)** — канонічна зведена спека Deleted-режиму. R2.4 + R3 лишаються як data-шар-довідка (TrashStore).
 
 **R2.4. Deleted files (Recently deleted)** — той самий single-pane shell (R2.0), що й Conflicts mode, але **спрощений
 detail view**.
@@ -712,7 +712,7 @@ unresolved-конфліктів):
 відкриває view за default-sub-tab-правилом (R2.7.5). `Sync All` / `Commit all` /
 `Commit current` / `Pull+push` мапляться на наявні команди main.ts.
 
-> **📌 Доповнення (2026-07-03, канонічно у [`docs/tasks/HISTORY-DELETED.md`](../docs/tasks/HISTORY-DELETED.md) §4.1).**
+> **📌 Доповнення (2026-07-03, канонічно у [`docs/tasks/HISTORY-DELETED.md`](tasks/DIFF-EDITOR-HISTORY-DELETED.md) §4.1).**
 > Додати пункт **`Show history of current file`** (поряд із `Commit current file`) — History
 > current-file-bound entry зі status-bar (спростовує рання «History не має глобальних поверхонь»:
 > нема глобального СПИСКУ/badge, але current-file-bound пункт легітимний). **Гейт `hasActiveFile`

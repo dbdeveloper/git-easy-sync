@@ -440,7 +440,7 @@ recovery прибрав, на committed-результаті класифіку�
 
 ## 10. VISION — History (розширює R2.3 / R7.9b / Phase 7)
 
-> ⤴ **SUPERSEDED для History/Deleted → [`docs/tasks/HISTORY-DELETED.md`](../HISTORY-DELETED.md).**
+> ⤴ **SUPERSEDED для History/Deleted → [`docs/tasks/HISTORY-DELETED.md`](../DIFF-EDITOR-HISTORY-DELETED.md).**
 > Канонічна зведена спека обох режимів — там (data-джерела, дзеркало History↔Deleted, стан коду,
 > sequencing). Цей розділ лишається як історична візія; за розбіжності істина — у HISTORY-DELETED.md.
 
@@ -565,7 +565,7 @@ back-stack із 3 кроків / 3 view-types**:
 
 ## 11. VISION — Deleted sub-tab (розширює R2.4 / R3.6; ЧАСТКОВИЙ reuse absent-base)
 
-> ⤴ **SUPERSEDED для History/Deleted → [`docs/tasks/HISTORY-DELETED.md`](../HISTORY-DELETED.md).**
+> ⤴ **SUPERSEDED для History/Deleted → [`docs/tasks/HISTORY-DELETED.md`](../DIFF-EDITOR-HISTORY-DELETED.md).**
 > Канонічна зведена спека — там. Цей розділ лишається як історична візія.
 
 > Vision-нотатка (2026-06-29, advisor-reviewed). `diff2-panel:Deleted` — це **sub-tab у

@@ -8,7 +8,7 @@
 > для тюнінгу, не як воротá (§4).
 >
 > **Область — вузька (ЯК ЗБЕРІГАТИ), не сканування й не алгоритм:**
-> - **Двигун** (commit change-detection + drain/pull/push + конфлікти + diff3) → [`SYNC-FIX.md`](./SYNC-FIX.md).
+> - **Двигун** (commit change-detection + drain/pull/push + конфлікти + diff3) → [`SYNC2-FIX.md`](SYNC2-FIX.md).
 > - **Dot-простір** (ЯКІ dot-файли/теки синкати + `readRootGitignore`/`walkDotDir` + on-device
 >   виміри) → [`SYNC2-DOT-FILES-REFACTOR.md`](./SYNC2-DOT-FILES-REFACTOR.md).
 > - **Цей файл** — лише як зберігати на диску (a) кілька глобальних параметрів і (b) per-file
@@ -26,7 +26,7 @@
 ### A. Глобальні sync-параметри («hot») — кілька крихітних, критичних
 
 `lastSyncCommitSha`, `lastSyncTreeSha`, `lastCommitMtime` (watermark), `remoteIdentity`
-(owner/repo/branch), `conflictBranch`, `heldPluginUpdates` (див.[`PLUGIN-UPDATE-COMPAT.md, п.5.5`](./PLUGIN-UPDATE-COMPAT.md#55-форма-запису)). 
+(owner/repo/branch), `conflictBranch`, `heldPluginUpdates` (див.[`PLUGIN-UPDATE-COMPAT.md, п.5.5`](SYNC2-PLUGIN-UPDATE-COMPAT.md#55-форма-запису)). 
 Разом — кількасот байт. **Незамінні:** втрата = плагін «забув, де він» відносно 
 GitHub → перезалив увесь vault / насипав фальш-конфліктів. Окремо: **`lastSyncTreeSha` — 
 це ще й ЯКІР до merge-баз** (див. B).
@@ -72,9 +72,9 @@ cold (не per-file baseline). Це **per-device службовий облік, 
   store.getLastSyncCommitSha()`, `:1157`). Перевірено: жоден із трьох викликів
   `attemptAutoMerge` це поле не читає. **У ЦІЛЬОВОМУ алгоритмі — навпаки:** BASE тягнеться
   `getBlob(baselineSha)`, як це вже роблять zero-byte guard (`SYNC2.md:503-505`) і fold
-  конфліктів (SYNC-FIX §8.8). Деталі й обґрунтування — SYNC-FIX.
+  конфліктів (SYNC2-FIX §8.8). Деталі й обґрунтування — SYNC2-FIX.
   ⚠️ **Кваліфікація:** поле — база **лише коли черга порожня**. Якщо в черзі є попередній
-  батч того самого шляху, базою стає **його вміст** (`oldOurs`, SYNC-FIX §10.2 «кочівна
+  батч того самого шляху, базою стає **його вміст** (`oldOurs`, SYNC2-FIX §10.2 «кочівна
   пара»; у коді `sync2-manager.ts:4459-4463`), а поле не використовується. Це дзеркалить
   `queuedSha ?? snap.baselineSha` з детекції змін (`change-detector.ts:329`).
 - **`mtime`/`size` — captured-AT-SYNC**, не поточні. `vault.getFiles()` дає ПОТОЧНІ — інші для
@@ -174,7 +174,7 @@ head **без бази** — тобто саме випадок, коли тез
 НЕ в довговічності — перечитування її не доводить (потрапляє в той самий page cache; `fsync`
 адаптер Obsidian не дає). Причина в тому, що диск — **єдине джерело істини про те, який слот
 зараз fallback**, а стан там міг змінитися способом, про який RAM не знає: торн-слот після
-краху, видалена reset-ом тека `.runtime/` ([`RESET-PLUGIN.md`](./RESET-PLUGIN.md)), слот із
+краху, видалена reset-ом тека `.runtime/` ([`RESET-PLUGIN.md`](SYNC2-RESET-PLUGIN.md)), слот із
 бекапу, перезапуск плагіна між записами.
 
 **Успішність запису = відсутність винятку. Read-back НЕ робимо.** Перечитувати записане й

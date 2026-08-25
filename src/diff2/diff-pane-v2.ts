@@ -1078,7 +1078,7 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       // Mod+G / Shift+Mod+G AND F3 / Shift+F3. The F3 pair already ships inside searchKeymap
       // (@codemirror/search 6.5.6, the pinned version — scope "editor search-panel" is active
       // in the editor too), so no extra binding is needed; search-gate.test.ts locks it.
-      // HISTORY-DELETED.md §4.6 relies on F3 for phrase carry-over.
+      // DIFF-EDITOR-HISTORY-DELETED.md §4.6 relies on F3 for phrase carry-over.
       keymap.of(searchKeymap),
       configureSearchPanel, // TODO §15/§17 — hotkey tooltips on << / >>; hide dead [All]
       keymap.of([...historyKeymap, ...defaultKeymap]),

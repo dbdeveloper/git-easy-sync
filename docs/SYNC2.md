@@ -1543,7 +1543,7 @@ Consequence when `semverSide` appears not to have fired: the resolver is
 not where to look. Look at why the BASELINE diverged from reality — a
 stale or wrong snapshot row turns "nothing changed" into "one side
 changed", and the engine then correctly propagates it. Worked example:
-[`tasks/PLUGIN-UPDATE-COMPAT.md`](./tasks/PLUGIN-UPDATE-COMPAT.md) §5.9.1,
+[`tasks/PLUGIN-UPDATE-COMPAT.md`](tasks/SYNC2-PLUGIN-UPDATE-COMPAT.md) §5.9.1,
 where a bootstrap-recorded baseline makes a BRAT reinstall look like a
 deliberate edit and rolls the repo back on every device.
 

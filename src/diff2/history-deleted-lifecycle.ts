@@ -1,7 +1,7 @@
 // Authored and tested by Claude Code under the attentive guidance of
 // Vladyslav Kozlovskyy.
 //
-// Phase 7 / 9b (HISTORY-DELETED.md §4.5.3) — the EPHEMERAL session lifecycle for
+// Phase 7 / 9b (DIFF-EDITOR-HISTORY-DELETED.md §4.5.3) — the EPHEMERAL session lifecycle for
 // History + Deleted editors. Unlike a conflict (a REAL, on-disk conflict whose
 // `.diff2-autosave/<id>/` dir persists for crash-recovery), a History/Deleted editor
 // is a transient view; its session dir must "follow the tab" and never accumulate on

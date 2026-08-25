@@ -1,7 +1,7 @@
 // Authored and tested by Claude Code under the attentive guidance of
 // Vladyslav Kozlovskyy.
 //
-// Phase 7 (History) data layer — HISTORY-DELETED.md §4.7 stage 7a.0.
+// Phase 7 (History) data layer — DIFF-EDITOR-HISTORY-DELETED.md §4.7 stage 7a.0.
 //
 // A file's history is assembled from TWO sources:
 //   - GitHub commits touching the path (`GithubClient.listCommitsForPath`),
