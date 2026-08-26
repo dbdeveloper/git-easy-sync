@@ -636,11 +636,20 @@ sibling-file в diff-editor
 5. Якщо спроба п.4 - вдала, тоді новий conflict-sibling-file (timestamp у назві — `tracked.remote.mtime`,
    дата remote-коміту, НЕ момент запису на диск) ЗАМІНЮЄ останній елемент `current_conflict.siblings` (зберігається
    з результатом _diff3 на файловій системі, а старий — видаляється(!); довжина списку не змінюється).
+   **⚠️ ВИПРАВЛЕНО (2026-08-26, §II.11):** старий файл видаляється ОСТАННІМ, після того, як новий sibling-файл
+   і довговічний (durable) запис про конфлікт уже надійно на диску — не навпаки. Це не стилістична деталь:
+   видалення старого файлу ДО durable-запису — і є Finding 1 (крах/мережевий збій між ними лишав durable-запис
+   застарілим, а старий доказ уже знищеним, що могло тихо закрити живий конфлікт). Захищено mark-транзакцією
+   (§II.11) — оскільки на Obsidian Mobile немає жодного способу примусити fsync (перевірено по реальному коду
+   `@capacitor/filesystem`, не за здогадом), надійність тут — не запобігання, а виявлення на наступному читанні
+   (size+SHA, той самий принцип, що й `sync_store/`, §II.9) плюс детермінований redo.
 6. Якщо спроба п.4 - не вдала (`_diff3` повернув MANUAL_CONFLICT — не вдалось автоматично злити), тоді на файловій
    системі просто зберігається ще один conflict-sibling-file (той самий `tracked.remote.mtime`), який ДОДАЄТЬСЯ
    новим елементом у кінець `current_conflict.siblings` (список росте на один; старий елемент лишається tracked, не
-   стає synthetic — §III `process_conflicts()`).
-7. І після п.5 і в п.6 оновлюємо conflict metadata list (`current_conflict.siblings`) і зберігаємо на файловій системі.
+   стає synthetic — §III `process_conflicts()`). Ця гілка (append) НІЧОГО старого не знищує — mark-транзакції
+   (§II.11) не потребує, самолікується звичайним redo при повторі (детерміноване ім'я файлу).
+7. І після п.5 і в п.6 оновлюємо conflict metadata list (`current_conflict.siblings`) і зберігаємо на файловій
+   системі — для п.5 (replace) це durable-персист усередині самої mark-транзакції (§II.11, крок 3), не окрема дія.
 8. **Якщо довантаження `blob` (п.3 чи п.4) провалюється мережевою помилкою — увесь drain АБОРТУЄТЬСЯ**
    (2026-08-25, рішення власника, той самий шлях, що й TOKEN_EXPIRED): журнал НЕ видаляється, наступний drain
    повторює весь Vault-step з нуля. Це навмисно НЕ per-file skip — інакше журнал зникав би (кінець епілогу)
@@ -948,6 +957,201 @@ def retryOnNetworkError(op):  # op: () -> result; може кинути TOKEN_EX
 щоб коментар знову не застарів; перевірка — `grep -c "retryOnNetworkError(()" ` по файлу) і обидва
 `getBlobFromRepo` у `_diff3()` (раніше — без жодного ретраю взагалі, перша ж мережева гикавка
 одразу падала до викликача) переписані на цей хелпер нижче.
+
+## II.11 Crash-safe заміна conflict-sibling-файлу (STEP3 "replace") — mark-транзакція без fsync
+
+**Знахідка (2026-08-25/26, критичний перегляд разом з advisor і власником).** У STEP3, коли
+`_diff3()` успішно змержив попередній sibling-файл із новим remote-вмістом ("replace"-гілка), старий
+порядок дій був: `removeFromVault(previous_sibling)` → `saveConflictSiblingFile(merged_sibling)` →
+`conflicts.set(..., replaceLast(...))` — де останній крок оновлює **лише пам'ять процесу**;
+довговічний (durable) запис про конфлікт пишеться на диск лише в епілозі (§III, крок 2). Якщо
+ПІЗНІШЕ, обробляючи ІНШИЙ, непов'язаний tracked-файл у тому самому Vault-step циклі, стається
+`NETWORK_ERROR` — весь `drain()` тепер (§II.6 п.8) одразу абортує, епілог не виконується. Диск лишається
+в суперечливому стані: старий sibling-файл УЖЕ видалено, новий — записано, а durable-запис про
+конфлікт про це нічого не знає. Наступний drain бачить: старого файлу нема → "конфлікт вирішено"
+→ якщо це був останній конфлікт — `conflict_branch` тихо мержиться в `main` БЕЗ участі користувача
+(I2-клас дефект — саме той, заради недопущення якого й переписується `drain()`).
+
+**Чому це не можна закрити банальним `fsync`.** Перевірено проти реального коду плагінів, якими
+Obsidian Mobile фактично пише файли (не за здогадом):
+- **Android** (`ionic-team/capacitor-filesystem`, `LegacyFilesystemImplementation.kt`, `writeFile`):
+  звичайний `FileOutputStream.write()` + `.close()`, без жодного `fsync`/`getFD().sync()`.
+- **iOS** (`ionic-team/ion-ios-filesystem`, `IONFILEManager.swift`, `saveFile`): `Data.write(to:)` /
+  `String.write(to:atomically:encoding:)`, без `FileHandle.synchronizeFile()`/`F_FULLFSYNC`.
+- **Публічний API `@capacitor/filesystem`** (повний список методів: `checkPermissions`,
+  `requestPermissions`, `readFile`, `readFileInChunks`, `writeFile`, `appendFile`, `deleteFile`,
+  `mkdir`, `rmdir`, `readdir`, `getUri`, `stat`, `rename`, `copy`, `downloadFile`, listeners) —
+  жодного sync/flush-методу чи прапорця немає. Community-плагін Obsidian не може написати власний
+  нативний код і не має доступу нижче за цей API — це не забудькуватість, а платформна стеля.
+- **Desktop (Node.js)** так само: `fs.writeFile`/`writeFileSync` без явного `fileHandle.sync()` не
+  гарантують фізичний запис на диск.
+- Наш власний `atomicWriteFile` (`src/sync2/atomic-write.ts`), яким уже написано пів документа
+  (hot-metadata, `TrackedFiles`-журнал, `saveConflictSiblingFile`), робить temp+rename — це дає
+  **атомарність** (ніколи не побачите "розірваний" вміст файлу), але **не durability**: fsync там
+  теж немає. Ризик "правильний розмір, сміттєвий вміст" (уже описаний §II.9 для `sync_store/`)
+  теоретично стосується й тут.
+
+**Отже надійність — не через запобігання, а через ВИЯВЛЕННЯ на наступному читанні** (той самий
+принцип, що вже прийнятий для `.runtime/sync_store/`, §II.9) **+ явний, детермінований redo**, а не
+намагання гарантувати запис. Два незалежні чеки, для двох різних ризиків:
+
+1. **"Чи взагалі відбувся крок 3 (запис metadata)?"** — питання ЧАСУ, не пошкодження, і НЕ рішення
+   напрямку відновлення (§II.11, "Рішення власника" нижче — за sibling-driven контрактом воно лише
+   підказує, з якого кроку продовжувати). `atomicWriteFile` (temp+rename) структурно не дає
+   "розірваного" JSON НАВІТЬ без fsync (rename атомарний на рівні видимості) — тому тут досить
+   порівняти GUID-токен мітки з GUID, збереженим У durable conflicts-store
+   (`conflicts.lastSiblingTxGuid`), а не годинники (mtime-порівняння цей проєкт уже відкинув для
+   схожої задачі — `TrackedFiles`-журнал, SYNC2-METAFILE-REFACTOR.md §2 — ключування на монотонний
+   `seq`, не на час, саме через недостатню точність mtime на частині файлових систем).
+2. **"Чи вміст нового sibling-файлу справжній, чи сміття?"** — реальний corruption-ризик, той самий
+   клас, що вже описаний §II.9. Тут — точно той самий triple-check, що й `getBlobFromSyncStore`:
+   `size` спершу (дешево), потім SHA (якщо розмір збігся).
+
+**⚠️ Важлива відмінність від `sync_store/`: sibling-контент НЕ відновлюваний з мережі** (§II.6 —
+"на сервер НЕ ЙДУТЬ"). Тому hash-on-load тут може лише ВИЯВИТИ пошкодження, не полагодити.
+
+**Рішення власника (2026-08-26, друга ревізія — sibling-driven контракт, заміняє першу версію
+того ж дня, бінарний "metadataOk && newFileOk").** Напрямок відновлення визначає ЛИШЕ цілісність нового sibling-файлу (перевірка 2), НЕ
+поточний стан metadata (перевірка 1). Мітка — це інвертована дельта: несе ОБИДВА FileInfo
+(`oldSibling` і `newSibling`), тому з неї однаково реконструюється рух в БУДЬ-ЯКИЙ бік — "де зараз
+metadata" лише підказує, з якого кроку продовжувати, а не є окремим рішенням:
+
+- **новий sibling-файл валідний (перевірка 2 пройшла)** → накатуємо ВПЕРЕД, продовжуючи транзакцію
+  з першого недовершеного кроку (3-5) — байдуже, чи metadata вже нова, чи ще стара. Повний redo
+  Vault-step тут НЕ потрібен узагалі.
+- **новий sibling-файл битий/відсутній (перевірка 2 провалилась)** → відкочуємось до
+  перед-транзакційного стану (реверс кроку 3, прибрати новий файл, unmark). Це відновлює
+  КОНСИСТЕНТНІСТЬ, але НЕ саму злуку (fold) свіжої remote-зміни, заради якої STEP3 запускався — той
+  fold доллється сам: журнал (`TrackedFiles`) лишається живим (епілог не був досягнутий), тому
+  наступний drain природно повторить Vault-step і сам домержить fold для цього шляху. Спеціального
+  redo-коду тут не потрібно — це вже наявний механізм, не окрема будова.
+  - Якщо старий sibling-файл ФІЗИЧНО ще на диску (звичайний випадок — крок 4 транзакції або не
+    виконувався, або щойно був довершений відкатом) — саме так і відбувається.
+  - Якщо старого ТЕЖ немає (крах ПІСЛЯ видалення старого, крок 4, + torn новий — без fsync немає
+    гарантії порядку durability МІЖ різними файлами) — обидва sibling-файли для цього шляху
+    втрачені; `process_conflicts()` (§III, дедуп, сценарій "tracked sibling фізично видалений")
+    prune-ить запис із порожнім `siblings`, а наступний STEP3 відбудовує ланцюжок з нуля, з першого
+    sibling (`sync_store/`) — деградація (втрата ОДНОГО проміжного sibling-запису), не корупція.
+
+(Детермінований redo — той самий принцип, що вже й так рятує append/first-sibling гілки — обидві
+навмисно ЛИШАЮТЬСЯ без цієї транзакції, бо не знищують жодного доказу, самолікуються редо самі по
+собі.)
+
+**Мітка — per-подія, самодостатня, не на весь Vault-step-цикл:**
+
+```
+mark = {
+    guid,                # унікальний токен цієї конкретної спроби (не mtime!)
+    path,                 # шлях base-файлу (P)
+    oldSibling,           # ПОВНИЙ FileInfo {path, sha, size, mtime, device_label} — потрібен
+                          # цілком, не лише ім'я: якщо новий sibling-файл виявиться битим
+                          # (перевірка 2 провалилась) — єдина умова відкату за sibling-driven
+                          # контрактом — відкат відновлює САМЕ цей об'єкт
+    newSibling            # ПОВНИЙ FileInfo щойно змерджованого результату — і для обчислення
+                          # імені файлу (buildSiblingFilePath), і для перевірки (2) на відновленні
+}
+```
+
+Послідовність (лише "replace"-гілка STEP3 — "append" і "перший sibling" НЕ чіпаються, вони й так
+безпечні):
+
+```
+1. atomicWrite(SIBLING_TX_MARK_PATH, mark)              # ще ДО будь-якого запису sibling-файлу
+2. saveConflictSiblingFile(merged_sibling)              # як і зараз, З AtomicWrite (та сама
+                                                         # функція, той самий захист, що й для
+                                                         # трьох НЕ-транзакційних сайтів — не
+                                                         # чіпаємо спільний helper заради economії,
+                                                         # яку тут ніхто не просив)
+3. conflicts.set(path, {conflictBase, siblings: replaceLast(...)})
+   conflicts.lastSiblingTxGuid = guid                    # ОДНЕ нове поле в durable-структурі
+   saveConflictsToStore(conflicts)                        # ⚠️ ДУРАБЕЛЬНИЙ КОМІТ ТУТ, не в епілозі —
+                                                           # це і закриває саму діру
+4. removeFromVault(oldSibling-файл)                      # 404-tolerant
+5. deleteSiblingTransactionMark()                         # 404-tolerant
+```
+
+**Відновлення — крок 0 самого `process_conflicts()`** (§III), не крок 0 `drain()` — `process_conflicts()`
+викликається з 4 різних місць (onload, відкриття diff-panel, вихід з diff-editor, старт drain-у,
+§III категорія I сценарій 9), і недокомічений/битий sibling-файл мусить бути прибраний чи підтверджений
+ДО того, як БУДЬ-ЯКИЙ з цих 4 сайтів просканує Vault — інакше він протече у скан як synthetic (чи
+tracked-на-биту-адресу) для трьох сайтів з чотирьох, які раніше не викликали цю функцію взагалі:
+
+```
+mark = readSiblingTransactionMark()
+if mark is not null:
+    conflicts = loadConflictsFromStore()       # свіжий durable-скан. `AtomicWriteRecovery.sweep()`
+                                                # (onload, СТРОГО ДО першого виклику process_conflicts()
+                                                # — див. "Залежність від sweep" нижче) уже привів цей
+                                                # файл до ОДНОГО консистентного стану (старого або
+                                                # нового) — bak/tmp сюди ніколи не долітають
+    guidMatches = (conflicts.lastSiblingTxGuid == mark.guid)
+    newFileOk = verifySiblingFileIntegrity(mark.newSibling)  # §II.9-стиль: size спершу, потім SHA;
+                                                # без мережевого fallback-у. ЄДИНИЙ дискримінатор
+                                                # напрямку (рішення власника вище) — guidMatches лише
+                                                # підказує, з якого кроку продовжувати
+    current = conflicts.get(mark.path)
+
+    if newFileOk:
+        # ВПЕРЕД — продовжуємо транзакцію з першого недовершеного кроку:
+        if not guidMatches:
+            conflicts.set(mark.path, {conflictBase: current.conflictBase,
+                siblings: replaceLast(current.siblings, mark.newSibling)})
+            conflicts.lastSiblingTxGuid = mark.guid
+            saveConflictsToStore(conflicts)    # крок 3 (реконструкція old+мітка→new; НЕ потребує
+                                                # tmp-байтів — sweep міг їх уже відкинути, це нормально)
+        removeFromVaultIfExists(buildSiblingFilePath(mark.oldSibling.path, mark.oldSibling.mtime,
+            mark.oldSibling.device_label))     # крок 4, 404-tolerant — no-op, якщо вже виконано
+    else:
+        # НАЗАД — відкат до перед-транзакційного стану:
+        if guidMatches:
+            conflicts.set(mark.path, {conflictBase: current.conflictBase,
+                siblings: replaceLast(current.siblings, mark.oldSibling)})
+            conflicts.lastSiblingTxGuid = null # ⚠️ ОБОВ'ЯЗКОВО (не опціонально): bak переживає лише
+                                                # крахи ВСЕРЕДИНІ самого виклику saveConflictsToStore
+                                                # (sweep його не зачищає до return); будь-який крах
+                                                # ПІСЛЯ повернення цього виклику — знову НАША
+                                                # реконструкція, без цього повторний recovery по тій
+                                                # самій мітці тримався б лише на випадковому
+                                                # no-op-повторі replaceLast(old→old) — семантика поля
+                                                # стає чесною: "guid останньої УСПІШНО закомміченої
+                                                # транзакції", а не "останньої спроби"
+            saveConflictsToStore(conflicts)    # реверс кроку 3
+        removeFromVaultIfExists(buildSiblingFilePath(mark.newSibling.path, mark.newSibling.mtime,
+            mark.newSibling.device_label))     # прибрати биту/часткову спробу
+        # Старий sibling-файл тут НІЧИМ не займаємо — журнал живий, наступний Vault-step сам
+        # домержить fold (чи, якщо старого теж немає, process_conflicts() prune-ить порожній
+        # запис і STEP3 відбудує ланцюжок з нуля) — див. "Рішення власника" вище.
+    deleteSiblingTransactionMark()
+```
+
+`verifySiblingFileIntegrity(fileInfo)` — та сама триступенева перевірка, що й `getBlobFromSyncStore`
+(§II.9), застосована до файлу у Vault замість `sync_store/`: `stat` → якщо розмір не збігається,
+одразу `false` (дешево); інакше читаємо байти й рахуємо SHA → порівнюємо. Без мережевого fallback-у
+(sibling-контент з мережі невідновний) і без `verified_shas`-кешу (ця перевірка виконується щонайбільше
+раз на крах, не десятки разів за drain, як для `sync_store/`).
+
+**⚠️ Інваріант форми запису (для ОБОХ напрямків реконструкції).** І накат вперед, і відкат назад
+конструюють `conflicts.get(mark.path)` заново лише з двох полів — `{conflictBase, siblings}`. Якщо
+schema запису колись виросте (нове поле), ОБИДВА місця (тут і mainline-код STEP3, §III) мовчки
+загублять його при будь-якій replace-транзакції — нове поле в схемі є ОБОВ'ЯЗКОВИМ приводом оновити
+обидва сайти одночасно, не лише один.
+
+**Залежність від `AtomicWriteRecovery.sweep()` — навмисна, не випадкова.** `saveConflictsToStore`
+пише файл під `.runtime/...`, тобто фізично під `<configDir>/plugins/<selfPluginId>/.runtime/...`
+(`conflict-store.ts` уже так робить для наявного ConflictStore) — ПОЗА Obsidian-івським
+vault-контент-індексом (`getAbstractFileByPath` для такого шляху ніколи не поверне `TFile`).
+Це означає `atomicWriteFile` (`src/sync2/atomic-write.ts`) для цього файлу ЗАВЖДИ бере
+rename-стратегію (`.sync-tmp`/`.sync-bak`+rename), НІКОЛИ modify-in-place-гілку — **явне припущення,
+яке `saveConflictsToStore` мусить зберігати**: один JSON-файл, шлях під `.runtime/`, без TFile.
+`AtomicWriteRecovery.sweep()` (генерик, той самий код, що обслуговує всі atomicWriteFile-записи в
+проєкті) нормалізує будь-яку осиротілу `.sync-tmp`/`.sync-bak`-пару для ЦЬОГО файлу до ОДНОГО
+консистентного стану ще на onload — sweep не знає нічого про нашу транзакцію (не має оракула, щоб
+довіряти tmp-байтам без окремого SHA-запису, якого для generic-файлів нема), тому завжди або
+довершує (коли live уже присутній) або відкочує на bak (коли live відсутній); ніколи не лишає файл
+відсутнім. Наш recovery (вище) після sweep бачить рівно один metadata-файл + мітку + sibling-файли —
+bak/tmp самому recovery-коду читати не треба. Це тримається СТРОГО за умови: **sweep запускається
+РАНІШЕ, ніж БУДЬ-ЯКИЙ виклик `process_conflicts()` цього сеансу** (onload, до `workspace.onLayoutReady`
+— той самий порядок, що вже прийнятий для інших `atomicWriteFile`-споживачів, §sync2-engine.md).
 
 ## III. Приблизна реалізація алгоритму
 
@@ -1291,6 +1495,106 @@ def findConflictSiblingFilesInVault(path, siblings):
     return {trackedOnDisk: trackedOnDisk, synthetic: synthetic}
 
 
+# ==============================================================================================
+# STEP3 "replace"-транзакція — mark-based crash recovery без fsync (§II.11). Захищає ЛИШЕ
+# replace-гілку (diff3 OK): вона єдина знищує доказ (видаляє старий sibling-файл) ДО durable-
+# запису нового стану. "append"/"перший sibling" тут НЕ проходять — самолікуються редо.
+# ==============================================================================================
+
+SIBLING_TX_MARK_PATH = ".runtime/sibling-tx-mark.json"  # один слот — replace-транзакції по
+                                                          # конструкції не бувають конкурентними
+                                                          # (§VI.2: per-file обробка послідовна)
+
+def writeSiblingTransactionMark(guid, path, oldSibling, newSibling):
+    # oldSibling/newSibling — ПОВНІ FileInfo {path, sha, size, mtime, device_label}, не самі
+    # імена: відновлення (нижче) або верифікує newSibling за SHA, або відкочує durable-запис на
+    # oldSibling цілком — для обох потрібен весь об'єкт, не рядок.
+    atomicWrite(SIBLING_TX_MARK_PATH, {guid: guid, path: path, oldSibling: oldSibling, newSibling: newSibling})
+
+
+def readSiblingTransactionMark():
+    if not fileExists(SIBLING_TX_MARK_PATH):
+        return null   # звичайний, безкрахів старт — нема що відновлювати
+    return readJson(SIBLING_TX_MARK_PATH)
+
+
+def deleteSiblingTransactionMark():
+    removeFileIfExists(SIBLING_TX_MARK_PATH)  # 404-толерантно, той самий патерн, що й
+                                               # deleteBranchIfExists/removeBatchDir
+
+
+def verifySiblingFileIntegrity(fileInfo):
+    # §II.9-стиль triple-check (`getBlobFromSyncStore`), застосований до Vault замість
+    # `sync_store/` — БЕЗ мережевого fallback-у (sibling-контент з мережі невідновний, §II.6) і
+    # БЕЗ verified_shas-кешу (виконується щонайбільше раз на крах, не десятки разів за drain):
+    siblingPath = buildSiblingFilePath(fileInfo.path, fileInfo.mtime, fileInfo.device_label)
+    stat = statVaultFile(siblingPath)
+    if not stat.exists:
+        return false
+    if stat.size != fileInfo.size:
+        return false   # дешевий fail — не читаємо й не хешуємо файл, чий розмір уже не той
+    bytes = readBytes(siblingPath)
+    return getSha(bytes) == fileInfo.sha
+
+
+def recoverSiblingTransactionIfNeeded():
+    # ⚠️ Викликається В КРОЦІ 0 самого process_conflicts() (§III нижче) — 2026-08-26, друга
+    # ревізія: НЕ в drain(), бо process_conflicts() викликається з 4 місць (onload, diff-panel,
+    # вихід з diff-editor, старт drain-у), і недокомічений новий sibling-файл мусить бути
+    # підтверджений чи прибраний ДО скану БУДЬ-ЯКОГО з чотирьох, інакше протече як synthetic
+    # (§II.11). Без параметра (не `conflicts`) — навмисно: `loadConflictsFromStore()` виконуємо
+    # лише тоді, коли мітка СПРАВДІ є (рідкісний, крах-related випадок), не на кожному звичайному
+    # виклику.
+    mark = readSiblingTransactionMark()
+    if mark is null:
+        return
+    conflicts = loadConflictsFromStore()   # свіжий durable-скан. AtomicWriteRecovery.sweep()
+                                            # (onload, СТРОГО ДО першого виклику process_conflicts())
+                                            # уже привів цей файл до ОДНОГО консистентного стану —
+                                            # той самий, що process_conflicts() п.1 зараз же
+                                            # довантажить сам
+    guidMatches = (conflicts.lastSiblingTxGuid == mark.guid)
+    newFileOk = verifySiblingFileIntegrity(mark.newSibling)   # ⚠️ ЄДИНИЙ дискримінатор напрямку
+                                            # (§II.11, "рішення власника 2026-08-26, друга
+                                            # ревізія") — guidMatches лише підказує, з якого кроку
+                                            # продовжувати, НЕ вирішує вперед/назад
+    current = conflicts.get(mark.path)
+
+    if newFileOk:
+        # ВПЕРЕД — продовжуємо транзакцію з першого недовершеного кроку, БАЙДУЖЕ чи metadata вже
+        # нова: повний redo Vault-step тут не потрібен узагалі.
+        if not guidMatches:
+            conflicts.set(mark.path, {conflictBase: current.conflictBase,
+                siblings: replaceLast(current.siblings, mark.newSibling)})
+            conflicts.lastSiblingTxGuid = mark.guid
+            saveConflictsToStore(conflicts)   # довершує крок 3 (реконструкція old+мітка→new)
+        removeFromVaultIfExists(buildSiblingFilePath(mark.oldSibling.path, mark.oldSibling.mtime,
+            mark.oldSibling.device_label))    # крок 4, 404-tolerant — no-op, якщо вже виконано
+    else:
+        # НАЗАД — відкат до перед-транзакційного стану:
+        if guidMatches:
+            # metadata вже стверджувала новий стан, але сам файл битий/відсутній — відкочуємо
+            # durable-запис на старий sibling (undo replaceLast), інакше наступний STEP3 читав би
+            # last(siblings) = биту версію й впав би на LOCAL_FILE_IS_NOT_FOUND_ERROR:
+            conflicts.set(mark.path, {conflictBase: current.conflictBase,
+                siblings: replaceLast(current.siblings, mark.oldSibling)})
+            conflicts.lastSiblingTxGuid = null   # ⚠️ ОБОВ'ЯЗКОВО — без цього повторний recovery
+                                                  # по тій самій мітці (крах ПОСЕРЕД самого
+                                                  # recovery) тримався б лише на випадковому
+                                                  # no-op-повторі replaceLast(old→old); з цим полем
+                                                  # семантика чесна: "guid останньої УСПІШНО
+                                                  # закомміченої транзакції"
+            saveConflictsToStore(conflicts)      # реверс кроку 3
+        removeFromVaultIfExists(buildSiblingFilePath(mark.newSibling.path, mark.newSibling.mtime,
+            mark.newSibling.device_label))  # прибираємо незалежно від того, чи він взагалі
+                                             # з'явився, і чи битий — однаково не довіряємо
+        # Старий sibling-файл тут НІЧИМ не займаємо. Якщо він фізично ще на диску — журнал живий,
+        # наступний Vault-step сам домержить свіжу remote-зміну (fold) для цього шляху; якщо його
+        # ТЕЖ немає (крах ПІСЛЯ кроку 4 + torn новий) — process_conflicts() prune-ить порожній
+        # запис, STEP3 відбудує ланцюжок з нуля (деградація, не корупція) — §II.11.
+    deleteSiblingTransactionMark()
+
+
 def process_conflicts():
    # ⚠️ КОНТРАКТ (2026-08-24, розширення §V-уніфікації; МОДЕЛЬ ВИПРАВЛЕНА 2026-08-24, критичний
    # перегляд, власник): `conflicts` — Map<path, {conflictBase, siblings: FileInfo[]}>. `siblings`
@@ -1347,6 +1651,15 @@ def process_conflicts():
    # == 0`, §III нижче) блокується НАЗАВЖДИ для цього шляху, conflict_branch ніколи не мерджиться.
    # Порожня Map тепер — ЛЕГАЛЬНЕ, відмінне від `null` значення ("нема нерозв'язаних конфліктів,
    # і ми це вже знаємо" — не привід перезавантажувати з диска):
+   #
+   # ⚠️ КРОК 0 (2026-08-26, §II.11, перенесено з drain()): відновлення незавершеної STEP3
+   # "replace"-транзакції, якщо є — ДО будь-якого читання/запису `conflicts` нижче. Раніше цей
+   # виклик жив лише в drain()'s "крок 0" — але process_conflicts() викликається з 4 місць
+   # (onload, diff-panel, вихід з diff-editor, старт drain-у, сценарій 9 нижче), і три з них НЕ
+   # проходили через drain() — недокомічений/битий sibling-файл міг протекти у скан цих трьох
+   # сайтів як synthetic ДО першого-ж drain-у. Один виклик тут покриває всі 4. Дешево, коли мітки
+   # нема (один fileExists, не повний durable-скан) — див. §II.11 для повного алгоритму:
+   recoverSiblingTransactionIfNeeded()
    if conflicts is null:
        conflicts = loadConflictsFromStore()
 
@@ -1602,7 +1915,10 @@ def drain():
     while true:                                                            
         if restart_batch:
             #==========================================================================================
-            # перший крок - це обробка старих (з попередніх sync) tracked manual conflicts
+            # перший крок - це обробка старих (з попередніх sync) tracked manual conflicts. Відновлення
+            # незавершеної STEP3 "replace"-транзакції (§II.11) тепер живе ВСЕРЕДИНІ process_conflicts()
+            # самого (2026-08-26, перенесено — покриває всі 4 виклики process_conflicts(), не лише
+            # цей), тому окремого виклику тут більше немає.
             #==========================================================================================
             conflicts = process_conflicts() # `conflicts` тут ще не оголошена (перший прохід 
                                                    # цього drain()) → всередині process_conflicts()
@@ -2456,9 +2772,14 @@ def drain():
                  vault_step_errors.add({path: tracked.remote.path, error: diff_error})
                  continue
              if diff_error != MANUAL_CONFLICT:
-                # видаляємо попередній sibling файл і ЗАМІНЮЄМО останній елемент списку на
-                # поточний в Vault і в conflicts (довжина списку не змінюється):
-                removeFromVault(previous_sibling)
+                # ЗАМІНЮЄМО останній елемент списку на поточний — і в Vault, і в conflicts
+                # (довжина списку не змінюється). ⚠️ ВИПРАВЛЕНО (2026-08-26, §II.11, Finding 1 —
+                # "точнісінько той клас бага, заради якого весь цей редизайн"): раніше тут
+                # `removeFromVault(previous_sibling)` виконувався ПЕРШИМ, до будь-якого durable-
+                # запису — крах/NETWORK_ERROR-аборт ІНШОГО файлу пізніше в тому самому циклі міг
+                # лишити durable conflicts store застарілим, а старий доказ уже знищеним. Тепер —
+                # mark-транзакція (§II.11): спершу мітка + новий файл + durable-персист, і лише
+                # ТОДІ видалення старого.
                 merged_sibling.mtime = tracked.remote.mtime  # РІШЕННЯ ВЛАСНИКА (2026-08-23): дата
                                                 # remote-коміту, НЕ момент запису. _diff3() завжди
                                                 # повертає mtime=null для свіжозлитого результату —
@@ -2474,9 +2795,18 @@ def drain():
                                                 # попередньому sibling-файлу чи _diff3()-результату
                                                 # (який тут теж завжди повертає null — той самий
                                                 # клас, що й mtime).
-                saveConflictSiblingFile(merged_sibling)
+                txGuid = generateGuid()  # crypto.randomUUID() — НЕ Math.random()/Date.now() (заборонені
+                                                # в проєкті як джерело унікальності; той самий принцип,
+                                                # що монотонний seq у METAFILE §2)
+                writeSiblingTransactionMark(txGuid, tracked.remote.path, previous_sibling, merged_sibling)  # §II.11,
+                                                # крок 1 транзакції — ДО будь-якого запису sibling-файлу
+                saveConflictSiblingFile(merged_sibling)  # крок 2 — З AtomicWrite, як і завжди
                 conflicts.set(tracked.remote.path, {conflictBase: current_conflict.conflictBase,
                     siblings: replaceLast(current_conflict.siblings, merged_sibling)})
+                conflicts.lastSiblingTxGuid = txGuid
+                saveConflictsToStore(conflicts)  # крок 3 — ⚠️ ДУРАБЕЛЬНИЙ КОМІТ ТУТ, не в епілозі
+                removeFromVault(previous_sibling)  # крок 4 — ЛИШЕ ТЕПЕР видаляємо старий sibling
+                deleteSiblingTransactionMark()  # крок 5
              else:
                 # Зберігаємо новий, старий НЕ чіпаємо на диску — старий лишається ЩЕ ОДНИМ tracked
                 # елементом списку (§II.6 п.6), НЕ стає synthetic (§II.6/§III "TRACKED vs
@@ -2789,13 +3119,14 @@ def drain():
 | **Delete conflict-branch** | Так, 404-толерантно | `deleteBranchIfExists` трактує "гілки вже нема" як успіх, не помилку — крах МІЖ delete і записом на диск не відрізняється від "ще не видаляли" для наступної спроби. |
 | **Vault-step запис** (`updateFileInVault`, `saveConflictSiblingFile`) | Так, через `atomicWriteFile`/rename | Запис того самого вмісту вдруге — той самий байтовий результат; крах-recovery для atomic write вже покритий існуючим `AtomicWriteRecovery.sweep` (SYNC2.md §10), новий механізм не потрібен. `readVaultFileInfo`/`last(current_conflict.siblings)` (conflicts, §III) тепер повертають `.blob` одразу — без цього `_diff3()` тут падав би на `LOCAL_FILE_IS_NOT_FOUND_ERROR` при КОЖНОМУ виклику, а не лише при краху. **⚠️ ВИПРАВЛЕНО (2026-08-25, Finding #2, власник — "вирішити раз і назавжди"):** попередня версія мала per-file NETWORK_ERROR-skip-and-continue, і твердження "рядок 7 нижче однаково коректний і для крах, і для мережева помилка" (2026-08-24) було ПОМИЛКОВИМ — graceful skip доходив до епілогу, писав cold baseline і видаляв journal, тому шлях НЕ повторювався наступним drain (відкрите питання, епілог крок 1). Фікс — НЕ латка, а усунення самої розбіжності: NETWORK_ERROR у Vault-step тепер УСЮДИ `return` (5 сайтів: STEP3-гілка-1 blob-fetch, STEP3-гілка-2 `_diff3`, non-manual-conflict `_diff3`, Vault-step-born-конфлікт blob-fetch і device_label-fetch), той самий шлях, що й TOKEN_EXPIRED. Journal тепер ЗАВЖДИ живий, коли epilogue не досягнуто — "graceful" і "крах" для NETWORK_ERROR стали буквально ОДНИМ шляхом, рядок 7 (IV.2) тепер коректний без застереження. Лишається CONFIRMED-lossy NOT_FOUND (repo-corruption клас, §12.5.D) — той skip-and-continue, оскільки retry там не допоміг би: `tracked.base` для такого шляху не просувається, повтор станеться лише коли для нього прийде НОВА remote-зміна (не сам факт "наступний drain") — прийнятно, бо клас події вже некоректний repo-стан, не мережева нестабільність. |
 | **Cold baseline-transfer** (епілог крок 1, `writeFileBaseline`) | Так, per-path atomicWrite | Джерело (`TrackedFiles`) НЕ змінюється, доки крок 4 його не видалить — записати той самий шлях тим самим значенням двічі поспіль дає байтово ідентичний результат. Торн зачіпає 1 кошик (§2.2 METAFILE-REFACTOR), не всю мапу. **⚠️ ДОПОВНЕНО (2026-08-25):** крок тепер пропускає (`continue`) будь-який `tracked`, у якого `tracked.remote.sha is null` — плейсхолдер для idle, ще не оновленого цим drain-ом lingering-конфлікту (Seeding, рядок нижче). Без guard-у повтор писав би null поверх РЕАЛЬНОЇ попередньої baseline; сам guard так само ідемпотентний — той самий плейсхолдер при redo дає той самий skip. |
-| **conflicts → durable store** (епілог крок 2, `saveConflictsToStore`) | Так, atomicWrite + reconcile обмежений siblings-половиною | `process_conflicts()` (§III прим., повний псевдокод) сканує ФС наново щоразу, але торкається ЛИШЕ `current_conflict.siblings` (по-елементно — §III "TRACKED vs SYNTHETIC") — `current_conflict.conflictBase` завжди переноситься з входу без змін (контракт функції). Повторний виклик при незмінному стані Vault дає той самий результат; сам запис — atomicWrite. Перевірка тепер `conflicts is null` (не `is empty`, §III) — порожня, але ЗАВАНТАЖЕНА мапа (напр. після STEP3 NOT_FOUND-cancel видалив останній запис) НЕ підміняється застарілою durable-копією при redo. |
+| **conflicts → durable store** (епілог крок 2, `saveConflictsToStore`) | Так, atomicWrite + reconcile обмежений siblings-половиною | `process_conflicts()` (§III прим., повний псевдокод) сканує ФС наново щоразу, але торкається ЛИШЕ `current_conflict.siblings` (по-елементно — §III "TRACKED vs SYNTHETIC") — `current_conflict.conflictBase` завжди переноситься з входу без змін (контракт функції). Повторний виклик при незмінному стані Vault дає той самий результат; сам запис — atomicWrite. Перевірка тепер `conflicts is null` (не `is empty`, §III) — порожня, але ЗАВАНТАЖЕНА мапа (напр. після STEP3 NOT_FOUND-cancel видалив останній запис) НЕ підміняється застарілою durable-копією при redo. ⚠️ Епілог — НЕ єдиний writer цього store: STEP3 replace-транзакція (§II.11, наступний рядок) теж пише `saveConflictsToStore` mid-drain, синхронно всередині Vault-step-циклу (§VI.2 — по-файлова обробка послідовна, гонки немає). |
 | **Hot-пара** (епілог крок 3, `persistHotMetadata`) | Так, ping-pong (§2.1 METAFILE-REFACTOR) — АЛЕ ⚠️ семантика `conflictBranch`-поля змінилась, див. нижче | Той самий 2-слотовий протокол, що вже доведений для `cursor-store`/drain-журналу — seq-дискримінатор, читання = максимальний валідний слот. **⚠️ ВИПРАВЛЕНО (2026-08-25):** запис `conflictBranch` тепер = пряме значення локальної `conflictBranchName` (власник її життєвого циклу — виключно FINALIZE, §III), НЕ `(len(conflicts) > 0) ? conflictBranchName : null`. Стара тернарна форма зануляла поле, щойно `conflicts` порожніла ПІЗНІШЕ в тому самому епілозі (крок 2), навіть якщо FINALIZE (виконується РАНІШЕ в drain-і, до Vault-step) ще не підтвердив merge/delete — тихо скасовувало hot-фолбек `restoreTrackedFilesFromDiskOrCreateNewOne` (рядок "Seeding" нижче) для лінгеруючого конфлікту без журналу: `conflictBranchName` там присвоюється ЛИШЕ якщо FINALIZE сам занулив (merge підтверджено/гілки вже нема) — пряме значення тут і фолбек там тепер одне джерело істини, а не два, що можуть розійтись. |
 | **Видалення TrackedFiles-журналу** (епілог крок 4) | Так, 404-толерантно | "Вже нема" = success, той самий патерн, що й `deleteBranchIfExists`. |
 | **sweep sync_store** (епілог крок 5) | Так, за побудовою (§12.5) — тепер за ЧОТИРМА джерелами `referenced`, останнє — durable `conflicts`-store (SYNC2-FIX.md §12.5.D) | `referenced`-множина рахується заново з диска щоразу; повторний sweep при незмінному стані — той самий результат. Завершеність sweep-у тепер залежить від ДВОХ умов, не однієї: порожня черга (`push_queue/`) І порожній durable `conflicts` — поки живе хоч один manual conflict, його `conflictBase`-blob лишається в `referenced` і НЕ підмітається (§12.5.D) незалежно від того, скільки drain-ів минуло. |
 | **STEP3 blob-fetch + NOT_FOUND-cancel** (Vault-step, §III, `previous_sibling is null` гілка) | Так, повним redo Vault-step | Крах ДО завершення епілогу (журнал ще на диску) → наступний запуск повторює Vault-step з нуля для ВСІХ tracked, включно з цим шляхом: те саме `sync_store`→мережа читання, той самий NOT_FOUND (природа помилки не залежить від того, скільки разів її перевіряли), той самий `conflicts.delete` + `is_manual_conflict=false`. Немає проміжного стану, який redo міг би застати "напівскасованим" — обидва присвоєння в ОДНІЙ, не розбитій навпіл ділянці коду, до будь-якого диск-запису цього кроку. |
 | **Seeding** (`restoreTrackedFilesFromDiskOrCreateNewOne`, §III) | Так, чиста функція від входу | Вхід — `(журнал-з-диска, durable conflicts-з-диска)`, обидва не змінюються під час виконання функції; вихід — детермінована функція входу (журнал-гілка АБО reconcile-гілка від `conflicts`, без прихованого стану). Повторний виклик з тим самим входом (напр. після краху ДО першого запису епілогу) дає той самий `TrackedFiles`-масив, включно з `base: seeded_remote`-плейсхолдером для idle-шляхів і фолбеком `conflictBranchName = metadata.getConflictBranchName()`, коли журналу нема. |
 | **Lazy device_label-fetch** (STEP1 / pull-folding-refresh / Vault-step-born-конфлікт, §III) | Так, read-only | `getCommitDeviceLabelForPath` — чисте GET, без побічних ефектів на repo. Крах ДО чи ПІСЛЯ виклику не залишає проміжного стану, що вимагав би відкату — гірше, що можливо: значення просто перезапитується вдруге при redo. |
+| **STEP3 replace-транзакція** (§II.11, mark → новий файл → durable-персист → видалення старого → unmark) | Так, через GUID-звірку + hash-on-load, БЕЗ fsync | `recoverSiblingTransactionIfNeeded()` (§III, крок 0 самого `process_conflicts()` — 2026-08-26, друга ревізія: перенесено з drain()'s кроку 0, покриває всі 4 виклики `process_conflicts()`) відновлює з мітки. Дискримінатор напрямку — ЛИШЕ цілісність нового sibling-файлу (size+SHA, §II.9-стиль, без мережевого fallback-у): валідний → накат ВПЕРЕД з першого недовершеного кроку (3-5), БАЙДУЖЕ, чи metadata вже нова — повного redo Vault-step тут не потрібно взагалі; битий/відсутній → відкат до перед-транзакційного стану (undo `replaceLast`, якщо metadata встигла оновитись — з обов'язковим `lastSiblingTxGuid=null`), прибрати новий файл, unmark. Сама злука (fold) свіжої remote-зміни в цьому кейсі доллється НЕ спеціальним кодом, а вже наявним механізмом — журнал лишається живим, наступний Vault-step повторює fold сам. |
 
 **Передумова, на якій тримаються рядки 1/2 нижче (не мережевий side-effect, а чиста in-memory
 реконструкція): reconciliation `is_manual_conflict` при відновленні.** `restoreTrackedFilesFromDiskOrCreateNewOne`
@@ -2840,6 +3171,12 @@ crash/redo від того, щоб побачити напівзаповнени
 | 12 | Епілог, ПІСЛЯ кроку 4 (журнал видалено), ДО кроку 5 (sweep) | Журнал відсутній | Наступний `drain()` бачить ПОРОЖНІЙ `TrackedFiles`, черга порожня → одразу епілог: кроки 1-2 no-op (нічого переносити), крок 3 no-op (той самий `head_hash`), крок 4 no-op (уже видалено), крок 5 нарешті виконується. Якщо наступний drain найближчим часом не запуститься — той самий sweep однаково запуститься на onload плагіна (§12.5.C) | IV.1 "sweep sync_store" + §12.5.C onload backstop |
 | 13 ⚠️ НОВЕ (2026-08-25) | Епілог, ПІСЛЯ кроку 2 (`conflicts` записано БЕЗ щойно скасованого шляху, §III STEP3 NOT_FOUND-cancel), ДО кроку 4 (журнал ще з прапорцем `is_manual_conflict=true` для цього шляху) | Durable `conflicts` уже без запису; журнал (`TrackedFiles`) ще на диску, ще каже "конфлікт" | Restart перечитує журнал — БАЧИТЬ `is_manual_conflict=true`, АЛЕ Seeding (`restoreTrackedFilesFromDiskOrCreateNewOne`) reconcile-гілка звіряє журнал зі свіжим `conflicts` (той самий скан, що й process_conflicts()) — шляху там уже нема → прапорець скидається сам, без окремого коду. Самолікується тим самим reconciliation, що вже доведений для "передумови рядків 1/2" вище. | IV.1 "Seeding" + "Передумова" вище |
 | 14 ⚠️ НОВЕ (2026-08-25) | Між `conflicts.delete(...)` (§III STEP3 NOT_FOUND-cancel, лише в пам'яті) і початком епілогу (крок 2 ще не записав це на диск) | Durable `conflicts` на диску ЩЕ містить скасований шлях; in-memory-стан цього drain-у вже без нього | Крах тут ідентичний рядку 7/8 вище (Vault-step ще не завершився) — redo повторює Vault-step з нуля, доходить до ТОГО САМОГО NOT_FOUND (природа помилки не залежить від спроби), re-cancel-ить ідентично. Немає "часткового" скасування, яке потребувало б окремого рецепта. | IV.1 "STEP3 blob-fetch + NOT_FOUND-cancel" |
+| 15 ⚠️ НОВЕ (2026-08-26, §II.11, друга ревізія) | STEP3 replace-транзакція, ПІСЛЯ мітки (крок 1), ДО запису нового sibling-файлу (крок 2) | Мітка на диску; ні новий, ні старий sibling-файл не зачеплені; `conflicts.lastSiblingTxGuid` ще СТАРИЙ (не збігається з міткою) | `recoverSiblingTransactionIfNeeded()`: новий файл ще не існує → `verifySiblingFileIntegrity` = false → НАЗАД. `guidMatches=false` → metadata не займаємо; новий файл прибрати (його й нема — no-op); unmark. Журнал живий, наступний STEP3 перераховує fold з нуля | IV.1 "STEP3 replace-транзакція" |
+| 16 ⚠️ НОВЕ (2026-08-26, §II.11, друга ревізія) | Посеред запису нового sibling-файлу (крок 2) — файл частково записаний/бита копія | Мітка на диску; новий файл присутній, але SHA/розмір не зійдуться; `conflicts.lastSiblingTxGuid` ще СТАРИЙ | Той самий шлях, що й рядок 15 — дискримінатор (цілісність нового файлу) провалюється незалежно від того, що каже metadata → НАЗАД: новий файл прибирається (не довіряємо), metadata не займаємо (`guidMatches=false`), unmark, журнал довершить fold | IV.1 "STEP3 replace-транзакція" |
+| 17 ⚠️ НОВЕ (2026-08-26, §II.11, друга ревізія) | ПІСЛЯ durable-персисту (крок 3, `conflicts.lastSiblingTxGuid` уже новий), ДО видалення старого sibling-файлу (крок 4) | Мітка на диску; новий файл справжній І зареєстрований; старий файл ФІЗИЧНО ще на диску, але вже НЕ в `siblings`-списку (synthetic) | Новий файл валідний → ВПЕРЕД: `guidMatches=true` → крок 3 вже не потрібен (no-op), лишається довершити ЛИШЕ крок 4 (видалити старий) і unmark, БЕЗ redo Vault-step для цього шляху — саме та властивість, заради якої й писалась ця транзакція | IV.1 "STEP3 replace-транзакція" |
+| 18 ⚠️ НОВЕ (2026-08-26, §II.11, друга ревізія) | Між записом валідного нового sibling-файлу (крок 2 повністю успішний) і durable-персистом (крок 3 ще НЕ виконався) — вікно, якого перша версія контракту трактувала як повний rollback+redo | Мітка на диску; новий файл справжній і ПРОХОДИТЬ перевірку; `conflicts.lastSiblingTxGuid` ЩЕ СТАРИЙ (`guidMatches=false`) | Новий файл валідний → ВПЕРЕД, попри те що `guidMatches=false`: `conflicts.set` (реконструкція old+мітка→new) + `lastSiblingTxGuid=mark.guid` + `saveConflictsToStore` (довершує крок 3), потім крок 4 (видалити старий), unmark. Redo Vault-step НЕ потрібен — це і є зміна другої ревізії відносно першої (яка тут форсувала повний rollback) | IV.1 "STEP3 replace-транзакція" |
+| 19 ⚠️ НОВЕ (2026-08-26, §II.11, друга ревізія) | ПІСЛЯ durable-персисту (крок 3), ДО видалення старого (крок 4) — новий sibling-файл на диску ВИЯВЛЯЄТЬСЯ битим при відновленні (torn write, реальний ризик без fsync — §II.11), СТАРИЙ файл ще фізично на диску | Мітка на диску; `conflicts.lastSiblingTxGuid` новий, `verifySiblingFileIntegrity` провалюється; старий sibling-файл ще присутній (крок 4 не виконувався) | НАЗАД: `guidMatches=true` → відкат durable-запису на `mark.oldSibling` (undo `replaceLast`, `lastSiblingTxGuid=null`), прибрати биту копію нового, unmark. Старий файл нікуди не діли — журнал живий, наступний Vault-step сам домержить fold для цього шляху, спеціального redo-коду не потрібно | IV.1 "STEP3 replace-транзакція" |
+| 20 ⚠️ НОВЕ (2026-08-26, §II.11, друга ревізія) | ПІСЛЯ видалення старого sibling-файлу (крок 4), новий sibling-файл на диску ВИЯВЛЯЄТЬСЯ битим при відновленні (torn write без fsync-гарантії порядку durability МІЖ окремими файлами, тому "новий записався раніше за старий" не гарантовано) | Мітка на диску; `conflicts.lastSiblingTxGuid` новий, `verifySiblingFileIntegrity` провалюється; старого sibling-файлу ТЕЖ немає на диску (крок 4 уже виконався) | НАЗАД: `guidMatches=true` → відкат durable-запису на `mark.oldSibling` (undo `replaceLast`, `lastSiblingTxGuid=null`), прибрати биту копію нового, unmark. Але `mark.oldSibling`-ФАЙЛУ фізично вже немає — метадата вказує в нікуди. `process_conflicts()` (сценарій C.6, "tracked sibling фізично видалений") prune-ить запис із порожнім `siblings`; наступний STEP3 відбудовує ланцюжок з нуля, з першого sibling (`sync_store/`). Деградація (втрата ОДНОГО проміжного sibling-запису), не корупція | IV.1 "STEP3 replace-транзакція"; §II.11 "Рішення власника" |
 
 **Висновок:** для КОЖНОЇ точки краху рецепт один — "продовжити з того самого місця, звідки читає
 `getBatch()`/цикл, довіряючи ідемпотентності". Немає жодної точки, що вимагає окремого, унікального
@@ -3108,7 +3445,7 @@ seeding) + рідший integration-рівень (реальний GitHub, пі�
 8. Vault-step, `base≠remote`, diff3 OK → Vault оновлюється до злитого результату
 9. Vault-step, локальний файл видалено з Vault ПІД ЧАС drain-у (`local.mode=DELETED`, не `null`) → тихе видалення (правило 5) якщо remote не змінився, MANUAL_CONFLICT (8.b) якщо змінився
 
-### C. Manual Conflict lifecycle (§II.6) — 13 сценаріїв
+### C. Manual Conflict lifecycle (§II.6) — 21 сценарій
 
 1. STEP1: конфлікт народжується з `_diff3` ERROR → `conflicts.set(path, {conflictBase, siblings: []})`, push у conflict-branch, `base=remote=R_m`, `is_manual_conflict=true`
 2. STEP2: файл уже в конфлікті, новий local edit → push у conflict-branch з dedup (той самий SHA, що вже в `conflictBase` → пуш пропускається)
@@ -3123,15 +3460,26 @@ seeding) + рідший integration-рівень (реальний GitHub, пі�
 11. Idle lingering-конфлікт (`tracked.remote.sha==null`, нема свіжого pull цього drain-у) → Vault-step чисто пропускає, без побічних ефектів
 12. Кілька drain-ів поспіль, кожен додає ще один sibling при ERROR → список росте коректно, порядок = append-order = порядок за mtime
 13. `device_label` заповнюється на ВСІХ 3 сайтах народження конфлікту (STEP1, pull-folding-refresh, Vault-step-born) і НЕ для звичайних (не-конфліктних) файлів
+14. **STEP3 replace-транзакція (§II.11), щасливий шлях:** мітка → новий sibling → durable-персист (`lastSiblingTxGuid`) → видалення старого → unmark — увесь ланцюжок відбувається, старий файл справді зникає, новий справді tracked
+15. **Крах/аборт МІЖ міткою (крок 1) і повноцінним записом нового sibling-файлу (крок 2)** — новий файл ще не з'явився, або з'явився частково биту-копію — дискримінатор (`verifySiblingFileIntegrity`) провалюється НЕЗАЛЕЖНО від стану metadata → НАЗАД: metadata не займаємо, новий файл прибирається (якщо є), unmark, журнал довершить fold наступним drain-ом
+16. **⚠️ Друга ревізія (2026-08-26): крах ПІСЛЯ повного і валідного запису нового sibling-файлу (крок 2), АЛЕ ДО durable-персисту (крок 3)** — `verifySiblingFileIntegrity` ПРОХОДИТЬ, `conflicts.lastSiblingTxGuid` ще старий (`guidMatches=false`) → ВПЕРЕД попри це: перша версія контракту тут форсувала повний rollback+redo, друга — дискримінатор лише цілісність файлу, тому просто довершує крок 3 (реконструкція old+мітка→new) і крок 4, БЕЗ redo Vault-step
+17. **Крах ПІСЛЯ durable-персисту (крок 3), ДО видалення старого (крок 4)** (`lastSiblingTxGuid` уже новий, новий sibling-файл справжній) → ВПЕРЕД, крок 3 вже no-op → відновлення довершує ЛИШЕ крок 4, БЕЗ redo Vault-step для цього шляху
+18. **Новий sibling-файл виявляється битим при відновленні, СТАРИЙ фізично ще на диску** (крок 4 не виконувався) → НАЗАД: відкат durable-запису на старий sibling (undo `replaceLast`, `lastSiblingTxGuid=null`), бита копія прибирається, unmark. Сама злука (fold) свіжої remote-зміни НЕ відновлюється тут спеціальним кодом — журнал живий, наступний Vault-step сам повторює fold для цього шляху
+19. **⚠️ НОВИЙ (2026-08-26, друга ревізія): новий sibling-файл битий ПРИ відновленні, І старий ТЕЖ фізично відсутній** (крах ПІСЛЯ видалення старого, крок 4, + torn новий — без fsync немає гарантії порядку durability МІЖ окремими файлами) → НАЗАД відкочує metadata на `mark.oldSibling`, але сам файл цей уже видалено — метадата вказує в нікуди → `process_conflicts()` (сценарій C.6) prune-ить запис, наступний STEP3 відбудовує ланцюжок з нуля, з першого sibling (`sync_store/`) — деградація (втрата ОДНОГО проміжного sibling-запису), не корупція
+20. **Крах ПОСЕРЕД самого recovery** (мітка з попереднього краху вже читається вдруге — сам `recoverSiblingTransactionIfNeeded()` не встиг завершитись): і forward-гілка (крах між `removeFromVaultIfExists(oldSibling)` і `deleteSiblingTransactionMark()`), і backward-гілка (крах між `saveConflictsToStore` з обнуленим `lastSiblingTxGuid` і `deleteSiblingTransactionMark()`) — за повторного виклику дають ТУ САМУ гілку детерміновано (дискримінатор — цілісність файлу, яка не змінюється між спробами; `lastSiblingTxGuid` явно обнуляється при backward, §II.11) і завершуються без побічних ефектів
+21. **`verifySiblingFileIntegrity` — size-first short-circuit:** розбіжність розміру дає `false` без читання й хешування байтів (той самий принцип, що й `getBlobFromSyncStore`, §II.9)
 
-### D. Крах-відновлення / ідемпотентність (§IV.1-IV.2) — 12+2 точки краху
+### D. Крах-відновлення / ідемпотентність (§IV.1-IV.2) — 12+2+6 точок краху
 
 Крах під час: R3b claim; після claim до будь-якого push; після MAIN push до диску; після
 CONFLICT-BRANCH push до диску; між MAIN і CONFLICT push; під час FINALIZE до диску; посеред
 Vault-step циклу; після Vault-step до видалення журналу; кожен з епілог-переходів 1→2, 2→3,
 3→4, 4→5. Плюс 2 нові вікна навколо сьогоднішнього STEP3 NOT_FOUND-cancel фіксу: крах між
 `conflicts.delete()` (у пам'яті) і епілог-кроком 2; крах між епілог-кроком 2 (durable вже без
-запису) і кроком 4 (журнал ще з прапорцем) — має самолікуватись через RECONCILE.
+запису) і кроком 4 (журнал ще з прапорцем) — має самолікуватись через RECONCILE. Плюс 6 вікон
+STEP3 replace-транзакції (§II.11, IV.2 рядки 15-20 — sibling-driven контракт, друга ревізія
+2026-08-26): кожна фазова межа мітка→новий файл→durable-персист→видалення старого→unmark, і
+окремо деградаційний випадок "обидва sibling-файли втрачені" (рядок 20).
 
 ### E. Уніфікація NETWORK_ERROR (сьогоднішній фікс, 2026-08-25) — ПРІОРИТЕТ, ще не верифіковано тестами
 
