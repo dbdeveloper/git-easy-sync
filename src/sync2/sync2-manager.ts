@@ -1227,25 +1227,31 @@ export class Sync2Manager {
     // otherwise spin up our own and own its hide.
     const ownPullProgress = sharedProgress === null;
     let pullProgress: ProgressHandle | null = sharedProgress;
-    // Bytes-based threshold: fetch the head tree once and sum the
-    // sizes of the syncable changes. The notice opens iff the total
-    // would actually take noticeable time to download. Skipped when
-    // there's nothing to pull (no tree call cost).
+    // Bytes-based threshold, sized per-path rather than via a whole-repo
+    // tree fetch. `getRepoContent()` (`GET /git/trees/{head}?recursive=1`)
+    // used to be called here just to look up a handful of sizes — its
+    // response scales with the ENTIRE vault (measured: ~273 bytes/entry;
+    // a 20k-file vault costs ~5.5 MB on every non-empty pull, regardless
+    // of how few files actually changed). `getContentsMetadataAtRef` is
+    // the same per-path lookup `reconcileBatchAgainstHead` already uses
+    // (SHA-first branch) — one small request per changed path instead of
+    // one huge one. Above PROGRESS_COUNT_THRESHOLD changed files we skip
+    // the precision lookup entirely and just call it heavy — that's the
+    // same threshold this code already used as its error-path fallback,
+    // now applied proactively so a pull doesn't fire dozens of sequential
+    // per-path requests just to decide whether to show a progress notice.
     let isHeavyPull = false;
-    if (syncableChanges.length > 0) {
-      try {
-        const { files: treeFiles } = await this.client.getRepoContent({
-          retry: true,
-        });
-        let totalBytes = 0;
-        for (const f of syncableChanges) {
-          totalBytes += treeFiles[f.filename]?.size ?? 0;
-        }
-        isHeavyPull = totalBytes > this.progressBytesThreshold;
-      } catch {
-        // Tree call failed (rare); fall back to count-based heuristic.
-        isHeavyPull = syncableChanges.length > PROGRESS_COUNT_THRESHOLD;
+    if (syncableChanges.length > PROGRESS_COUNT_THRESHOLD) {
+      isHeavyPull = true;
+    } else if (syncableChanges.length > 0) {
+      let totalBytes = 0;
+      for (const f of syncableChanges) {
+        const meta = await this.client
+          .getContentsMetadataAtRef({ path: f.filename, ref: currentHead, retry: true })
+          .catch(() => null);
+        totalBytes += meta?.size ?? 0;
       }
+      isHeavyPull = totalBytes > this.progressBytesThreshold;
     }
     // The progress notice opens lazily on the FIRST file tick rather
     // than pre-loop. tickPull runs at loop-start (below), so each
