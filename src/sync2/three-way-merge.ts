@@ -3,6 +3,7 @@
 // AGPL-3.0 — see LICENSE.
 
 import { merge as diff3Merge } from "node-diff3";
+import { detectEol, restoreEol } from "./eol";
 
 // Outcome of a 3-way merge attempt. "clean" means non-overlapping
 // edits or coincident edits that node-diff3 reconciled silently.
@@ -32,23 +33,19 @@ export function mergeText(
     excludeFalseConflicts: true,
     stringSeparator: /\r?\n/,
   });
-  // result.result is an array of strings (with conflict markers
-  // already inlined when result.conflict is true). Join with the
-  // newline that the original inputs likely used.
-  const sep = pickSeparator(ours, base, theirs);
-  const joined = result.result.join(sep);
+  // result.result is an array of strings (with conflict markers already
+  // inlined when result.conflict is true), joined with `\n` then restored
+  // to `ours`' (local's) OWN dominant EOL style — NOT "any input has
+  // CRLF". SYNC2-FIX.md §8.2.1 / NEW-DRAIN.md §III _diff3 CRLF residual
+  // case (2026-08-28): scanning all three inputs let a CRLF `base` or
+  // `theirs` silently flip a local LF-file to CRLF even when the lines
+  // LOCAL actually touched were never edited. Restoring `ours`' own
+  // style keeps the invariant "the merge changes what changed, not the
+  // user's formatting" — reuses the same detectEol/restoreEol algorithm
+  // already shipped and tested for the diff2 UI write-back path (bug-59).
+  const joined = restoreEol(result.result.join("\n"), detectEol(ours));
   if (!result.conflict) {
     return { kind: "clean", content: joined };
   }
   return { kind: "conflict", conflictMarkedContent: joined };
-}
-
-// Pick the line-ending the merged text should use. Prefer CRLF if any
-// of the inputs uses it (Windows-edited files preserve their style),
-// otherwise plain LF.
-function pickSeparator(...inputs: string[]): string {
-  for (const s of inputs) {
-    if (s.includes("\r\n")) return "\r\n";
-  }
-  return "\n";
 }

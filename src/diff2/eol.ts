@@ -23,48 +23,10 @@
 // write-back. A mixed-EOL file is normalized to its dominant style (a deliberate,
 // documented change — not byte-for-byte preserved). Compare mode (TWO write targets)
 // is deferred (§8, unbuilt) — "which EOL per side" is genuinely ambiguous there.
-
-export type EolStyle = "lf" | "crlf" | "cr";
-
-// The dominant line ending of `s`. No `\r` at all → "lf". Otherwise whichever of
-// crlf / lone-cr / lone-lf occurs most (ties break crlf > cr > lf — the safe order for
-// a file that has any `\r`). Uses no lookbehind (mobile Capacitor WebView compat).
-export function detectEol(s: string): EolStyle {
-  // A 2-byte EOL in EITHER order (`\r\n` or the rare `\n\r`) counts as crlf.
-  const crlf = (s.match(/\r\n|\n\r/g) || []).length;
-  const totalCr = (s.match(/\r/g) || []).length;
-  const totalLf = (s.match(/\n/g) || []).length;
-  const crOnly = totalCr - crlf; // lone \r (old Mac)
-  const lfOnly = totalLf - crlf; // lone \n (Unix)
-  if (crlf === 0 && crOnly === 0) return "lf";
-  if (crlf >= crOnly && crlf >= lfOnly) return "crlf";
-  if (crOnly >= lfOnly) return "cr";
-  return "lf";
-}
-
-// Any line ending → `\n` (the model's hardcoded separator). The 2-byte forms FIRST
-// (`\r\n` or `\n\r`) so a CRLF/reverse doesn't leave a stray `\r` (or become `\n\n`),
-// then lone `\r`.
-export function toLf(s: string): string {
-  return s.replace(/\r\n|\n\r/g, "\n").replace(/\r/g, "\n");
-}
-
-// `\n` → the file's EOL. Inverse of toLf up to the dominant-EOL contract. `lf` is a
-// no-op; the input is assumed already-`\n` (model output), so a plain `\n`→EOL replace
-// is exact.
-export function restoreEol(s: string, eol: EolStyle): string {
-  if (eol === "lf") return s;
-  return s.replace(/\n/g, eol === "crlf" ? "\r\n" : "\r");
-}
-
-// The single session EOL from the two sides' dominant EOLs. User's full truth table
-// (explicit bytes — priority LF > CR > CRLF, "shorter" wins and LF beats CR in the tie):
-//   \r\n?\r\n→\r\n · \r\n?\r→\r · \r\n?\n→\n · \r?\r→\r · \r?\n→\n · \n?\n→\n
-// So CRLF survives only when BOTH sides are CRLF; a LF side always forces LF; CR beats
-// only CRLF. Symmetric.
-export function commonEol(a: EolStyle, b: EolStyle): EolStyle {
-  if (a === b) return a;
-  if (a === "lf" || b === "lf") return "lf";
-  if (a === "cr" || b === "cr") return "cr";
-  return "crlf";
-}
+//
+// 2026-08-28: the actual algorithm moved to src/sync2/eol.ts — three-way-merge.ts
+// (engine, automatic 3-way merge) needed the identical detection/restoration logic,
+// and src/sync2/ may not import from src/diff2/ (.claude/rules/diff2-ui.md). This file
+// re-exports the canonical implementation so existing diff2/ imports keep working
+// unchanged.
+export { type EolStyle, detectEol, toLf, restoreEol, commonEol } from "../sync2/eol";

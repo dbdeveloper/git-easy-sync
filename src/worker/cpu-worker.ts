@@ -26,6 +26,7 @@ import type {
   MergeTextResult,
 } from "./types";
 import { merge as diff3Merge } from "node-diff3";
+import { detectEol, restoreEol } from "../sync2/eol";
 
 // Worker `self` is `DedicatedWorkerGlobalScope` — but bundling
 // against the standard TS dom lib drags in Window types. We type
@@ -72,15 +73,12 @@ async function computeGitBlobSHA(bytes: ArrayBuffer): Promise<string> {
 
 // node-diff3 three-way text merge. Mirrors src/sync2/three-way-merge.ts
 // mergeText — same options (excludeFalseConflicts + LF-tolerant
-// stringSeparator), same separator picking. Result shape matches
-// MergeTextResult for postMessage transit.
-function pickSeparator(...inputs: string[]): string {
-  for (const s of inputs) {
-    if (s.includes("\r\n")) return "\r\n";
-  }
-  return "\n";
-}
-
+// stringSeparator), same EOL restoration (ours' own dominant style, not
+// "any input has CRLF" — NEW-DRAIN.md §III _diff3 CRLF residual case,
+// 2026-08-28). Result shape matches MergeTextResult for postMessage
+// transit. Keep this in sync with three-way-merge.ts by hand — this file
+// is bundled standalone (esbuild IIFE) and can't share a runtime import
+// with the main-thread module, only the source-level helper (../sync2/eol).
 function mergeText(
   ours: string,
   base: string,
@@ -90,8 +88,7 @@ function mergeText(
     excludeFalseConflicts: true,
     stringSeparator: /\r?\n/,
   });
-  const sep = pickSeparator(ours, base, theirs);
-  const joined = result.result.join(sep);
+  const joined = restoreEol(result.result.join("\n"), detectEol(ours));
   if (!result.conflict) {
     return { kind: "clean", content: joined };
   }

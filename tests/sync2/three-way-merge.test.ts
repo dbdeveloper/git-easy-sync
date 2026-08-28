@@ -107,6 +107,51 @@ describe("mergeText", () => {
     expect(r.kind).toBe("conflict");
   });
 
+  // NEW-DRAIN.md §III (_diff3, CRLF residual case, 2026-08-28) + §VIII category A,
+  // scenarios 27-29: the separator must reflect LOCAL's (ours) own dominant EOL, not
+  // "any input has CRLF" (SYNC2-FIX.md §8.2.1's measured bug — base/theirs could
+  // impose CRLF on a local LF-file). These three only apply to the residual case
+  // where short-circuit is impossible (both sides genuinely diverged from base).
+  it("CRLF regression (A.27): base has CRLF, ours/theirs LF, real merge — stays LF (not imposed by base)", () => {
+    const base = "line1\r\nline2\r\nline3\r\nline4";
+    const ours = "line1-ours\nline2\nline3\nline4";
+    const theirs = "line1\nline2\nline3\nline4-theirs";
+    const r = mergeText(ours, base, theirs);
+    expect(r.kind).toBe("clean");
+    if (r.kind === "clean") {
+      expect(r.content.includes("\r\n")).toBe(false);
+      expect(r.content).toContain("line1-ours");
+      expect(r.content).toContain("line4-theirs");
+    }
+  });
+
+  it("CRLF regression (A.28): ours has CRLF, base/theirs LF, real merge — stays CRLF (local's own style)", () => {
+    const base = "line1\nline2\nline3\nline4";
+    const ours = "line1-ours\r\nline2\r\nline3\r\nline4";
+    const theirs = "line1\nline2\nline3\nline4-theirs";
+    const r = mergeText(ours, base, theirs);
+    expect(r.kind).toBe("clean");
+    if (r.kind === "clean") {
+      expect(r.content).toContain("\r\n");
+      expect(r.content).toContain("line1-ours");
+      expect(r.content).toContain("line4-theirs");
+    }
+  });
+
+  it("CRLF regression (A.29): ours has mixed line endings — normalizes to ours' dominant style (tie→crlf)", () => {
+    const base = "a\nb\nc\nd";
+    const ours = "a-edit\r\nb\r\nc\nd"; // 2 CRLF pairs + 1 lone LF → dominant = crlf (tie-break)
+    const theirs = "a\nb\nc\nd-edit";
+    const r = mergeText(ours, base, theirs);
+    expect(r.kind).toBe("clean");
+    if (r.kind === "clean") {
+      expect(r.content).toContain("a-edit");
+      expect(r.content).toContain("d-edit");
+      // No lone \n survives once every \r\n pair is stripped out.
+      expect(r.content.replace(/\r\n/g, "")).not.toContain("\n");
+    }
+  });
+
   it("handles paragraph-scale non-overlapping changes cleanly", () => {
     const base = [
       "# Title",
