@@ -1435,6 +1435,107 @@ push-затирання — перевірка Шару 2 мусить стоя�
 замінює його коректність — "тиха втрата читання" (I2, чисто-remote зміна, пропущена Шаром 1)
 лишається залежною ВИКЛЮЧНО від Шару 1, Шар 2 її не бачить.
 
+## II.14 `mergeBranches()` / `isAncestorOf()` — reachability-merge, НЕ контент-merge
+
+**Рішення (2026-08-29, власник + advisor).** Раніше `client.mergeBranches(...)` у FINALIZE (§III) був
+чорною скринькою — виклик без контракту, без вказання, ЯК саме зливаються гілки й що повертається.
+Це була остання нерозкрита скринька §III, і вона несуча: від вибору механізму залежить, чи
+FINALIZE тихо повертає застарілий контент у `main`.
+
+**Головне правило: merge-коміт несе ДЕРЕВО `main`, а не результат злиття вмісту. `POST
+/repos/{owner}/{repo}/merges` (GitHub Merge API) НЕ використовується НІКОЛИ.**
+
+Обґрунтування — від семантики самої conflict-branch. На момент FINALIZE РОЗВ'ЯЗАНИЙ вміст УЖЕ в
+`main`: користувач звів base-file зі sibling-файлом у diff-editor, sibling зник, шлях вийшов з
+конфлікт-режиму (`process_conflicts()` → RECONCILE, §III) і поїхав у `main` звичайним batch-push-ем
+— а всі батчі завершуються ДО FINALIZE (він після `end while true`). Отже conflict-branch на цей
+момент тримає ВИКЛЮЧНО *витіснені*, застарілі локальні версії (`C_n`) — чисту історію, не актуальний
+стан. Справжній контент-merge має два наслідки, і обидва руйнівні:
+
+- **409 merge conflict** — GitHub не може автозлити, а розв'язати це через API нема чим: глухий кут
+  наприкінці drain-у;
+- **гірше — УСПІШНИЙ автозлит**: застарілий `C_n` тихо повертається в `main` поверх щойно
+  розв'язаного користувачем файлу. Це рівно I2-клас (мовчазне затирання чужого/новішого вмісту),
+  проти якого весь цей редизайн — лише прийшов би з несподіваного боку, вже ПІСЛЯ того, як
+  користувач вважав конфлікт закритим.
+
+Reachability-merge (дерево `main` + два предки) — єдина реалізація, узгоджена з
+PSEUDO-MERGE-MODE.md §4.4: збереження історії там визначене через ДОСЯЖНІСТЬ (другий предок
+тримає всі проміжні коміти гілки GC-safe після `deleteRef`), а НЕ через змішування вмісту.
+Порядок предків `[main_head, conflict_head]` — прямо з §4.3; він же тримає `--first-parent`-історію
+`main` чистою.
+
+**Передумови вже в коді (перевірено 2026-08-29, не потребують нових методів клієнта):**
+`createCommit` має параметр `parents?: string[]` з коментарем, що вже описує саме цей випадок
+(`src/github/client.ts:288-291`, "manual merge commits land tree-of-main with parents=[main.head,
+branch.head]"); `getCommit` повертає `{tree: {sha}, committer: {date}, message}`
+(`client.ts:348-365`); `compare` повертає `status: "ahead"|"behind"|"identical"|"diverged"`
+(`client.ts:718`); повідомлення — вже написана `formatMergeConflictBranchMessage(deviceLabel,
+whenMs)` (`src/sync2/commit-message.ts:113`), з незмінним контрактом трейлінг-суфікса
+`(deviceLabel)`.
+
+```
+def mergeBranches(conflict_head_hash, head_hash):
+    # Повертає (merge_sha, committed_at) — ТОЙ САМИЙ контракт, що й pushCommit() (§VII.5),
+    # щоб викликач не мусив розрізняти два види "ми просунули main".
+    (headCommit, error) = retryOnNetworkError(() => getCommit(head_hash))  # §II.10
+    if error == TOKEN_EXPIRED: return (null, error)
+    if error == NETWORK_ERROR: return (null, error)
+
+    (merge, error) = retryOnNetworkError(() => createCommit(
+        message = formatMergeConflictBranchMessage(deviceLabel, now()),
+        treeSha = headCommit.tree.sha,        # ⚠️ ДЕРЕВО MAIN — контентний no-op. Саме цей
+                                               # рядок робить merge безпечним: вміст `main` не
+                                               # змінюється НІ НА БАЙТ, гілка приєднується лише
+                                               # заради досяжності (PSEUDO-MERGE-MODE §4.4)
+        parents = [head_hash, conflict_head_hash]))  # порядок з §4.3: main ПЕРШИЙ
+    if error == TOKEN_EXPIRED: return (null, error)
+    if error == NETWORK_ERROR: return (null, error)
+
+    (_, error) = retryOnNetworkError(() => updateReference("heads/{mainBranch}", merge.sha,
+                                                            force=false))
+        # force=false НАВМИСНО: `merge.sha` має `head_hash` своїм першим предком, тож для
+        # незрушеного `main` це звичайний fast-forward і 422 НЕ буде. 422 тут означає рівно
+        # одне — інший пристрій зрушив `main`, поки ми будували merge-коміт (див. "422-політика")
+    if error != null: return (null, error)
+
+    return ((merge.sha, merge.committed_at), null)   # committed_at = committer.date з відповіді
+                                                      # Create-Commit API (§VII.5, той самий інваріант)
+
+
+def isAncestorOf(candidate_ancestor_sha, head_sha):
+    # Остання дрібна скринька FINALIZE. Окремого ендпоінта не треба — вистачає вже наявного
+    # compare(): "ahead" = head попереду candidate (тобто candidate — предок), "identical" = той
+    # самий коміт (теж вважаємо предком, merge не потрібен), "diverged"/"behind" = НЕ предок.
+    (cmp, error) = compare(base=candidate_ancestor_sha, head=head_sha)
+    if error != null: return (null, error)
+    return (cmp.status == "ahead" or cmp.status == "identical", null)
+```
+
+**422-політика на `updateReference` — ВІДКЛАДАЄМО, не крутимо цикл.** Отримавши 422, FINALIZE
+просто НЕ зануляє `conflictBranchName` і йде далі (Vault-step, епілог). Наступний drain
+запустить FINALIZE знову — і ancestor-check (§III) робить це ідемпотентним. Окремий retry-цикл
+тут НЕ потрібен і навіть шкідливий: уся машинерія повтору вже є (hot-metadata несе
+`conflictBranchName` між drain-ами, §III епілог крок 3; IV.1 рядки 5-6), а 422 означає, що інший
+пристрій зараз активний — наступний drain однаково захоче спершу підтягнути ЙОГО зміни, а не
+пробивати merge наосліп.
+
+**Наслідок для §III (це і є фікс "застарілого якоря"):** `head_hash = merge_sha` ОДРАЗУ після
+успішного merge. Без цього епілог крок 3 записав би `lastSyncCommitSha` = ПЕРЕДmerge-коміт.
+
+**Наскільки це було небезпечно — чесна оцінка (2026-08-29).** Початкове формулювання цієї знахідки
+("наступний drain переімпортує власний `C_n` і затре розв'язаний файл") справедливе ЛИШЕ для
+контентного merge. З `tree-of-main` дерево merge-коміту побайтово дорівнює перед-merge-дереву, тож
+`compare(pre-merge, merge-commit).files` — ПОРОЖНІЙ: жодного шляху не переімпортується. Застарілий
+якір коштує один зайвий `compare()` і самолікується наступним епілогом. Тобто це не втрата даних,
+а неточність — і саме рішення `tree-of-main` (вище) є тим, що робить її нешкідливою. Фіксуємо
+обидва разом: рядок `head_hash = merge_sha` лишається обов'язковим (якір мусить бути чесним), але
+severity — "неточність", не "I2".
+
+**Крах МІЖ `createCommit` і `updateReference`** лишає в repo недосяжний ("orphan") commit-об'єкт:
+невидимий, ні на що не впливає, GitHub приберe його власним GC. Повтору не потребує — наступний
+FINALIZE будує merge-коміт наново (§IV.2, новий рядок 22).
+
 ## III. Приблизна реалізація алгоритму
 
 То як це відбувається? Приблизно так:
@@ -2521,7 +2622,7 @@ def drain():
         # повністю і видаляємо з `push_queue/`, або наступний раз ми почнемо його обробляти з початку!
         # Саме тому вихід з циклу при помилкці це просто return ERROR, а не якийсь складний destructor.                                                 
         #=========================================================================================    
-        for each local in batch:   # структура local (FileInfo): {path, size, sha, mode, device_label=null, blob=null}
+        for each local in batch:   # структура local (FileInfo): {path, size, sha, mode, mtime, device_label=null, blob=null}
             # перевіряємо чи існує в sync_store blob файлу з даного batch (див. SYNC2-FIX, §12)
             if local.mode != DELETED:
                 local.blob = getBlobFromSyncStore(local.sha, local.size) # §II.9: null і на "нема
@@ -2908,23 +3009,52 @@ def drain():
                 return error
             conflictBranchName = null; persistDrainState()
         else:
-            (_, error) = retryOnNetworkError(() => client.mergeBranches(conflict_head_hash, head_hash))  # §II.10;
-                                                                 # merge-commit, два parent (§4.3
-                                                                 # PSEUDO-MERGE-MODE.md)
+            (mergeResult, error) = mergeBranches(conflict_head_hash, head_hash)  # §II.14 —
+                                                                 # ПОВНИЙ контракт тепер там (раніше
+                                                                 # чорна скринька `client.mergeBranches`):
+                                                                 # merge-коміт з ДЕРЕВОМ MAIN і двома
+                                                                 # предками [main, conflict] (§4.3
+                                                                 # PSEUDO-MERGE-MODE.md). Контентний
+                                                                 # merge (POST /merges) ЗАБОРОНЕНО —
+                                                                 # він повернув би витіснений C_n у main
+                                                                 # (§II.14). retryOnNetworkError уже
+                                                                 # ВСЕРЕДИНІ, на кожному з трьох
+                                                                 # мережевих кроків — тут не обгортаємо
+                                                                 # вдруге
             if error == TOKEN_EXPIRED:
                 saveTokenExpiredMark()
                 return error
             if error == NETWORK_ERROR:
                 return error
-            (_, error) = retryOnNetworkError(() => deleteBranchIfExists(conflictBranchName))  # §II.10
-            if error == TOKEN_EXPIRED:
-                saveTokenExpiredMark()
-                return error
-            if error == NETWORK_ERROR:
-                return error
-            conflictBranchName = null; persistDrainState()
-        # Жодних подальших push у цьому drain немає, тому "head_hash застарів після merge" —
-        # структурно неможливо: нема наступного кроку, якому він був би потрібен.
+            if error == ERROR422:
+                # Інший пристрій зрушив main, поки ми будували merge-коміт. ВІДКЛАДАЄМО (§II.14,
+                # "422-політика"): НЕ зануляємо conflictBranchName, НЕ крутимо цикл — просто йдемо
+                # далі. Наступний drain запустить FINALIZE знову, ancestor-check вище робить це
+                # ідемпотентним, а гілку донесе hot-metadata (епілог крок 3):
+                pass   # свідомо без побічних ефектів
+            else:
+                (merge_sha, _) = mergeResult   # committed_at тут свідомо ігнорується — той самий
+                                                # принцип, що й для conflict-push (§VII.5): на
+                                                # sibling-timestamp merge не впливає
+                head_hash = merge_sha   # ⚠️ ОБОВ'ЯЗКОВО (2026-08-29): без цього епілог крок 3
+                                        # записав би lastSyncCommitSha = ПЕРЕДmerge-коміт, тобто
+                                        # якір, що бреше про поточний стан main. Severity —
+                                        # "неточність", не втрата даних, і саме tree-of-main
+                                        # (§II.14) робить її нешкідливою: compare(pre-merge,
+                                        # merge-commit).files ПОРОЖНІЙ, бо дерево не змінилось.
+                                        # Але якір усе одно мусить бути чесним
+                (_, error) = retryOnNetworkError(() => deleteBranchIfExists(conflictBranchName))  # §II.10
+                if error == TOKEN_EXPIRED:
+                    saveTokenExpiredMark()
+                    return error
+                if error == NETWORK_ERROR:
+                    return error
+                conflictBranchName = null; persistDrainState()
+        # Жодних подальших PUSH у цьому drain немає — але це НЕ означає, що застарілий head_hash
+        # тут нешкідливий. ⚠️ ВИПРАВЛЕНО (2026-08-29): попередня редакція цього коментаря казала
+        # "структурно неможливо", розглядаючи ЛИШЕ push-и й не помічаючи, що епілог крок 3 теж
+        # споживає head_hash — як lastSyncCommitSha. Тому merge-гілка вище ЯВНО просуває head_hash
+        # на merge_sha (§II.14).
 
     # всі batches оброблено, тепер порівнюємо файли з TrackedFiles з оригінальними файлами в Vault і замінюємо їх, 
     # видаляємо, зберігаємо conflict-siblings до них.     
@@ -3177,7 +3307,7 @@ def drain():
                                                                     # там ніколи не був застейджений) і
                                                                     # впав би на LOCAL_FILE_IS_NOT_FOUND.
               if vault_entry.exists:
-                  local = FileInfo(path=vault_entry.path, size=vault_entry.size,
+                  local = FileInfo(path=vault_entry.path, size=vault_entry.size, mtime=vault_entry.mtime,
                                     sha=vault_entry.sha, mode="", blob=vault_entry.blob)
               else:
                   # РІШЕННЯ ВЛАСНИКА (2026-08-23): користувач міг видалити файл з Vault, ПОКИ
@@ -3458,7 +3588,7 @@ def drain():
 | **`POST /git/blobs` (blob upload)**                                                                     | Так, вроджено                                                                                                                   | Content-addressed: ім'я блоба — SHA його вмісту. Повторний upload того самого вмісту — no-op на боці GitHub (те саме SHA повертається). Безпечно повторювати без перевірок.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | **Push у MAIN** (`createTree`→`createCommit`→`updateRef`)                                               | Так, через SHA-рівність на СВІЖІЙ голові                                                                                        | Рестарт завжди перечитує `head_hash` заново (`restart_batch=true` на початку кожного циклу). Якщо попередня спроба вже долетіла, свіжий remote-diff покаже наш власний вміст як "remote", і §11 П11 (per-file byte-identical drop, ЗБЕРЕЖЕНО) відкидає файл ДО спроби push. Доведено прикладом §II.4 "Якщо збій відбувся після успішного push".                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | **Push у CONFLICT-BRANCH**                                                                              | Так, ПІСЛЯ фіксу §II.7                                                                                                          | `shouldPushToConflictBranch()` (§II.7) не залежить від персистованого `conflict_hash` — за потреби йде живою перевіркою `getContentsMetadataAtRef` проти поточної голови гілки. До фіксу STEP1 не мав цієї перевірки взагалі — саме це й лагодить §II.7.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| **Merge conflict-branch → main** (finalize, §III)                                                       | Так, через ancestor-check                                                                                                       | `isAncestorOf(conflict_head_hash, head_hash)` перед merge (§III, блок FINALIZE) — якщо гілка вже влита, merge не повторюється.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **Merge conflict-branch → main** (finalize, §III + §II.14)                                              | Так, через ancestor-check                                                                                                       | `isAncestorOf(conflict_head_hash, head_hash)` перед merge (§III, блок FINALIZE) — якщо гілка вже влита, merge не повторюється. **⚠️ ДОПОВНЕНО (2026-08-29, §II.14):** сам merge — reachability-коміт із ДЕРЕВОМ `main` і предками `[main, conflict]`, а не контентне злиття, тому повторення нічого не змінює у вмісті ЗА ВИЗНАЧЕННЯМ (дерево те саме). `updateReference(force=false)` 422-иться, якщо `main` зрушив — тоді FINALIZE відкладається до наступного drain-у (не цикл), гілка лишається жива. Крах між `createCommit` і `updateReference` лишає недосяжний orphan-коміт — нешкідливий (§IV.2 рядок 22).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | **Delete conflict-branch**                                                                              | Так, 404-толерантно                                                                                                             | `deleteBranchIfExists` трактує "гілки вже нема" як успіх, не помилку — крах МІЖ delete і записом на диск не відрізняється від "ще не видаляли" для наступної спроби.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | **Vault-step запис** (`updateFileInVault`, `saveConflictSiblingFile`)                                   | Так, через `atomicWriteFile`/rename                                                                                             | Запис того самого вмісту вдруге — той самий байтовий результат; крах-recovery для atomic write вже покритий існуючим `AtomicWriteRecovery.sweep` (SYNC2.md §10), новий механізм не потрібен. `readVaultFileInfo`/`last(current_conflict.siblings)` (conflicts, §III) тепер повертають `.blob` одразу — без цього `_diff3()` тут падав би на `LOCAL_FILE_IS_NOT_FOUND_ERROR` при КОЖНОМУ виклику, а не лише при краху. **⚠️ ВИПРАВЛЕНО (2026-08-25, Finding #2, власник — "вирішити раз і назавжди"):** попередня версія мала per-file NETWORK_ERROR-skip-and-continue, і твердження "рядок 7 нижче однаково коректний і для крах, і для мережева помилка" (2026-08-24) було ПОМИЛКОВИМ — graceful skip доходив до епілогу, писав cold baseline і видаляв journal, тому шлях НЕ повторювався наступним drain (відкрите питання, епілог крок 1). Фікс — НЕ латка, а усунення самої розбіжності: NETWORK_ERROR у Vault-step тепер УСЮДИ `return` (5 сайтів: STEP3-гілка-1 blob-fetch, STEP3-гілка-2 `_diff3`, non-manual-conflict `_diff3`, Vault-step-born-конфлікт blob-fetch і device_label-fetch), той самий шлях, що й TOKEN_EXPIRED. Journal тепер ЗАВЖДИ живий, коли epilogue не досягнуто — "graceful" і "крах" для NETWORK_ERROR стали буквально ОДНИМ шляхом, рядок 7 (IV.2) тепер коректний без застереження. Лишається CONFIRMED-lossy NOT_FOUND (repo-corruption клас, §12.5.D) — той skip-and-continue, оскільки retry там не допоміг би: `tracked.base` для такого шляху не просувається, повтор станеться лише коли для нього прийде НОВА remote-зміна (не сам факт "наступний drain") — прийнятно, бо клас події вже некоректний repo-стан, не мережева нестабільність. |
 | **Cold baseline-transfer** (епілог крок 1, `writeFileBaseline`)                                         | Так, per-path atomicWrite                                                                                                       | Джерело (`TrackedFiles`) НЕ змінюється, доки крок 4 його не видалить — записати той самий шлях тим самим значенням двічі поспіль дає байтово ідентичний результат. Торн зачіпає 1 кошик (§2.2 METAFILE-REFACTOR), не всю мапу. **⚠️ ДОПОВНЕНО (2026-08-25):** крок тепер пропускає (`continue`) будь-який `tracked`, у якого `tracked.remote.sha is null` — плейсхолдер для idle, ще не оновленого цим drain-ом lingering-конфлікту (Seeding, рядок нижче). Без guard-у повтор писав би null поверх РЕАЛЬНОЇ попередньої baseline; сам guard так само ідемпотентний — той самий плейсхолдер при redo дає той самий skip.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -3521,6 +3651,7 @@ crash/redo від того, щоб побачити напівзаповнени
 | 19 ⚠️ НОВЕ (2026-08-26, §II.11, друга ревізія) | ПІСЛЯ durable-персисту (крок 3), ДО видалення старого (крок 4) — новий sibling-файл на диску ВИЯВЛЯЄТЬСЯ битим при відновленні (torn write, реальний ризик без fsync — §II.11), СТАРИЙ файл ще фізично на диску                               | Мітка на диску; `conflicts.lastSiblingTxGuid` новий, `verifySiblingFileIntegrity` провалюється; старий sibling-файл ще присутній (крок 4 не виконувався)                         | НАЗАД: `guidMatches=true` → відкат durable-запису на `mark.oldSibling` (undo `replaceLast`, `lastSiblingTxGuid=null`), прибрати биту копію нового, unmark. Старий файл нікуди не діли — журнал живий, наступний Vault-step сам домержить fold для цього шляху, спеціального redo-коду не потрібно                                                                                                                                                                                                       | IV.1 "STEP3 replace-транзакція"                                                                                                                                                                                                                                                                                                                                                                                                             |
 | 20 ⚠️ НОВЕ (2026-08-26, §II.11, друга ревізія) | ПІСЛЯ видалення старого sibling-файлу (крок 4), новий sibling-файл на диску ВИЯВЛЯЄТЬСЯ битим при відновленні (torn write без fsync-гарантії порядку durability МІЖ окремими файлами, тому "новий записався раніше за старий" не гарантовано) | Мітка на диску; `conflicts.lastSiblingTxGuid` новий, `verifySiblingFileIntegrity` провалюється; старого sibling-файлу ТЕЖ немає на диску (крок 4 уже виконався)                  | НАЗАД: `guidMatches=true` → відкат durable-запису на `mark.oldSibling` (undo `replaceLast`, `lastSiblingTxGuid=null`), прибрати биту копію нового, unmark. Але `mark.oldSibling`-ФАЙЛУ фізично вже немає — метадата вказує в нікуди. `process_conflicts()` (сценарій C.6, "tracked sibling фізично видалений") prune-ить запис із порожнім `siblings`; наступний STEP3 відбудовує ланцюжок з нуля, з першого sibling (`sync_store/`). Деградація (втрата ОДНОГО проміжного sibling-запису), не корупція | IV.1 "STEP3 replace-транзакція"; §II.11 "Рішення власника"                                                                                                                                                                                                                                                                                                                                                                                  |
 | 21 ⚠️ НОВЕ (2026-08-26, §II.11, третя ревізія) | Мітка лишилась від in-session винятку/незавершеної транзакції; МІЖ тим і наступним `drain()` користувач сам вручну розв'язав конфлікт у diff-editor — durable-запис P зник (prune-нутий `process_conflicts()`)                                | Мітка на диску; `conflicts.get(mark.path)` = null (запис P відсутній); можливо новий і/або старий sibling-файл ще фізично на диску (звичайні synthetic-файли, більше не tracked) | `current is null` → нема з чим накатувати ні вперед, ні назад: якщо `guidMatches` — занулити `lastSiblingTxGuid` і `saveConflictsToStore` (інакше guid безстроково стверджував би "транзакція закомітилась"); прибрати ЛИШЕ новий файл (безумовно наш артефакт); старий НЕ займати (доля за наступним скану `process_conflicts()`, C.4/C.6); unmark. Без null-guard тут був би null-deref на `current.conflictBase`                                                                                     | IV.1 "STEP3 replace-транзакція"; §II.11                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 22 ⚠️ НОВЕ (2026-08-29, §II.14) | FINALIZE, МІЖ `createCommit` (merge-коміт створено) і `updateReference` (`main` ще на нього не вказує) | У repo лежить недосяжний ("orphan") commit-об'єкт; `main` не зрушив; `conflictBranchName` ще не занулений (журнал/hot його несуть) | Наступний FINALIZE (наступний drain) бачить `isAncestorOf` = false (гілка не влита — ref не оновився) і будує merge-коміт НАНОВО. Orphan-об'єкт ні на що не впливає: недосяжний, невидимий у жодному API-переліку, прибирається GitHub-івським GC. Спеціального прибирання не потребує | IV.1 "Merge conflict-branch → main"; §II.14 |
 
 **Висновок:** для КОЖНОЇ точки краху рецепт один — "продовжити з того самого місця, звідки читає
 `getBatch()`/цикл, довіряючи ідемпотентності". Немає жодної точки, що вимагає окремого, унікального
@@ -4049,7 +4180,7 @@ STEP3 replace-транзакції (§II.11, IV.2 рядки 15-20 — sibling-d
 8. `local`-blob відсутній у `sync_store/` → ремонт з Vault, якщо SHA збігається; інакше шлях пропускається (не помилка)
 9. `remote`/`base`-blob відсутній у `sync_store/` → перекачується з GitHub, зберігається назад
 
-### G. Crash-safe запис у conflict-branch (§II.7) — 8 сценаріїв
+### G. Crash-safe запис у conflict-branch (§II.7) + FINALIZE-merge (§II.14) — 8+6 сценаріїв
 
 1. `shouldPushToConflictBranch`: журнал підтверджує той самий SHA → push пропускається, без мережі
 2. `shouldPushToConflictBranch`: журнал не підтверджує, `conflict_head_hash is null` (гілки ще нема) → push
@@ -4060,6 +4191,25 @@ STEP3 replace-транзакції (§II.11, IV.2 рядки 15-20 — sibling-d
 6. `conflictBranchName` переживає МІЖ-drain'ові рестарти без journal через hot-metadata фолбек
 7. FINALIZE запускається лише коли `conflictBranchName != null` І `len(conflicts) == 0`
 8. FINALIZE: ancestor-check ідемпотентність (гілка вже влита → лише delete) + 404-як-success (гілку вже видалено)
+
+**§II.14 `mergeBranches()` (додано 2026-08-29) — 6 сценаріїв:**
+
+9. **Найважливіший у категорії:** merge-коміт створюється з `treeSha` == дерево `main`, а НЕ з
+   результатом контентного злиття → вміст `main` після FINALIZE побайтово ТОЙ САМИЙ, що й до нього.
+   Регресійний сенс: якби хтось реалізував це через `POST /merges`, витіснений `C_n` повернувся б
+   у `main` поверх щойно розв'язаного користувачем файлу (I2-клас, §II.14)
+10. `parents == [main_head, conflict_head]` саме в цьому порядку (§4.3 PSEUDO-MERGE-MODE.md) —
+    перевірити позиційно, не як множину: зворотний порядок ламає `--first-parent`-історію `main`
+11. Після успішного merge `head_hash` просувається на `merge_sha` → епілог крок 3 пише
+    `lastSyncCommitSha` = merge-коміт, НЕ передmerge-значення (регресія блокера, знайденого
+    2026-08-29)
+12. `compare(pre-merge_head, merge_sha).files` — ПОРОЖНІЙ (наслідок tree-of-main, п.9): підтверджує,
+    що навіть застарілий якір не спричиняє переімпорту жодного шляху
+13. `updateReference` повертає 422 (інший пристрій зрушив `main`) → `conflictBranchName` НЕ
+    зануляється, гілка НЕ видаляється, drain продовжується штатно; наступний FINALIZE зливає
+    успішно (§II.14, "422-політика — відкладаємо, не крутимо цикл")
+14. `isAncestorOf`: `compare.status` `"ahead"`/`"identical"` → true (merge пропускається, лише
+    delete); `"diverged"`/`"behind"` → false (merge виконується)
 
 ### H. `getBatch()`/R3b claim-протокол (§II.8) — 6 сценаріїв
 
