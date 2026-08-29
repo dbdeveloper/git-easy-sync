@@ -17,7 +17,7 @@ import { Vault } from "../../mock-obsidian";
 import { calculateGitBlobSHA } from "../../src/utils";
 
 const CONFIG_DIR = ".obsidian";
-const SELF_PLUGIN_ID = "github-easy-sync";
+const SELF_PLUGIN_ID = "git-easy-sync";
 
 function fixture(): {
   root: string;
@@ -91,7 +91,7 @@ describe("ChangeDetector", () => {
     it("hardcoded deny: skips sync2 manifest itself", async () => {
       writeFile(
         f.root,
-        `${CONFIG_DIR}/github-easy-sync-metadata.json`,
+        `${CONFIG_DIR}/git-easy-sync-metadata.json`,
         "{}",
       );
       const out = await f.detector.findChanges();

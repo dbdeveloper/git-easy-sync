@@ -30,7 +30,7 @@ import { Vault } from "../../mock-obsidian";
 //      cascade / multi-sibling path-close.
 
 const CONFIG_DIR = ".obsidian";
-const SELF_PLUGIN_ID = "github-easy-sync";
+const SELF_PLUGIN_ID = "git-easy-sync";
 
 // Make a fake ConflictRecord at the type-system level — classify()
 // doesn't read most fields; we just need a valid shape.

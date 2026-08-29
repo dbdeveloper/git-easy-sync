@@ -1,5 +1,5 @@
 // Cross-platform contracts — single home for the differences between
-// the platforms `github-easy-sync` runs on. Each piece below used to
+// the platforms `git-easy-sync` runs on. Each piece below used to
 // live in a different module and was authored independently; adding a
 // new platform constraint required touching N files and trusting
 // nobody missed one. This module consolidates the lot so the
@@ -133,7 +133,7 @@ export function encodePathForGithub(path: string): string {
 // (all already follow the pattern; this just gives them a single
 // canonical implementation to share):
 //
-//   - atomic-write.ts — promotes `.sync-tmp` staging file to its
+//   - atomic-write.ts — promotes `.ges-tmp` staging file to its
 //     final name during Pull-Replace (SYNC2 §2.3, Step 3).
 //   - conflict-store.ts — persistRecord renames `meta.json.tmp` to
 //     `meta.json` after every store mutation.

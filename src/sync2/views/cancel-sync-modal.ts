@@ -29,7 +29,7 @@ export class CancelSyncModal extends Modal {
 
   open(): void {
     super.open();
-    this.titleEl.setText("GitHub Easy Sync — sync in progress");
+    this.titleEl.setText("Git Easy Sync — sync in progress");
     this.contentEl.empty();
 
     const body = this.contentEl.createDiv();

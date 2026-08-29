@@ -6,11 +6,11 @@
 // dedicated bak-based swap mirroring its forward-recovery shape.
 //
 // Protocol (point-of-no-return = step 3, history → bak):
-//   1. write   <history>.sync-tmp  = new (compacted) jsonl
-//   2. remove  <history>.sync-bak  (clean any stale bak)
-//   3. rename  <history> → <history>.sync-bak   (old preserved as bak)
-//   4. rename  <history>.sync-tmp → <history>   (new promoted)
-//   5. remove  <history>.sync-bak
+//   1. write   <history>.ges-tmp  = new (compacted) jsonl
+//   2. remove  <history>.ges-bak  (clean any stale bak)
+//   3. rename  <history> → <history>.ges-bak   (old preserved as bak)
+//   4. rename  <history>.ges-tmp → <history>   (new promoted)
+//   5. remove  <history>.ges-bak
 // Capacitor rename never overwrites → each rename's dst is absent first (step 2
 // clears bak; step 3 moves history away before step 4 targets it).
 //
@@ -40,8 +40,8 @@ export async function rewriteHistoryAtomic(
   jsonl: string,
 ): Promise<void> {
   const path = historyPathFor(conflictId);
-  const tmp = `${path}.sync-tmp`;
-  const bak = `${path}.sync-bak`;
+  const tmp = `${path}.ges-tmp`;
+  const bak = `${path}.ges-bak`;
   await vault.adapter.write(tmp, jsonl); // 1
   await rm(vault, bak); // 2
   if (await vault.adapter.exists(path)) await vault.adapter.rename(path, bak); // 3
@@ -56,8 +56,8 @@ export async function recoverHistoryRewrite(
   conflictId: string,
 ): Promise<void> {
   const path = historyPathFor(conflictId);
-  const tmp = `${path}.sync-tmp`;
-  const bak = `${path}.sync-bak`;
+  const tmp = `${path}.ges-tmp`;
+  const bak = `${path}.ges-bak`;
   const a = vault.adapter;
   if (await a.exists(bak)) {
     if (await a.exists(path)) {

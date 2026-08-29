@@ -16,11 +16,11 @@
 // when the target is an existing TFile — the editor-friendly path that
 // PRESERVES an open tab's cursor/scroll. The previous safeRename swap made
 // Obsidian see the file vanish and closed the tab. modifyBinary is NOT atomic
-// (a crash can leave a torn final), but the done.json + clean `.sync-tmp` make
+// (a crash can leave a torn final), but the done.json + clean `.ges-tmp` make
 // recovery deterministic anyway: a torn final WITH our clean tmp is OUR write →
 // roll forward from the tmp; a non-matching final WITHOUT our clean tmp is a
 // genuine external edit → fall back. The original is never renamed aside, so
-// there is no `.sync-bak` (rollback only happens before any modify, when the
+// there is no `.ges-bak` (rollback only happens before any modify, when the
 // originals are still intact). New files (no TFile) atomically rename the tmp.
 //
 // SCOPE: this module is the commit engine + TOCTOU detector + per-dir
@@ -283,7 +283,7 @@ export async function commit7Step(
   const baseTmp = stagingPathFor(targetBase, "tmp");
   const siblingTmp = stagingPathFor(targetSibling, "tmp");
 
-  // Step 3 — stage new versions in .sync-tmp. A delete-base stages nothing (its
+  // Step 3 — stage new versions in .ges-tmp. A delete-base stages nothing (its
   // committed end-state is "absent", there is no roll-forward source to stage).
   await Promise.all([
     deleteBase
@@ -294,7 +294,7 @@ export async function commit7Step(
 
   // Step 4 — promote each side IN PLACE (bug3). modifyBinary keeps an open
   // editor's tab/cursor/scroll; a new file (no TFile) atomically renames the
-  // tmp. The original is NEVER renamed aside → no .sync-bak. The commit point
+  // tmp. The original is NEVER renamed aside → no .ges-bak. The commit point
   // is reached the moment the first modifyBinary lands; before that, originals
   // are intact and recovery rolls back. SEQUENTIAL by design (base then
   // sibling) so recovery reasons over one linear sequence — DIFF-EDITOR.md
@@ -696,13 +696,13 @@ export async function recoverCommit(
   }
 
   // ROLL BACK (rows A–C): the commit never produced a usable version of both
-  // sides (pre-write, or a torn .sync-tmp). Originals are untouched at their
-  // final paths (.sync-bak only ever appears once both tmp✓, i.e. in the
+  // sides (pre-write, or a torn .ges-tmp). Originals are untouched at their
+  // final paths (.ges-bak only ever appears once both tmp✓, i.e. in the
   // forward states). Drop the partial staging + done.json; the autosave
   // session survives so the user can re-resolve.
   //
   // CLOSURE: this branch is provably correct only over crash-REACHABLE states
-  // — for every real crash, a .sync-bak implies both tmps completed ⇒ both
+  // — for every real crash, a .ges-bak implies both tmps completed ⇒ both
   // hasNew ⇒ forward, so a rollback state can never carry a bak. We therefore
   // leave any bak untouched (it still holds the original — no data loss even
   // in an externally-corrupted, unreachable shape; the file is just at .bak).

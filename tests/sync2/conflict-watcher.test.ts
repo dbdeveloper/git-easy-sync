@@ -29,7 +29,7 @@ import { ConflictCounter } from "../../src/sync2/conflict-counter";
 import { Vault } from "../../mock-obsidian";
 
 const CONFIG_DIR = ".obsidian";
-const SELF_PLUGIN_ID = "github-easy-sync";
+const SELF_PLUGIN_ID = "git-easy-sync";
 
 function fixture() {
   const root = path.join(

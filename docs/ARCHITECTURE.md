@@ -80,7 +80,7 @@ src/
     ├── change-detector.ts           # Vault walk + findChanges + queue bridge
     ├── push-queue.ts                # .push-queue/ persistence + markers + meta serdes + enqueueSynthetic
     ├── tree-builder.ts              # Batch → tree entries (with uploadedBlobs skip)
-    ├── snapshot-store.ts            # github-easy-sync-metadata.json (file name is historic)
+    ├── snapshot-store.ts            # git-easy-sync-metadata.json (file name is historic)
     ├── push-inflight.ts             # SYNC2 §7.9 push→record crash marker (MANDATORY;
     │                                #  recoverPushInflight heals a landed-but-unrecorded push)
     ├── pending-deletions-store.ts   # .pending-deletions/<id>/meta.json — pull-sanitize delete-intents

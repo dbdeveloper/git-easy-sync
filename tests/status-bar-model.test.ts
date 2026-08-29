@@ -59,20 +59,20 @@ describe("buildStatusMenu — §7 three states", () => {
   it("uninitialized → heading + Settings only", () => {
     const m = buildStatusMenu({
       state: "uninitialized",
-      pluginName: "GitHub Easy Sync",
+      pluginName: "Git Easy Sync",
       queueDepth: 0,
       conflictCount: 0,
       hasActiveFile: true,
     });
     expect(keys(m)).toEqual([null, "settings"]);
-    expect(m[0].label).toBe("GitHub Easy Sync: Uninitialized");
+    expect(m[0].label).toBe("Git Easy Sync: Uninitialized");
     expect(m[1].separatorBefore).toBe(true);
   });
 
   it("token-expired → heading + actions + Settings; first action + Settings get separators", () => {
     const m = buildStatusMenu({
       state: "token-expired",
-      pluginName: "GitHub Easy Sync",
+      pluginName: "Git Easy Sync",
       queueDepth: 3,
       conflictCount: 2,
       hasActiveFile: true,
@@ -87,7 +87,7 @@ describe("buildStatusMenu — §7 three states", () => {
       "open-history",
       "settings",
     ]);
-    expect(m[0].label).toBe("GitHub Easy Sync: Token expired");
+    expect(m[0].label).toBe("Git Easy Sync: Token expired");
     expect(m.find((i) => i.key === "sync-all")?.separatorBefore).toBe(true);
     expect(m.find((i) => i.key === "settings")?.separatorBefore).toBe(true);
     // §35 — the two GitHub-network actions are greyed while the token is expired;
@@ -114,7 +114,7 @@ describe("buildStatusMenu — §7 three states", () => {
   it("normal → actions + Settings, no heading, no leading separator", () => {
     const m = buildStatusMenu({
       state: "normal",
-      pluginName: "GitHub Easy Sync",
+      pluginName: "Git Easy Sync",
       queueDepth: 0,
       conflictCount: 0,
       hasActiveFile: true,

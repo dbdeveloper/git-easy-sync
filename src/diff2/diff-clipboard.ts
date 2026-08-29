@@ -1,7 +1,7 @@
 // V2 §2.2.7 — diff-group ↔ clipboard serialization (COPY half; PASTE = step 6).
 //
 // A selection that wholly contains diff-group(s) (group-atomic, §2.2.6) copies as
-// a fenced ```github-easy-sync block per group; normal text in the selection is
+// a fenced ```git-easy-sync block per group; normal text in the selection is
 // copied verbatim; a selection within ONE ver-block copies as plain text (§2.2.7
 // п.1) — handled by returning null so the default copy runs.
 //
@@ -32,7 +32,7 @@ import {
 
 // §2.2.7 markers/prefixes (byte-exact, user-finalized 2026-06-20). Unicode here is
 // cosmetic for ≪/≫; uniqueness is carried by the fence tag + all-or-nothing parse.
-export const FENCE_OPEN = "```github-easy-sync";
+export const FENCE_OPEN = "```git-easy-sync";
 export const FENCE_CLOSE = "```";
 export const VER1_OPEN = "≪"; // U+226A MUCH LESS-THAN
 export const SEP = "=="; // ASCII
@@ -74,7 +74,7 @@ export function serializeGroup(c1: string, c2: string): string {
 
 // ── §2.2.7 п.4–6 — PARSE (clipboard text → segments), the inverse of serialize ──
 //
-// A clipboard string is a sequence of normal text and fenced ```github-easy-sync
+// A clipboard string is a sequence of normal text and fenced ```git-easy-sync
 // blocks. parseClipboard scans for blocks; a block that matches rules 4(a–f)
 // EXACTLY becomes a group segment, anything else (incl. a malformed fence, rule 5)
 // stays literal normal text. All-or-nothing PER BLOCK. Pure — the paste filter

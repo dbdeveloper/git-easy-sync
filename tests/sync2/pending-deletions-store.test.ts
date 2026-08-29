@@ -11,7 +11,7 @@ import { Vault } from "../../mock-obsidian";
 import PendingDeletionsStore from "../../src/sync2/pending-deletions-store";
 
 const CONFIG_DIR = ".obsidian";
-const SELF = "github-easy-sync";
+const SELF = "git-easy-sync";
 
 describe("PendingDeletionsStore", () => {
   let tmp: string;

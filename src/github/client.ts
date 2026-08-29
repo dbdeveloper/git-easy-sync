@@ -816,11 +816,11 @@ export default class GithubClient {
   /**
    * Updates an arbitrary ref (not just the configured `githubBranch`)
    * to point at a new commit. Pseudo-merge mode uses this for conflict
-   * branches (refs/heads/github-easy-sync-conflicts-*). Pass `ref` without
+   * branches (refs/heads/git-easy-sync-conflicts-*). Pass `ref` without
    * the "refs/" prefix — same shape GitHub's API expects after
    * "/git/refs/".
    *
-   * @param ref e.g. "heads/github-easy-sync-conflicts-Obsidian-20260520143022-847"
+   * @param ref e.g. "heads/git-easy-sync-conflicts-Obsidian-20260520143022-847"
    */
   async updateReference({
     ref,
@@ -907,7 +907,7 @@ export default class GithubClient {
   /**
    * List refs whose names start with the given prefix. Pseudo-merge
    * uses this to enumerate active conflict branches during the
-   * recovery sweep — e.g. `getMatchingRefs("heads/github-easy-sync-conflicts-")`.
+   * recovery sweep — e.g. `getMatchingRefs("heads/git-easy-sync-conflicts-")`.
    * Returns an empty array on 404 (no matches).
    */
   async getMatchingRefs({

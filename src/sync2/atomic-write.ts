@@ -9,12 +9,12 @@ import { safeRename } from "./cross-platform";
 
 // Atomic-with-backup write of a vault file. Crash-safe sequence:
 //
-//   1. writeBinary(<path>.sync-tmp, newBytes)
-//   2. if exists(<path>): rename(<path>, <path>.sync-bak)
-//   3. rename(<path>.sync-tmp, <path>)
+//   1. writeBinary(<path>.ges-tmp, newBytes)
+//   2. if exists(<path>): rename(<path>, <path>.ges-bak)
+//   3. rename(<path>.ges-tmp, <path>)
 //   4. caller's afterCommit() — typically recordSync, so snapshot
 //      matches the just-installed bytes BEFORE cleanup
-//   5. remove(<path>.sync-bak)
+//   5. remove(<path>.ges-bak)
 //
 // Why this order: with `recordSync` between rename-into-place and
 // backup cleanup, the recovery sweep on plugin onload can use the
@@ -26,32 +26,32 @@ import { safeRename } from "./cross-platform";
 // renames are POSIX-atomic on the underlying filesystem. ConflictStore
 // uses the same primitive at `conflict-store.ts:persistRecord`.
 
-export const SYNC_TMP_SUFFIX = ".sync-tmp";
-export const SYNC_BAK_SUFFIX = ".sync-bak";
+export const SYNC_TMP_SUFFIX = ".ges-tmp";
+export const SYNC_BAK_SUFFIX = ".ges-bak";
 
 // Stage 7 modify-in-place marker. Zero-byte file in the same
 // folder as the target. Format:
 //
-//   `.<filename-with-ext>.sync-tmp.`
+//   `.<filename-with-ext>.ges-tmp.`
 //
 // Examples:
-//   `notes/folder/note.md`   → `notes/folder/.note.md.sync-tmp.`
-//   `.obsidian/.gitignore`    → `.obsidian/..gitignore.sync-tmp.`
+//   `notes/folder/note.md`   → `notes/folder/.note.md.ges-tmp.`
+//   `.obsidian/.gitignore`    → `.obsidian/..gitignore.ges-tmp.`
 //
 // Two distinguishing signals:
 //   - LEADING dot — file is invisible in Obsidian's file
 //     explorer (which hides dotfiles by default).
 //   - TRAILING dot — makes the marker syntactically distinct
-//     from the existing staging-file shape `.eslintrc.json.sync-tmp`
+//     from the existing staging-file shape `.eslintrc.json.ges-tmp`
 //     (no trailing dot). The existing `parseStagingPath` /
 //     `findCandidates` recognisers won't claim a marker as a
-//     staging file because both forms it checks (`<stem>.sync-tmp.<ext>`
-//     and `<file>.sync-tmp`) require NO trailing dot after
-//     `.sync-tmp`.
+//     staging file because both forms it checks (`<stem>.ges-tmp.<ext>`
+//     and `<file>.ges-tmp`) require NO trailing dot after
+//     `.ges-tmp`.
 //
 // Semantics: the marker's PRESENCE is the signal. Empty bytes
 // intentionally; the actual rollback bytes live in the matching
-// `.sync-bak` sibling (existing convention). Recovery:
+// `.ges-bak` sibling (existing convention). Recovery:
 //   - marker present, bak present → restore in-place via
 //     modifyBinary (rollback to pre-modify state).
 //   - marker present, bak missing → defensive cleanup of marker.
@@ -65,11 +65,11 @@ export const SYNC_BAK_SUFFIX = ".sync-bak";
 // disambiguation. Acceptable tradeoff for the rework — the
 // target user is Capacitor mobile + macOS/Linux desktop where
 // trailing dots work cleanly.
-export const SYNC_MOD_MARKER_SUFFIX = ".sync-tmp.";
+export const SYNC_MOD_MARKER_SUFFIX = ".ges-tmp.";
 
 // modifyMarkerPathFor: returns the modify-in-place marker path
 // for a given target. Same folder, dot-prefixed basename,
-// `.sync-tmp.` suffix.
+// `.ges-tmp.` suffix.
 export function modifyMarkerPathFor(targetPath: string): string {
   const slashIdx = targetPath.lastIndexOf("/");
   const dir = slashIdx >= 0 ? targetPath.slice(0, slashIdx + 1) : "";
@@ -78,41 +78,41 @@ export function modifyMarkerPathFor(targetPath: string): string {
 }
 
 // Inverse of modifyMarkerPathFor. Recognises a marker by its
-// shape — basename starts with `.`, ends with `.sync-tmp.` (literal
+// shape — basename starts with `.`, ends with `.ges-tmp.` (literal
 // trailing dot), middle slice non-empty.
 //
 // Note: the atomic-rename strategy does NOT use a marker — the
-// presence of `.sync-bak` itself signals "rename in progress",
+// presence of `.ges-bak` itself signals "rename in progress",
 // and the existing SHA-based recovery handles it correctly.
-// Adding a parallel `.sync-bak.` marker would be redundant.
+// Adding a parallel `.ges-bak.` marker would be redundant.
 export function parseModifyMarkerPath(markerPath: string): string | null {
   if (!markerPath.endsWith(SYNC_MOD_MARKER_SUFFIX)) return null;
   const slashIdx = markerPath.lastIndexOf("/");
   const dir = slashIdx >= 0 ? markerPath.slice(0, slashIdx + 1) : "";
   const basename = slashIdx >= 0 ? markerPath.slice(slashIdx + 1) : markerPath;
   if (!basename.startsWith(".")) return null;
-  // strip leading dot and trailing .sync-tmp.
+  // strip leading dot and trailing .ges-tmp.
   const inner = basename.slice(1, -SYNC_MOD_MARKER_SUFFIX.length);
   if (inner.length === 0) return null;
   return `${dir}${inner}`;
 }
 
-// Computes the staging path for a target file by inserting `.sync-bak`
-// (or `.sync-tmp` if `which="tmp"`) BEFORE the file extension instead
+// Computes the staging path for a target file by inserting `.ges-bak`
+// (or `.ges-tmp` if `which="tmp"`) BEFORE the file extension instead
 // of appending after it. This preserves the original extension's
-// visibility in Obsidian's file explorer (a `.md.sync-bak` file is
-// hidden under "Show all file types: false" but a `note.sync-bak.md`
+// visibility in Obsidian's file explorer (a `.md.ges-bak` file is
+// hidden under "Show all file types: false" but a `note.ges-bak.md`
 // is still indexed as markdown).
 //
 // See docs/PSEUDO-MERGE-MODE.md §9.2 for the naming convention.
 // Examples:
-//   - "Folder/note.md"                  → "Folder/note.sync-bak.md"
-//   - "Plugins/foo/manifest.json"       → "Plugins/foo/manifest.sync-bak.json"
-//   - ".gitignore"                      → ".gitignore.sync-bak"
-//   - "README" (no ext)                 → "README.sync-bak"
-//   - ".obsidian/.gitignore"            → ".obsidian/.gitignore.sync-bak"
-//   - "note.conflict-from-Phone-X.md"   → "note.conflict-from-Phone-X.sync-bak.md"
-//   - "file.tar.gz"                     → "file.tar.sync-bak.gz"  (uses LAST extension)
+//   - "Folder/note.md"                  → "Folder/note.ges-bak.md"
+//   - "Plugins/foo/manifest.json"       → "Plugins/foo/manifest.ges-bak.json"
+//   - ".gitignore"                      → ".gitignore.ges-bak"
+//   - "README" (no ext)                 → "README.ges-bak"
+//   - ".obsidian/.gitignore"            → ".obsidian/.gitignore.ges-bak"
+//   - "note.conflict-from-Phone-X.md"   → "note.conflict-from-Phone-X.ges-bak.md"
+//   - "file.tar.gz"                     → "file.tar.ges-bak.gz"  (uses LAST extension)
 //
 // Hidden + extensionless files append the suffix (no extension to
 // insert before). Files like ".gitignore" or "README" can't be
@@ -143,19 +143,19 @@ export function stagingPathFor(
 }
 
 // Inverse of stagingPathFor: tries to recognize `stagingPath` as a
-// `.sync-bak` / `.sync-tmp` staging file and returns its target final
+// `.ges-bak` / `.ges-tmp` staging file and returns its target final
 // path. Returns null if `stagingPath` doesn't match the staging shape
 // (regular user file). Used by AtomicWriteRecovery.sweep when walking
 // the vault for orphan staging entries — we can't determine "is this
 // a staging file?" by suffix alone because the pre-suffix form
-// (`note.sync-bak.md`) doesn't end in `.sync-bak`.
+// (`note.ges-bak.md`) doesn't end in `.ges-bak`.
 //
 // Recognition logic:
-//   1. Pre-suffix form: `<stem>.sync-bak.<ext>` — look for the literal
-//      `.sync-bak.` infix in the filename portion (after the last
+//   1. Pre-suffix form: `<stem>.ges-bak.<ext>` — look for the literal
+//      `.ges-bak.` infix in the filename portion (after the last
 //      slash). The portion after the infix is a single extension
 //      segment with no further slashes.
-//   2. Suffix form: `<file>.sync-bak` — filename ends in `.sync-bak`
+//   2. Suffix form: `<file>.ges-bak` — filename ends in `.ges-bak`
 //      with no further extension (hidden file or extensionless).
 // Both forms reconstruct the final path by removing the suffix.
 export function parseStagingPath(
@@ -168,7 +168,7 @@ export function parseStagingPath(
   const slashIdx = stagingPath.lastIndexOf("/");
   const fileStart = slashIdx + 1;
   for (const { suffix, which } of candidates) {
-    // Pre-suffix form: look for the LAST `.sync-bak.` inside the
+    // Pre-suffix form: look for the LAST `.ges-bak.` inside the
     // filename portion. The matched position must be > fileStart
     // (don't allow zero-length stem) and the segment after must
     // contain no `/` AND at least one character.
@@ -183,7 +183,7 @@ export function parseStagingPath(
         return { finalPath, which };
       }
     }
-    // Suffix form: filename ends in `.sync-bak` (no extension after).
+    // Suffix form: filename ends in `.ges-bak` (no extension after).
     if (
       stagingPath.endsWith(suffix) &&
       stagingPath.length > fileStart + suffix.length
@@ -221,7 +221,7 @@ const AW_PERF_LOG_MS = 200;
 // SYNCHRONOUSLY and spins for minutes with "File system operation timed out" retries
 // (device: 693 KB → 28 s, 1.1 MB → 112 s — superlinear). Above this size the cursor
 // preservation is not worth that freeze, so we fall through to the rename strategy: it
-// writes the new bytes to a `.sync-tmp` (NOT into the open file) then renames it over the
+// writes the new bytes to a `.ges-tmp` (NOT into the open file) then renames it over the
 // target — the open view reloads (losing cursor) but there is no modifyBinary storm. Normal
 // notes (< 256 KB) keep the editor-friendly fast path.
 // Exported so exit-commit.ts's promoteInPlace (commit7Step's in-place promote — the SAME
@@ -282,33 +282,33 @@ export async function atomicWriteFile(
     if (existing instanceof TFile) {
       // Crash-safe modify protocol — forward-complete recovery:
       //
-      //   1. writeBinary(`.sync-tmp`, newBytes) — stage the NEW
+      //   1. writeBinary(`.ges-tmp`, newBytes) — stage the NEW
       //      bytes (the FUTURE state). Marker is NOT yet present,
-      //      so a crash here looks like a Path A transient sync-tmp
+      //      so a crash here looks like a Path A transient ges-tmp
       //      and the existing orphan sweep drops it on next onload.
       //   2. write(marker, "") — the marker's presence signals to
-      //      recovery: "the sync-tmp next to me is the authoritative
+      //      recovery: "the ges-tmp next to me is the authoritative
       //      target state — forward-complete by renaming it."
       //   3. modifyBinary(target, newBytes) — in-place write that
       //      preserves any open editor's cursor + scroll.
       //   4. afterCommit() — caller updates snapshot.
-      //   5. remove(`.sync-tmp`) — staging file no longer needed.
+      //   5. remove(`.ges-tmp`) — staging file no longer needed.
       //   6. remove(marker) — flips recovery's signal off LAST,
       //      so the marker is a true "this was in progress" signal
       //      throughout its lifetime (never present without
       //      forward-recovery context).
       //
       // Crash recovery (AtomicWriteRecovery.sweep):
-      //   - marker + sync-tmp present → remove(target), rename
-      //     sync-tmp → target, remove(marker). Forward-completes
+      //   - marker + ges-tmp present → remove(target), rename
+      //     ges-tmp → target, remove(marker). Forward-completes
       //     the operation. (Recovery runs at onload before any
       //     editor is open, so the rename's side-effect of closing
       //     the editor is moot.)
-      //   - marker without sync-tmp → just remove(marker). Step 5
-      //     ran (sync-tmp gone) but step 6 crashed; the modify
+      //   - marker without ges-tmp → just remove(marker). Step 5
+      //     ran (ges-tmp gone) but step 6 crashed; the modify
       //     completed successfully and the marker is a stale
       //     leftover.
-      //   - sync-tmp without marker → existing Path A logic drops
+      //   - ges-tmp without marker → existing Path A logic drops
       //     it as a transient (crash before step 2).
       const tmpPath = stagingPathFor(path, "tmp");
       const markerPath = modifyMarkerPathFor(path);
@@ -317,7 +317,7 @@ export async function atomicWriteFile(
       // synchronously), NOT our staging I/O. Shared by diff2 [←] AND sync's large-file
       // writes. Logs only when the whole write is slow (≥ threshold). See awPerfSink.
       const tStage0 = performance.now();
-      // Step 1: stage new bytes in .sync-tmp. Existing transient
+      // Step 1: stage new bytes in .ges-tmp. Existing transient
       // staging path / file shape, reused — the marker is the
       // signal that distinguishes this from a rename-strategy
       // in-flight tmp.
@@ -336,7 +336,7 @@ export async function atomicWriteFile(
         }
         // Step 5: remove staging FIRST. If we crash between this
         // and step 6, the marker alone remains and recovery's
-        // "marker without sync-tmp → cleanup" branch drops it.
+        // "marker without ges-tmp → cleanup" branch drops it.
         await vault.adapter.remove(tmpPath);
         // Step 6: remove marker last. The marker's presence has
         // always been a true "in progress" signal up to this point.
@@ -383,8 +383,8 @@ export async function atomicWriteFile(
   await withViewPreserve(path, () => renameStrategyWrite(vault, path, bytes, afterCommit));
 }
 
-// The crash-safe atomic write: stage new bytes in .sync-tmp → move any live file aside to
-// .sync-bak → rename tmp→path → afterCommit → drop .sync-bak; roll back from .sync-bak on
+// The crash-safe atomic write: stage new bytes in .ges-tmp → move any live file aside to
+// .ges-bak → rename tmp→path → afterCommit → drop .ges-bak; roll back from .ges-bak on
 // error. Extracted so atomicWriteFile runs it INSIDE withViewPreserve without a giant inline
 // wrap. Used for large existing files (avoid the modifyBinary freeze) + brand-new files
 // (no TFile to modify in place).
@@ -395,9 +395,9 @@ async function renameStrategyWrite(
   afterCommit?: () => Promise<void>,
 ): Promise<void> {
   // Pre-suffix staging paths so Obsidian's file explorer still
-  // recognizes the staging file by extension (a `.md.sync-tmp`
+  // recognizes the staging file by extension (a `.md.ges-tmp`
   // file is hidden under "Show all file types: false" but a
-  // `note.sync-tmp.md` stays visible). See stagingPathFor above
+  // `note.ges-tmp.md` stays visible). See stagingPathFor above
   // and docs/PSEUDO-MERGE-MODE.md §9.2.
   const tmpPath = stagingPathFor(path, "tmp");
   const bakPath = stagingPathFor(path, "bak");
@@ -405,22 +405,22 @@ async function renameStrategyWrite(
   // TODO(perf) — time the rename strategy too, so if a large file is STILL slow here (raw
   // adapter.writeBinary / rename) we see it. Expected fast: writes to a tmp, not the open file.
   const tRenStage0 = performance.now();
-  // Step 1: stage new bytes in .sync-tmp. A previous crash may have
-  // left a stale .sync-tmp behind — overwrite silently; the file is
+  // Step 1: stage new bytes in .ges-tmp. A previous crash may have
+  // left a stale .ges-tmp behind — overwrite silently; the file is
   // transient by definition.
   await vault.adapter.writeBinary(tmpPath, bytes);
   const tRenPromote0 = performance.now();
 
   try {
-    // Step 2: move the live path aside under .sync-bak. Skipped when
+    // Step 2: move the live path aside under .ges-bak. Skipped when
     // the file doesn't exist (brand-new file case). safeRename
-    // handles the "drop stale .sync-bak from a previous crash"
+    // handles the "drop stale .ges-bak from a previous crash"
     // step (cross-platform.ts § safeRename).
     if (await vault.adapter.exists(path)) {
       await safeRename(vault.adapter, path, bakPath);
     }
 
-    // Step 3: atomic promote .sync-tmp → live path. Plain rename:
+    // Step 3: atomic promote .ges-tmp → live path. Plain rename:
     // step 2 just moved any live file aside, so `path` is empty.
     // No safeRename — the invariant "path is empty here" matters
     // and we want to fail loudly if it isn't.
@@ -432,7 +432,7 @@ async function renameStrategyWrite(
       await afterCommit();
     }
 
-    // Step 5: cleanup .sync-bak. No-op when the file didn't exist
+    // Step 5: cleanup .ges-bak. No-op when the file didn't exist
     // before (no rename happened in step 2).
     if (await vault.adapter.exists(bakPath)) {
       await vault.adapter.remove(bakPath);
@@ -453,8 +453,8 @@ async function renameStrategyWrite(
       }
     }
   } catch (err) {
-    // Best-effort rollback. Restoring from .sync-bak gives us the
-    // pre-write state. .sync-tmp goes to the trash either way.
+    // Best-effort rollback. Restoring from .ges-bak gives us the
+    // pre-write state. .ges-tmp goes to the trash either way.
     try {
       if (await vault.adapter.exists(bakPath)) {
         await safeRename(vault.adapter, bakPath, path);
@@ -481,15 +481,15 @@ interface ConflictStoreLike {
 }
 
 // Crash-recovery sweep for `atomicWriteFile` AND for ConflictStore's
-// vault-level `.sync-tmp` sibling staging. Runs on plugin onload
+// vault-level `.ges-tmp` sibling staging. Runs on plugin onload
 // BEFORE the engine starts touching the vault — walks the tree for
-// any `.sync-tmp` / `.sync-bak` leftovers and reconciles them
+// any `.ges-tmp` / `.ges-bak` leftovers and reconciles them
 // against the snapshot + conflict stores.
 //
 // Each suffix has ONE consistent meaning (see
 // docs/PSEUDO-MERGE-MODE.md §9 for the full rationale):
 //
-//   `.sync-tmp` = NEW bytes staged for a target (existing or new).
+//   `.ges-tmp` = NEW bytes staged for a target (existing or new).
 //      Ambiguous between two callsites; dispatch by ownership via
 //      conflictStore.getBySibling(finalPath):
 //        record exists, finalPath exists                    → drop tmp
@@ -506,9 +506,9 @@ interface ConflictStoreLike {
 //                                                             Phase B]
 //        no record (Path A transient new bytes)              → drop tmp
 //
-//   `.sync-bak` = OLD bytes backed up before an overwrite.
+//   `.ges-bak` = OLD bytes backed up before an overwrite.
 //      Only produced by atomicWriteFile (Path A); ConflictStore never
-//      writes `.sync-bak`. Recovery is snapshot-based, no ownership
+//      writes `.ges-bak`. Recovery is snapshot-based, no ownership
 //      dispatch needed:
 //        finalPath missing                                  → rename(bak
 //                                                             → finalPath)
@@ -534,7 +534,7 @@ export class AtomicWriteRecovery {
     // includes:
     //   - Path B Step 3 (ConflictStore sibling promotion)
     //   - Modify-in-place marker forward-complete
-    // Excludes ROLLBACK cases (sync-bak restored over original)
+    // Excludes ROLLBACK cases (ges-bak restored over original)
     // because those bring the path BACK to its pre-write state —
     // any running plugin already matches that state.
     appliedPaths: string[];
@@ -545,7 +545,7 @@ export class AtomicWriteRecovery {
 
     const { syncTmps, syncBaks, syncModifyMarkers } = await this.findCandidates();
 
-    // 1. .sync-tmp: forward-direction staging. Dispatch by ownership.
+    // 1. .ges-tmp: forward-direction staging. Dispatch by ownership.
     // Path B (ConflictStore.create) → resume Step 3 by renaming to the
     // final sibling path if SHA matches the record's theirsBlobSha.
     // Path A (atomicWriteFile transient — rename strategy) → drop
@@ -603,11 +603,11 @@ export class AtomicWriteRecovery {
       }
     }
 
-    // 2. .sync-bak: rollback backups, snapshot-based recovery.
+    // 2. .ges-bak: rollback backups, snapshot-based recovery.
     // Produced only by atomicWriteFile's rename strategy (Path A);
-    // ConflictStore never writes .sync-bak. The modify-in-place
-    // strategy (Stage 7) doesn't touch .sync-bak — it uses
-    // forward-recovery via the paired .sync-tmp.
+    // ConflictStore never writes .ges-bak. The modify-in-place
+    // strategy (Stage 7) doesn't touch .ges-bak — it uses
+    // forward-recovery via the paired .ges-tmp.
     for (const { stagingPath: bakPath, finalPath: originalPath } of syncBaks) {
       try {
         const fileExists = await this.vault.adapter.exists(originalPath);
@@ -649,16 +649,16 @@ export class AtomicWriteRecovery {
       }
     }
 
-    // 3. `.sync-tmp.` modify-in-place markers. The marker tells us
+    // 3. `.ges-tmp.` modify-in-place markers. The marker tells us
     // "this path's modify-in-place was started but the cleanup
     // step never ran." Forward-complete: rename the matching
-    // `.sync-tmp` over the target. (Recovery happens at onload
+    // `.ges-tmp` over the target. (Recovery happens at onload
     // before any editor is open, so the rename's side-effect of
     // closing an editor on the target is moot.)
     //
-    //   - marker + .sync-tmp present → remove target, rename
-    //     sync-tmp → target. Forward-completes the modify.
-    //   - marker without .sync-tmp → defensive cleanup of marker
+    //   - marker + .ges-tmp present → remove target, rename
+    //     ges-tmp → target. Forward-completes the modify.
+    //   - marker without .ges-tmp → defensive cleanup of marker
     //     (we have no bytes to land; something unexpected
     //     happened upstream).
     for (const { markerPath, finalPath } of syncModifyMarkers) {
@@ -694,15 +694,15 @@ export class AtomicWriteRecovery {
     return { cleaned, restored, appliedPaths };
   }
 
-  // Recursively walk the vault for `.sync-tmp` / `.sync-bak` staging
-  // files AND `.<basename>.sync-tmp.` modify-in-place markers.
+  // Recursively walk the vault for `.ges-tmp` / `.ges-bak` staging
+  // files AND `.<basename>.ges-tmp.` modify-in-place markers.
   //
-  // Staging files: both pre-suffix form (`note.sync-bak.md`) and
-  // suffix form (`.gitignore.sync-bak`) are recognized via
+  // Staging files: both pre-suffix form (`note.ges-bak.md`) and
+  // suffix form (`.gitignore.ges-bak`) are recognized via
   // `parseStagingPath`.
   //
   // Modify-in-place markers: recognized by the dot-prefix +
-  // `.sync-tmp.` trailing-dot pattern via parseModifyMarkerPath.
+  // `.ges-tmp.` trailing-dot pattern via parseModifyMarkerPath.
   // Files that don't match any pattern are normal user files and
   // skipped.
   private async findCandidates(): Promise<{

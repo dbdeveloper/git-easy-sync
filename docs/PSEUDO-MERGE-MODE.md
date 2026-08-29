@@ -1,12 +1,12 @@
 # Pseudo-Merge Mode: Resolving Synchronisation Conflicts Through Filesystem Operations
 
 > A design rationale for the conflict-resolution layer in the
-> `github-easy-sync` Obsidian plugin.
+> `git-easy-sync` Obsidian plugin.
 
 ## Abstract
 
 This article describes **pseudo-merge mode**, the conflict-resolution
-mechanism used by `github-easy-sync` to keep an Obsidian vault in step
+mechanism used by `git-easy-sync` to keep an Obsidian vault in step
 with a GitHub repository across multiple devices. The plugin operates
 under two hard constraints — it speaks only the GitHub REST API (no
 `git` binary, no `isomorphic-git`) and it must work identically on
@@ -60,7 +60,7 @@ would be resolved by `git pull --no-rebase`: the second device would
 detect the divergence, attempt a three-way textual merge, succeed if
 the edits did not overlap, or fall back to inserting `<<<<<<<` /
 `=======` / `>>>>>>>` conflict markers into the file for the writer to
-disentangle. None of this is available to `github-easy-sync` by
+disentangle. None of this is available to `git-easy-sync` by
 design. The plugin runs inside Obsidian's process — including
 Obsidian's Capacitor-based mobile build — and ships with **no `git`
 binary and no JavaScript reimplementation of git's merge algorithm**.
@@ -324,10 +324,10 @@ When a conflict is first detected on a device, the plugin creates a
 GitHub branch named:
 
 ```
-github-easy-sync-conflicts-<deviceLabel>-<YYYYMMDDHHMMSS>-<mmm>
+git-easy-sync-conflicts-<deviceLabel>-<YYYYMMDDHHMMSS>-<mmm>
 ```
 
-For example, `github-easy-sync-conflicts-Laptop-20260508153022-847`.
+For example, `git-easy-sync-conflicts-Laptop-20260508153022-847`.
 The local version of the conflicting file is pushed to this branch;
 unrelated files in the same sync continue to flow to `main`. From
 the perspective of any other device synchronizing against the same
@@ -668,7 +668,7 @@ Thursday.` and clicks `[Sync]`. The phone's `drain()` runs:
    the merge produces conflict markers — the auto-merge gate
    returns `register-conflict`.
 2. The plugin creates a conflict branch
-   `github-easy-sync-conflicts-Phone-20260508153022-847` on the
+   `git-easy-sync-conflicts-Phone-20260508153022-847` on the
    current `main` HEAD and pushes the Phone's version of `idea.md`
    to it.
 3. A sibling is written to the vault using the `.sync-tmp` staging
@@ -676,7 +676,7 @@ Thursday.` and clicks `[Sync]`. The phone's `drain()` runs:
    `Notes/idea.conflict-from-Laptop-2026-05-08T15-30-00Z.md`
    containing `Launch by Monday.`
 4. A conflict record is persisted under
-   `.obsidian/plugins/github-easy-sync/.conflicts/<id>/meta.json`.
+   `.obsidian/plugins/git-easy-sync/.conflicts/<id>/meta.json`.
 
 The status bar shows `🔀 1`. The Phone's `idea.md` still reads
 `Launch by Thursday.` — the user can continue editing it.
@@ -849,7 +849,7 @@ its queued batch:
    Auto-merge attempts run, all three fail, and three conflicts are
    registered in sequence:
    - A conflict branch is created on the first registration —
-     `github-easy-sync-conflicts-Phone-20260508153022-847` — at
+     `git-easy-sync-conflicts-Phone-20260508153022-847` — at
      the current `main` HEAD. The Phone's pre-conflict version of
      `idea.md` is pushed to it as the first commit
      (`message: "conflict (Phone)"`).
@@ -964,7 +964,7 @@ from each into `todo.md`, then deletes the sibling. On the next
      (Phone)", treeSha: main.tree, parents: [main.head,
      branch.head]})` constructs the merge-commit on `main`.
   3. `updateBranchHead` makes the merge-commit `main`'s new tip.
-  4. `deleteReference("heads/github-easy-sync-conflicts-Phone-...")`
+  4. `deleteReference("heads/git-easy-sync-conflicts-Phone-...")`
      removes the branch label. The four branch commits remain
      reachable through the merge-commit's second parent (§2.3).
   5. `lastSyncCommitSha` is advanced to the merge-commit.
@@ -1070,7 +1070,7 @@ merge terminology. Stored locally in the snapshot store
 during pull-side reconciliation.
 
 **Batch** — A unit of synchronisation work persisted on disk under
-`.obsidian/plugins/github-easy-sync/.push-queue/<id>/`. Holds the
+`.obsidian/plugins/git-easy-sync/.push-queue/<id>/`. Holds the
 files about to be committed, their target commit message, and the
 parent commit SHA the push will build on.
 
@@ -1083,7 +1083,7 @@ commits, an author, a committer, and a message. The unit of
 historical record in git.
 
 **Conflict branch** — A per-device GitHub branch named
-`github-easy-sync-conflicts-<deviceLabel>-<timestamp>-<msec>` to
+`git-easy-sync-conflicts-<deviceLabel>-<timestamp>-<msec>` to
 which the device's local version of every conflicting file is
 pushed. Invisible to other devices until finalised through a
 merge-commit on `main`.
@@ -1093,7 +1093,7 @@ a vault path to its sibling file, the remote content's SHA, the
 remote device's label, and cached `(mtime, size, sha)` triples for
 fast freshness checks. Stored on disk as one
 `meta.json` per record under
-`.obsidian/plugins/github-easy-sync/.conflicts/<id>/`.
+`.obsidian/plugins/git-easy-sync/.conflicts/<id>/`.
 
 **Conflict store** — The in-memory plus on-disk index of all active
 conflict records. The single source of truth for "what is in
@@ -1158,7 +1158,7 @@ solo batch by the queue (never folded into other user batches).
 **Snapshot store** — The local persistent record of "what each path
 looked like in the version of the repository this device most
 recently synchronized against." Stored at
-`.obsidian/plugins/github-easy-sync/github-easy-sync-metadata.json`.
+`.obsidian/plugins/git-easy-sync/git-easy-sync-metadata.json`.
 Used by the change detector and by pull-side reconciliation to
 distinguish "this file changed locally" from "this file changed
 remotely" from "this file changed on both sides."

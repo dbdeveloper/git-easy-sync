@@ -39,7 +39,7 @@ function makeClient(): { client: GithubClient; cleanup: () => void } {
     githubBranch: "main",
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const logger = new Logger(vault as any, "github-easy-sync", false);
+  const logger = new Logger(vault as any, "git-easy-sync", false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const client = new GithubClient(settings, logger as any);
   return { client, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };

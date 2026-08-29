@@ -135,7 +135,7 @@ describe("parseLocalTimestamp", () => {
 // ---------------------------------------------------------------------------
 describe("enumeratePushQueueVersions", () => {
   const CONFIG_DIR = ".obsidian";
-  const SELF_PLUGIN_ID = "github-easy-sync";
+  const SELF_PLUGIN_ID = "git-easy-sync";
 
   let root: string;
   let vault: Vault;

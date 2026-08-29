@@ -15,7 +15,7 @@ import { sweepOnload } from "../../../src/diff2/trash-recovery";
 // is untouched (metadata-only protocol of R3.7).
 
 const CONFIG_DIR = ".obsidian";
-const SELF_PLUGIN_ID = "github-easy-sync";
+const SELF_PLUGIN_ID = "git-easy-sync";
 
 function fixture() {
   const root = path.join(

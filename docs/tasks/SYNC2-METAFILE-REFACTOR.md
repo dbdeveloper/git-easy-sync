@@ -100,7 +100,7 @@ push/pull» і не «на кожен оброблений batch», а **для 
 
 ### Проблема сховища — write-amplification
 
-Сьогодні все лежить в ОДНОМУ `<configDir>/github-easy-sync-metadata.json`, повністю в RAM,
+Сьогодні все лежить в ОДНОМУ `<configDir>/git-easy-sync-metadata.json`, повністю в RAM,
 переписується **ЦІЛКОМ** (сирий `adapter.write`, не atomic) ~щобатч → **~2.6 МБ перезапис на
 КОЖНУ зміну ОДНОГО файлу**, росте з розміром vault (виміри — DOT-FILES §14).
 
@@ -268,7 +268,7 @@ Ping-pong-слоти — **єдина** конструкція в дизайні
   запису; видалення додало б ФС-операцію на шляху відновлення і знищило б доказ, якби
   впали обидва слоти.
 
-- **Міграція:** одноразове читання старого `github-easy-sync-metadata.json` → засів **ОБОХ**
+- **Міграція:** одноразове читання старого `git-easy-sync-metadata.json` → засів **ОБОХ**
   слотів зі `seq: 0`. Далі все йде штатним правилом із §2.1 (обидва валідні → `max+1`, ціль —
   слот із меншим seq, нічия → `a`), тобто перший робочий запис піде в `a` зі `seq: 1`.
 
@@ -328,14 +328,14 @@ Per DOT-FILES: dot-файли + normal-файли в дозволених dot-т
 
 ### 2.4 Розташування на диску (поточне → майбутнє)
 
-**Зараз:** усе (hot + cold) в ОДНОМУ файлі `<configDir>/github-easy-sync-metadata.json`
+**Зараз:** усе (hot + cold) в ОДНОМУ файлі `<configDir>/git-easy-sync-metadata.json`
 (`SYNC2_MANIFEST_FILE_NAME`; виключений із синку в `isSyncable`).
 
 **Майбутнє — у per-device `.runtime/`** (`<configDir>/plugins/<plugin-id>/.runtime/` — уже
 hardcoded-excluded зі синку як per-device runtime-стан, `change-detector.ts:45`). Попередній
-метафайл `<configDir>/github-easy-sync-metadata.json` при цьому видаляється — ⚠️ **у ДВОХ
+метафайл `<configDir>/git-easy-sync-metadata.json` при цьому видаляється — ⚠️ **у ДВОХ
 місцях, не в одному**:
-1. рядок `github-easy-sync-metadata.json` у керованому блоці `<configDir>/.gitignore`
+1. рядок `git-easy-sync-metadata.json` у керованому блоці `<configDir>/.gitignore`
    (`gitignore-invariants.ts:54`);
 2. хардкод у `isSyncable` (`change-detector.ts:31`) — приберете лише перше, лишиться мертвий код.
 

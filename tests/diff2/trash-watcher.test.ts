@@ -18,7 +18,7 @@ import { TrashWatcher } from "../../src/diff2/trash-watcher";
 // place to complete the end-to-end loop.
 
 const CONFIG_DIR = ".obsidian";
-const SELF_PLUGIN_ID = "github-easy-sync";
+const SELF_PLUGIN_ID = "git-easy-sync";
 
 interface FakeVault {
   delete: (file: unknown, ...rest: unknown[]) => Promise<void>;

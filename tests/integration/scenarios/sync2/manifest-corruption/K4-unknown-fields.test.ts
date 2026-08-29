@@ -29,7 +29,7 @@ import {
 // the fields it knows about; anything else is ignored so older
 // builds keep working when a newer build wrote extra state.
 
-const MANIFEST_REL = ".obsidian/github-easy-sync-metadata.json";
+const MANIFEST_REL = ".obsidian/git-easy-sync-metadata.json";
 
 describe.skipIf(!integrationEnabled())(
   "sync2 K4 — unknown manifest fields (forward-compat)",

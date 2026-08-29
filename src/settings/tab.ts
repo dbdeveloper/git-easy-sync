@@ -74,7 +74,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     // installed. Values come from manifest.json.
     const m = this.plugin.manifest;
     const titleEl = containerEl.createEl("div", {
-      cls: "github-easy-sync-settings-title",
+      cls: "git-easy-sync-settings-title",
     });
     titleEl.createSpan({ text: `${m.name} ${m.version}` });
     if (m.authorUrl) {
@@ -82,7 +82,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       const link = titleEl.createEl("a", {
         text: "(repo)",
         href: m.authorUrl,
-        cls: "github-easy-sync-settings-repo",
+        cls: "git-easy-sync-settings-repo",
       });
       link.setAttr("target", "_blank");
       link.setAttr("rel", "noopener");

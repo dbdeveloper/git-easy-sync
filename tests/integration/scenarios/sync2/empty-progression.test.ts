@@ -60,7 +60,7 @@ describe.skipIf(!integrationEnabled())(
         const expectedAfter = [
           ...initialFiles,
           ".obsidian/.gitignore",
-          ".obsidian/plugins/github-easy-sync/.gitignore",
+          ".obsidian/plugins/git-easy-sync/.gitignore",
         ]
           .filter((p, i, a) => a.indexOf(p) === i)
           .sort();

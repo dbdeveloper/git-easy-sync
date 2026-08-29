@@ -43,7 +43,7 @@ describe.skipIf(!integrationEnabled())(
       const mockVault = new MockVault(tmpRoot);
       const logger = new Logger(
         mockVault as unknown as import("obsidian").Vault,
-        "github-easy-sync",
+        "git-easy-sync",
         false,
       );
       const client = new GithubClient(

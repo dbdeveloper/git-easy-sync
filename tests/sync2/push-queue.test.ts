@@ -14,7 +14,7 @@ import { Vault } from "../../mock-obsidian";
 import { FileChange } from "../../src/sync2/types";
 
 const CONFIG_DIR = ".obsidian";
-const SELF_PLUGIN_ID = "github-easy-sync";
+const SELF_PLUGIN_ID = "git-easy-sync";
 
 function fixture(): {
   root: string;

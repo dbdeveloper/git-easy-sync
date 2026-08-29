@@ -233,7 +233,7 @@ describe("shouldCanonicalize — only USER-edited vault text (excludes <configDi
     // subdirs, incl. the plugin's own text files
     expect(shouldCanonicalize(".obsidian/plugins/foo/manifest.json", cfg)).toBe(false);
     expect(
-      shouldCanonicalize(".obsidian/plugins/github-easy-sync/styles.css", cfg),
+      shouldCanonicalize(".obsidian/plugins/git-easy-sync/styles.css", cfg),
     ).toBe(false);
   });
 

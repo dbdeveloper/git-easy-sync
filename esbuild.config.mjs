@@ -67,7 +67,7 @@ const networkWorkerSource = await buildWorkerSource(
 
 // Optional: after each successful build, mirror the plugin outputs into a
 // vault's plugin folder so Obsidian picks them up immediately. Set
-// OBSIDIAN_PLUGIN_DIR to <Vault>/.obsidian/plugins/github-easy-sync.
+// OBSIDIAN_PLUGIN_DIR to <Vault>/.obsidian/plugins/git-easy-sync.
 // data.json is intentionally not mirrored — that file is vault-specific
 // state owned by Obsidian, not a build output.
 //

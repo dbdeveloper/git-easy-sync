@@ -2,24 +2,24 @@
 // variant, bug3).
 //
 // Recovery is a PURE function of disk state. We hand-craft each row's exact
-// on-disk slot configuration (final / .sync-tmp × old/new/torn/foreign/absent),
+// on-disk slot configuration (final / .ges-tmp × old/new/torn/foreign/absent),
 // run recoverCommit, and assert the vault converges to the committed end-state
 // (forward rows) or cleanly rolls back (A–C) / falls back (genuine foreign).
 //
 // bug3 note: commit7Step now promotes IN PLACE (modifyBinary), so it NEVER
-// writes .sync-bak — the original is modified, not renamed aside. modifyBinary
+// writes .ges-bak — the original is modified, not renamed aside. modifyBinary
 // is non-atomic, so a crash can leave a TORN final (classified "foreign"); the
-// discriminator is OUR clean .sync-tmp — torn-final + clean-tmp = our write →
+// discriminator is OUR clean .ges-tmp — torn-final + clean-tmp = our write →
 // roll forward; foreign-final + no-clean-tmp = external edit → fall back. Rows
 // TB/TS cover the torn cases. Hand-crafting is the ONLY way to reach a partial
-// .sync-tmp / a torn final; a secondary injection test then proves a real
+// .ges-tmp / a torn final; a secondary injection test then proves a real
 // commit7Step crash lands WITHIN the matrix.
 //
 // The ENTIRE matrix runs over BOTH a regular vault path AND a `.obsidian/` dot-
 // dir path (matrixSuite is invoked twice). A conflict can — undesirably but
 // possibly — land on a config-dir file; those are never indexed TFiles, so the
 // commit takes the safeRename path and the staging-path shape differs
-// (`.obsidian/p/data.sync-tmp.json`). Running the full matrix on both proves
+// (`.obsidian/p/data.ges-tmp.json`). Running the full matrix on both proves
 // classifySide / stagingPathFor / safeRename handle the hidden-dir shape
 // identically. (Production uses vault.adapter throughout — the high-level
 // vault.read/modify TFile API does NOT see dot-dir files — and modifyBinary
@@ -128,8 +128,8 @@ function matrixSuite(label: string, BASE: string, SIB: string): void {
     afterEach(() => fs.rmSync(fx.root, { recursive: true, force: true }));
 
     const FORWARD: Array<[string, Slot, Slot]> = [
-      // Modify-in-place crash states (bug3): no .sync-bak is ever created (the
-      // original is modified in place, never renamed aside). The clean .sync-tmp
+      // Modify-in-place crash states (bug3): no .ges-bak is ever created (the
+      // original is modified in place, never renamed aside). The clean .ges-tmp
       // is the roll-forward source. A "foreign" final WITH our clean tmp is OUR
       // torn modifyBinary — recovery overwrites it from the tmp (NOT a fallback).
       ["D (both staged, finals old — pre-modify)", { final: "old", tmp: "tmpNew", bak: false }, { final: "old", tmp: "tmpNew", bak: false }],

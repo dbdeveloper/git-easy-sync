@@ -295,7 +295,7 @@ export default class GitHubSyncPlugin extends Plugin {
     try {
       // 2.0.2-beta2 self-update bootloader. Runs BEFORE loadSettings,
       // before logger init, before anything else — handles pending
-      // sync-tmp + marker pairs for OUR plugin's main.js /
+      // ges-tmp + marker pairs for OUR plugin's main.js /
       // manifest.json / styles.css left by a previous self-update
       // that crashed mid-protocol. If the bootloader applies any
       // swap, it schedules reloadPlugin and we ABORT the rest of
@@ -309,7 +309,7 @@ export default class GitHubSyncPlugin extends Plugin {
             void reloadPluginById(this.app, manifest.id).catch((err) => {
               try {
                 console.error(
-                  "[github-easy-sync] self-reload failed",
+                  "[git-easy-sync] self-reload failed",
                   err,
                 );
               } catch {
@@ -329,7 +329,7 @@ export default class GitHubSyncPlugin extends Plugin {
         // normal onload — the next drain may recover.
         try {
           console.error(
-            "[github-easy-sync] Self-update bootloader threw, continuing normal onload",
+            "[git-easy-sync] Self-update bootloader threw, continuing normal onload",
             err,
           );
         } catch {
@@ -870,7 +870,7 @@ export default class GitHubSyncPlugin extends Plugin {
       paths: store.paths().length,
     });
     // AtomicWriteRecovery sweep runs AFTER ConflictStore.load (see
-    // block below) so the sweep can resolve `.sync-tmp` staging
+    // block below) so the sweep can resolve `.ges-tmp` staging
     // files owned by conflict records via record.theirsBlobSha
     // SHA-verify, not just snapshot-based reasoning.
     const gi = new GI(vaultRoot);
@@ -966,7 +966,7 @@ export default class GitHubSyncPlugin extends Plugin {
     }
     // diff2 [←]-commit recovery (DIFF-EDITOR.md §5.0.a / §4.2). MUST run
     // BEFORE AtomicWriteRecovery.sweep below: commit7Step stages the resolved
-    // base+sibling via the SAME .sync-tmp/.sync-bak suffixes the naive sweep
+    // base+sibling via the SAME .ges-tmp/.ges-bak suffixes the naive sweep
     // scans, and only recoverCommit's done.json-coordinated dispatch can
     // restore the PAIR atomically. Filesystem-driven (id = dir name), so a
     // tracked conflict whose record vanished mid-crash still recovers. No-op
@@ -988,7 +988,7 @@ export default class GitHubSyncPlugin extends Plugin {
       this.logger.error("diff2 autosave recovery failed", `${err}`);
     }
     // Crash-recovery sweep for atomic-write artifacts AND for
-    // ConflictStore vault-level `.sync-tmp` staging siblings. Runs BEFORE the
+    // ConflictStore vault-level `.ges-tmp` staging siblings. Runs BEFORE the
     // engine starts touching the vault so any leftover staging from a
     // previous crash is reconciled against the snapshot + conflict
     // stores before findChanges or drain sees them.
@@ -1457,7 +1457,7 @@ export default class GitHubSyncPlugin extends Plugin {
   private applyRibbonSyncingState(running: boolean): void {
     this.drainRunning = running;
     this.syncRibbonIcon?.toggleClass(
-      "github-easy-sync-ribbon-syncing",
+      "git-easy-sync-ribbon-syncing",
       running,
     );
     this.updateStatusBarItem();
@@ -1471,7 +1471,7 @@ export default class GitHubSyncPlugin extends Plugin {
     const icon = this.syncRibbonIcon;
     if (!icon) return;
     const expired = this.tokenExpiredFlag?.isExpiredCached() ?? false;
-    icon.toggleClass("github-easy-sync-ribbon-token-expired", expired);
+    icon.toggleClass("git-easy-sync-ribbon-token-expired", expired);
     setTooltip(
       icon,
       expired ? "Token expired" : syncTooltip(this.currentQueueDepth),
@@ -1562,7 +1562,7 @@ export default class GitHubSyncPlugin extends Plugin {
     bg = "var(--color-green, #16a34a)",
   ): HTMLElement {
     const el = parent.createSpan({
-      cls: "github-easy-sync-ribbon-pending-batches-badge",
+      cls: "git-easy-sync-ribbon-pending-batches-badge",
     });
     el.style.position = "absolute";
     el.style.top = "2px";
@@ -1589,7 +1589,7 @@ export default class GitHubSyncPlugin extends Plugin {
     this.statusBarItem.style.cursor = "pointer";
     // white-space: pre keeps the leading space in " (↑ N)" from collapsing
     // against the "GitHub" label in the flex status-bar item.
-    this.statusBarItem.addClass("github-easy-sync-statusbar");
+    this.statusBarItem.addClass("git-easy-sync-statusbar");
     // E2 (TODO §7) — the single "GitHub" item is clickable → the status menu.
     this.statusBarItem.addEventListener("click", (evt) =>
       this.showStatusBarMenu(evt),
@@ -1617,19 +1617,19 @@ export default class GitHubSyncPlugin extends Plugin {
     // (same either way), "M ⁇" red (overrides the syncing-green). Rebuilt each
     // call (cheap).
     el.empty();
-    el.toggleClass("github-easy-sync-statusbar-syncing", this.drainRunning);
+    el.toggleClass("git-easy-sync-statusbar-syncing", this.drainRunning);
     const ghSpan = el.createSpan({ text: "GitHub" });
     // §35 — the "GitHub" word turns red while the token is expired (overrides the
     // syncing-green), so the failure is visible without opening the menu.
     if (this.tokenExpiredFlag?.isExpiredCached() ?? false) {
-      ghSpan.addClass("github-easy-sync-statusbar-token-expired");
+      ghSpan.addClass("git-easy-sync-statusbar-token-expired");
     }
     const conflicts = this.conflictCounter?.getValue() ?? 0;
     for (const seg of statusBarSuffix(this.currentQueueDepth, conflicts)) {
       const span = el.createSpan({ text: seg.text });
-      if (seg.cls === "up") span.addClass("github-easy-sync-statusbar-up");
+      if (seg.cls === "up") span.addClass("git-easy-sync-statusbar-up");
       else if (seg.cls === "conflict")
-        span.addClass("github-easy-sync-statusbar-conflict");
+        span.addClass("git-easy-sync-statusbar-conflict");
     }
   }
 
@@ -1725,7 +1725,7 @@ export default class GitHubSyncPlugin extends Plugin {
     // Reflect an already-running drain (icon created mid-sync).
     if (this.drainRunning) {
       this.syncRibbonIcon.toggleClass(
-        "github-easy-sync-ribbon-syncing",
+        "git-easy-sync-ribbon-syncing",
         true,
       );
     }
@@ -1743,7 +1743,7 @@ export default class GitHubSyncPlugin extends Plugin {
   // when the ribbon icon is hidden.
   applySyncIconSpin(): void {
     this.syncRibbonIcon?.toggleClass(
-      "github-easy-sync-no-spin",
+      "git-easy-sync-no-spin",
       !(this.settings.spinSyncIcon ?? true),
     );
   }
@@ -1962,7 +1962,7 @@ export default class GitHubSyncPlugin extends Plugin {
     const willReload: string[] = [];
     for (const id of ids) {
       // Skip disabled plugins — reload would just enable them, which
-      // is surprising. Self (github-easy-sync) is treated the same as
+      // is surprising. Self (git-easy-sync) is treated the same as
       // any other plugin: the new main.js is already on disk (the
       // marker swap completed), so disable+enable loads the new code.
       if (enabled !== undefined && !enabled.has(id)) {

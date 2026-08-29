@@ -101,7 +101,7 @@ describe("recoverAutosaveDirs — onload orchestration", () => {
 
   it("a defer dir with no staged bytes rolls back, preserving the session", async () => {
     // done.json present but originals untouched (== start snapshots) and no
-    // .sync-tmp/.sync-bak → recoverCommit takes the A–C rollback path and the
+    // .ges-tmp/.ges-bak → recoverCommit takes the A–C rollback path and the
     // session dir survives for the user to resume.
     await makeSession(fx.vault, "tracked-rb");
     await fx.vault.adapter.writeBinary(

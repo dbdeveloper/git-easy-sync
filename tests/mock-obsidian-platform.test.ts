@@ -162,8 +162,8 @@ describe("MOCK_PLATFORM", () => {
         const finalPath = `Notes/Штрихи до "святої" книги "Віра в Лад".md`;
         const tmpStaging = stagingPathFor(finalPath, "tmp");
         const bakStaging = stagingPathFor(finalPath, "bak");
-        expect(tmpStaging).toBe(`Notes/Штрихи до "святої" книги "Віра в Лад".sync-tmp.md`);
-        expect(bakStaging).toBe(`Notes/Штрихи до "святої" книги "Віра в Лад".sync-bak.md`);
+        expect(tmpStaging).toBe(`Notes/Штрихи до "святої" книги "Віра в Лад".ges-tmp.md`);
+        expect(bakStaging).toBe(`Notes/Штрихи до "святої" книги "Віра в Лад".ges-bak.md`);
       });
 
       it("rename quoted filename to other quoted filename round-trips", async () => {
@@ -188,13 +188,13 @@ describe("MOCK_PLATFORM", () => {
 // meta.json. This test verifies the wiring end-to-end on both
 // platforms.
 describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }])(
-  "ConflictStore.create (.sync-tmp staging flow) — under $platform",
+  "ConflictStore.create (.ges-tmp staging flow) — under $platform",
   ({ platform }) => {
     let tmp: string;
     let vault: Vault;
     let store: ConflictStore;
     const CONFIG_DIR = ".obsidian";
-    const SELF = "github-easy-sync";
+    const SELF = "git-easy-sync";
 
     beforeEach(async () => {
       tmp = mkdtempSync(path.join(tmpdir(), `cs-create-${platform}-`));
@@ -329,7 +329,7 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
 
       // Setup: vault base + sibling + record (the post-conflict-
       // detection state). Use store.create() so the full 3-step
-      // `.sync-tmp` flow runs and lands the sibling at its final
+      // `.ges-tmp` flow runs and lands the sibling at its final
       // path.
       fs.mkdirSync(path.join(tmp, "Notes"), { recursive: true });
       fs.writeFileSync(path.join(tmp, "Notes/note.md"), "ours\n");

@@ -30,7 +30,7 @@ import { evaluateConflictState } from "../../../../../src/sync2/conflict-classif
 // Pseudo-merge stage 7b — conflict-branch lifecycle.
 //
 // End-to-end: trigger a conflict against real GitHub, observe that
-// a per-device conflict branch (`github-easy-sync-conflicts-<label>-<ts>-<ms>`)
+// a per-device conflict branch (`git-easy-sync-conflicts-<label>-<ts>-<ms>`)
 // gets created at the moment of registration, that the user's local
 // version lands on it as a commit (so the pre-conflict state is
 // preserved on GitHub even though it's filtered out of main push),
@@ -109,7 +109,7 @@ describe.skipIf(!integrationEnabled())(
         ).data.conflictBranch;
         expect(cb).not.toBeNull();
         conflictBranchToCleanup = cb!.name;
-        expect(cb!.name).toMatch(/^github-easy-sync-conflicts-/);
+        expect(cb!.name).toMatch(/^git-easy-sync-conflicts-/);
 
         // Branch exists on GitHub at the recorded head SHA.
         const remoteBranchHead = await getBranchHead(cb!.name);

@@ -20,7 +20,7 @@ import SnapshotStore from "../../src/sync2/snapshot-store";
 import { Vault } from "../../mock-obsidian";
 
 const CONFIG_DIR = ".obsidian";
-const SELF = "github-easy-sync";
+const SELF = "git-easy-sync";
 
 function fixture() {
   const root = path.join(
@@ -116,8 +116,8 @@ describe("GitignoreInvariants.enforce", () => {
     // staging/backup artifacts must never propagate across devices.
     expect(content).toContain(INVARIANT_BEGIN);
     expect(content).toContain("*.conflict-from-*");
-    expect(content).toContain("*.sync-tmp");
-    expect(content).toContain("*.sync-bak");
+    expect(content).toContain("*.ges-tmp");
+    expect(content).toContain("*.ges-bak");
     // Recommended defaults: *.log (the plugin's own log lives at
     // <vault>/<plugin-id>.log; remove the rule to opt into log
     // sync).
@@ -268,13 +268,13 @@ describe("GitignoreInvariants.enforce", () => {
 
     // Plant a STALE on-disk gitignore: structured like a canonical
     // block but missing a hypothetical "future-canonical-rule"
-    // (stand-in for `*.sync-bak*` after a plugin upgrade — any line
+    // (stand-in for `*.ges-bak*` after a plugin upgrade — any line
     // a future canonical adds that the recorded snapshot was unaware
     // of).
     const staleBody = [
       INVARIANT_BEGIN,
       "# old block",
-      "github-easy-sync-metadata.json",
+      "git-easy-sync-metadata.json",
       "plugins/*/data.json",
       INVARIANT_END,
     ].join("\n");
@@ -323,14 +323,14 @@ describe("extractInvariantBlock / blockHasAllowLine (pure)", () => {
   const blockOff = [
     INVARIANT_BEGIN,
     "# stuff",
-    "github-easy-sync-metadata.json",
+    "git-easy-sync-metadata.json",
     "plugins/*/data.json",
     INVARIANT_END,
   ].join("\n");
   const blockOn = [
     INVARIANT_BEGIN,
     "# stuff",
-    "github-easy-sync-metadata.json",
+    "git-easy-sync-metadata.json",
     "!plugins/*/data.json",
     INVARIANT_END,
   ].join("\n");
@@ -338,7 +338,7 @@ describe("extractInvariantBlock / blockHasAllowLine (pure)", () => {
   it("extractInvariantBlock: returns body between markers, exclusive", () => {
     const body = extractInvariantBlock(blockOff);
     expect(body).not.toBeNull();
-    expect(body).toContain("github-easy-sync-metadata.json");
+    expect(body).toContain("git-easy-sync-metadata.json");
     expect(body).not.toContain(INVARIANT_BEGIN);
     expect(body).not.toContain(INVARIANT_END);
   });

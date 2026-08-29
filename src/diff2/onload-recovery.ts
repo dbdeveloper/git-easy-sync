@@ -2,7 +2,7 @@
 // (DIFF-EDITOR.md §5.0.a / §4.2 — the Phase-11 "onload sweep" unification
 // point). Runs at plugin startup, and MUST run BEFORE sync2's
 // `AtomicWriteRecovery.sweep`: `commit7Step` stages the resolved base+sibling
-// through the SAME `.sync-tmp`/`.sync-bak` suffixes the naive sweep scans, so
+// through the SAME `.ges-tmp`/`.ges-bak` suffixes the naive sweep scans, so
 // only `recoverCommit`'s `done.json`-coordinated A–K dispatch can restore the
 // PAIR atomically. The naive sweep would forward-recover each side
 // independently and break pair-atomicity (SYNC2 §10 / DIFF-EDITOR §5.0.b).

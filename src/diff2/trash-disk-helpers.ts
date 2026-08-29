@@ -15,7 +15,7 @@ import { safeRename } from "../sync2/cross-platform";
 // inert and a future write will safeRename over them anyway via
 // cross-platform's exists-then-remove guard).
 //
-// Compare to PSEUDO-MERGE-MODE.md §9.4 Path B: that protocol uses .sync-tmp
+// Compare to PSEUDO-MERGE-MODE.md §9.4 Path B: that protocol uses .ges-tmp
 // because the staged bytes have meaningful integrity-witness behavior
 // (the conflict record's theirsBlobSha lets recovery promote the temp
 // to its final form). meta.json files don't have that property — a

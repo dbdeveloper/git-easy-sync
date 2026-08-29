@@ -41,7 +41,7 @@ describe.skipIf(!integrationEnabled())(
         },
         new Logger(
           {} as unknown as import("obsidian").Vault,
-          "github-easy-sync",
+          "git-easy-sync",
           false,
         ),
       );

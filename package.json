@@ -1,5 +1,5 @@
 {
-  "name": "github-easy-sync",
+  "name": "git-easy-sync",
   "version": "2.0.2-beta",
   "description": "Sync a GitHub repository with the Obsidian Vault on different platforms without requiring git installation",
   "main": "main.js",

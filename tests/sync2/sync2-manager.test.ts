@@ -26,7 +26,7 @@ import { calculateGitBlobSHA } from "../../src/utils";
 import { NewTreeRequestItem } from "../../src/github/client";
 
 const CONFIG_DIR = ".obsidian";
-const SELF_PLUGIN_ID = "github-easy-sync";
+const SELF_PLUGIN_ID = "git-easy-sync";
 
 function makeFakeClient(): Sync2Client & {
   calls: {

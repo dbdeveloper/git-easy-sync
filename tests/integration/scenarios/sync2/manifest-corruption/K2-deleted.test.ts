@@ -28,7 +28,7 @@ import {
 // up-front; missing file falls through to fresh metadata. Recovery
 // is the same shape as K1.
 
-const MANIFEST_REL = ".obsidian/github-easy-sync-metadata.json";
+const MANIFEST_REL = ".obsidian/git-easy-sync-metadata.json";
 
 describe.skipIf(!integrationEnabled())(
   "sync2 K2 — manifest file deleted",

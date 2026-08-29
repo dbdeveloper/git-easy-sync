@@ -17,7 +17,7 @@ import type { DataAdapter } from "obsidian";
 function makeFixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "bootloader-test-"));
   const vault = new MockVault(root) as unknown as { adapter: DataAdapter };
-  const pluginDir = ".obsidian/plugins/github-easy-sync";
+  const pluginDir = ".obsidian/plugins/git-easy-sync";
   return {
     root,
     adapter: vault.adapter,
@@ -75,21 +75,21 @@ function captureReload(): {
 const FILES = {
   main: {
     final: "main.js",
-    tmp: "main.sync-tmp.js",
-    marker: ".main.js.sync-tmp.",
-    bak: "main.sync-bak.js",
+    tmp: "main.ges-tmp.js",
+    marker: ".main.js.ges-tmp.",
+    bak: "main.ges-bak.js",
   },
   manifest: {
     final: "manifest.json",
-    tmp: "manifest.sync-tmp.json",
-    marker: ".manifest.json.sync-tmp.",
-    bak: "manifest.sync-bak.json",
+    tmp: "manifest.ges-tmp.json",
+    marker: ".manifest.json.ges-tmp.",
+    bak: "manifest.ges-bak.json",
   },
   styles: {
     final: "styles.css",
-    tmp: "styles.sync-tmp.css",
-    marker: ".styles.css.sync-tmp.",
-    bak: "styles.sync-bak.css",
+    tmp: "styles.ges-tmp.css",
+    marker: ".styles.css.ges-tmp.",
+    bak: "styles.ges-bak.css",
   },
 };
 
@@ -118,9 +118,9 @@ describe("runSelfUpdateBootloader — marker-based recovery for main.js + manife
     }
   });
 
-  it("Case C (main.js only): sync-tmp without marker → DROPPED (NOT applied), 'no-pending'", async () => {
+  it("Case C (main.js only): ges-tmp without marker → DROPPED (NOT applied), 'no-pending'", async () => {
     // The bug fix: previous SHA-comparison bootloader applied
-    // unverified bytes. Marker-based bootloader drops sync-tmp
+    // unverified bytes. Marker-based bootloader drops ges-tmp
     // when marker is absent (safe — write may have been partial).
     const f = makeFixture();
     try {
@@ -155,7 +155,7 @@ describe("runSelfUpdateBootloader — marker-based recovery for main.js + manife
     }
   });
 
-  it("Case B (main.js only): marker without sync-tmp → orphan cleaned, 'no-pending'", async () => {
+  it("Case B (main.js only): marker without ges-tmp → orphan cleaned, 'no-pending'", async () => {
     const f = makeFixture();
     try {
       await setup(f.adapter, f.pluginDir, {
@@ -184,7 +184,7 @@ describe("runSelfUpdateBootloader — marker-based recovery for main.js + manife
     }
   });
 
-  it("Case A (main.js only): marker + sync-tmp + main.js → applied, reload scheduled", async () => {
+  it("Case A (main.js only): marker + ges-tmp + main.js → applied, reload scheduled", async () => {
     const f = makeFixture();
     try {
       await setup(f.adapter, f.pluginDir, {
@@ -295,7 +295,7 @@ describe("runSelfUpdateBootloader — marker-based recovery for main.js + manife
 
   it("multiple files pending simultaneously: ALL applied, ONE reload scheduled", async () => {
     // Drain pulled a new plugin version where main.js + manifest.json +
-    // styles.css all changed. Each gets its own marker + sync-tmp.
+    // styles.css all changed. Each gets its own marker + ges-tmp.
     // Bootloader applies all three, schedules ONE reload (Obsidian's
     // reload re-reads everything anyway).
     const f = makeFixture();
@@ -317,7 +317,7 @@ describe("runSelfUpdateBootloader — marker-based recovery for main.js + manife
       const result = await runSelfUpdateBootloader({
         adapter: f.adapter,
         pluginDir: f.pluginDir,
-        pluginLabel: "github-easy-sync",
+        pluginLabel: "git-easy-sync",
         reloadPlugin: r.reloadPlugin,
         scheduleReload: r.scheduleReload,
         notice: (msg, d) => notices.push({ msg, duration: d }),
@@ -336,7 +336,7 @@ describe("runSelfUpdateBootloader — marker-based recovery for main.js + manife
       // ONE notice that names the plugin (not a per-file count), even
       // though three files were applied.
       expect(notices.length).toBe(1);
-      expect(notices[0].msg).toBe(`Plugin "github-easy-sync" updated`);
+      expect(notices[0].msg).toBe(`Plugin "git-easy-sync" updated`);
       // All applied
       expect(await f.adapter.read(`${f.pluginDir}/${FILES.main.final}`)).toBe(
         "new-main",
@@ -354,9 +354,9 @@ describe("runSelfUpdateBootloader — marker-based recovery for main.js + manife
 
   it("mixed cases: main.js applied + manifest.json incomplete (no marker) + styles.css clean", async () => {
     // Drain wrote main.js fully (marker present), but crashed
-    // while writing manifest.sync-tmp (no marker landed).
+    // while writing manifest.ges-tmp (no marker landed).
     // Bootloader: applies main.js, drops the incomplete
-    // manifest sync-tmp, leaves styles.css alone.
+    // manifest ges-tmp, leaves styles.css alone.
     const f = makeFixture();
     try {
       await setup(f.adapter, f.pluginDir, {
@@ -385,7 +385,7 @@ describe("runSelfUpdateBootloader — marker-based recovery for main.js + manife
       expect(await f.adapter.read(`${f.pluginDir}/${FILES.main.final}`)).toBe(
         "new-main",
       );
-      // manifest.json untouched (incomplete sync-tmp was dropped)
+      // manifest.json untouched (incomplete ges-tmp was dropped)
       expect(
         await f.adapter.read(`${f.pluginDir}/${FILES.manifest.final}`),
       ).toBe('{"version":"1"}');
@@ -401,7 +401,7 @@ describe("runSelfUpdateBootloader — marker-based recovery for main.js + manife
     }
   });
 
-  it("Case A variant: marker + sync-tmp, main.js absent (crash between bak rename and tmp rename) → applied", async () => {
+  it("Case A variant: marker + ges-tmp, main.js absent (crash between bak rename and tmp rename) → applied", async () => {
     const f = makeFixture();
     try {
       await setup(f.adapter, f.pluginDir, {
@@ -483,7 +483,7 @@ describe("runSelfUpdateBootloader — marker-based recovery for main.js + manife
       await runSelfUpdateBootloader({
         adapter: f.adapter,
         pluginDir: f.pluginDir,
-        pluginLabel: "github-easy-sync",
+        pluginLabel: "git-easy-sync",
         reloadPlugin: r.reloadPlugin,
         scheduleReload: r.scheduleReload,
         notice: (msg, d) => notices.push({ msg, duration: d }),
@@ -492,7 +492,7 @@ describe("runSelfUpdateBootloader — marker-based recovery for main.js + manife
       // Always names the plugin, never counts files — a single reload
       // picks up any combination of applied files.
       expect(notices.length).toBe(1);
-      expect(notices[0].msg).toBe(`Plugin "github-easy-sync" updated`);
+      expect(notices[0].msg).toBe(`Plugin "git-easy-sync" updated`);
       expect(notices[0].duration).toBe(3000);
     } finally {
       f.cleanup();
@@ -559,7 +559,7 @@ describe("extractAffectedPluginId — plugin file path detection", () => {
 
 describe("isOwnPluginRecoverableFile — write-side bootloader routing", () => {
   const cfg = ".obsidian";
-  const self = "github-easy-sync";
+  const self = "git-easy-sync";
 
   it("returns true for main.js, manifest.json, styles.css under own plugin dir", () => {
     expect(

@@ -61,7 +61,7 @@ function bareInstance(): GateHandle {
 }
 
 const CONFIG_DIR = ".obsidian";
-const SELF_PLUGIN_ID = "github-easy-sync";
+const SELF_PLUGIN_ID = "git-easy-sync";
 
 function fixture() {
   const root = path.join(os.tmpdir(), `presync-gate-${crypto.randomBytes(4).toString("hex")}`);

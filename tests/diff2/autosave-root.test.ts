@@ -33,21 +33,21 @@ describe("setAutosaveRoot — relocate the autosave dir under the plugin folder"
   });
 
   it("after setAutosaveRoot(parent) the dir lives under <parent>/.runtime/diff2-autosave", () => {
-    setAutosaveRoot(".obsidian/plugins/github-easy-sync");
+    setAutosaveRoot(".obsidian/plugins/git-easy-sync");
     expect(autosaveDir("cid")).toBe(
-      ".obsidian/plugins/github-easy-sync/.runtime/diff2-autosave/cid",
+      ".obsidian/plugins/git-easy-sync/.runtime/diff2-autosave/cid",
     );
   });
 
   it("the live binding reaches sweepAll (autosave-cleanup reads the SAME root)", async () => {
     const vault = fixture();
-    setAutosaveRoot(".obsidian/plugins/github-easy-sync");
+    setAutosaveRoot(".obsidian/plugins/git-easy-sync");
     // A real session under the NEW root with an empty history (sweep cond 2b).
     await vault.adapter.writeBinary("b.md", new TextEncoder().encode("base\n").buffer as ArrayBuffer);
     await vault.adapter.writeBinary("s.md", new TextEncoder().encode("sib\n").buffer as ArrayBuffer);
     await startSession(vault, "cid", "b.md", "s.md");
     // Mkdir landed under the plugin folder, not the vault root.
-    expect(await vault.adapter.exists(".obsidian/plugins/github-easy-sync/.runtime/diff2-autosave/cid")).toBe(true);
+    expect(await vault.adapter.exists(".obsidian/plugins/git-easy-sync/.runtime/diff2-autosave/cid")).toBe(true);
     expect(await vault.adapter.exists(".runtime/diff2-autosave/cid")).toBe(false);
 
     // sweepAll walks AUTOSAVE_ROOT — if the live binding failed it would scan the

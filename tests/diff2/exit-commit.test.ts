@@ -77,10 +77,10 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
 
       // No leftover staging / barrier / session dir.
       for (const p of [
-        `${BASE}.sync-tmp.md`,
-        `${BASE}.sync-bak.md`,
-        `${SIB}.sync-tmp.md`,
-        `${SIB}.sync-bak.md`,
+        `${BASE}.ges-tmp.md`,
+        `${BASE}.ges-bak.md`,
+        `${SIB}.ges-tmp.md`,
+        `${SIB}.ges-bak.md`,
       ]) {
         expect(await fx.vault.adapter.exists(p)).toBe(false);
       }
@@ -193,8 +193,8 @@ describe("commit7Step — done.json hash consistency + save-to-alt", () => {
         const wb = real.writeBinary;
         real.writeBinary = async (p: string, b: ArrayBuffer) => {
           // Only the step-3 base/sibling staging (.md); NOT done.json's own
-          // atomicWriteFile staging (.sync-tmp.json), which must complete first.
-          if (p.includes(".sync-tmp.md")) throw new Error("crash step 3");
+          // atomicWriteFile staging (.ges-tmp.json), which must complete first.
+          if (p.includes(".ges-tmp.md")) throw new Error("crash step 3");
           return wb(p, b);
         };
         return real;
@@ -335,8 +335,8 @@ describe("commitOrDiscardExit — §4.1 zero-edit invariant + §5.0 exit decisio
     expect(await calculateGitBlobSHA(await fx.vault.adapter.readBinary(BASE))).toBe(baseShaBefore);
     expect(await calculateGitBlobSHA(await fx.vault.adapter.readBinary(SIB))).toBe(sibShaBefore);
     // No staging files were created (no safeRename swap ran).
-    expect(await fx.vault.adapter.exists("Notes/meeting.sync-tmp.md")).toBe(false);
-    expect(await fx.vault.adapter.exists("Notes/meeting.sync-bak.md")).toBe(false);
+    expect(await fx.vault.adapter.exists("Notes/meeting.ges-tmp.md")).toBe(false);
+    expect(await fx.vault.adapter.exists("Notes/meeting.ges-bak.md")).toBe(false);
   });
 
   it("recordCount > 0, vault unchanged → COMMITTED (both sides written, dir gone)", async () => {
@@ -521,7 +521,7 @@ describe("commit7Step — modify-in-place (bug3: preserve an open editor tab)", 
     // …and the ORIGINAL files were never renamed aside (what closed the tab).
     expect(renamedAway.some((r) => r.startsWith(`${BASE} ->`))).toBe(false);
     expect(renamedAway.some((r) => r.startsWith(`${SIB} ->`))).toBe(false);
-    // No .sync-bak is ever produced by the modify-in-place commit.
+    // No .ges-bak is ever produced by the modify-in-place commit.
     expect(await fx.vault.adapter.exists(stagingPathFor(BASE, "bak"))).toBe(false);
     expect(await fx.vault.adapter.exists(stagingPathFor(SIB, "bak"))).toBe(false);
 
@@ -591,8 +591,8 @@ describe("commit7Step — config-dir (.obsidian/) conflict paths (dot-dir)", () 
     expect(await fx.vault.adapter.read(CBASE)).toBe('{"a":3}\n');
     expect(await fx.vault.adapter.exists(CSIB)).toBe(false);
     // Staging used the dot-dir ext-insert shape and was cleaned up.
-    expect(await fx.vault.adapter.exists(".obsidian/plugins/foo/data.sync-tmp.json")).toBe(false);
-    expect(await fx.vault.adapter.exists(".obsidian/plugins/foo/data.sync-bak.json")).toBe(false);
+    expect(await fx.vault.adapter.exists(".obsidian/plugins/foo/data.ges-tmp.json")).toBe(false);
+    expect(await fx.vault.adapter.exists(".obsidian/plugins/foo/data.ges-bak.json")).toBe(false);
     expect(await fx.vault.adapter.exists(autosaveDir(ID))).toBe(false);
   });
 

@@ -16,7 +16,7 @@ import { tmpdir } from "os";
 import { Vault } from "../mock-obsidian";
 import Logger from "../src/logger";
 
-const PLUGIN_ID = "github-easy-sync";
+const PLUGIN_ID = "git-easy-sync";
 
 describe("Logger", () => {
   let tmp: string;

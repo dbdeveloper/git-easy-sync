@@ -1,4 +1,4 @@
-# GitHub Easy Sync
+# Git Easy Sync
 
 > Sync your Obsidian vault with a GitHub repository — no `git` binary,
 > no `isomorphic-git`, identical behaviour on desktop and mobile.
@@ -29,7 +29,7 @@ being installed (which excludes mobile entirely) or bundle a heavy
 JavaScript git reimplementation (`isomorphic-git`) that struggles on
 mobile WebViews when vaults grow past a few hundred files.
 
-**GitHub Easy Sync goes a third way**: it talks to GitHub through the
+**Git Easy Sync goes a third way**: it talks to GitHub through the
 **REST API only**. No git binary on disk, no JS git engine in the
 bundle. The exact same sync logic runs on macOS, Windows, Linux,
 iOS, and Android — and survives vaults with thousands of files on
@@ -39,7 +39,7 @@ mid-range Android devices without OOM crashes.
 
 | Plugin | Engine | Mobile-friendly | Best for |
 |---|---|---|---|
-| **GitHub Easy Sync** (this) | GitHub REST API only | ✅ Large vaults work | Two-way sync without git skills; phones that just need to work; conflicts resolved through plain file operations (no merge markers, no modal dialogs, full edit history preserved). |
+| **Git Easy Sync** (this) | GitHub REST API only | ✅ Large vaults work | Two-way sync without git skills; phones that just need to work; conflicts resolved through plain file operations (no merge markers, no modal dialogs, full edit history preserved). |
 | [`obsidian-git`](https://github.com/Vinzent03/obsidian-git) | `isomorphic-git` (or native `git`) | ⚠️ Flaky on large vaults | Full git semantics — branches, rebase, custom hosts; comfortable users who want native git conflict markers and command-line-level control. |
 | [`github-gitless-sync`](https://github.com/silvanocerza/github-gitless-sync) | GitHub REST API only | ✅ | The original; this plugin is a heavily-refactored fork of it. |
 | [`Obsidian-GitHub-Sync`](https://github.com/kevinmkchin/Obsidian-GitHub-Sync) | Bash scripts + `git` | ❌ Desktop only | Simple desktop-only workflows. |
@@ -52,7 +52,7 @@ mid-range Android devices without OOM crashes.
 > developer at the keyboard; it degrades on mobile, on long-form
 > notes whose preview pane would render the markers as literal
 > text, and on binary files where it doesn't apply at all.
-> GitHub Easy Sync 2.0.1-beta takes a different route — each
+> Git Easy Sync 2.0.1-beta takes a different route — each
 > conflict becomes an ordinary sibling file in the vault, resolved
 > by the file operations every Obsidian user already knows. See
 > [CHANGELOG](./CHANGELOG.md) above and
@@ -175,7 +175,7 @@ In Obsidian → **Settings → Community plugins → Browse** → search for
 BRAT settings → **Add Beta Plugin** → paste this repo's URL:
 
 ```
-https://github.com/dbdeveloper/github-easy-sync
+https://github.com/dbdeveloper/git-easy-sync
 ```
 
 BRAT pulls the latest release; the plugin appears under
@@ -185,7 +185,7 @@ BRAT pulls the latest release; the plugin appears under
 
 #### 3. Fill in credentials
 
-Open the plugin settings (**Settings → GitHub Easy Sync**) and fill:
+Open the plugin settings (**Settings → Git Easy Sync**) and fill:
 
 - **GitHub token**: the PAT you generated above
 - **Owner**: your GitHub username (case-sensitive)
@@ -238,14 +238,14 @@ If you're switching from a different Obsidian-to-GitHub sync plugin
 (`obsidian-git`, `github-gitless-sync`, `Obsidian-GitHub-Sync`, etc.),
 follow this sequence. It's the least invasive, most accurate way to
 switch and won't lose edits — the previous plugin does the
-convergence, and GitHub Easy Sync just observes the converged state.
+convergence, and Git Easy Sync just observes the converged state.
 
 ### 1. Sync your local vault and remote repo through the previous plugin
 
 Run a full sync with the old plugin until **both sides are identical**:
 no pending local edits, no remote commits the vault hasn't pulled,
 no unresolved conflicts. This is the single most important step —
-GitHub Easy Sync adopts what it sees, it does not reconstruct any
+Git Easy Sync adopts what it sees, it does not reconstruct any
 history the old plugin produced.
 
 ### 2. Disable the previous plugin
@@ -254,7 +254,7 @@ history the old plugin produced.
 plugin OFF. Leaving two sync plugins enabled at once produces
 duplicate commits and races over `<configDir>/` files.
 
-### 3. Install and enable GitHub Easy Sync
+### 3. Install and enable Git Easy Sync
 
 Follow [Installing the plugin](#installing-the-plugin) for the BRAT
 install + enable steps.
@@ -274,7 +274,7 @@ command palette. Because step 1 made both sides identical,
 counterpart by SHA and records them silently — no transfers, no
 overwrites, no surprise convergence commit.
 
-> **Why this path is the safest.** GitHub Easy Sync's adoption is
+> **Why this path is the safest.** Git Easy Sync's adoption is
 > non-destructive per-file: local files are never overwritten without
 > an mtime check that says the remote is newer. So even if step 1
 > was imperfect, the worst case is "the newer side wins file-by-file"
@@ -290,7 +290,7 @@ overwrites, no surprise convergence commit.
 
 ### 6. Delete the old `.git` directory (optional, recommended on mobile)
 
-GitHub Easy Sync syncs through GitHub's REST API and does **not**
+Git Easy Sync syncs through GitHub's REST API and does **not**
 need a local `.git/` folder — all version history lives on GitHub.
 If your previous plugin used real `git` or `isomorphic-git`
 (`obsidian-git`, `Obsidian-GitHub-Sync`), it left a hidden `.git/`
@@ -310,8 +310,8 @@ safely delete `<vault>/.git/` to reclaim that space:
   Syncthing, etc.).
 
 > The actual commit history is preserved on GitHub — only the local
-> object store is removed. GitHub Easy Sync's own state lives under
-> `<configDir>/plugins/github-easy-sync/` and is not affected.
+> object store is removed. Git Easy Sync's own state lives under
+> `<configDir>/plugins/git-easy-sync/` and is not affected.
 > If you migrated from `github-gitless-sync` (REST-API-only, like
 > this plugin), there's no `.git/` to clean up — skip this step.
 
@@ -319,13 +319,13 @@ safely delete `<vault>/.git/` to reclaim that space:
 
 If you're setting up the mobile side of the migration from scratch,
 you can skip the `.git/` cleanup entirely by **starting the mobile
-vault empty** and letting GitHub Easy Sync pull everything from the
+vault empty** and letting Git Easy Sync pull everything from the
 remote:
 
 1. On your desktop, finish steps 1–5 above so the GitHub repo holds
    the authoritative latest state of the vault.
 2. On mobile, create a **new empty Obsidian vault**.
-3. Install only GitHub Easy Sync via BRAT (see
+3. Install only Git Easy Sync via BRAT (see
    [Installing the plugin](#installing-the-plugin)) — you don’t need 
    an y previous plugins for syncing with GitHub.
 4. [Fill in credentials](#3-fill-in-credentials) pointing at the same
@@ -407,7 +407,7 @@ credentials → one Sync click → reload → done.
 ## Settings reference
 
 Settings tab layout matches what you'll see in Obsidian under
-**Settings → GitHub Easy Sync**.
+**Settings → Git Easy Sync**.
 
 ### Remote Repository
 
@@ -478,7 +478,7 @@ Settings tab layout matches what you'll see in Obsidian under
 ### Logging
 
 - **Enable logging** — appends every operation to
-  `<vault>/github-easy-sync.log`. Off by default. The log lives at
+  `<vault>/git-easy-sync.log`. Off by default. The log lives at
   the vault root so you can open it directly in Obsidian. `*.log`
   is gitignored at the vault root by default — remove that rule if
   you want the log to sync to GitHub (useful for analysing mobile
@@ -625,7 +625,7 @@ Example (`.obsidian.vimrc`):
 
 ```vim
 " Sync current file with one keystroke
-exmap syncFile obcommand github-easy-sync:sync-current-file
+exmap syncFile obcommand git-easy-sync:sync-current-file
 nmap <leader>gs :syncFile<CR>
 ```
 
@@ -641,7 +641,7 @@ When something doesn't behave the way you expect:
 2. **Reproduce** the issue.
 3. **Copy the log** from the settings page (there's a copy button).
 4. **Open an issue** at
-   [github.com/dbdeveloper/github-easy-sync/issues](https://github.com/dbdeveloper/github-easy-sync/issues)
+   [github.com/dbdeveloper/git-easy-sync/issues](https://github.com/dbdeveloper/git-easy-sync/issues)
    and paste the log along with:
    - Platform (macOS / Windows / Linux / iOS / Android)
    - Obsidian version

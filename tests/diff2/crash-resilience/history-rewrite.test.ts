@@ -31,8 +31,8 @@ function fixture() {
 }
 const dir = () => autosaveDir(ID);
 const P = () => `${dir()}/history.jsonl`;
-const TMP = () => `${P()}.sync-tmp`;
-const BAK = () => `${P()}.sync-bak`;
+const TMP = () => `${P()}.ges-tmp`;
+const BAK = () => `${P()}.ges-bak`;
 
 async function read(vault: Vault, p: string): Promise<string | null> {
   return (await vault.adapter.exists(p)) ? vault.adapter.read(p) : null;

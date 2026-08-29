@@ -25,7 +25,7 @@ ping-pong схема з монотонним `seq` вимагає, щоб reset 
 
 | крок | код | що фактично відбувається |
 |---|---|---|
-| `store.clear()` + `store.save()` | `main.ts:771-772` | **переписує** `<configDir>/github-easy-sync-metadata.json` порожнім станом; файл НЕ видаляється |
+| `store.clear()` + `store.save()` | `main.ts:771-772` | **переписує** `<configDir>/git-easy-sync-metadata.json` порожнім станом; файл НЕ видаляється |
 | `queue.clearAll()` | `main.ts:773` → `push-queue.ts:374-377` | `rmdir(.runtime/push-queue, true)` |
 | `renameVaultSiblingsToUnresolved()` | `main.ts:779` → `conflict-store.ts:457-479` | обходить **vault** і перейменовує кожен `*.conflict-from-*` на `*.unresolved-<ts>.*` |
 | `conflictStore.clearAll()` | `main.ts:780` → `conflict-store.ts:439-446` | `rmdir(.runtime/conflicts, true)` |
@@ -84,7 +84,7 @@ conflict-редакторах, і сьогодні reset їх НЕ чіпає �
 ## 4. Відкриті питання
 
 **O1. Legacy-шлях метафайлу — залежність між документами.** Сьогоднішній
-`<configDir>/github-easy-sync-metadata.json` (`snapshot-store.ts:11-12,181-183`) лежить
+`<configDir>/git-easy-sync-metadata.json` (`snapshot-store.ts:11-12,181-183`) лежить
 **поза текою плагіна**, тож `rm -rf .runtime/` його не зачепить. Доки
 METAFILE-REFACTOR §2 не переїхав у `.runtime/`, reset мусить прибирати цей шлях **окремо**.
 Тобто порядок робіт між двома документами має значення.

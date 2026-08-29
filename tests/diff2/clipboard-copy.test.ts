@@ -55,7 +55,7 @@ describe("serializeGroup — byte-exact against the spec Examples", () => {
   it("Example 6: 3-line ver1, empty ver2", () => {
     const c1 = "ver1-visible-line-1\n  ver1-visible-line-2\nver1-visible-line-3  \n";
     const expected =
-      "```github-easy-sync\n" +
+      "```git-easy-sync\n" +
       "≪\n" +
       "- ver1-visible-line-1↵\n" +
       "-   ver1-visible-line-2↵\n" +
@@ -70,7 +70,7 @@ describe("serializeGroup — byte-exact against the spec Examples", () => {
     const c1 = "ver1-visible-line-1\n  ver1-visible-line-2\nver1-visible-line-3  \n";
     const c2 = "ver2-visible-line-1\n\nver2-visible-line-2\n";
     const expected =
-      "```github-easy-sync\n" +
+      "```git-easy-sync\n" +
       "≪\n" +
       "- ver1-visible-line-1↵\n" +
       "-   ver1-visible-line-2↵\n" +
@@ -87,12 +87,12 @@ describe("serializeGroup — byte-exact against the spec Examples", () => {
   it("EOL-less last line omits ↵ but keeps its \\n separator (§2.2.7 п.6)", () => {
     // ver1 "a\nb" EOL-less (b → no ↵); ver2 "x\n" terminated (x → ↵).
     expect(serializeGroup("a\nb", "x\n")).toBe(
-      "```github-easy-sync\n≪\n- a↵\n- b\n==\n+ x↵\n≫\n```\n",
+      "```git-easy-sync\n≪\n- a↵\n- b\n==\n+ x↵\n≫\n```\n",
     );
   });
 
   it("empty VER1 (delete-vs-modify / absent-base) → ≪ then == directly", () => {
-    expect(serializeGroup("", "x\n")).toBe("```github-easy-sync\n≪\n==\n+ x↵\n≫\n```\n");
+    expect(serializeGroup("", "x\n")).toBe("```git-easy-sync\n≪\n==\n+ x↵\n≫\n```\n");
   });
 });
 
@@ -107,7 +107,7 @@ describe("copyClipboardText — selection modes", () => {
     const v1from = m.ranges.find((r) => r.ver === 1)!.from;
     const v2to = m.ranges.find((r) => r.ver === 2)!.to;
     const s = state("a\nL\nc\n", "a\nR\nc\n", { anchor: v1from, head: v2to });
-    expect(copyClipboardText(s)).toBe("```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n");
+    expect(copyClipboardText(s)).toBe("```git-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n");
   });
 
   it("mixed selection (normal + whole group) → normal verbatim + fenced, doc order", () => {
@@ -119,7 +119,7 @@ describe("copyClipboardText — selection modes", () => {
     const v2to = m.ranges.find((r) => r.ver === 2)!.to;
     const s = state(base, sib, { anchor: 0, head: m.doc.length });
     // whole doc selected: group fenced + trailing normal "c\n" verbatim.
-    expect(copyClipboardText(s)).toBe("```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n" + "c\n");
+    expect(copyClipboardText(s)).toBe("```git-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n" + "c\n");
     expect(v2to).toBeLessThan(m.doc.length); // there IS trailing normal
   });
 
@@ -132,9 +132,9 @@ describe("copyClipboardText — selection modes", () => {
     const s = state(base, sib, { anchor: 0, head: m.doc.length });
     expect(copyClipboardText(s)).toBe(
       "pre\n" +
-        "```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n" +
+        "```git-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n" +
         "mid\n" +
-        "```github-easy-sync\n≪\n- M↵\n==\n+ N↵\n≫\n```\n" +
+        "```git-easy-sync\n≪\n- M↵\n==\n+ N↵\n≫\n```\n" +
         "post\n",
     );
   });
@@ -202,10 +202,10 @@ describe("copyClipboardText — selection modes", () => {
 // ── §2.2.7 п.4–6 — PARSE (clipboard → segments), step 6a ─────────────────────
 describe("parseClipboard — fenced block → group; malformed → as-is (rule 5)", () => {
   const G6 =
-    "```github-easy-sync\n≪\n- ver1-visible-line-1↵\n-   ver1-visible-line-2↵\n" +
+    "```git-easy-sync\n≪\n- ver1-visible-line-1↵\n-   ver1-visible-line-2↵\n" +
     "- ver1-visible-line-3  ↵\n==\n≫\n```\n";
   const G7 =
-    "```github-easy-sync\n≪\n- ver1-visible-line-1↵\n-   ver1-visible-line-2↵\n" +
+    "```git-easy-sync\n≪\n- ver1-visible-line-1↵\n-   ver1-visible-line-2↵\n" +
     "- ver1-visible-line-3  ↵\n==\n+ ver2-visible-line-1↵\n+ ↵\n+ ver2-visible-line-2↵\n≫\n```\n";
 
   it("Example 6 → one group, empty ver2 (prefixes + ↵ stripped, whitespace kept)", () => {
@@ -235,16 +235,16 @@ describe("parseClipboard — fenced block → group; malformed → as-is (rule 5
 
   it("each rule-4 failure → the whole text stays NORMAL (as-is, rule 5)", () => {
     const asIs = (t: string) => expect(parseClipboard(t)).toEqual([{ kind: "normal", text: t }]);
-    asIs("```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n"); // 4f: no close fence
-    asIs("```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n```\n"); // 4e: no ≫
-    asIs("```github-easy-sync\n≪\n- L↵\n+ R↵\n≫\n```\n"); // 4d: no ==
-    asIs("```github-easy-sync\n≪\nL↵\n==\n≫\n```\n"); // 4c: ver1 line missing "- "
-    asIs("```github-easy-sync\nX\n- L↵\n==\n≫\n```\n"); // 4b: not ≪
+    asIs("```git-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n"); // 4f: no close fence
+    asIs("```git-easy-sync\n≪\n- L↵\n==\n+ R↵\n```\n"); // 4e: no ≫
+    asIs("```git-easy-sync\n≪\n- L↵\n+ R↵\n≫\n```\n"); // 4d: no ==
+    asIs("```git-easy-sync\n≪\nL↵\n==\n≫\n```\n"); // 4c: ver1 line missing "- "
+    asIs("```git-easy-sync\nX\n- L↵\n==\n≫\n```\n"); // 4b: not ≪
     asIs("```other\n≪\n- L↵\n==\n≫\n```\n"); // 4a: wrong fence tag
   });
 
   it("scan: normal + valid block + normal → 3 segments in order", () => {
-    const t = "before\n```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\nafter\n";
+    const t = "before\n```git-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\nafter\n";
     expect(parseClipboard(t)).toEqual([
       { kind: "normal", text: "before\n" },
       { kind: "group", ver1: ["L"], ver2: ["R"] },
@@ -253,8 +253,8 @@ describe("parseClipboard — fenced block → group; malformed → as-is (rule 5
   });
 
   it("scan: valid block + INVALID block → group then literal normal (mixed all-or-nothing)", () => {
-    const valid = "```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n";
-    const invalid = "```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n"; // no close fence
+    const valid = "```git-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n";
+    const invalid = "```git-easy-sync\n≪\n- L↵\n==\n+ R↵\n"; // no close fence
     const segs = parseClipboard(valid + invalid);
     expect(segs[0]).toEqual({ kind: "group", ver1: ["L"], ver2: ["R"] });
     expect(segs[1].kind).toBe("normal");
@@ -281,7 +281,7 @@ describe("CUT — group-spanning selection: copy text + delete via selectionDele
     const v2 = m.ranges.find((r) => r.ver === 2)!;
     const s = state(base, sib, { anchor: v1.from, head: v2.to });
     // COPY half: serialized fenced block.
-    expect(copyClipboardText(s)).toBe("```github-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n");
+    expect(copyClipboardText(s)).toBe("```git-easy-sync\n≪\n- L↵\n==\n+ R↵\n≫\n```\n");
     // DELETE half: the group-spanning selection rebuilds to group-gone.
     const spec = selectionDeleteSpec(s)!;
     expect(spec).not.toBeNull();

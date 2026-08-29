@@ -104,7 +104,7 @@ export async function createSync2Client(
     opts.ownsVaultPath ?? opts.vaultPath === undefined;
   const vaultPath =
     opts.vaultPath ??
-    mkdtempSync(path.join(os.tmpdir(), "github-easy-sync-int-"));
+    mkdtempSync(path.join(os.tmpdir(), "git-easy-sync-int-"));
   const vault = new MockVault(vaultPath) as unknown as ObsidianVault;
 
   const settings: GitHubSyncSettings = {

@@ -433,7 +433,7 @@ export interface Sync2ManagerDeps {
   // main.ts uses it to call `app.plugins.reloadPlugin(id)` for each
   // affected plugin so the new code takes effect immediately
   // instead of waiting for the user to disable + re-enable by hand.
-  // Self-plugin update (github-easy-sync's own files) goes through
+  // Self-plugin update (git-easy-sync's own files) goes through
   // here too; the bootloader at our onload() top is just the
   // crash-recovery backstop for the case where the swap was left
   // mid-protocol.
@@ -2160,24 +2160,24 @@ export class Sync2Manager {
   // runs at the very top of our onload() before logger/snapshot
   // init) needs an integrity signal it can verify WITHOUT access
   // to ground-truth SHAs from the snapshot store. The marker file
-  // `.<basename>.<ext>.sync-tmp.` is that signal: its presence
-  // certifies that the sync-tmp write completed fully and the
+  // `.<basename>.<ext>.ges-tmp.` is that signal: its presence
+  // certifies that the ges-tmp write completed fully and the
   // bytes are safe to apply.
   //
   // Protocol (executed in current drain process — POSIX rename of
   // a running plugin's main.js is safe; the V8 in-memory image is
   // independent of the file's inode):
-  //   Step 1: writeBinary(sync-tmp, bytes) — full write commit
-  //   Step 2: write(marker, "")            — "sync-tmp is verified"
+  //   Step 1: writeBinary(ges-tmp, bytes) — full write commit
+  //   Step 2: write(marker, "")            — "ges-tmp is verified"
   //   Step 3: rename(file → bak)           — backup (Capacitor-safe)
-  //   Step 4: rename(sync-tmp → file)      — atomic swap
+  //   Step 4: rename(ges-tmp → file)      — atomic swap
   //   Step 5: afterCommit()                — snapshot update
   //   Step 6: remove(marker)               — marker no longer needed
   //   Step 7: remove(bak)                  — backup cleanup
   //   add self to affectedPluginIds        — reloadPlugin at drain end
   //
   // All crash windows are covered by the bootloader's Cases A/B/C
-  // (see plugin-update-bootloader.ts): marker presence + sync-tmp
+  // (see plugin-update-bootloader.ts): marker presence + ges-tmp
   // presence directs the next-launch recovery deterministically.
   //
   // Used for all three of (main.js, manifest.json, styles.css)
@@ -2189,25 +2189,25 @@ export class Sync2Manager {
     afterCommit?: () => Promise<void>,
   ): Promise<void> {
     // Derive the staging + marker + bak filenames from the target.
-    // For `<dir>/main.js`: tmp = `<dir>/main.sync-tmp.js`,
-    // marker = `<dir>/.main.js.sync-tmp.`, bak = `<dir>/main.sync-bak.js`.
+    // For `<dir>/main.js`: tmp = `<dir>/main.ges-tmp.js`,
+    // marker = `<dir>/.main.js.ges-tmp.`, bak = `<dir>/main.ges-bak.js`.
     const slash = path.lastIndexOf("/");
     const dir = path.slice(0, slash);
     const fileName = path.slice(slash + 1);
     const dotIdx = fileName.lastIndexOf(".");
     const baseName = fileName.slice(0, dotIdx);
     const ext = fileName.slice(dotIdx);
-    const tmpPath = `${dir}/${baseName}.sync-tmp${ext}`;
+    const tmpPath = `${dir}/${baseName}.ges-tmp${ext}`;
     // Marker shape matches the modify-in-place convention so the
     // existing AtomicWriteRecovery.sweep handles this protocol as a
     // free defense-in-depth layer if the bootloader is bypassed.
-    const markerPath = `${dir}/.${fileName}.sync-tmp.`;
-    const bakPath = `${dir}/${baseName}.sync-bak${ext}`;
+    const markerPath = `${dir}/.${fileName}.ges-tmp.`;
+    const bakPath = `${dir}/${baseName}.ges-bak${ext}`;
 
-    // Step 1: full write of sync-tmp (awaited; bytes flushed before
+    // Step 1: full write of ges-tmp (awaited; bytes flushed before
     // marker write begins).
     await this.vault.adapter.writeBinary(tmpPath, bytes);
-    // Step 2: drop marker — "sync-tmp is the gold standard, apply it".
+    // Step 2: drop marker — "ges-tmp is the gold standard, apply it".
     await this.vault.adapter.write(markerPath, "");
     // Steps 3-4: atomic swap via bak intermediate (portable —
     // Capacitor rename does not overwrite, so we have to clear the
@@ -2645,7 +2645,7 @@ export class Sync2Manager {
     // 2. Resolve / create the conflict branch.
     let cb = this.store.getConflictBranch();
     if (cb === null) {
-      // Eager creation: name = github-easy-sync-conflicts-{label}-{ts}-{mmm}.
+      // Eager creation: name = git-easy-sync-conflicts-{label}-{ts}-{mmm}.
       // On the rare 422 "Reference already exists" (cross-device
       // sub-second collision on the default label), re-generate
       // with a freshly-clocked now() — millisecond resolution makes

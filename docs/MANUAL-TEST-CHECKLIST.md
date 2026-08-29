@@ -156,7 +156,7 @@ suite (`pnpm test:integration`).
 
 ## Reporting a mobile issue
 
-Open a GitHub issue with: device + Android/iOS version + Obsidian version; the section/item above that failed; expected vs observed result; a snapshot of `<vault>/.obsidian/plugins/github-easy-sync/.push-queue/` (paths only — content may carry private data); and any relevant lines from `<vault>/.obsidian/github-easy-sync.log` (with "Enable logging" on).
+Open a GitHub issue with: device + Android/iOS version + Obsidian version; the section/item above that failed; expected vs observed result; a snapshot of `<vault>/.obsidian/plugins/git-easy-sync/.push-queue/` (paths only — content may carry private data); and any relevant lines from `<vault>/.obsidian/git-easy-sync.log` (with "Enable logging" on).
 
 ---
 

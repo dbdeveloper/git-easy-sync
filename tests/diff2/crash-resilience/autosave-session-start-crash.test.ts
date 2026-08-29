@@ -7,7 +7,7 @@
 //
 // We crash startSession after each protocol step by making the vault
 // adapter throw on the writeBinary that stages the NEXT file
-// (atomicWriteFile = writeBinary(<x>.sync-tmp) → rename → final path), then
+// (atomicWriteFile = writeBinary(<x>.ges-tmp) → rename → final path), then
 // assert the on-disk state. Node env (real fs over tmpdir), not happy-dom.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -67,25 +67,25 @@ interface Scenario {
 }
 
 const SCENARIOS: Scenario[] = [
-  { name: "before base.snapshot (step 6)", marker: "base.sync-tmp", present: [] },
+  { name: "before base.snapshot (step 6)", marker: "base.ges-tmp", present: [] },
   {
     name: "after base.snapshot, before sibling (step 7)",
-    marker: "sibling.sync-tmp",
+    marker: "sibling.ges-tmp",
     present: ["base.snapshot"],
   },
   {
     name: "after snapshots, before cursor (step 8)",
-    marker: "cursor-a.sync-tmp",
+    marker: "cursor-a.ges-tmp",
     present: ["base.snapshot", "sibling.snapshot"],
   },
   {
     name: "after cursor, before history (step 9)",
-    marker: "history.sync-tmp",
+    marker: "history.ges-tmp",
     present: ["base.snapshot", "sibling.snapshot", "cursor-a.json"],
   },
   {
     name: "after history, before meta (step 10 — the commit point)",
-    marker: "meta.sync-tmp",
+    marker: "meta.ges-tmp",
     present: ["base.snapshot", "sibling.snapshot", "cursor-a.json", "history.jsonl"],
   },
 ];

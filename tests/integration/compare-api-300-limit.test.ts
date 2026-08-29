@@ -54,7 +54,7 @@ describe.skipIf(!integrationEnabled())(
       const mockVault = new MockVault(tmpRoot);
       const logger = new Logger(
         mockVault as unknown as import("obsidian").Vault,
-        "github-easy-sync",
+        "git-easy-sync",
         true, // enabled=true so the probe's info() lines actually reach console/log — see run output
       );
       const client = new GithubClient(
@@ -238,7 +238,7 @@ describe.skipIf(!integrationEnabled())(
         },
         new Logger(
           {} as unknown as import("obsidian").Vault,
-          "github-easy-sync",
+          "git-easy-sync",
           false,
         ),
       );
@@ -339,7 +339,7 @@ describe.skipIf(!integrationEnabled())(
         },
         new Logger(
           {} as unknown as import("obsidian").Vault,
-          "github-easy-sync",
+          "git-easy-sync",
           false,
         ),
       );

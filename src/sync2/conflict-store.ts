@@ -24,9 +24,9 @@ import { safeRename } from "./cross-platform";
 //   <basename>.conflict-from-<deviceLabel>-<isoTs>.<ext>
 //
 // During create(), the sibling is staged at vault level as a
-// `.sync-tmp` pre-suffix file (e.g., `note.conflict-from-Phone-...sync-tmp.md`)
+// `.ges-tmp` pre-suffix file (e.g., `note.conflict-from-Phone-...ges-tmp.md`)
 // and atomically renamed to its final name. Crash-recovery is handled
-// by AtomicWriteRecovery.sweep() via ownership dispatch on .sync-tmp.
+// by AtomicWriteRecovery.sweep() via ownership dispatch on .ges-tmp.
 
 const CONFLICTS_DIRNAME = ".runtime/conflicts";
 const META_FILE = "meta.json";
@@ -217,7 +217,7 @@ export default class ConflictStore {
   // Create a new conflict record using the 3-step atomic protocol
   // documented in docs/PSEUDO-MERGE-MODE.md §9.4 (Path B):
   //
-  //   1. writeBinary(<sibling>.sync-tmp.<ext>, theirsContent)
+  //   1. writeBinary(<sibling>.ges-tmp.<ext>, theirsContent)
   //   2. atomic write of meta.json via .tmp + rename (persistRecord)
   //   3. atomic rename staging → siblingPath
   //
@@ -252,8 +252,8 @@ export default class ConflictStore {
     const recordDir = `${this.conflictsRoot}/${id}`;
     const stagingPath = stagingPathFor(siblingPath, "tmp");
 
-    // Vault-level `.sync-tmp` staging — `.sync-tmp` carries NEW bytes
-    // destined for a not-yet-existing target. (`.sync-bak` is the
+    // Vault-level `.ges-tmp` staging — `.ges-tmp` carries NEW bytes
+    // destined for a not-yet-existing target. (`.ges-bak` is the
     // rollback-target suffix used by atomicWriteFile for backups of
     // files that already existed; sibling registration writes a
     // brand-new file so it uses tmp, not bak. See

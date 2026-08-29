@@ -11,9 +11,9 @@
 //
 //   <plugin-id>-conflicts-<deviceLabel>-<YYYYMMDDHHMMSS>-<mmm>
 //
-// Examples (with plugin id "github-easy-sync"):
-//   github-easy-sync-conflicts-Obsidian-20260520143022-847
-//   github-easy-sync-conflicts-Phone-20260601090015-003
+// Examples (with plugin id "git-easy-sync"):
+//   git-easy-sync-conflicts-Obsidian-20260520143022-847
+//   git-easy-sync-conflicts-Phone-20260601090015-003
 //
 // The msec suffix guards against cross-device sub-second collisions
 // (two devices, both with the default `"Obsidian"` label, hitting

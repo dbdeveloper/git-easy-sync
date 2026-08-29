@@ -30,7 +30,7 @@ import {
 // re-emits everything as "added" via the snapshot-empty path; the
 // SHAs match what's on remote, so the tree-build skips the commit.
 
-const MANIFEST_REL = ".obsidian/github-easy-sync-metadata.json";
+const MANIFEST_REL = ".obsidian/git-easy-sync-metadata.json";
 
 describe.skipIf(!integrationEnabled())(
   "sync2 K5 — empty files map but lastSync set",

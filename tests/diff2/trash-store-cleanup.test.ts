@@ -21,7 +21,7 @@ import type { TrashRecord } from "../../src/diff2/types";
 //     all if nothing matched.
 
 const CONFIG_DIR = ".obsidian";
-const SELF_PLUGIN_ID = "github-easy-sync";
+const SELF_PLUGIN_ID = "git-easy-sync";
 
 function fixture() {
   const root = path.join(

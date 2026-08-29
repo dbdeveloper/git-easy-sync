@@ -1,7 +1,7 @@
 # Diff-Edit Widget — Implementation Plan
 
 > Документ описує комплексне переосмислення Diff-Edit / Conflict-View UX
-> для плагіна `github-easy-sync`. "the conflict-view
+> для плагіна `git-easy-sync`. "the conflict-view
 > UX is the one area still openly known to be primitive" — цей план
 > закриває цю дірку.
 >
@@ -35,12 +35,12 @@
   `diff-edit-view.ts`, ...
 - **Obsidian commands** — **БЕЗ ручного префіксу "Diff2:"**.
   Obsidian command palette **автоматично** префіксує усі команди
-  display-ім'ям плагіна з `manifest.json` (`github-easy-sync`).
+  display-ім'ям плагіна з `manifest.json` (`git-easy-sync`).
   Тому у коді задаємо тільки кoмандні імена, наприклад
   `Compare two files…`, `Open Diff-Edit`, `Next chunk`,
   `Show history of active file`. У палітрі вони відображаються як
-  `github-easy-sync: Compare two files…`. Подвійний префікс
-  ("github-easy-sync: Diff2: …") нечитабельний — уникаємо.
+  `git-easy-sync: Compare two files…`. Подвійний префікс
+  ("git-easy-sync: Diff2: …") нечитабельний — уникаємо.
 
 Поділ обов'язків між `sync2/` і `diff2/`:
 
@@ -67,7 +67,7 @@
    (R1–R7). Не причісувати інший код "заодно", не рефакторити
    суміжні модулі, не "виправляти, що очі бачать".
 
-2. **Не порушувати роботу основного плагіну.** `github-easy-sync` —
+2. **Не порушувати роботу основного плагіну.** `git-easy-sync` —
    це working production-плагін з 429 unit-тестами і ~106 integration-
    тестами (серії A–L, див. CLAUDE.md). Уся існуюча поведінка sync-
    рушія (bootstrap, adoption, normalize, incremental, atomic
@@ -258,7 +258,7 @@ Diff-Edit widget підтримує чотири функціональні ре
 
 2. **Command palette**:
    команди `Compare two files…` (просить вибрати обидва), і `Compare active file with…` (active file = top, picker для
-   bottom). Префікс `github-easy-sync:` додається Obsidian автоматично.
+   bottom). Префікс `git-easy-sync:` додається Obsidian автоматично.
 
 3. **Зсередини Diff2**: режим Compare у мode-перемикачі (TBD-розділ про навігацію між режимами).
 
@@ -402,9 +402,9 @@ sibling` (SYNC2 §1) — лиш виконаний у момент editor-exit �
 **R2.4. Deleted files (Recently deleted)** — той самий single-pane shell (R2.0), що й Conflicts mode, але **спрощений
 detail view**.
 
-Для реалізації цього режиму необхідно додати до `plugins/github-easy-sync/.trash/` директорію (ВЖЕ ДОДАНО!!!), де будуть
+Для реалізації цього режиму необхідно додати до `plugins/git-easy-sync/.trash/` директорію (ВЖЕ ДОДАНО!!!), де будуть
 зберігатись видаліні (В ЦІЙ SYNC-СЕСІЇ ТІЛЬКИ!!!) файли. Що це означає? Це означає, що в
-`plugins/github-easy-sync/.trash/<id>` будуть зберігатись видалені файли тільки до наступного Sync, після чого ми
+`plugins/git-easy-sync/.trash/<id>` будуть зберігатись видалені файли тільки до наступного Sync, після чого ми
 вважаємо, що цей файл більше користувачу не потрібний, і відновити цей файл можна буде тільки з GitHub repo.
 Якщо ж файл було створено і видалено в одному циклі Sync (між двома sync) - файл втрачається незворотньо.
 
@@ -642,7 +642,7 @@ state, що ламає симетрію tabs.
       Compare-detail з обраною парою.
     - `Show history` → відкриває diff2 view у History list для цього path
       (R2.3).
-- **Command palette** (Obsidian сам префіксує `github-easy-sync:`):
+- **Command palette** (Obsidian сам префіксує `git-easy-sync:`):
     - `Compare two files…` — picker для обох сторін.
     - `Compare active file with…` — active як top, picker для bottom.
     - `Show history of active file` — History list для active file.
@@ -681,13 +681,13 @@ unresolved-конфліктів):
 
 - **Uninitialized** (token/owner/repo/branch — порожні у Settings):
   ```
-  GitHub Easy Sync: Uninitialized        (сірим)
+  Git Easy Sync: Uninitialized        (сірим)
   ───────────────
   Settings
   ```
 - **Token expired** (існує файл-мітка `.token_expired` — §5 нижче):
   ```
-  GitHub Easy Sync: Token expired        (сірим)
+  Git Easy Sync: Token expired        (сірим)
   ───────────────
   Sync All                               (завжди commit+drain, незалежно від syncStartsWithCommit)
   Commit all changed files
@@ -726,7 +726,7 @@ unresolved-конфліктів):
 #### R2.7.3.a. `.token_expired` persistent-мітка (TODO.md §5) — підмурок під §7
 
 Файл-мітка `.token_expired` у каталозі плагіна
-(`.obsidian/plugins/github-easy-sync/`). Ставиться/витирається **у точно відомих
+(`.obsidian/plugins/git-easy-sync/`). Ставиться/витирається **у точно відомих
 точках** обробки 401/403 (де помилка виникає / де зв'язок успішно встановлено) —
 тож **без events і без live-перевірок**: просто читаємо наявність файлу у Settings
 (показ повідомлення) і в status-bar меню (§7 стан "Token expired"). Доповнює наявний
@@ -848,7 +848,7 @@ high-value surfaces) → **E5 → E4 → E6** (deep-link + triggers). E2 НЕ з
   repaint). CSS `-up`(success)/`-conflict`(error). Тести: `status-bar-model` 12. **Manual:** Menu
   відкривається вгору зі status-bar (desktop+mobile). **Field-fixes (user-test 2026-06-05):**
   syncing-колір = `--text-success` (був `--interactive-accent`=фіолетовий у темі); пробіл «GitHub (»
-  через CSS `white-space: pre` на `.github-easy-sync-statusbar` (flex-item колапсував звичайний
+  через CSS `white-space: pre` на `.git-easy-sync-statusbar` (flex-item колапсував звичайний
   пробіл). **+ TODO §10** (окремо, у тому ж commit): заголовок Settings зверху —
   «{name} {version} ([repo]({authorUrl}))» з `manifest.json` (`settings/tab.ts` `display()`).
 
@@ -883,7 +883,7 @@ high-value surfaces) → **E5 → E4 → E6** (deep-link + triggers). E2 НЕ з
 > R3.8–R3.13.
 
 **R3.1.** Створити локальний "smart-trash":
-`<configDir>/plugins/github-easy-sync/.trash/<id>/`
+`<configDir>/plugins/git-easy-sync/.trash/<id>/`
 де `<id>` — 17-цифровий timestamp (та сама схема, що у `.conflicts/` та `.push-queue/`).
 
 Кожен запис trash містить:
@@ -1622,7 +1622,7 @@ ConflictStore відбувається на drain-start через `evaluateConf
 **R6.4. Spawn-механіка** (спільна для обох точок входу A і B):
 
 1. Записати `ours` та `theirs` у тимчасові файли:
-   `<configDir>/plugins/github-easy-sync/.tmp/<id>/ours.<ext>` та
+   `<configDir>/plugins/git-easy-sync/.tmp/<id>/ours.<ext>` та
    `theirs.<ext>`. Файли у плагін-каталозі (не в системному `/tmp`)
    бо так доступно через Obsidian adapter і кросплатформово.
 2. Spawn процес через Node API (`require("child_process").spawn` або

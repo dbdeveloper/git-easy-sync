@@ -15,7 +15,7 @@ import { sweepOnload } from "../../../src/diff2/trash-recovery";
 // Case-A orphan and restores the file to vault root.
 
 const CONFIG_DIR = ".obsidian";
-const SELF_PLUGIN_ID = "github-easy-sync";
+const SELF_PLUGIN_ID = "git-easy-sync";
 
 function fixture() {
   const root = path.join(

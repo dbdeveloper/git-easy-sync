@@ -881,16 +881,16 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
  * the inner lucide SVG; the pending-batches badge sits in the corner
  * and is unaffected. Toggled by main.ts applyRibbonSyncingState.
  */
-.github-easy-sync-ribbon-syncing svg {
+.git-easy-sync-ribbon-syncing svg {
     color: var(--interactive-accent);
-    animation: github-easy-sync-ribbon-spin 1s linear infinite;
+    animation: git-easy-sync-ribbon-spin 1s linear infinite;
 }
 /* TODO §14 — "Spin the sync icon" OFF: keep the accent tint (the syncing cue) but
  * suppress the rotation. main.ts applySyncIconSpin toggles the -no-spin marker. */
-.github-easy-sync-ribbon-syncing.github-easy-sync-no-spin svg {
+.git-easy-sync-ribbon-syncing.git-easy-sync-no-spin svg {
     animation: none;
 }
-@keyframes github-easy-sync-ribbon-spin {
+@keyframes git-easy-sync-ribbon-spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
 }
@@ -900,54 +900,54 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
  * refresh icon spins (reusing the ribbon spin keyframe). Idle, it's a
  * plain "GitHub". Toggled by main.ts updateStatusBarItem.
  */
-.github-easy-sync-statusbar-syncing {
+.git-easy-sync-statusbar-syncing {
     color: var(--text-success);
 }
 /* Preserve the " (" leading space so the suffix reads "GitHub (↑ N)" — the
  * flex status-bar item otherwise collapses it to "GitHub(↑ N)". */
-.github-easy-sync-statusbar {
+.git-easy-sync-statusbar {
     white-space: pre;
 }
 
 /* TODO §10 — settings header (plugin name + version + repo link). */
-.github-easy-sync-settings-title {
+.git-easy-sync-settings-title {
     font-weight: 600;
     font-size: 1.15em;
     margin-bottom: 0.75em;
 }
-.github-easy-sync-settings-repo {
+.git-easy-sync-settings-repo {
     font-weight: normal;
     font-size: 0.85em;
 }
 /* E2 (TODO §6) — status-bar suffix "(↑ N | M ⁇)". The push-queue "↑ N" is
  * green, the conflict count "M ⁇" red. These sit on the span itself, so they
  * override the parent's inherited syncing-green while a drain runs. */
-.github-easy-sync-statusbar-up {
+.git-easy-sync-statusbar-up {
     color: var(--text-success);
 }
-.github-easy-sync-statusbar-conflict {
+.git-easy-sync-statusbar-conflict {
     color: var(--text-error);
 }
 /* §35 — token-expired: the "GitHub" word turns red (sits on the span itself so
  * it overrides the parent's syncing-green). Toggled by updateStatusBarItem. */
-.github-easy-sync-statusbar-token-expired {
+.git-easy-sync-statusbar-token-expired {
     color: var(--text-error);
     font-weight: 600;
 }
 /* §35 — token-expired: the sync ribbon icon turns red. Toggled by
  * refreshSyncRibbonTokenExpired. Uses !important so it wins over the
  * syncing-green accent tint if a stale drain class lingers. */
-.github-easy-sync-ribbon-token-expired svg {
+.git-easy-sync-ribbon-token-expired svg {
     color: var(--text-error) !important;
 }
 /* §35 — the recovery-modal button row wraps + centers so on a narrow (mobile)
  * screen no button (esp. the first, "Open GitHub token page") is pushed off the
  * edge. Column direction lets the control span full width; the buttons then wrap
  * and center within it. Harmless on desktop (they fit on one centered row). */
-.github-easy-sync-token-modal-buttons {
+.git-easy-sync-token-modal-buttons {
     flex-direction: column;
 }
-.github-easy-sync-token-modal-buttons .setting-item-control {
+.git-easy-sync-token-modal-buttons .setting-item-control {
     flex-wrap: wrap;
     justify-content: center;
     gap: 0.5em;

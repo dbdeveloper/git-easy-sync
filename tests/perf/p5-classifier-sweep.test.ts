@@ -31,7 +31,7 @@ import { timed } from "./perf-helpers";
 // Run with `pnpm test:perf`. Skipped by the integration suite.
 
 const CONFIG_DIR = ".obsidian";
-const SELF_PLUGIN_ID = "github-easy-sync";
+const SELF_PLUGIN_ID = "git-easy-sync";
 
 async function buildFixture(count: number): Promise<{
   root: string;

@@ -34,7 +34,7 @@ function makePlugin(spinSyncIcon: boolean | undefined, icon: unknown): SpinHandl
   return p;
 }
 
-const NO_SPIN = "github-easy-sync-no-spin";
+const NO_SPIN = "git-easy-sync-no-spin";
 
 describe("applySyncIconSpin (TODO §14 — togglable sync-icon spin)", () => {
   it("spinSyncIcon = true → NO -no-spin marker (icon spins)", () => {

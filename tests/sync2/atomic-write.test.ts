@@ -28,24 +28,24 @@ import { calculateGitBlobSHA } from "../../src/utils";
 //   atomicWriteFile(vault, path, bytes, afterCommit?)
 //
 // Sequence:
-//   1. writeBinary(<path>.sync-tmp, bytes)
-//   2. if exists(<path>): rename(<path>, <path>.sync-bak)
-//   3. rename(<path>.sync-tmp, <path>)
+//   1. writeBinary(<path>.ges-tmp, bytes)
+//   2. if exists(<path>): rename(<path>, <path>.ges-bak)
+//   3. rename(<path>.ges-tmp, <path>)
 //   4. afterCommit()  ← snapshot.recordSync, typically
-//   5. remove(<path>.sync-bak)
+//   5. remove(<path>.ges-bak)
 //
 // Crash-recovery sweep (post-Stage-13, suffix semantics corrected):
-//   *.sync-tmp:                           dispatch by ownership via
+//   *.ges-tmp:                           dispatch by ownership via
 //                                         ConflictStore.getBySibling
 //     no record (Path A transient)        → delete (junk)
 //     record + finalPath exists           → delete (Step 3 done, stale)
-//     record + finalPath missing, SHA ok  → rename .sync-tmp → finalPath
+//     record + finalPath missing, SHA ok  → rename .ges-tmp → finalPath
 //     record + finalPath missing, SHA bad → delete (record drops later)
-//   *.sync-bak (Path A only, no dispatch):
-//     no <file>                           → restore from .sync-bak
-//     <file> + SHA == snapshot.remoteSha  → delete .sync-bak [cleanup race]
-//     <file> + SHA mismatch               → restore from .sync-bak
-//     <file>, no snapshot entry           → restore from .sync-bak (conservative)
+//   *.ges-bak (Path A only, no dispatch):
+//     no <file>                           → restore from .ges-bak
+//     <file> + SHA == snapshot.remoteSha  → delete .ges-bak [cleanup race]
+//     <file> + SHA mismatch               → restore from .ges-bak
+//     <file>, no snapshot entry           → restore from .ges-bak (conservative)
 
 function fixture(): {
   root: string;
@@ -97,15 +97,15 @@ describe("atomicWriteFile", () => {
     f.cleanup();
   });
 
-  it("brand-new file: writes bytes; .sync-tmp and .sync-bak are gone afterwards", async () => {
+  it("brand-new file: writes bytes; .ges-tmp and .ges-bak are gone afterwards", async () => {
     await atomicWriteFile(
       f.vault as unknown as import("obsidian").Vault,
       "Notes/note.md",
       bytesOf("hello\n"),
     );
     expect(readText(f.root, "Notes/note.md")).toBe("hello\n");
-    expect(fs.existsSync(path.join(f.root, "Notes/note.sync-tmp.md"))).toBe(false);
-    expect(fs.existsSync(path.join(f.root, "Notes/note.sync-bak.md"))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, "Notes/note.ges-tmp.md"))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, "Notes/note.ges-bak.md"))).toBe(false);
   });
 
   it("existing file: replaces content; old version backed up then cleaned", async () => {
@@ -116,13 +116,13 @@ describe("atomicWriteFile", () => {
       bytesOf("v2\n"),
     );
     expect(readText(f.root, "x.md")).toBe("v2\n");
-    expect(fs.existsSync(path.join(f.root, "x.sync-tmp.md"))).toBe(false);
-    expect(fs.existsSync(path.join(f.root, "x.sync-bak.md"))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, "x.ges-tmp.md"))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, "x.ges-bak.md"))).toBe(false);
   });
 
   it("afterCommit runs after the file is in place but before backup cleanup", async () => {
     // Strict invariant: at the time afterCommit fires, the install
-    // is committed AND .sync-bak still exists. The cleanup is what
+    // is committed AND .ges-bak still exists. The cleanup is what
     // races against the user-perspective "we're done"; afterCommit
     // sees the canonical post-install state.
     fs.writeFileSync(path.join(f.root, "x.md"), "v1");
@@ -137,39 +137,39 @@ describe("atomicWriteFile", () => {
       async () => {
         observed.push({
           fileContent: readText(f.root, "x.md"),
-          bakExists: fs.existsSync(path.join(f.root, "x.sync-bak.md")),
+          bakExists: fs.existsSync(path.join(f.root, "x.ges-bak.md")),
         });
       },
     );
     expect(observed).toEqual([{ fileContent: "v2", bakExists: true }]);
     // Post-afterCommit: cleanup ran.
-    expect(fs.existsSync(path.join(f.root, "x.sync-bak.md"))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, "x.ges-bak.md"))).toBe(false);
   });
 
-  it("stale .sync-bak from a previous crash is overwritten by the rename-aside step", async () => {
-    // Setup: file exists at canonical path AND a leftover .sync-bak
+  it("stale .ges-bak from a previous crash is overwritten by the rename-aside step", async () => {
+    // Setup: file exists at canonical path AND a leftover .ges-bak
     // from a previous crash sits next to it. atomicWriteFile must
     // not throw on the rename(file → bak) collision.
     fs.writeFileSync(path.join(f.root, "x.md"), "current");
-    fs.writeFileSync(path.join(f.root, "x.sync-bak.md"), "leftover");
+    fs.writeFileSync(path.join(f.root, "x.ges-bak.md"), "leftover");
     await atomicWriteFile(
       f.vault as unknown as import("obsidian").Vault,
       "x.md",
       bytesOf("v3"),
     );
     expect(readText(f.root, "x.md")).toBe("v3");
-    expect(fs.existsSync(path.join(f.root, "x.sync-bak.md"))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, "x.ges-bak.md"))).toBe(false);
   });
 
-  it("stale .sync-tmp from a previous crash is silently overwritten", async () => {
-    fs.writeFileSync(path.join(f.root, "x.sync-tmp.md"), "old partial");
+  it("stale .ges-tmp from a previous crash is silently overwritten", async () => {
+    fs.writeFileSync(path.join(f.root, "x.ges-tmp.md"), "old partial");
     await atomicWriteFile(
       f.vault as unknown as import("obsidian").Vault,
       "x.md",
       bytesOf("fresh"),
     );
     expect(readText(f.root, "x.md")).toBe("fresh");
-    expect(fs.existsSync(path.join(f.root, "x.sync-tmp.md"))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, "x.ges-tmp.md"))).toBe(false);
   });
 });
 
@@ -184,8 +184,8 @@ describe("AtomicWriteRecovery.sweep", () => {
     f.cleanup();
   });
 
-  it("orphan .sync-tmp without ConflictStore in scope: dropped (Path A transient)", async () => {
-    fs.writeFileSync(path.join(f.root, "x.sync-tmp.md"), "partial");
+  it("orphan .ges-tmp without ConflictStore in scope: dropped (Path A transient)", async () => {
+    fs.writeFileSync(path.join(f.root, "x.ges-tmp.md"), "partial");
     const recovery = new AtomicWriteRecovery(
       f.vault as unknown as import("obsidian").Vault,
       f.store,
@@ -193,13 +193,13 @@ describe("AtomicWriteRecovery.sweep", () => {
     const result = await recovery.sweep();
     expect(result.cleaned).toBe(1);
     expect(result.restored).toBe(0);
-    expect(fs.existsSync(path.join(f.root, "x.sync-tmp.md"))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, "x.ges-tmp.md"))).toBe(false);
   });
 
-  it("only .sync-bak (no original): restored to canonical path", async () => {
+  it("only .ges-bak (no original): restored to canonical path", async () => {
     // Crash between step 2 (rename → bak) and step 3 (rename tmp →
     // file): backup is the only intact copy.
-    fs.writeFileSync(path.join(f.root, "x.sync-bak.md"), "previous");
+    fs.writeFileSync(path.join(f.root, "x.ges-bak.md"), "previous");
     const recovery = new AtomicWriteRecovery(
       f.vault as unknown as import("obsidian").Vault,
       f.store,
@@ -208,16 +208,16 @@ describe("AtomicWriteRecovery.sweep", () => {
     expect(result.cleaned).toBe(0);
     expect(result.restored).toBe(1);
     expect(readText(f.root, "x.md")).toBe("previous");
-    expect(fs.existsSync(path.join(f.root, "x.sync-bak.md"))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, "x.ges-bak.md"))).toBe(false);
   });
 
-  it("both .sync-bak AND original, file matches snapshot: backup is cleaned up", async () => {
-    // Crash between step 4 (recordSync) and step 5 (cleanup .sync-bak):
+  it("both .ges-bak AND original, file matches snapshot: backup is cleaned up", async () => {
+    // Crash between step 4 (recordSync) and step 5 (cleanup .ges-bak):
     // the install is committed AND the snapshot is updated, but the
     // cleanup didn't run. Recovery detects the SHA match and drops
     // the backup.
     fs.writeFileSync(path.join(f.root, "x.md"), "v2");
-    fs.writeFileSync(path.join(f.root, "x.sync-bak.md"), "v1");
+    fs.writeFileSync(path.join(f.root, "x.ges-bak.md"), "v1");
     f.store.set("x.md", {
       path: "x.md",
       remoteSha: await shaOf("v2"),
@@ -232,7 +232,7 @@ describe("AtomicWriteRecovery.sweep", () => {
     expect(result.cleaned).toBe(1);
     expect(result.restored).toBe(0);
     expect(readText(f.root, "x.md")).toBe("v2");
-    expect(fs.existsSync(path.join(f.root, "x.sync-bak.md"))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, "x.ges-bak.md"))).toBe(false);
   });
 
   it("both files exist, file mismatches snapshot: restore backup", async () => {
@@ -240,7 +240,7 @@ describe("AtomicWriteRecovery.sweep", () => {
     // (recordSync): file is new bytes, snapshot still has OLD sha.
     // The mismatch tells us we can't trust the install — restore.
     fs.writeFileSync(path.join(f.root, "x.md"), "newPartialOrNotCommitted");
-    fs.writeFileSync(path.join(f.root, "x.sync-bak.md"), "previous-good");
+    fs.writeFileSync(path.join(f.root, "x.ges-bak.md"), "previous-good");
     f.store.set("x.md", {
       path: "x.md",
       remoteSha: await shaOf("previous-good"),
@@ -255,13 +255,13 @@ describe("AtomicWriteRecovery.sweep", () => {
     expect(result.cleaned).toBe(0);
     expect(result.restored).toBe(1);
     expect(readText(f.root, "x.md")).toBe("previous-good");
-    expect(fs.existsSync(path.join(f.root, "x.sync-bak.md"))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, "x.ges-bak.md"))).toBe(false);
   });
 
   it("both files exist, no snapshot entry: conservative restore", async () => {
     // We can't verify; backup is the trustable copy.
     fs.writeFileSync(path.join(f.root, "x.md"), "unverified");
-    fs.writeFileSync(path.join(f.root, "x.sync-bak.md"), "known-good");
+    fs.writeFileSync(path.join(f.root, "x.ges-bak.md"), "known-good");
     const recovery = new AtomicWriteRecovery(
       f.vault as unknown as import("obsidian").Vault,
       f.store,
@@ -275,17 +275,17 @@ describe("AtomicWriteRecovery.sweep", () => {
   it("recursive walk: finds artifacts deep in subfolders", async () => {
     // Real vaults have nested folders; sweep must reach them all.
     fs.mkdirSync(path.join(f.root, "Notes/Sub/Deep"), { recursive: true });
-    fs.writeFileSync(path.join(f.root, "Notes/Sub/Deep/a.sync-tmp.md"), "x");
-    fs.writeFileSync(path.join(f.root, "Notes/Sub/b.sync-bak.md"), "y");
+    fs.writeFileSync(path.join(f.root, "Notes/Sub/Deep/a.ges-tmp.md"), "x");
+    fs.writeFileSync(path.join(f.root, "Notes/Sub/b.ges-bak.md"), "y");
     const recovery = new AtomicWriteRecovery(
       f.vault as unknown as import("obsidian").Vault,
       f.store,
     );
     const result = await recovery.sweep();
-    expect(result.cleaned).toBe(1); // a.sync-tmp.md
-    expect(result.restored).toBe(1); // b.sync-bak.md → b.md
+    expect(result.cleaned).toBe(1); // a.ges-tmp.md
+    expect(result.restored).toBe(1); // b.ges-bak.md → b.md
     expect(
-      fs.existsSync(path.join(f.root, "Notes/Sub/Deep/a.sync-tmp.md")),
+      fs.existsSync(path.join(f.root, "Notes/Sub/Deep/a.ges-tmp.md")),
     ).toBe(false);
     expect(readText(f.root, "Notes/Sub/b.md")).toBe("y");
   });
@@ -301,14 +301,14 @@ describe("AtomicWriteRecovery.sweep", () => {
   });
 
   it("modify-in-place forward-complete reports applied path (2.0.2-beta2)", async () => {
-    // The marker + .sync-tmp pair from Path C (modify-in-place
-    // strategy) gets forward-completed: rename sync-tmp over target,
+    // The marker + .ges-tmp pair from Path C (modify-in-place
+    // strategy) gets forward-completed: rename ges-tmp over target,
     // remove marker. Surface the target path in appliedPaths so the
     // caller can trigger reloadPlugin(id) when the target is under
     // configDir/plugins/<id>/.
     fs.writeFileSync(path.join(f.root, "x.md"), "old-bytes");
-    fs.writeFileSync(path.join(f.root, "x.sync-tmp.md"), "new-bytes");
-    fs.writeFileSync(path.join(f.root, ".x.md.sync-tmp."), "");
+    fs.writeFileSync(path.join(f.root, "x.ges-tmp.md"), "new-bytes");
+    fs.writeFileSync(path.join(f.root, ".x.md.ges-tmp."), "");
     const recovery = new AtomicWriteRecovery(
       f.vault as unknown as import("obsidian").Vault,
       f.store,
@@ -318,16 +318,16 @@ describe("AtomicWriteRecovery.sweep", () => {
     expect(result.restored).toBe(1);
     expect(result.appliedPaths).toEqual(["x.md"]);
     expect(readText(f.root, "x.md")).toBe("new-bytes");
-    expect(fs.existsSync(path.join(f.root, "x.sync-tmp.md"))).toBe(false);
-    expect(fs.existsSync(path.join(f.root, ".x.md.sync-tmp."))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, "x.ges-tmp.md"))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, ".x.md.ges-tmp."))).toBe(false);
   });
 
-  it("modify-in-place marker without sync-tmp: cleaned only, no applied path (2.0.2-beta2)", async () => {
+  it("modify-in-place marker without ges-tmp: cleaned only, no applied path (2.0.2-beta2)", async () => {
     // Marker without tmp = the modify completed and the cleanup
     // crashed mid-way. No new bytes appear; just remove the marker.
     // appliedPaths stays empty.
     fs.writeFileSync(path.join(f.root, "x.md"), "old-bytes");
-    fs.writeFileSync(path.join(f.root, ".x.md.sync-tmp."), "");
+    fs.writeFileSync(path.join(f.root, ".x.md.ges-tmp."), "");
     const recovery = new AtomicWriteRecovery(
       f.vault as unknown as import("obsidian").Vault,
       f.store,
@@ -336,15 +336,15 @@ describe("AtomicWriteRecovery.sweep", () => {
     expect(result.cleaned).toBe(1);
     expect(result.restored).toBe(0);
     expect(result.appliedPaths).toEqual([]);
-    expect(fs.existsSync(path.join(f.root, ".x.md.sync-tmp."))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, ".x.md.ges-tmp."))).toBe(false);
   });
 
-  it("sync-bak rollback: NOT reported in appliedPaths (rollback is not 'new bytes')", async () => {
+  it("ges-bak rollback: NOT reported in appliedPaths (rollback is not 'new bytes')", async () => {
     // Crash between rename(live → bak) and rename(tmp → live):
     // sweep restores bak → live. This is ROLLBACK to old bytes —
     // any running plugin already matches. Don't surface in
     // appliedPaths.
-    fs.writeFileSync(path.join(f.root, "y.sync-bak.md"), "old-bytes");
+    fs.writeFileSync(path.join(f.root, "y.ges-bak.md"), "old-bytes");
     const recovery = new AtomicWriteRecovery(
       f.vault as unknown as import("obsidian").Vault,
       f.store,
@@ -358,8 +358,8 @@ describe("AtomicWriteRecovery.sweep", () => {
   it("constants exported: SYNC_TMP_SUFFIX / SYNC_BAK_SUFFIX match the file suffixes", () => {
     // Pin the suffix shape so callers (gitignore-invariants etc.)
     // can reference the same constants without drift.
-    expect(SYNC_TMP_SUFFIX).toBe(".sync-tmp");
-    expect(SYNC_BAK_SUFFIX).toBe(".sync-bak");
+    expect(SYNC_TMP_SUFFIX).toBe(".ges-tmp");
+    expect(SYNC_BAK_SUFFIX).toBe(".ges-bak");
   });
 });
 
@@ -367,53 +367,53 @@ describe("AtomicWriteRecovery.sweep", () => {
 //
 // See docs/PSEUDO-MERGE-MODE.md §9.2 for the naming convention.
 describe("stagingPathFor", () => {
-  it("normal file → inserts .sync-bak before the extension", () => {
-    expect(stagingPathFor("Folder/note.md")).toBe("Folder/note.sync-bak.md");
+  it("normal file → inserts .ges-bak before the extension", () => {
+    expect(stagingPathFor("Folder/note.md")).toBe("Folder/note.ges-bak.md");
     expect(stagingPathFor("Plugins/foo/manifest.json")).toBe(
-      "Plugins/foo/manifest.sync-bak.json",
+      "Plugins/foo/manifest.ges-bak.json",
     );
     expect(stagingPathFor("Folder/image.png")).toBe(
-      "Folder/image.sync-bak.png",
+      "Folder/image.ges-bak.png",
     );
   });
 
-  it("hidden file with no extension → appends .sync-bak (no insertion)", () => {
-    expect(stagingPathFor(".gitignore")).toBe(".gitignore.sync-bak");
+  it("hidden file with no extension → appends .ges-bak (no insertion)", () => {
+    expect(stagingPathFor(".gitignore")).toBe(".gitignore.ges-bak");
     expect(stagingPathFor(".obsidian/.gitignore")).toBe(
-      ".obsidian/.gitignore.sync-bak",
+      ".obsidian/.gitignore.ges-bak",
     );
-    expect(stagingPathFor(".editorconfig")).toBe(".editorconfig.sync-bak");
+    expect(stagingPathFor(".editorconfig")).toBe(".editorconfig.ges-bak");
   });
 
-  it("extensionless file → appends .sync-bak (no insertion)", () => {
-    expect(stagingPathFor("README")).toBe("README.sync-bak");
-    expect(stagingPathFor("Folder/Makefile")).toBe("Folder/Makefile.sync-bak");
+  it("extensionless file → appends .ges-bak (no insertion)", () => {
+    expect(stagingPathFor("README")).toBe("README.ges-bak");
+    expect(stagingPathFor("Folder/Makefile")).toBe("Folder/Makefile.ges-bak");
   });
 
   it("file with multiple dots in name → insertion uses LAST extension", () => {
     expect(stagingPathFor("Folder/file.tar.gz")).toBe(
-      "Folder/file.tar.sync-bak.gz",
+      "Folder/file.tar.ges-bak.gz",
     );
     // Conflict-from sibling shape from ConflictStore.create; this is
     // the path shape that ConflictStore calls stagingPathFor with.
     expect(
       stagingPathFor("Folder/note.conflict-from-Phone-2026-05-22T15-30-00Z.md"),
     ).toBe(
-      "Folder/note.conflict-from-Phone-2026-05-22T15-30-00Z.sync-bak.md",
+      "Folder/note.conflict-from-Phone-2026-05-22T15-30-00Z.ges-bak.md",
     );
   });
 
-  it("`which='tmp'` variant uses .sync-tmp pre-suffix", () => {
+  it("`which='tmp'` variant uses .ges-tmp pre-suffix", () => {
     expect(stagingPathFor("Folder/note.md", "tmp")).toBe(
-      "Folder/note.sync-tmp.md",
+      "Folder/note.ges-tmp.md",
     );
-    expect(stagingPathFor(".gitignore", "tmp")).toBe(".gitignore.sync-tmp");
+    expect(stagingPathFor(".gitignore", "tmp")).toBe(".gitignore.ges-tmp");
   });
 });
 
 // ─── AtomicWriteRecovery SHA-verify (ConflictStore-owned siblings) ─────
 //
-// sweep must validate `.sync-tmp` content SHA against the
+// sweep must validate `.ges-tmp` content SHA against the
 // ConflictStore record's `theirsBlobSha` (when one exists) before
 // promoting it to finalPath. Corrupted / mismatched staging is
 // dropped + logged; the record is left for the next drain Phase B
@@ -422,7 +422,7 @@ describe("AtomicWriteRecovery SHA-verify (ConflictStore-owned siblings)", () => 
   // Fixture that wires AtomicWriteRecovery against both SnapshotStore
   // and ConflictStore so sweep can dispatch by ownership. We plant
   // a ConflictStore record manually (via create + remove final), then
-  // place a `.sync-tmp` staging file and exercise the sweep.
+  // place a `.ges-tmp` staging file and exercise the sweep.
 
   let f: ReturnType<typeof fixture>;
 
@@ -434,19 +434,19 @@ describe("AtomicWriteRecovery SHA-verify (ConflictStore-owned siblings)", () => 
     f.cleanup();
   });
 
-  it("sweep finds .sync-tmp with SHA matching record.theirsBlobSha → rename to finalPath", async () => {
+  it("sweep finds .ges-tmp with SHA matching record.theirsBlobSha → rename to finalPath", async () => {
     const { default: ConflictStore } = await import(
       "../../src/sync2/conflict-store"
     );
     const conflictStore = new ConflictStore({
       vault: f.vault as unknown as import("obsidian").Vault,
       configDir: ".obsidian",
-      selfPluginId: "github-easy-sync",
+      selfPluginId: "git-easy-sync",
     });
     await conflictStore.load();
     // create() lands the sibling at its final path via the new
-    // `.sync-bak` flow. To simulate the Step 3 crash, we need: meta
-    // persisted (record in store), `.sync-bak` content on disk,
+    // `.ges-bak` flow. To simulate the Step 3 crash, we need: meta
+    // persisted (record in store), `.ges-bak` content on disk,
     // final sibling missing.
     fs.mkdirSync(path.join(f.root, "Notes"), { recursive: true });
     fs.writeFileSync(path.join(f.root, "Notes/note.md"), "local content\n");
@@ -480,14 +480,14 @@ describe("AtomicWriteRecovery SHA-verify (ConflictStore-owned siblings)", () => 
     expect(fs.readFileSync(siblingAbs, "utf8")).toBe("theirs content\n");
   });
 
-  it("sweep finds .sync-tmp with SHA NOT matching record.theirsBlobSha → drop, leave record for drain Phase B", async () => {
+  it("sweep finds .ges-tmp with SHA NOT matching record.theirsBlobSha → drop, leave record for drain Phase B", async () => {
     const { default: ConflictStore } = await import(
       "../../src/sync2/conflict-store"
     );
     const conflictStore = new ConflictStore({
       vault: f.vault as unknown as import("obsidian").Vault,
       configDir: ".obsidian",
-      selfPluginId: "github-easy-sync",
+      selfPluginId: "git-easy-sync",
     });
     await conflictStore.load();
     fs.mkdirSync(path.join(f.root, "Notes"), { recursive: true });
@@ -528,9 +528,9 @@ describe("AtomicWriteRecovery SHA-verify (ConflictStore-owned siblings)", () => 
     expect(conflictStore.get(rec.id)).toBeDefined();
   });
 
-  it(".sync-tmp at a path with no ConflictStore record → dropped as Path A transient (even when conflictStore is in scope)", async () => {
+  it(".ges-tmp at a path with no ConflictStore record → dropped as Path A transient (even when conflictStore is in scope)", async () => {
     // Pin the dispatch: presence of conflictStore in the recovery
-    // constructor must NOT cause a Path A transient .sync-tmp (one
+    // constructor must NOT cause a Path A transient .ges-tmp (one
     // whose finalPath is just an ordinary user file, not a sibling)
     // to be treated as a forward-finalize candidate.
     const { default: ConflictStore } = await import(
@@ -539,13 +539,13 @@ describe("AtomicWriteRecovery SHA-verify (ConflictStore-owned siblings)", () => 
     const conflictStore = new ConflictStore({
       vault: f.vault as unknown as import("obsidian").Vault,
       configDir: ".obsidian",
-      selfPluginId: "github-easy-sync",
+      selfPluginId: "git-easy-sync",
     });
     await conflictStore.load();
-    // Place a .sync-tmp at a path that ConflictStore knows nothing
+    // Place a .ges-tmp at a path that ConflictStore knows nothing
     // about — e.g., from a crashed atomicWriteFile pull-replace.
     fs.mkdirSync(path.join(f.root, "Notes"), { recursive: true });
-    fs.writeFileSync(path.join(f.root, "Notes/regular.sync-tmp.md"), "partial");
+    fs.writeFileSync(path.join(f.root, "Notes/regular.ges-tmp.md"), "partial");
 
     const recovery = new AtomicWriteRecovery(
       f.vault as unknown as import("obsidian").Vault,
@@ -556,7 +556,7 @@ describe("AtomicWriteRecovery SHA-verify (ConflictStore-owned siblings)", () => 
     expect(result.cleaned).toBe(1);
     expect(result.restored).toBe(0);
     expect(
-      fs.existsSync(path.join(f.root, "Notes/regular.sync-tmp.md")),
+      fs.existsSync(path.join(f.root, "Notes/regular.ges-tmp.md")),
     ).toBe(false);
     // The "final" path (Notes/regular.md) was never created — drop is
     // correct because the bytes are transient, not destined.
@@ -572,13 +572,13 @@ describe("modifyMarkerPathFor + parseModifyMarkerPath", () => {
   it("round-trips a regular path: notes/folder/note.md", () => {
     const target = "notes/folder/note.md";
     const marker = modifyMarkerPathFor(target);
-    expect(marker).toBe("notes/folder/.note.md.sync-tmp.");
+    expect(marker).toBe("notes/folder/.note.md.ges-tmp.");
     expect(parseModifyMarkerPath(marker)).toBe(target);
   });
 
   it("round-trips a root-level path: note.md", () => {
     const marker = modifyMarkerPathFor("note.md");
-    expect(marker).toBe(".note.md.sync-tmp.");
+    expect(marker).toBe(".note.md.ges-tmp.");
     expect(parseModifyMarkerPath(marker)).toBe("note.md");
   });
 
@@ -586,7 +586,7 @@ describe("modifyMarkerPathFor + parseModifyMarkerPath", () => {
     const target = ".obsidian/.gitignore";
     const marker = modifyMarkerPathFor(target);
     // Two leading dots: one we always add + one from the target name.
-    expect(marker).toBe(".obsidian/..gitignore.sync-tmp.");
+    expect(marker).toBe(".obsidian/..gitignore.ges-tmp.");
     expect(parseModifyMarkerPath(marker)).toBe(target);
   });
 
@@ -595,23 +595,23 @@ describe("modifyMarkerPathFor + parseModifyMarkerPath", () => {
   });
 
   it("parseModifyMarkerPath returns null for a staging file shape", () => {
-    // .eslintrc.json.sync-tmp ends in .sync-tmp with NO trailing
+    // .eslintrc.json.ges-tmp ends in .ges-tmp with NO trailing
     // dot — it's an existing staging file for the hidden config
     // file `.eslintrc.json`. parseModifyMarkerPath must reject
     // it so the existing parseStagingPath stays authoritative for
     // that shape.
-    expect(parseModifyMarkerPath(".eslintrc.json.sync-tmp")).toBeNull();
+    expect(parseModifyMarkerPath(".eslintrc.json.ges-tmp")).toBeNull();
   });
 
   it("parseModifyMarkerPath returns null when basename lacks the leading dot", () => {
-    // A file that ends in `.sync-tmp.` but doesn't start with `.`
+    // A file that ends in `.ges-tmp.` but doesn't start with `.`
     // is not a marker (it's some user file that happens to have
     // the suffix). The leading dot is essential.
-    expect(parseModifyMarkerPath("notes/note.md.sync-tmp.")).toBeNull();
+    expect(parseModifyMarkerPath("notes/note.md.ges-tmp.")).toBeNull();
   });
 
   it("uses the exported suffix constant", () => {
-    expect(SYNC_MOD_MARKER_SUFFIX).toBe(".sync-tmp.");
+    expect(SYNC_MOD_MARKER_SUFFIX).toBe(".ges-tmp.");
   });
 });
 
@@ -625,11 +625,11 @@ describe("AtomicWriteRecovery — modify-in-place markers (forward-recovery)", (
   });
 
   it(
-    "marker + sync-tmp present + target present (partial) → " +
-      "rename sync-tmp over target (forward-complete)",
+    "marker + ges-tmp present + target present (partial) → " +
+      "rename ges-tmp over target (forward-complete)",
     async () => {
       // Simulates: modifyBinary crashed mid-write, leaving the
-      // target with partial bytes. The sync-tmp has the intended
+      // target with partial bytes. The ges-tmp has the intended
       // final state — recovery renames it over the target.
       const targetPath = "Notes/n.md";
       const newBytes = bytesOf("new content from upstream");
@@ -660,12 +660,12 @@ describe("AtomicWriteRecovery — modify-in-place markers (forward-recovery)", (
   );
 
   it(
-    "marker + sync-tmp present + target already has new bytes → " +
+    "marker + ges-tmp present + target already has new bytes → " +
       "rename overwrites (idempotent forward-complete)",
     async () => {
       // Simulates: modifyBinary + afterCommit completed but the
-      // marker / sync-tmp cleanup crashed. Recovery still renames;
-      // the result is byte-identical because sync-tmp has the same
+      // marker / ges-tmp cleanup crashed. Recovery still renames;
+      // the result is byte-identical because ges-tmp has the same
       // bytes as the live file.
       const targetPath = "Notes/n.md";
       const newBytes = bytesOf("new content");
@@ -691,8 +691,8 @@ describe("AtomicWriteRecovery — modify-in-place markers (forward-recovery)", (
   );
 
   it(
-    "marker + sync-tmp present + target missing → " +
-      "rename creates target from sync-tmp",
+    "marker + ges-tmp present + target missing → " +
+      "rename creates target from ges-tmp",
     async () => {
       const targetPath = "Notes/n.md";
       const newBytes = bytesOf("recovered");
@@ -718,7 +718,7 @@ describe("AtomicWriteRecovery — modify-in-place markers (forward-recovery)", (
   );
 
   it(
-    "marker present + sync-tmp missing → " +
+    "marker present + ges-tmp missing → " +
       "defensive cleanup of the marker (nothing to land)",
     async () => {
       const targetPath = "Notes/n.md";
@@ -730,7 +730,7 @@ describe("AtomicWriteRecovery — modify-in-place markers (forward-recovery)", (
       );
       const markerPath = modifyMarkerPathFor(targetPath);
       fs.writeFileSync(path.join(f.root, markerPath), "");
-      // No sync-tmp.
+      // No ges-tmp.
 
       const sweep = new AtomicWriteRecovery(
         f.vault as unknown as import("obsidian").Vault,
@@ -747,7 +747,7 @@ describe("AtomicWriteRecovery — modify-in-place markers (forward-recovery)", (
   );
 
   it(
-    "sync-tmp present + NO marker → " +
+    "ges-tmp present + NO marker → " +
       "existing Path A logic drops it as transient",
     async () => {
       // Mirror of "modify aborted before marker was created". The
@@ -784,7 +784,7 @@ describe("AtomicWriteRecovery — modify-in-place markers (forward-recovery)", (
       const tmpPath = stagingPathFor(targetPath, "tmp");
       fs.writeFileSync(path.join(f.root, tmpPath), Buffer.from(newBytes));
       const markerPath = modifyMarkerPathFor(targetPath);
-      expect(markerPath).toBe("Notes/..gitignore.sync-tmp.");
+      expect(markerPath).toBe("Notes/..gitignore.ges-tmp.");
       fs.writeFileSync(path.join(f.root, markerPath), "");
 
       const sweep = new AtomicWriteRecovery(

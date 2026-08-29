@@ -227,7 +227,7 @@ describe("SnapshotStore", () => {
     await store.load();
     expect(store.getConflictBranch()).toBeNull();
     store.setConflictBranch({
-      name: "github-easy-sync-conflicts-Obsidian-20260520143022-847",
+      name: "git-easy-sync-conflicts-Obsidian-20260520143022-847",
       head: "deadbeef".repeat(5),
     });
     await store.save();
@@ -235,7 +235,7 @@ describe("SnapshotStore", () => {
     const reloaded = newStore(vault);
     await reloaded.load();
     expect(reloaded.getConflictBranch()).toEqual({
-      name: "github-easy-sync-conflicts-Obsidian-20260520143022-847",
+      name: "git-easy-sync-conflicts-Obsidian-20260520143022-847",
       head: "deadbeef".repeat(5),
     });
   });
@@ -243,7 +243,7 @@ describe("SnapshotStore", () => {
   it("conflictBranch: clearConflictBranch resets to null", async () => {
     const store = newStore(vault);
     await store.load();
-    store.setConflictBranch({ name: "github-easy-sync-conflicts-X-1-001", head: "sha" });
+    store.setConflictBranch({ name: "git-easy-sync-conflicts-X-1-001", head: "sha" });
     store.clearConflictBranch();
     expect(store.getConflictBranch()).toBeNull();
   });
@@ -254,7 +254,7 @@ describe("SnapshotStore", () => {
       JSON.stringify({
         lastSyncCommitSha: "abc",
         files: {},
-        conflictBranch: { name: "github-easy-sync-conflicts-X-1-001" /* head missing */ },
+        conflictBranch: { name: "git-easy-sync-conflicts-X-1-001" /* head missing */ },
       }),
     );
     const store = newStore(vault);
@@ -279,7 +279,7 @@ describe("SnapshotStore", () => {
   it("clear() drops conflictBranch too (panic-button reset)", async () => {
     const store = newStore(vault);
     await store.load();
-    store.setConflictBranch({ name: "github-easy-sync-conflicts-X-1-001", head: "sha" });
+    store.setConflictBranch({ name: "git-easy-sync-conflicts-X-1-001", head: "sha" });
     store.clear();
     expect(store.getConflictBranch()).toBeNull();
   });

@@ -43,7 +43,7 @@
 
 | § | Фіча | Тригери | UNDO/REDO |
 |---|---|---|---|
-| 2.2.7 | diff-group ↔ clipboard (fenced `github-easy-sync` блок) | Ctrl+C/Ctrl+X (copy), Ctrl+V (paste) | plain edits + replay-парсер |
+| 2.2.7 | diff-group ↔ clipboard (fenced `git-easy-sync` блок) | Ctrl+C/Ctrl+X (copy), Ctrl+V (paste) | plain edits + replay-парсер |
 | 2.2.12 | злиття 2/3/4 diff-groups в одну | Delete/Backspace/Ctrl+Y/paste-між-групами | plain edits + replay |
 | 2.2.13 | re-resolve: після КОЖНОЇ зміни ver-block → `diff2()` на групі | будь-яка правка ver-block | plain edits + replay |
 | 2.2.5 п.3 | gesture, що ініціює злиття (єдиний `\n` між групами) | Delete/Backspace/Ctrl+Y | (тригер 2.2.12) |

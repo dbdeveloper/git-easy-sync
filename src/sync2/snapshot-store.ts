@@ -9,7 +9,7 @@ import { FileSnapshot } from "./types";
 // written by Sync2Manager after successful pushes/pulls. Never sent to
 // the remote — sync2's design treats per-device sync state as private.
 export const SYNC2_MANIFEST_FILE_NAME =
-  "github-easy-sync-metadata.json" as const;
+  "git-easy-sync-metadata.json" as const;
 
 // Per-invariant-gitignore record. mtime+hash lets us short-circuit
 // the rewrite check: if the on-disk mtime hasn't moved since we last

@@ -30,7 +30,7 @@ import { Vault } from "../../mock-obsidian";
 //   - delete + clearAll do NOT touch vault siblings
 
 const CONFIG_DIR = ".obsidian";
-const SELF_PLUGIN_ID = "github-easy-sync";
+const SELF_PLUGIN_ID = "git-easy-sync";
 const DEVICE = "test-device";
 
 function fixture(): {
@@ -181,7 +181,7 @@ describe("ConflictStore", () => {
       // meta.json persisted; tmp atomic-write artifact cleaned.
       expect(fs.existsSync(path.join(dir, "meta.json"))).toBe(true);
       expect(fs.existsSync(path.join(dir, "meta.json.tmp"))).toBe(false);
-      // Sibling staging is renamed from `.sync-tmp` pre-suffix to its
+      // Sibling staging is renamed from `.ges-tmp` pre-suffix to its
       // final siblingPath atomically (see §9.4).
       expect(fs.existsSync(path.join(f.root, rec.siblingPath))).toBe(true);
       expect(readVaultText(f.root, rec.siblingPath)).toBe("theirs content\n");
@@ -378,7 +378,7 @@ describe("ConflictStore", () => {
     it("step-3 done then user externally deletes vault sibling → record stays indexed", async () => {
       // load() never resurrects vault content. The record loads from
       // meta.json; the missing sibling becomes a drain Phase B drop
-      // signal on the next sync. Vault-level `.sync-tmp` staging is
+      // signal on the next sync. Vault-level `.ges-tmp` staging is
       // already renamed to the final siblingPath by the time
       // create() returns — there is no backup file to re-emit from.
       await f.store.load();

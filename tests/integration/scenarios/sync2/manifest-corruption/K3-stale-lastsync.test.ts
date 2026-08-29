@@ -30,7 +30,7 @@ import {
 // currentHead so the next push reconciles against the live branch
 // head. No crash, no data loss.
 
-const MANIFEST_REL = ".obsidian/github-easy-sync-metadata.json";
+const MANIFEST_REL = ".obsidian/git-easy-sync-metadata.json";
 
 describe.skipIf(!integrationEnabled())(
   "sync2 K3 — stale lastSyncCommitSha (unreachable on remote)",

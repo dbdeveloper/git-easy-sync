@@ -16,30 +16,30 @@
 // CORRECTNESS NOTE — why marker file, not SHA comparison
 // ────────────────────────────────────────────────────────
 // The bootloader runs BEFORE the snapshot store loads, so it has no
-// "ground truth" SHA to verify a sync-tmp file's integrity against.
-// SHA(sync-tmp) computed at startup is just the hash of whatever
+// "ground truth" SHA to verify a ges-tmp file's integrity against.
+// SHA(ges-tmp) computed at startup is just the hash of whatever
 // bytes happen to be on disk — if the write was interrupted, those
 // bytes are partial and the SHA is meaningless. A previous draft of
-// this bootloader compared SHA(file) to SHA(sync-tmp) and applied
+// this bootloader compared SHA(file) to SHA(ges-tmp) and applied
 // when they differed; that incorrectly applied corrupted bytes when
-// sync-tmp was partial.
+// ges-tmp was partial.
 //
-// The fix: a separate marker file `.<basename>.<ext>.sync-tmp.` is
-// written by the drain ONLY AFTER the sync-tmp write fully
+// The fix: a separate marker file `.<basename>.<ext>.ges-tmp.` is
+// written by the drain ONLY AFTER the ges-tmp write fully
 // completes. The bootloader uses MARKER PRESENCE as the integrity
 // signal:
 //
-//   marker present + sync-tmp present  →  sync-tmp is verified complete,
+//   marker present + ges-tmp present  →  ges-tmp is verified complete,
 //                                          apply forward (Case A)
-//   marker present + sync-tmp absent   →  swap completed before crash,
+//   marker present + ges-tmp absent   →  swap completed before crash,
 //                                          remove orphan marker (Case B)
-//   marker absent  + sync-tmp present  →  write was incomplete OR
+//   marker absent  + ges-tmp present  →  write was incomplete OR
 //                                          marker write never landed;
-//                                          drop sync-tmp (Case C).
+//                                          drop ges-tmp (Case C).
 //                                          Next sync re-pulls.
-//   marker absent  + sync-tmp absent   →  nothing pending (Case D)
+//   marker absent  + ges-tmp absent   →  nothing pending (Case D)
 //
-// The marker filename shape `.<basename>.<ext>.sync-tmp.` matches
+// The marker filename shape `.<basename>.<ext>.ges-tmp.` matches
 // the modify-in-place marker convention from PSEUDO-MERGE-MODE
 // §19.1. This is intentional: the existing AtomicWriteRecovery.sweep
 // (which runs LATER in onload, at initSync2 time) already handles
@@ -57,18 +57,18 @@ const SELF_UPDATE_FILES = ["main.js", "manifest.json", "styles.css"];
 
 export interface BootloaderDeps {
   adapter: DataAdapter;
-  pluginDir: string; // e.g. ".obsidian/plugins/github-easy-sync"
+  pluginDir: string; // e.g. ".obsidian/plugins/git-easy-sync"
   // Closure that invokes app.plugins.reloadPlugin(<self id>). Wrapped
   // so tests can capture the call without touching Obsidian's
   // internal API and so the bootloader stays platform-agnostic.
   reloadPlugin: () => void;
   // Optional. Surfaces `Plugin "<label>" updated` so the user sees
   // SOMETHING happen before the reload fires. Always our own plugin —
-  // the label names it (e.g. "github-easy-sync"), matching the
+  // the label names it (e.g. "git-easy-sync"), matching the
   // sibling-plugin reload notice in main.ts.
   notice?: (msg: string, durationMs?: number) => void;
   // Display label for OUR plugin (manifest.id). Used in the notice.
-  // Falls back to "github-easy-sync" when omitted.
+  // Falls back to "git-easy-sync" when omitted.
   pluginLabel?: string;
   // Optional. Logger sink for diagnostic lines. Falls back to
   // console in production (logger isn't initialised yet at
@@ -83,7 +83,7 @@ export interface BootloaderDeps {
 type FileResult =
   | { kind: "no-pending" }
   | { kind: "cleanup-marker-orphan" }
-  | { kind: "drop-orphan-sync-tmp" }
+  | { kind: "drop-orphan-ges-tmp" }
   | { kind: "applied" }
   | { kind: "failed"; reason: string };
 
@@ -93,10 +93,10 @@ export type BootloaderResult =
   | { action: "failed"; reason: string; failedFile: string };
 
 // Derives the staging filename for an original. main.js →
-// main.sync-tmp.js. manifest.json → manifest.sync-tmp.json.
+// main.ges-tmp.js. manifest.json → manifest.ges-tmp.json.
 function stagingNameFor(
   fileName: string,
-  suffix: "sync-tmp" | "sync-bak",
+  suffix: "ges-tmp" | "ges-bak",
 ): string {
   const dotIdx = fileName.lastIndexOf(".");
   if (dotIdx <= 0) return `${fileName}.${suffix}`;
@@ -105,9 +105,9 @@ function stagingNameFor(
   return `${base}.${suffix}${ext}`;
 }
 
-// Derives the marker filename: .<basename>.<ext>.sync-tmp.
+// Derives the marker filename: .<basename>.<ext>.ges-tmp.
 function markerNameFor(fileName: string): string {
-  return `.${fileName}.sync-tmp.`;
+  return `.${fileName}.ges-tmp.`;
 }
 
 async function recoverOneFile(
@@ -116,14 +116,14 @@ async function recoverOneFile(
 ): Promise<FileResult> {
   const { adapter, pluginDir, log } = deps;
   const finalPath = `${pluginDir}/${fileName}`;
-  const tmpPath = `${pluginDir}/${stagingNameFor(fileName, "sync-tmp")}`;
+  const tmpPath = `${pluginDir}/${stagingNameFor(fileName, "ges-tmp")}`;
   const markerPath = `${pluginDir}/${markerNameFor(fileName)}`;
-  const bakPath = `${pluginDir}/${stagingNameFor(fileName, "sync-bak")}`;
+  const bakPath = `${pluginDir}/${stagingNameFor(fileName, "ges-bak")}`;
 
   const markerExists = await adapter.exists(markerPath);
   const tmpExists = await adapter.exists(tmpPath);
 
-  // Case A: marker + sync-tmp → apply forward
+  // Case A: marker + ges-tmp → apply forward
   if (markerExists && tmpExists) {
     try {
       if (await adapter.exists(finalPath)) {
@@ -150,12 +150,12 @@ async function recoverOneFile(
       return { kind: "failed", reason: "apply-failed" };
     }
     log?.(
-      `Self-update bootloader: ${fileName} marker + sync-tmp → applied forward`,
+      `Self-update bootloader: ${fileName} marker + ges-tmp → applied forward`,
     );
     return { kind: "applied" };
   }
 
-  // Case B: marker without sync-tmp → cleanup orphan marker
+  // Case B: marker without ges-tmp → cleanup orphan marker
   if (markerExists && !tmpExists) {
     try {
       await adapter.remove(markerPath);
@@ -168,19 +168,19 @@ async function recoverOneFile(
     return { kind: "cleanup-marker-orphan" };
   }
 
-  // Case C: sync-tmp without marker → drop
+  // Case C: ges-tmp without marker → drop
   if (!markerExists && tmpExists) {
     try {
       await adapter.remove(tmpPath);
     } catch (err) {
-      log?.(`Failed to drop ${fileName} incomplete sync-tmp`, {
+      log?.(`Failed to drop ${fileName} incomplete ges-tmp`, {
         err: `${err}`,
       });
     }
     log?.(
-      `Self-update bootloader: ${fileName} incomplete sync-tmp dropped (no marker)`,
+      `Self-update bootloader: ${fileName} incomplete ges-tmp dropped (no marker)`,
     );
-    return { kind: "drop-orphan-sync-tmp" };
+    return { kind: "drop-orphan-ges-tmp" };
   }
 
   // Case D: nothing pending
@@ -194,14 +194,14 @@ export async function runSelfUpdateBootloader(
     reloadPlugin,
     notice,
     log,
-    pluginLabel = "github-easy-sync",
+    pluginLabel = "git-easy-sync",
     scheduleReload = (cb, delay) => setTimeout(cb, delay),
   } = deps;
   const logFn =
     log ??
     ((msg: string, ctx?: Record<string, unknown>) => {
       try {
-        console.log(`[github-easy-sync bootloader] ${msg}`, ctx ?? {});
+        console.log(`[git-easy-sync bootloader] ${msg}`, ctx ?? {});
       } catch {
         // ignore
       }
@@ -221,7 +221,7 @@ export async function runSelfUpdateBootloader(
       appliedFiles.push(fileName);
     }
     // Cases B/C/D for this file: continue with next file. The
-    // changes happened (marker cleared, sync-tmp dropped) but don't
+    // changes happened (marker cleared, ges-tmp dropped) but don't
     // require reload by themselves.
   }
 

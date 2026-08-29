@@ -427,11 +427,11 @@ describe("§2.2.12 — zero-size docs & EOL-less last line (added later; resolve
   });
 });
 
-// §2.2.7 — clipboard copy/cut/paste of a diff-group as the ```github-easy-sync```
+// §2.2.7 — clipboard copy/cut/paste of a diff-group as the ```git-easy-sync```
 // (≪/==/≫ + `- `/`+ ` + ↵) format. NOT BUILT YET (Tier-2). Documented as the spec
 // gap; flip these to real tests when the clipboard subsystem lands.
 describe("§2.2.7 — diff-group clipboard format (NOT BUILT — Tier-2 gap)", () => {
-  it.todo("(2) a selected diff-group copies to ```github-easy-sync``` with ≪/==/≫ + `- `/`+ ` + ↵");
+  it.todo("(2) a selected diff-group copies to ```git-easy-sync``` with ≪/==/≫ + `- `/`+ ` + ↵");
   it.todo("(3a) pasting that block onto a normal line converts it BACK into a diff-group");
   it.todo("(3b) pasting it inside a ver-block (or another editor) inserts as-is");
   it.todo("(4/5) malformed block (any 4a–4f rule fails) pastes as-is, no conversion");

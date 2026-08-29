@@ -29,7 +29,7 @@ import {
 // next syncAll re-aligns with remote via the no-op tree skip (SHAs
 // already match, no spurious commit lands).
 
-const MANIFEST_REL = ".obsidian/github-easy-sync-metadata.json";
+const MANIFEST_REL = ".obsidian/git-easy-sync-metadata.json";
 
 describe.skipIf(!integrationEnabled())(
   "sync2 K1 — invalid JSON in snapshot manifest",

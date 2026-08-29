@@ -59,7 +59,7 @@ export class TokenExpiredModal extends Modal {
     this.titleEl.setText(
       mobile
         ? "GitHub token expired"
-        : "GitHub Easy Sync — GitHub token expired or invalid",
+        : "Git Easy Sync — GitHub token expired or invalid",
     );
     this.contentEl.empty();
 
@@ -110,7 +110,7 @@ export class TokenExpiredModal extends Modal {
     // The class makes the button row WRAP + center (styles.css) so on a narrow
     // phone screen no button is pushed off the edge (field-reported).
     const buttons = new Setting(this.contentEl);
-    buttons.settingEl.addClass("github-easy-sync-token-modal-buttons");
+    buttons.settingEl.addClass("git-easy-sync-token-modal-buttons");
     buttons
       .addButton((btn) =>
         btn

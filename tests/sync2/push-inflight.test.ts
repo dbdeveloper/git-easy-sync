@@ -15,7 +15,7 @@ import {
 // exercised end-to-end in sync2-manager.test.ts ("FIX: crash gap WITH the push-inflight
 // marker"); these cover the marker file's own fault-tolerance guarantees.
 
-const PLUGIN_ID = "github-easy-sync";
+const PLUGIN_ID = "git-easy-sync";
 const markerRel = `.obsidian/plugins/${PLUGIN_ID}/${PUSH_INFLIGHT_FILE_NAME}`;
 
 function makeVault() {

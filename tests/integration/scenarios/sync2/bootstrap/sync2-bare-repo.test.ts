@@ -68,7 +68,7 @@ import {
         expect(files).toContain(".gitignore");
         expect(files).toContain(".obsidian/.gitignore");
         expect(files).toContain(
-          ".obsidian/plugins/github-easy-sync/.gitignore",
+          ".obsidian/plugins/git-easy-sync/.gitignore",
         );
         // No user notes were written, so nothing else should appear.
         expect(files).toHaveLength(3);
@@ -93,7 +93,7 @@ import {
         expect(files).toContain(".gitignore");
         expect(files).toContain(".obsidian/.gitignore");
         expect(files).toContain(
-          ".obsidian/plugins/github-easy-sync/.gitignore",
+          ".obsidian/plugins/git-easy-sync/.gitignore",
         );
         // sync2 normalises text bytes (CRLF→LF, trailing newline) before
         // push — see text-normalize.ts. So the bytes that landed on

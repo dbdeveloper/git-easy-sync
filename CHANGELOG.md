@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **GitHub Easy Sync** are documented in this
+All notable changes to **Git Easy Sync** are documented in this
 file. The format roughly follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html)

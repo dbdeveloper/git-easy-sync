@@ -750,7 +750,7 @@ head=…)`) працює тільки коли `base` — це справжня,
 
 1. **Ім'я гілки персистується ДО першого мережевого виклику, що її торкається — не після.** Ім'я
    формується за канонічним шаблоном (`PSEUDO-MERGE-MODE.md §4.3`):
-   `github-easy-sync-conflicts-<deviceLabel>-<YYYYMMDDHHMMSS>-<mmm>`. Момент вибору імені й персист
+   `git-easy-sync-conflicts-<deviceLabel>-<YYYYMMDDHHMMSS>-<mmm>`. Момент вибору імені й персист
    `conflictBranchName` у drain-журнал (§V, `persistDrainState()`) — ПЕРШИЙ крок, ще ДО спроби
    створити чи запушити гілку. Тоді після краху це ім'я завжди відоме, незалежно від того, чи встиг
    сам push відбутись:

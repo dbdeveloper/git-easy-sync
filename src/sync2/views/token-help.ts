@@ -20,7 +20,7 @@
 export const GITHUB_TOKENS_URL =
   "https://github.com/settings/personal-access-tokens";
 export const PLUGIN_README_URL =
-  "https://github.com/dbdeveloper/github-easy-sync/blob/main/README.md#github-token-setup";
+  "https://github.com/dbdeveloper/git-easy-sync/blob/main/README.md#github-token-setup";
 
 // Renders a self-contained help box into `parent` and returns the box
 // element so the caller can remove or re-render it. The box carries a

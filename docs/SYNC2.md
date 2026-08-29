@@ -2,7 +2,7 @@
 
 ## Abstract
 
-This document specifies the engine layer of the GitHub Easy Sync
+This document specifies the engine layer of the Git Easy Sync
 plugin. Where [PSEUDO-MERGE-MODE.md](./PSEUDO-MERGE-MODE.md)
 describes the abstract algorithm by which conflicting edits across
 devices are resolved through filesystem operations, this document
@@ -2094,7 +2094,7 @@ short enough that the reload feels immediate to the user.
 
 ### 11.4 Self-reload — the special case
 
-Updating OUR OWN plugin (`github-easy-sync`) is recursive: the
+Updating OUR OWN plugin (`git-easy-sync`) is recursive: the
 file being swapped is the file the running code came from.
 On POSIX (macOS, Linux, Capacitor Android-on-Chromium), atomic
 rename of an open file works at the filesystem layer — the V8
@@ -2358,7 +2358,7 @@ merge terminology. Stored locally in the snapshot store
 during pull-side reconciliation.
 
 **Batch** — A unit of synchronisation work persisted on disk under
-`.obsidian/plugins/github-easy-sync/.push-queue/<id>/`. Holds the
+`.obsidian/plugins/git-easy-sync/.push-queue/<id>/`. Holds the
 files about to be committed, their target commit message, and the
 parent commit SHA the push will build on.
 
@@ -2371,7 +2371,7 @@ commits, an author, a committer, and a message. The unit of
 historical record in git.
 
 **Conflict branch** — A per-device GitHub branch named
-`github-easy-sync-conflicts-<deviceLabel>-<timestamp>-<msec>` to
+`git-easy-sync-conflicts-<deviceLabel>-<timestamp>-<msec>` to
 which the device's local version of every conflicting file is
 pushed. Invisible to other devices until finalised through a
 merge-commit on `main`.
@@ -2381,7 +2381,7 @@ a vault path to its sibling file, the remote content's SHA, the
 remote device's label, and cached `(mtime, size, sha)` triples for
 fast freshness checks. Stored on disk as one
 `meta.json` per record under
-`.obsidian/plugins/github-easy-sync/.conflicts/<id>/`.
+`.obsidian/plugins/git-easy-sync/.conflicts/<id>/`.
 
 **Conflict store** — The in-memory plus on-disk index of all active
 conflict records. The single source of truth for "what is in
@@ -2446,7 +2446,7 @@ solo batch by the queue (never folded into other user batches).
 **Snapshot store** — The local persistent record of "what each path
 looked like in the version of the repository this device most
 recently synchronized against." Stored at
-`.obsidian/plugins/github-easy-sync/github-easy-sync-metadata.json`.
+`.obsidian/plugins/git-easy-sync/git-easy-sync-metadata.json`.
 Used by the change detector and by pull-side reconciliation to
 distinguish "this file changed locally" from "this file changed
 remotely" from "this file changed on both sides."

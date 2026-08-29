@@ -329,7 +329,7 @@ Root-блок ховає `.*` на будь-якій глибині, тож пі
 last-match:
 
 ```
-# syncConfigDir=false — github-easy-sync
+# syncConfigDir=false — git-easy-sync
 *
 ```
 
@@ -442,7 +442,7 @@ freshness-облік конкретних керованих областей.
 вирізати? **Відповідь: не знає і не мусить.** Він шукає не текст, а **маркери**:
 
 ```
-INVARIANT_BEGIN = "# ===== github-easy-sync invariants — DO NOT EDIT ====="
+INVARIANT_BEGIN = "# ===== git-easy-sync invariants — DO NOT EDIT ====="
 INVARIANT_END   = "# ===== end of invariants ====="
 ```
 
@@ -517,7 +517,7 @@ INVARIANT_END   = "# ===== end of invariants ====="
 записали, і тим, як ріжемо відрізок, — інакше ремонт мовчки не спрацьовує ніколи.
 Рекомендація — **байти UTF-8**, і не гіпотетично: не-ASCII у цих файлах присутній **уже
 сьогодні**, і в маркерах, і в тілі. `INVARIANT_BEGIN` — це
-`# ===== github-easy-sync invariants — DO NOT EDIT =====` (`gitignore-invariants.ts:12`,
+`# ===== git-easy-sync invariants — DO NOT EDIT =====` (`gitignore-invariants.ts:12`,
 em dash U+2014), а в тілі — рядок `# Per-device state — never propagate between machines.`
 (`:53`). Тобто вимогу пінити одиниці **не можна відкласти як передчасну**. Брати наявний
 `calculateGitBlobSHA`: він і так прив'язує довжину всередині preimage (`blob <len>\0`), тож
@@ -601,7 +601,7 @@ em dash U+2014), а в тілі — рядок `# Per-device state — never pro
 її текст фіксований і ми знаємо його точно. Правило видалення:
 
 ```
-знайти рядок, що дорівнює "# syncConfigDir=false — github-easy-sync"
+знайти рядок, що дорівнює "# syncConfigDir=false — git-easy-sync"
    → видалити його
    → і НАСТУПНИЙ рядок, якщо він точно "*"
 ```

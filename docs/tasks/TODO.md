@@ -62,7 +62,7 @@
                   на пам'ять про попередження з кроку 1.
 
 5. ✅ DONE. Зберігати persistent ознаку "token expired" у вигляді файлу-мітки `token_expired` в каталозі
-   `.obsidian/plugins/github-easy-sync/.runtime/`, який витирати після відновлення зв'язку. Ми точно знаємо точки, де
+   `.obsidian/plugins/git-easy-sync/.runtime/`, який витирати після відновлення зв'язку. Ми точно знаємо точки, де
    виникає
    ця помилка (або пропадає, бо зв'язок установлено успішно) тому можемо абсолютно точно встановлювати цей файл чи
    видаляти його. А потім цей файл можна читати і використовувати в Settings для показу відповідних повідомлень навіть
@@ -82,17 +82,17 @@
 
 7. ✅ DONE: рядок "GitHub*" в statusbar повинен бути "клікабельним" і показувати statusbar меню, яке для
    неініціалізованого
-   github-easy-sync plugin повине мати два рядки (схоже як стандартний неініціалізований плагін Sync). Назва
-   "GitHub Easy Sync" береться з manifest.json, не констатна назва):
+   git-easy-sync plugin повине мати два рядки (схоже як стандартний неініціалізований плагін Sync). Назва
+   "Git Easy Sync" береться з manifest.json, не констатна назва):
    ```
-   GitHub Easy Sync: Uninitialized  # сірим кольором (перевірка settings GitHub token/Owner/Repository/Repository branch на поржні значення)
+   Git Easy Sync: Uninitialized  # сірим кольором (перевірка settings GitHub token/Owner/Repository/Repository branch на поржні значення)
    -------------------------------
    Settings
    ```
 
    також тут може бути повідомлення про expired token
    ```
-   GitHub Easy Sync: Token expired              # сірим кольором (якщо існу єфайл .token_expired десь в plugin/github-easy-sync)
+   Git Easy Sync: Token expired              # сірим кольором (якщо існу єфайл .token_expired десь в plugin/git-easy-sync)
    -------------------------------
    Sync All                                     # завжди commit + drain незалежно від значення в Settings
    Commit all changed files
@@ -126,13 +126,13 @@
     видно чиї це Settings, і версію. Може ще бути посилання на GitHub repo десь маленьким лінком типу "(repo)"
     Брати такі значення з manifest.json:
     ```
-      "name": "GitHub Easy Sync",
+      "name": "Git Easy Sync",
       "version": "2.0.2-beta",
-      "authorUrl": "https://github.com/dbdeveloper/github-easy-sync",
+      "authorUrl": "https://github.com/dbdeveloper/git-easy-sync",
     ```
     "{name} {version} ([repo]({authorUrl}))"
     буде щось таке:
-    "GitHub Easy Sync 2.0.2-beta (repo)"
+    "Git Easy Sync 2.0.2-beta (repo)"
 
 11. ✅ DONE: До речі, а diff-editor толерує файли з `\r\n`, а не тільки `\n`? Що станеться, якщо користувач відключить
     auto-canonicalize і в файлах будуть такі закінчення рядків?
@@ -226,11 +226,11 @@
 
 19. Додати коментар (див коментар "HERE:") в `.obsidian/.gitignore` :
     ```
-    # ===== github-easy-sync invariants — DO NOT EDIT =====
+    # ===== git-easy-sync invariants — DO NOT EDIT =====
     # Editing this block triggers a rewrite to canonical on next load.
     
     # Per-device state — never propagate between machines.
-    github-easy-sync-metadata.json
+    git-easy-sync-metadata.json
     workspace.json
     workspace-mobile.json
     community-plugins.json
@@ -445,7 +445,7 @@
     Ще б я змінював при цьому колір слова "GitHub" в statusbar на червоний.
     Також хотілось би, щоб колір іконки "Sync" в ribbon також змінювався на червоний, його hint містив повідомлення
     "Token expired" і клац по цій іконці завжди викликав появу модального вікна:
-    "GitHub Easy Sync — GitHub token expired or invalid".
+    "Git Easy Sync — GitHub token expired or invalid".
     Зараз це модальне вікно з'являється, але якщо його закрити ([X]), тоді при наступному "Sync" воно вже не з'являється
     (а мусило б!), а тимчасово виникає випливаюче повідомлення: "Error syncing. kt: Failed to get branch head sha,
     status 401".
@@ -467,10 +467,10 @@
     І ЩЕ: Червоний колір іконки Sync в ribbon і слова "GitHub" в statusbar повинні відновлюватись при старті програми, 
           якщо файл-мітка "token_expired" все ще присутній в `.runtime/`.
 
-    Важливе доповнення! Автоматичні операції (такі як Sync при старті Obsidian+github-easy-sync plugin), чи періодичні
+    Важливе доповнення! Автоматичні операції (такі як Sync при старті Obsidian+git-easy-sync plugin), чи періодичні
     sync, бо встановлено в settings "Sync strategy": "On interval" при наявності файла-мітка "token_expired"
     в `.runtime/` відбуваються "тихо", тобто без показу модального вікна 
-    "GitHub Easy Sync — GitHub token expired or invalid", єдине що вони показують, так це короткочасне випливаюче 
+    "Git Easy Sync — GitHub token expired or invalid", єдине що вони показують, так це короткочасне випливаюче 
     повідомлення "Sync skipped: token expired" замість "Sync done".
 
     TEST в "Settings" – це єдине місце, яке абсолютно не залежить від файлу "token_expired", і так, успішне виконання test в settings також здатне прибрати цей файл, тільки цього швидше за все ніколи не             
@@ -480,7 +480,7 @@
     завершується при ітеративному виклику (ribbon, commands) - з появою modal dialog, автоматичний запуск -
     появою короткочасного випливаючого повідомлення: "Sync skipped: token expired" замість "Sync done".
 
-    І ще - дві різні версії модальних вікна ""GitHub Easy Sync — GitHub token expired or invalid":
+    І ще - дві різні версії модальних вікна ""Git Easy Sync — GitHub token expired or invalid":
       1. (так що є) Для desktop
       2. коротша і менша - для mobile devices
    
@@ -515,9 +515,9 @@
     1. створив новий Obsidian Vault: `/Users/dbdeveloper/My Obsidian Vault`
     2. створив новий private GitHub repo (з нуля, без README, без .gitignore, без license) - `My-Obsidian-Vault`
     3. створив для нього fine-grained key
-    4. встановив в Obsidian Vault "My Obsidian Vault" plugin "BRAT" і через нього встановиви github-easy-sync плагін
+    4. встановив в Obsidian Vault "My Obsidian Vault" plugin "BRAT" і через нього встановиви git-easy-sync плагін
        з мого repo
-    5. зайшов в Settings плагіну github-easy-sync і встановив правильні значення "GitHub token", 
+    5. зайшов в Settings плагіну git-easy-sync і встановив правильні значення "GitHub token", 
        Owner ("new-username12345"), Repository ("My-Obsidian-Vault") і Repository branch ("main").
     6. запустив [test] і отримав помилку — див. docs/tasks/imgs/bug-60-1.png (і здавалось би, що 
        це правильно, бо такого branch ("main") ще в GitHub repo немає (він нульовий). Однак! Якщо я 
@@ -546,7 +546,7 @@
     за timestamp-таблицею, в якій кожний рядок являє собою запис з логу. Пропоную в Settings додати кнопку для перегляду 
     логу, і при цьому генерувати тимчасовий md-файл і відкривати його як звичайний md-файл (readonly, якщо можливо).
     Також варто дати можливість користувачу за потреби копіювати з цієї таблиці записи в clipboard. Сам файл в корні 
-    Vault (`github-easy-sync.log`) користувач може відкривати іншими засобами або копіювати, перейменовувати/видаляти як 
+    Vault (`git-easy-sync.log`) користувач може відкривати іншими засобами або копіювати, перейменовувати/видаляти як 
     заманеться. До речі, останнє (delete)) має якось детектитись системою логування, щоб це не зупиняло логування, а 
     одразу ж створювався новий лог-файл, якщо в settings увімкнено логування. Цей файл не dot-file, тому ondelete його 
     втрату побачить одразу.
@@ -661,12 +661,12 @@
 
 Оновлюй свої знання про останній статус, і продовжуємо працювати далі. Після останнього push ми виконали три великі дії:
 
-1. ✅ DONE: перенесли всі каталоги і файли, необхідні для роботи плагіну github-easy-sync з
+1. ✅ DONE: перенесли всі каталоги і файли, необхідні для роботи плагіну git-easy-sync з
    `.obsidian/plugins/<plugin-id>/` в
    підкаталог `.obsidian/plugins/<plugin-id>/.runtime`, що зменшило безлад і покращило контроль над локальними
    даними, які ніколи не мають потрапити на сервер github в repo, щоб не спричинити збою
 2. ✅ DONE: покращили механізм рестарту плагіну через API функції:
-   `app.plugins.disablePlugin("github-easy-sync"); app.plugins.enablePlugin("github-easy-sync")`, тепер такий рестарт (
+   `app.plugins.disablePlugin("git-easy-sync"); app.plugins.enablePlugin("git-easy-sync")`, тепер такий рестарт (
    якщо між цими командами не більше 3сек)
    переживають всі відкриті вікна, створені плагіном, що дуже важливо при оновленні плагіну через BRAT або через Sync в
    самому плагіні
@@ -735,7 +735,7 @@ structure/cursor-ефекти** (`setStructure`/`resolveCaret`). НЕ потрі
 
 ### Як виміряти (логи вже стоять)
 
-У `~/Obsidian-test/github-easy-sync.log`:
+У `~/Obsidian-test/git-easy-sync.log`:
 
 - `diff2 dry-run {recoverable, replayedBlocks, docBytes, ms}` — pre-modal лаг;
 - `diff2 recovered {replayedBlocks, docBytes, ms}` — час реального recovery після Continue;
@@ -803,7 +803,7 @@ diff-free і швидкий (splitModel = O(n) нарізка; в `exit-commit.t
   Repro-тест `tests/diff2/large-file-perf.test.ts` (був хвилини → тепер mount 28 ms / resolve
   36 ms на 4МБ-документі). Як VS Code / GitHub — вони теж кепують intra-line diff за розміром.
 
-Діагностичні логи (для device-repro, `github-easy-sync.log`):
+Діагностичні логи (для device-repro, `git-easy-sync.log`):
 
 - `diff2 wordDiff {oursLen, theirsLen, mode: char|word|skip, ms}` — per notable-group
   (skip-cap спрацював, або char/word ≥15 ms). Sink у `word-level-diff.ts`, дротований у

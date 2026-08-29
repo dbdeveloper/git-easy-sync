@@ -140,7 +140,7 @@ describe.skipIf(!integrationEnabled())(
         const remoteFiles = await listRemoteFiles(branch);
         expect(remoteFiles).not.toContain(cdGitignore);
         expect(remoteFiles).not.toContain(
-          ".obsidian/plugins/github-easy-sync/.gitignore",
+          ".obsidian/plugins/git-easy-sync/.gitignore",
         );
       },
       300_000,

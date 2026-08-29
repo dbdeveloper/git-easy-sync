@@ -885,11 +885,11 @@ text after\n
 
 1. Текст виділений в межах одного ver-block залишається plain-text без термінального символа `\n`.
 
-2. Виділенa diff-group в clipboard конвертується в markdown-code-block (``` ```) з типом даних "github-easy-sync"
+2. Виділенa diff-group в clipboard конвертується в markdown-code-block (``` ```) з типом даних "git-easy-sync"
    (plugin id). Ось приклад "AS-IS" без запаковування в ``` ```:
    Приклад 6:
    "
-   ```github-easy-sync
+   ```git-easy-sync
    ≪
    - ver1-visible-line-1↵
    -   ver1-visible-line-2↵
@@ -899,11 +899,11 @@ text after\n
    ```
    "
    або в одному рядку це:
-   "\`\`\`github-easy-sync\n≪\n- ver1-visible-line-1↵\n- ver1-visible-line-2↵\n- ver1-visible-line-3 ↵\n==\n≫\n\`\`\`\n"
+   "\`\`\`git-easy-sync\n≪\n- ver1-visible-line-1↵\n- ver1-visible-line-2↵\n- ver1-visible-line-3 ↵\n==\n≫\n\`\`\`\n"
 
    Приклад 7 (якщо обидва ver-block мають дані):
    "
-   ```github-easy-sync
+   ```git-easy-sync
    ≪
    - ver1-visible-line-1↵
    -   ver1-visible-line-2↵
@@ -915,7 +915,7 @@ text after\n
    ≫
    ```
    або в одному рядку це:
-   "\`\`\`github-easy-sync\n≪\n- ver1-visible-line-1↵\n- ver1-visible-line-2↵\n- ver1-visible-line-3 ↵\n==\n+
+   "\`\`\`git-easy-sync\n≪\n- ver1-visible-line-1↵\n- ver1-visible-line-2↵\n- ver1-visible-line-3 ↵\n==\n+
    ver2-visible-line-1↵\n+ ↵\n+ ver2-visible-line-2↵\n≫\n\`\`\`\n"
 
    Тобто реальний diff-group з трьома рядками в ver1-block і одним порожнімм ver2-block буде в clipboard виглядати, як
@@ -930,7 +930,7 @@ text after\n
    завершуючого `\n`, і цей текст вставляється в ver-block (крім фінального, останнього в документі, де рядок без
    завершуючого `\n` є допустимим), завершуючий `\n` додається автоматично при вставці.
 4. конвертувати в diff-group тільки коли виконуються наступні умови:
-   a. перший рядок diff-group в документі — це рядок "\`\`\`github-easy-sync"
+   a. перший рядок diff-group в документі — це рядок "\`\`\`git-easy-sync"
    b. другий рядок — це рядок "≪\n" (Unicode символ U+226A (MUCH LESS-THAN) + символ `\n`)
    c. всі наступні рядки до рядка "==\n" вважаються вмістом ver1-block. Тут може бути 0 або більше рядків, які мають
    мати перші 2 символи — "- ", після чого іде рядок (до символу '\n', перед яким вставляється символ `↵`) який є
@@ -957,7 +957,7 @@ text after\n
 кліпбоард створюється методом перетворення diff-group на вишевказаний шаблон, а при вставці назац в diff-editor-v2
 (ТІЛЬКИ ПРИ ВСТАВЦІ В NORMAL STRINGS!!!!) відбувається replay plain-unicode-text from clipboard в normal strings +
 diff-groups (якщо plain-text-diff-group-representation присутні в clipboaord (під plain-text-diff-group-representation
-in clipboard вважаємо набір рядків, які починаються з послідовності "\`\`\`github-easy-sync\n≪\n", закінчуються
+in clipboard вважаємо набір рядків, які починаються з послідовності "\`\`\`git-easy-sync\n≪\n", закінчуються
 рядком "\`\`\`\n" i точно слідують правилам з 2.2.7 п.4).
 
 #### 2.2.8 Робота з порожнім ver-блоком

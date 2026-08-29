@@ -69,7 +69,7 @@ import {
         // follow-up commit with Welcome.md is the full set.
         expect(remoteFiles).not.toContain(".obsidian/.gitignore");
         expect(remoteFiles).not.toContain(
-          ".obsidian/plugins/github-easy-sync/.gitignore",
+          ".obsidian/plugins/git-easy-sync/.gitignore",
         );
         expect(remoteFiles).not.toContain(".obsidian/snippets/dark.css");
         expect(remoteFiles).not.toContain(".obsidian/app.json");

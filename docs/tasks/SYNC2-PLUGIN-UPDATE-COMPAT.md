@@ -33,7 +33,7 @@ BRAT-style авто-релоад вивантажив працюючий Templat
 У лозі при цьому:
 
 ```
-BRAT-style reload scheduled  ids=["github-easy-sync","templater-obsidian"]
+BRAT-style reload scheduled  ids=["git-easy-sync","templater-obsidian"]
 BRAT-style reload done       id="templater-obsidian"      ← НЕПРАВДА
 ```
 
@@ -367,7 +367,7 @@ bootloader'у нема чого застосовувати. Стара верс�
 
   | | де лежить метафайл | переживає видалення? | що робить перший sync після перевстановлення |
   |---|---|---|---|
-  | **сьогодні** | `<configDir>/github-easy-sync-metadata.json` (`snapshot-store.ts:182`) — ПОЗА текою плагіна | **так**, `rmdir` його не чіпає | `lastSyncCommitSha` не `null` → bootstrap НЕ запускається → працює гейт **§5.2** |
+  | **сьогодні** | `<configDir>/git-easy-sync-metadata.json` (`snapshot-store.ts:182`) — ПОЗА текою плагіна | **так**, `rmdir` його не чіпає | `lastSyncCommitSha` не `null` → bootstrap НЕ запускається → працює гейт **§5.2** |
   | **після рефакторингу** | `.runtime/metadata.json` + `.runtime/file-baselines/` ([`SYNC2-METAFILE-REFACTOR.md`](./SYNC2-METAFILE-REFACTOR.md) §2) — УСЕРЕДИНІ теки | **ні**, гине разом із `.runtime/` | `lastSyncCommitSha === null` → **bootstrap запускається** → працює гейт **§5.9** |
 
   ⚠️ Тобто той самий сценарій маршрутизується у РІЗНІ гейти залежно від того, коли його
@@ -518,7 +518,7 @@ if (seenIgnored.has(path)) {
 
 Живе в метафайлі поруч із per-file baseline, ключ `heldPluginUpdates`. Розташування самого
 метафайлу зараз змінюється — див. [`SYNC2-METAFILE-REFACTOR.md`](./SYNC2-METAFILE-REFACTOR.md)
-§2: сьогодні `<configDir>/github-easy-sync-metadata.json`, у цілі — `.runtime/metadata.json`
+§2: сьогодні `<configDir>/git-easy-sync-metadata.json`, у цілі — `.runtime/metadata.json`
 (hot) + `.runtime/file-baselines/` (cold). Для нас це означає, що після рефакторингу запис
 **не переживе видалення плагіна** — прийнятно, бо умова перераховується (§4.4). **Не окремим
 файлом:** запис і baseline мусять змінюватися узгоджено (стерли baseline → мусимо мати

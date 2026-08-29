@@ -89,7 +89,7 @@ export function formatResolveConflictMessage(
 // Intermediate commit on the per-device conflict-branch: snapshot of
 // the user's local copy at registration time, or edit-while-in-
 // conflict push. NOT a main-bound commit; lands on the
-// `github-easy-sync-conflicts-<device>-<ts>-<ms>` branch.
+// `git-easy-sync-conflicts-<device>-<ts>-<ms>` branch.
 export function formatConflictMessage(
   deviceLabel: string,
   whenMs: number,

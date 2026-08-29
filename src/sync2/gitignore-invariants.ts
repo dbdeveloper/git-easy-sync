@@ -9,7 +9,7 @@ import SnapshotStore, { InvariantFileState } from "./snapshot-store";
 // Invariant block markers. Editing anything between BEGIN and END on
 // disk triggers a rewrite back to canonical on the next sync.
 export const INVARIANT_BEGIN =
-  "# ===== github-easy-sync invariants — DO NOT EDIT =====";
+  "# ===== git-easy-sync invariants — DO NOT EDIT =====";
 export const INVARIANT_END =
   "# ===== end of invariants =====";
 
@@ -51,7 +51,7 @@ function configDirInvariantBlock(opts: {
 # Editing this block triggers a rewrite to canonical on next load.
 
 # Per-device state — never propagate between machines.
-github-easy-sync-metadata.json
+git-easy-sync-metadata.json
 workspace.json
 workspace-mobile.json
 community-plugins.json
@@ -100,8 +100,8 @@ const ROOT_INVARIANT_BLOCK = `${INVARIANT_BEGIN}
 # Atomic-write staging + backup artifacts.
 # Transient files written by the crash-safe write protocol; the
 # onload recovery sweep cleans them up. Must never reach GitHub.
-*.sync-tmp*
-*.sync-bak*
+*.ges-tmp*
+*.ges-bak*
 ${INVARIANT_END}`;
 
 // Recommended root-level defaults seeded ONLY when sync2 first
