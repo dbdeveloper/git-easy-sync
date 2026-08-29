@@ -957,6 +957,79 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     expect(await g.queue.list()).toEqual([]);
   });
 
+  it("chaining must not skip the trailing pullIfNeeded that advances lastSync after a batch empties into a conflict (field bug, bisected to 3a98c96, 2026-08-29)", async () => {
+    // Real-world symptom (9 integration tests: G3, G4, D6, D8, branch-lifecycle,
+    // edit-while-in-conflict, multi-copy-pair-resolution, defer-then-resolve-via-sibling-delete):
+    // a genuine 3-way divergence registers a conflict and empties the batch — no createCommit,
+    // no push. Pre-3a98c96, pullIfNeeded ran UNCONDITIONALLY on every drain-loop iteration,
+    // including the one right after the now-empty batch was deleted from the queue — and ITS
+    // OWN post-loop logic ("No overlap: every remote change has been applied... safe to advance
+    // lastSync") unconditionally advances `lastSyncCommitSha` to the live head, REGARDLESS of
+    // whether the per-file outcome was a clean apply or a register-conflict. Chaining
+    // (`chainedHead ?? pullIfNeeded()`) skips that trailing call whenever `chainedHead` is
+    // non-null — which it always is after ANY processBatch return, including the empty-after-
+    // reconcile one (`store.getLastSyncCommitSha()` just returns the OLD, un-advanced value).
+    // Net effect: `lastSyncCommitSha` gets stuck at the PRE-conflict commit forever, so every
+    // later reconcile attempt for the same path re-derives the SAME base/theirs pair and
+    // re-registers the SAME conflict — even after the user resolves it (a genuinely NEW local
+    // edit gets re-conflicted against the ORIGINAL stale base, since expectedHead never moved).
+    const base = "shared\n";
+    const ours = "ours v1\n";
+    const theirs = "theirs\n";
+    const g = fixture({
+      staleHeadGuardConfig: { windowMs: 100_000, baseDelayMs: 1, maxDelayMs: 2 },
+    });
+    writeVaultFile(g.root, "note.md", ours);
+    g.store.setLastSync("C0", "TREE_0");
+    g.store.set("note.md", {
+      path: "note.md",
+      remoteSha: await shaOf(base),
+      mtime: fs.statSync(path.join(g.root, "note.md")).mtimeMs,
+      size: base.length,
+    });
+    await g.store.save();
+    await g.queue.enqueue(
+      [
+        {
+          kind: "modified",
+          path: "note.md",
+          size: ours.length,
+          mtime: 0,
+          previousRemoteSha: await shaOf(base),
+        },
+      ],
+      { parentCommitSha: "C0", parentTreeSha: "TREE_0" },
+    );
+
+    g.client.setBranchHead("C1");
+    g.client.setContentAtRef("C0", "note.md", base);
+    g.client.setContentAtRef("C1", "note.md", theirs);
+    g.client.setCompareResult("C0", "C1", {
+      status: "diverged",
+      files: [
+        { filename: "note.md", status: "modified", sha: await shaOf(theirs) },
+      ],
+    });
+
+    await g.manager.resumeQueue();
+
+    // The batch emptied into a conflict (not a clean push to main) — a
+    // sibling conflict file landed in the vault (ConflictStore.create's write).
+    const siblingFiles = fs
+      .readdirSync(g.root)
+      .filter((f) => f.includes(".conflict-from-"));
+    expect(siblingFiles.length).toBeGreaterThanOrEqual(1);
+    // The queue drained (nothing left to push to main — it went to the
+    // conflict branch instead).
+    expect(await g.queue.list()).toEqual([]);
+
+    // The bug: without the trailing pullIfNeeded, lastSyncCommitSha stays at "C0" forever.
+    // Fixed behaviour: it advances to "C1" (the live head), matching pre-3a98c96 semantics —
+    // so a FUTURE edit to this path reconciles against the correct (current) base instead of
+    // re-deriving the same stale conflict on every future sync.
+    expect(g.store.getLastSyncCommitSha()).toBe("C1");
+  });
+
   it("syncFile: nothing to sync when file matches snapshot", async () => {
     writeVaultFile(f.root, "x.md", "v");
     const stat = fs.statSync(path.join(f.root, "x.md"));

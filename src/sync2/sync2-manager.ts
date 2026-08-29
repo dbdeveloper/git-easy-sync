@@ -3182,9 +3182,10 @@ export class Sync2Manager {
           // FRESH head read + reconcile, and re-push. Bounded; a short backoff lets GitHub's
           // ref replica catch up before the fresh read. With chaining above, the FIRST attempt
           // already builds on our own known head, so this rarely fires.
+          let realPushHappened = false;
           for (let attempt = 0; ; attempt++) {
             try {
-              await this.processBatch(
+              realPushHappened = await this.processBatch(
                 ids[0],
                 attempt === 0 ? headHint : null, // retry → null forces processBatch's own fresh GET
                 ensurePushProgress,
@@ -3206,9 +3207,23 @@ export class Sync2Manager {
               throw err;
             }
           }
-          // CHAIN: the next batch builds on the head WE just recorded (processBatch's
-          // setLastSync) — never a fresh re-read that could be replica-lag stale.
-          chainedHead = this.store.getLastSyncCommitSha();
+          // SYNC2 §7.10 chaining fix (2026-08-29, field bug bisected to 3a98c96 — G3/G4/D6/D8/
+          // branch-lifecycle/edit-while-in-conflict/multi-copy-pair-resolution/defer-then-
+          // resolve-via-sibling-delete). CHAIN only when a REAL commit landed: the next batch
+          // then correctly builds on the head WE just recorded (processBatch's setLastSync) —
+          // never a fresh re-read that could be replica-lag stale. But when the batch emptied
+          // out WITHOUT a push (every path reconciled into a conflict, or dropped as stale),
+          // `getLastSyncCommitSha()` is UNCHANGED — chaining on it would silently skip the next
+          // iteration's pullIfNeeded() call. That call is not optional bookkeeping: its own
+          // post-loop logic ("no overlap — safe to advance lastSync") is what promotes
+          // lastSyncCommitSha to the live head EVEN when the per-file outcome was a
+          // register-conflict, not a clean apply — without it, lastSyncCommitSha stays stuck at
+          // the PRE-conflict commit forever, and every later edit to the same path re-derives
+          // the SAME stale conflict against the SAME stale base, even after the user resolves
+          // it. Forcing chainedHead=null here restores that call on the very next iteration.
+          chainedHead = realPushHappened
+            ? this.store.getLastSyncCommitSha()
+            : null;
           pushedAnyBatch = true;
         }
         // 2.0.2-beta2 tail re-check. See outer-loop comment above.
@@ -3477,7 +3492,13 @@ export class Sync2Manager {
     ensurePushProgress: (msg: string) => void = () => {},
     commitNum: number = 1,
     commitTotal: number = 1,
-  ): Promise<void> {
+    // Returns whether a REAL commit landed on main (true) vs the batch
+    // emptied out with nothing left to push — e.g. every path got
+    // reconciled into a conflict, or dropped as a stale duplicate (false).
+    // SYNC2 §7.10 chaining fix (2026-08-29, field bug bisected to
+    // 3a98c96): the caller's `chainedHead` optimization must NOT be
+    // trusted after a `false` return — see drain()'s call site.
+  ): Promise<boolean> {
     this.logger.info(`Sync2 push batch ${id}`);
     await this.queue.markInProgress(id);
     // 2.0.2-beta2 zero-byte restore guard (SYNC2 §2.9). BEFORE the
@@ -3710,7 +3731,10 @@ export class Sync2Manager {
         // entry was either reconciled out of the batch or dropped as
         // stale by pre-flight validation; the queue entry is deleted
         // so the drain loop moves on to the next batch)
-        return;
+        // SYNC2 §7.10 chaining fix: false — no real push happened, so
+        // drain()'s chainedHead must NOT be trusted for the next
+        // iteration (see the long comment on this function's signature).
+        return false;
       }
 
       // After all blobs settled, the work shifts to createTree +
@@ -3858,6 +3882,9 @@ export class Sync2Manager {
         commitSha,
         treeSha: newTreeSha,
       });
+      // SYNC2 §7.10 chaining fix: a real commit landed on main — the
+      // caller's chainedHead optimization is sound for the next iteration.
+      return true;
     } catch (err) {
       // Roll back the in-progress marker so a later resume can retry.
       await this.queue.clearInProgress(id);

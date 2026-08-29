@@ -1653,6 +1653,87 @@ units (essence: "disk == main but ≠ branch value → still emitted");
 ConflictStore units (create seeds `branchBaseSha`, single-latest,
 `recordBranchBasePush`, legacy `baseSha` fallback).
 
+### 7.14 chaining silently skipped the trailing `pullIfNeeded()` that promotes `lastSync` past a conflict (2026-08-29)
+
+**Symptom.** 9 integration tests failed, in two apparent families: "wrong side
+wins" (a resolved conflict's content never reached remote — `branch-lifecycle`,
+`defer-then-resolve-via-sibling-delete`, `edit-while-in-conflict`,
+`multi-copy-pair-resolution`, `G3-same-line-conflict`, `G4-binary-atomic-
+across-devices`) and "orphan snapshot entry" (`D6-same-file-local-delete-
+remote-modify`, `D8-same-file-deleted-both`). Non-deterministic for the first
+family (passed in isolation, failed under the full suite's real load/latency);
+100% deterministic for D8 in isolation — which made it the tractable probe.
+`git bisect` (both the general failure and D8 specifically, independently)
+converged on the SAME single commit: §7.10's chaining fix (`3a98c96`).
+
+**Root cause — one mechanism, two symptoms.** §7.10's chaining
+(`chainedHead ?? pullIfNeeded()`) is sound when a batch produces a REAL
+commit. It is unsound when a batch empties out WITHOUT one — every path
+reconciled into a conflict (`registerConflictAndDropPath`) or dropped as a
+redundant duplicate (`removeDeletion`) — because `store.getLastSyncCommitSha()`
+is UNCHANGED in that case, and `chainedHead` gets set to that same
+stale value anyway, non-null, so the next drain-loop iteration skips
+`pullIfNeeded()` entirely. That call is not optional bookkeeping: **its own
+post-loop logic unconditionally promotes `lastSyncCommitSha` to the live
+head whenever no path was deferred** ("no overlap — safe to advance
+lastSync"), REGARDLESS of whether the per-file outcome was a clean apply
+or a register-conflict. Skipping it means `lastSyncCommitSha` gets stuck at
+the PRE-conflict commit forever:
+- for a conflict, every LATER edit to the same path re-derives the exact
+  same `attemptAutoMerge(base, ours, theirs)` triple against the stale
+  base — forever `register-conflict`, even after the user resolves it
+  (confirmed live: 6 consecutive `register-conflict` verdicts across a
+  3-step resolve sequence that should have needed exactly 1);
+- for D6/D8, the redundant-deletion path (`reconcileBatchAgainstHead`'s
+  `theirs === null → removeDeletion`) never calls `recordSync`/
+  `recordDeletion` either — pre-chaining, the SAME trailing
+  `pullIfNeeded()` call, seeing the path no longer queued, took the
+  ordinary `applyRemoteDeletion` branch instead and cleaned the snapshot
+  directly. Post-chaining, that call never fires, so the snapshot entry
+  orphans.
+
+Confirmed empirically, not by inspection alone: side-by-side instrumented
+traces at the last-good commit (`bb43d62`, immediately before `3a98c96`)
+vs. current HEAD, for both D8 and `edit-while-in-conflict`, showing the
+extra `pullIfNeeded()` call present in one and absent in the other, with
+byte-identical inputs otherwise.
+
+**Fix.** `processBatch` now returns whether a real commit landed
+(`Promise<boolean>`, `false` on the empty-after-reconcile path, `true` at
+the end of a successful push). The drain loop only trusts `chainedHead` when
+that's `true`:
+```ts
+chainedHead = realPushHappened
+  ? this.store.getLastSyncCommitSha()
+  : null;
+```
+`null` forces a fresh `pullIfNeeded()` on the very next iteration — restoring
+the exact call that pre-chaining code made unconditionally, now made
+conditionally exactly where it matters (chaining's fast path for consecutive
+REAL pushes is untouched).
+
+**A wrong fix tried first, for the record.** The initial hypothesis was that
+`getGuardedHead()`'s OWN documented degradation ("past the backoff window,
+accept a still-behind read as reality") was feeding a stale-but-self-
+consistent head into `processBatch`'s Case 3 fast path. A `confident`/
+`degraded` flag was implemented and unit-tested (RED→GREEN in isolation) but
+made ZERO difference to the live 9-test failure — same failures, byte-
+identical error messages, after the fix. Instrumented live traces showed the
+guard was never even superseded (`idx: -1` throughout) in the failing runs —
+it was a complete no-op for this bug family. Reverted before the real root
+cause was found. Recorded here because the wrong hypothesis was plausible
+from reading the code alone and only distinguishable from the real one by
+running it against reality.
+
+**Tests.** `sync2-manager.test.ts`: "chaining must not skip the trailing
+pullIfNeeded that advances lastSync after a batch empties into a conflict" —
+deterministic unit RED (`lastSyncCommitSha` stuck at the pre-conflict commit)
+→ GREEN, using the existing fake-client harness (`setCompareResult` +
+`setContentAtRef`), no real network timing needed once the mechanism was
+understood. Live-reverified against real GitHub: all 9 previously-failing
+integration tests green, individually and as part of the full
+`pnpm test:integration` suite.
+
 ---
 
 ## 8. Worker Orchestra
