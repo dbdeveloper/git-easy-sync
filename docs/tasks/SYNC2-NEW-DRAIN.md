@@ -863,10 +863,12 @@ CRASH_RECOVERY(dir):
         return getBatch()   # наступний каталог (якщо є) або null
 
     for (path, sha, size) in batch.entries:
-        if not existInSyncStore(sha, size):  # §II.9: та сама функція, той самий (sha, size)
-                                              # контракт — обрізаний після краху batch-blob тепер
-                                              # ловиться тут само (розмір не збігається), а не
-                                              # мовчки трактується як "уже на місці"
+        if not existInSyncStore(sha):  # §II.9: голий stat "чи є файл з таким іменем".
+                                              # ⚠️ 2026-08-29: розмір тут БІЛЬШЕ не звіряється —
+                                              # обрізаний після краху batch-blob тепер ловиться не
+                                              # тут, а на ПЕРШОМУ ж читанні (`getBlobFromSyncStore`
+                                              # хешує байти й відкидає биту копію). Пізніше, але
+                                              # надійніше: збіг розміру й так нічого не доводив
             # спробувати долатати з живого Vault (той самий принцип, що й §12.6). Size-перед-SHA
             # (§I.2 примітка, SYNC2-FIX.md §12.9): stat дешевий, hash — ні (2 МБ → 6.3 мс,
             # 50 МБ → 107 мс). Розбіжність розміру ОДРАЗУ доводить "ремонт неможливий" — нема
@@ -910,10 +912,10 @@ temp+rename: метадані (розмір, факт rename) можуть жу�
 гарантія: хешувати САМІ байти, які підуть у diff3/push, у момент, коли вони й так завантажуються
 в пам'ять (blob уже читається цілком для `_diff3()` — стрімінгу тут ніде немає).
 
-**Триступенева перевірка, найдешевша спочатку:**
+**Двоступенева перевірка (⚠️ БУЛА триступенева — size-крок ПРИБРАНО 2026-08-29, рішення власника):**
 
 ```
-getBlobFromSyncStore(sha, size):
+getBlobFromSyncStore(sha):     # ⚠️ ОДИН аргумент. `size` прибрано — див. обґрунтування нижче
     if sha in verified_shas:             # per-drain in-memory Set — уже пройшов hash цього
                                           # запуску (типовий випадок "ours став theirs", §12.2:
                                           # той самий blob читається десятки разів за один drain)
@@ -923,22 +925,40 @@ getBlobFromSyncStore(sha, size):
     stat = statFile(sync_store/{sha})
     if stat is null:
         return null                      # немає взагалі — не помилка, звичайний cache miss
-    if stat.size != size:
-        # §12.9 fast-fail: НЕ тягнемо у RAM файл, довжина якого вже суперечить очікуваній.
-        # Побитий (обрізаний після краху посеред запису) — найімовірніша причина.
-        logWarning("sync_store: розмір не збігається з очікуваним — вважаємо биту копію", sha, stat.size, size)
-        return null
     
-    bytes = readBytes(sync_store/{sha})    # читаємо — розмір уже дешево підтверджено
+    bytes = readBytes(sync_store/{sha})
     if getSha(bytes) != sha:               # у cpu-worker, як і всі SHA в цьому проєкті
-        # Розмір міг збігтись випадково (power-loss без fsync лишає ПРАВИЛЬНУ довжину і
-        # сміттєвий вміст — саме той випадок, який крок вище пропускає, а цей ловить).
+        # Ловить ОБИДВА види пошкодження — і обрізаний файл, і power-loss без fsync, що лишає
+        # ПРАВИЛЬНУ довжину зі сміттєвим вмістом. Окремої перевірки довжини не потрібно:
         logWarning("sync_store: SHA не збігається після зчитування — бита копія", sha)
         return null
     
     verified_shas.add(sha)                 # хешувати цей SHA цього drain більше не треба
     return bytes
 ```
+
+**⚠️ ЧОМУ `size` ПРИБРАНО (рішення власника, 2026-08-29).** Git-SHA рахується як
+`sha1("blob " + size + "\0" + data)` — **довжина вже входить у сам хеш**. Отже підробити SHA
+невірним розміром неможливо, і крок `stat.size != size` не доводив НІЧОГО, чого не доводить
+`getSha(bytes) != sha` двома рядками нижче. Він був суто дешевим відсівом «не читати в RAM файл,
+довжина якого вже не та».
+
+Але тут цей відсів не окупається: **байти читаються однаково** — саме заради них функцію й
+викликають. Економія стосувалась лише рідкісного випадку пошкодження, а платили за неї всі
+викликачі, зобов'язані звідкись знати очікуваний розмір. І саме звідси народився реальний дефект
+(знайдено 2026-08-29): при `size = null` (а `compare()` size не повертає взагалі — див. §II.12)
+умова `stat.size != null` істинна для БУДЬ-ЯКОГО файлу, тож функція відкидала цілий, правильно
+названий blob як «битий» — вічний cache-miss, кожен файл качався з мережі наново, і
+`verified_shas` теж не заповнювався (вихід стався раніше). Прибирання параметра усуває цей клас
+багів, а не латає його.
+
+**Критерій, за яким це рішення ухвалено (застосовний і поза цією функцією):** перевірка розміру
+виправдана ЛИШЕ тоді, коли розбіжність дозволяє **пропустити роботу цілком** — тобто байти нам і
+не потрібні (типово: «чи змінився файл?»). Там, де байти читаються однаково, size — дублювання
+того, що вже доводить SHA. За цим критерієм size ЛИШАЄТЬСЯ в: правилі 7 (§II.1 — там це
+повноцінні вхідні дані, а не гейт), ChangeDetector (§I.2), R3b-ремонті (§II.8) і
+`verifySiblingFileIntegrity` (§II.11) — у всіх чотирьох байти не потрібні або size приходить з
+надійного джерела.
 
 `verified_shas = new Set()` оголошується там само, де інший drain-scoped стан (поруч із
 `TrackedFiles`, на самому старті `drain()`) — живе рівно один запуск drain, не персистується
@@ -956,13 +976,18 @@ getBlobFromSyncStore(sha, size):
   перекачати" і для цієї породи — це мовчазна дірка: локальний вміст існує ЛИШЕ тут, з мережі
   його нема звідки взяти (§12.3). Записано тут явно, щоб не переплутати породи при реалізації.
 
-**`existInSyncStore(sha, size)` — НАВМИСНО лишається дешевим (лише stat+size, без хешу).**
+**`existInSyncStore(sha)` — НАВМИСНО лишається найдешевшим (голий `stat`, без розміру й без хешу).**
+⚠️ `size` прибрано 2026-08-29 разом із `getBlobFromSyncStore` (те саме обґрунтування вище).
+**Сама функція ЛИШАЄТЬСЯ** — рішення власника: голий `stat`, що дозволяє не переписувати вже
+наявний blob, економить до 50 МБ зайвого запису на мобільному; це не той самий надлишок, що
+параметр, який мусить знати кожен викликач.
+
 Викликається лише там, де ми ВЖЕ тримаємо в пам'яті підтверджено правильні байти (щойно
 скачані з repo, або щойно змерджені diff3) і вирішуємо, чи писати їх у сховище вдруге (дедуп,
-§12.2). Якщо існуюча копія там насправді бита з тим самим розміром — не біда: НАСТУПНЕ читання
-цього SHA (`getBlobFromSyncStore`) все одно проганяє повний hash-on-load і саме тоді виявить і
-повідомить биту копію. Повна перевірка тут нічого б не змінила (ми й так уже маємо правильні
-байти в руках) — лише витратила б CPU на хеш, чий результат ніхто не використає.
+§12.2). Якщо існуюча копія там насправді бита — не біда: НАСТУПНЕ читання цього SHA
+(`getBlobFromSyncStore`) все одно проганяє hash-on-load і саме тоді виявить і повідомить биту
+копію. Повна перевірка тут нічого б не змінила (ми й так уже маємо правильні байти в руках) —
+лише витратила б CPU на хеш, чий результат ніхто не використає.
 
 **`saveBlobToSyncStore` пише напряму (`open` → `write` → `close`), БЕЗ temp+rename.**
 Content-addressed сховище ніколи не переписує ІНШИЙ вміст під тим самим іменем (колізія SHA —
@@ -1378,7 +1403,23 @@ def getChangedFilesFromGitHubRepo(base, head):
 
     # Крок 2 — звичайний, найчастіший шлях: файлів менше 300, compare() дав ПОВНИЙ список.
     if len(cmp.files) < 300:
-        return (cmp.files, null)   # {path,sha,size,mtime,mode} на елемент — форма НЕ змінюється
+        return (cmp.files, null)   # ⚠️ ВИПРАВЛЕНО (2026-08-29, перевірено на ЖИВОМУ GitHub API):
+                                   # елемент несе {path, sha, mode} — і НЕ несе ні `size`, ні
+                                   # `mtime`. Попередня редакція цього рядка стверджувала
+                                   # "{path,sha,size,mtime,mode} — форма НЕ змінюється", тобто
+                                   # обіцяла поля, яких API не дає взагалі. Реальні ключі
+                                   # `files[]`: additions, blob_url, changes, contents_url,
+                                   # deletions, filename, patch, raw_url, sha, status —
+                                   # additions/deletions/changes це РЯДКИ, не байти (SPIKE §68);
+                                   # дати є лише поkomітно (`commits[].commit.committer.date`).
+                                   # Наш клієнт (src/github/client.ts:719-732) нічого корисного не
+                                   # відкидає — обмеження на боці GitHub.
+                                   # Хто заповнює ці два поля далі:
+                                   #   size  → Шар 2 (§II.13) для кожного файлу батчу; для решти —
+                                   #           lazy-догрузка в правилі 7 (§II.1), єдиному
+                                   #           споживачі
+                                   #   mtime → `getCommitInfoForPath` (§III) на трьох сайтах
+                                   #           народження конфлікту — єдиних, де він потрібен
 
     # Крок 3 — рівно 300: compare() обрізав. ЗАМІНЮЄМО (не доповнюємо) частковий список повним
     # tree-diff — той самий фолбек, що й для force-push вище.
@@ -1406,7 +1447,12 @@ def fullTreeDiffAgainstColdBaseline(head):
         # структурно неможливий цим механізмом — окреме, ще не написане рішення.
         return (null, TREE_TRUNCATED_ERROR)
 
-    treePaths = {f.path: f.sha for f in tree.files if isSyncable(f.path)}   # той самий
+    treePaths = {f.path: (f.sha, f.size) for f in tree.files if isSyncable(f.path)}   # ⚠️ size ТЕЖ
+                                              # (2026-08-29): blob-запис дерева має вигляд
+                                              # {mode, path, sha, size, type, url} — перевірено на
+                                              # живому API. Тобто цей шлях отримує РОЗМІРИ ОПТОМ,
+                                              # одним запитом, безкоштовно — на відміну від
+                                              # compare(), який їх не має взагалі. Той самий
                                               # syncability-фільтр, що й звичайний
                                               # compare()-шлях (§II.1 п.1) — не новий
     result = []
@@ -1414,17 +1460,22 @@ def fullTreeDiffAgainstColdBaseline(head):
                                               # знаємо + усе, що Є на сервері зараз
     for path in allPaths:
         baselineSha = metadata.files.get(path)?.baselineSha
-        liveSha = treePaths.get(path)   # null, якщо шляху нема в дереві (видалено на сервері)
+        (liveSha, liveSize) = treePaths.get(path) ?? (null, null)   # (null,null), якщо шляху нема
+                                              # в дереві (видалено на сервері)
         if baselineSha == liveSha:
             continue   # не змінилось відносно нашої пам'яті — не кандидат
         result.add({
             path: path,
             sha: liveSha ?? DELETED_SHA_HASH,
-            size: null,   # tree-ендпоінт дає розмір blob'а окремим полем — заповнюється разом з
-                          # sha при реалізації; спрощено тут, деталь реалізації
-            mtime: null,  # ⚠️ ТОЙ САМИЙ відкритий пробіл, що й для звичайного compare()-шляху
-                          # (§VII.1, "lazy remote.mtime", SPIKE-COMPARE-300.md §4) — НЕ
-                          # розв'язується тут, успадковує наявну невизначеність, не створює нову
+            size: liveSize,   # ⚠️ ЗАПОВНЮЄТЬСЯ (2026-08-29): раніше тут стояло `null` з поміткою
+                              # "деталь реалізації". Розмір є в тому самому дереві, дарма — тож
+                              # цей шлях ЄДИНИЙ, хто віддає size без жодного додаткового запиту.
+                              # `null` лише для видалених (розміру в них і не буває)
+            mtime: null,  # ⚠️ Лишається null — і це НЕ вада саме цієї гілки: дат немає й у
+                          # compare() (§II.12 крок 2, перевірено живцем). Заповнюється пізніше й
+                          # лише там, де справді потрібен — `getCommitInfoForPath` на трьох сайтах
+                          # народження конфлікту (§III). Для не-конфліктних шляхів mtime не читає
+                          # ніхто (§VII.4)
             mode: liveSha is null ? DELETED : "",
         })
     return (result, null)
@@ -1448,6 +1499,67 @@ force-push — той факт, що discovery іноді йде довшим ш
 діапазону ДО його старту) — він **МОВЧКИ ЗАТИРАЄ remote-версію без сліду**: `TrackedFiles`
 вважає remote незмінним, локальна правка "перемагає" без порівняння з РЕАЛЬНИМ станом сервера,
 push проти незмінного `head_hash` — чистий fast-forward, GitHub не бачить нічого підозрілого.
+
+**⚠️ ЯК САМЕ РОБИТЬСЯ ЦЕЙ ВИКЛИК — `HEAD`, не `GET` (2026-08-29, виміряно на живому API).**
+Раніше тут (і в §III) стояло просто "дешевий live-виклик (`{sha,size}`, НЕ blob)" — і це було
+НЕПРАВДОЮ для реалізації через `GET /contents`: цей ендпоінт вкладає в JSON ще й `content` у
+base64 для кожного файлу до 1 МБ. Тобто "дешева перевірка" качала ВЕСЬ вміст батчу й викидала
+його. Виміряно:
+
+| Файл | `GET` + `vnd.github+json` | `HEAD` + `vnd.github.raw+json` |
+|---|---|---|
+| 31 043 Б | тіло 43 647 Б, ~0.215 с | тіло **0 Б**, ~0.26 с |
+| 990 389 Б | тіло **1 365 456 Б** (+38% base64), ~0.215 с | тіло **0 Б**, **~0.076 с** |
+| 1 212 647 Б (>1 МБ) | `content: ""`, `size` є | `Content-Length` коректний |
+
+`HEAD` з raw-медіатипом віддає рівно те, що Шару 2 треба, у заголовках:
+- **`ETag`** = blob-SHA (40 hex; звірено з полем `sha` на 4 файлах — точний збіг);
+- **`Content-Length`** = розмір файлу, сирий, без base64-роздування;
+- тіло — нуль байтів.
+
+На дрібних файлах виграш суто в трафіку (латентність домінує); на великих — ще й **утричі в часі**.
+Кількість запитів НЕ змінюється — це ті самі поїздки, які Шар 2 і так робив, лише порожні.
+
+**⚠️ ETag == blob-SHA — це СПОСТЕРЕЖЕННЯ, не контракт.** Принципова відмінність від 300-ліміту
+(§VII.1), який задокументований і контрактно заморожений для нашої запіненої `X-GitHub-Api-Version`:
+формат ETag GitHub ніде не обіцяв. Тому:
+
+1. **Рантайм — перевірка ФОРМИ + фолбек** (дешево, ловить очевидну зміну);
+2. **Інтеграційний тест-канарка — перевірка РІВНОСТІ**, а не форми: `ETag` з `HEAD` мусить
+   дослівно дорівнювати полю `sha` з `GET` для того самого шляху. Сама лише форма НЕ врятує, якщо
+   GitHub колись покладе в ETag хеш ВІДПОВІДІ — він теж буде 40 hex. Той самий патерн, що вже
+   стоїть у `tests/integration/compare-api-300-limit.test.ts` (CANARY);
+3. **Навіть якщо обидва рубежі колись пропустять чужий SHA — провал ГУЧНИЙ, не тихий:**
+   `liveSha != trackedSha` → "виправляємо" пам'ять → `_diff3` іде вантажити blob за цим SHA → у
+   `sync_store/` його нема → `getBlobFromRepo(bogus)` → 404 →
+   `REMOTE_FILE_IS_NOT_EXIST_IN_REPO_ERROR`. Єдиний тихий сценарій — чужий хеш ВИПАДКОВО дорівнює
+   `local.sha` (колізія SHA-1 на замовлення), нехтуємо.
+
+```
+def getContentsMetadataAtRef(path, ref):   # → {sha, size, blob?} або null (404)
+    (headers, error) = HEAD(contents/{path}?ref={ref}, Accept: application/vnd.github.raw+json)
+    if error == NOT_FOUND: return (null, null)          # шляху нема на цьому ref — не помилка
+    if error != null: return (null, error)
+    etag = stripWeakPrefixAndQuotes(headers["etag"])
+    if matches(etag, "^[0-9a-f]{40}$"):
+        return ({sha: etag, size: int(headers["content-length"]), blob: null}, null)
+
+    # ФОЛБЕК — форма ETag не та, що ми знаємо. Не гадаємо: беремо ДОКУМЕНТОВАНЕ поле `sha`.
+    logWarning("ETag не схожий на blob-SHA — фолбек на GET", path, etag)
+    (json, error) = GET(contents/{path}?ref={ref}, Accept: application/vnd.github+json)
+    if error != null: return (null, error)
+    blob = null
+    if json.content != "":        # ⚠️ порожній для файлів >1 МБ — тоді blob просто не беремо
+        blob = base64decode(json.content)
+        if not existInSyncStore(json.sha):
+            saveBlobToSyncStore({sha: json.sha, blob: blob})   # ⚠️ байти вже прийшли — гріх
+                                  # викидати. Наступний `getBlobFromSyncStore(sha)` (§II.9) їх
+                                  # знайде, і `getBlobFromRepo` для цього шляху НЕ знадобиться:
+                                  # перевірка sync_store перед мережею вже стоїть в УСІХ місцях
+                                  # §III, окремого коду не треба. У фолбек-режимі Шар 2 таким
+                                  # чином частково стає економією, а не витратою
+    return ({sha: json.sha, size: json.size, blob: blob}, null)
+```
 
 **Механізм — один живий виклик на кожен файл batch-у, ПЕРЕД коротким замиканням
 `tracked.remote.sha == local.sha` (не після — інакше хибний збіг `tracked.remote.sha` із
@@ -1653,7 +1765,7 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
        base = FileInfo()   # equal to: {path: null, size: null, mtime: null, sha: null, blob: null, mode: null,
                             # device_label: null}. device_label — ⚠️ ДОДАНО (2026-08-25, власник): device, що
                             # породив ЦЕЙ конкретний вміст. Populated LAZILY, не для кожного FileInfo — див.
-                            # `getCommitDeviceLabelForPath` нижче й місця виклику (STEP1 нового конфлікту,
+                            # `getCommitInfoForPath` нижче й місця виклику (STEP1 нового конфлікту,
                             # pull-folding для ВЖЕ конфліктних шляхів). base/local тут device_label не
                             # використовують узагалі (лише remote-похідні siblings його читають) — лишається
                             # null, нешкідливо.
@@ -1768,10 +1880,35 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
        #   local=DELETED,  remote.sha != base.sha → зловлено правилом 6.b (MANUAL_CONFLICT)
        #   local=DELETED,  remote.sha == base.sha → правило 4 (local.sha=DELETED_SHA_HASH
        #                                            != base.sha, симетрично до 4)
-       # Тому тут local.size і remote.size ГАРАНТОВАНО визначені — жодна сторона не DELETED,
-       # а звичайний файл завжди має size. Це не перевірка «про всяк випадок», а assert:
-       # порушення цієї умови означає баг у правилах 1-6 вище, не у вхідних даних.
-       assert local.size is not null and remote.size is not null
+       # Тому тут жодна сторона не DELETED, а звичайний файл завжди МАЄ розмір. Це не перевірка
+       # «про всяк випадок»: порушення для `local` означало б баг у правилах 1-6 вище.
+       assert local.size is not null   # local: завжди відомий — batch несе size у метафайлі,
+                                        # Vault-step читає живий stat
+       # ⚠️ remote.size — ЄДИНЕ місце в усьому алгоритмі, де size є повноцінними ВХІДНИМИ ДАНИМИ,
+       # а не дешевим гейтом (§II.9, "критерій"). І саме його може НЕ БУТИ: `compare()` розміру не
+       # повертає взагалі (§II.12 — перевірено на живому API), тож `tracked.remote.size` заповнює
+       # або Шар 2 (§II.13, для КОЖНОГО файлу батчу), або tree-fallback (§II.12, безкоштовно).
+       # Лишається одна щілина, куди не дістає ні той, ні той:
+       #   шлях змінено ТІЛЬКИ на remote (у жодному батчі його нема → Шар 2 не спрацював)
+       #   + користувач відредагував цей файл у Vault, ще НЕ закомітивши
+       #   → Vault-step порівнює живий файл з remote, обидві сторони розійшлись → ми тут.
+       # Це побутовий сценарій, не екзотика (правиш файл, не синхронізуєш, тим часом інший
+       # пристрій змінив той самий шлях). Чистий pull сюди не доходить — він виходить раніше, на
+       # правилі 3 (`local == base`), де size не потрібен взагалі.
+       # LAZY-дозавантаження, той самий патерн, що й device_label (§III): платимо мережею лише за
+       # фактичне розходження, а не за кожен змінений remote-файл. Повне дерево заради розмірів
+       # ВІДХИЛЕНО — 5.5 МБ на 20 000-файловий vault (SPIKE-COMPARE-300.md §5) заради рідкісної гілки:
+       if remote.size is null:
+           (live, error) = retryOnNetworkError(() => getContentsMetadataAtRef(remote.path, head_hash))  # §II.10
+           if error == TOKEN_EXPIRED:
+               return (null, error)
+           if error == NETWORK_ERROR:
+               return (null, error)
+           if live is null:
+               # шлях зник з remote МІЖ discovery і цим моментом — не наша гілка; трактуємо як
+               # видалення, тобто те саме, що й DELETED-сентинел вище за текстом
+               return (null, REMOTE_FILE_IS_NOT_EXIST_IN_REPO_ERROR(remote.path))
+           remote.size = live.size
        if settings.maximum_auto_merge_file_size < max(local.size, remote.size):                           # 7
            return (null, MANUAL_CONFLICT)
 
@@ -1780,7 +1917,7 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
                            # (не обов'язково)
         # local.mode=DELETED НЕ МОЖЕ потрапити на цей рівень — доведено вище (правило 7,
         # коментар "ДОВЕДЕННЯ"): усі DELETED-комбінації повертаються ще в правилах 1-6.
-        local.blob = getBlobFromSyncStore(local.sha, local.size) # §II.9: null і на "нема файлу",
+        local.blob = getBlobFromSyncStore(local.sha) # §II.9: null і на "нема файлу",
                                                      # і на "є, але не пройшов hash-on-load" —
                                                      # звідси нижче різниці не видно, і не треба
         if local.blob is null:
@@ -1788,7 +1925,7 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
                                                       
     if remote.blob is null:        
         # remote.mode=DELETED НЕ МОЖЕ потрапити на цей рівень — те саме доведення, що й для local вище.
-        remote.blob = getBlobFromSyncStore(remote.sha, remote.size) # §II.9 — biту копію (як і
+        remote.blob = getBlobFromSyncStore(remote.sha) # §II.9 — biту копію (як і
                                                        # відсутню) нижче однаково перекачуємо з repo
         if remote.blob is null:
            # вантажаимо цей блоб з repo i зберігаємо його в `.runtime/sync_store`:
@@ -1806,12 +1943,12 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
            if remote.blob is null:
                return (null, REMOTE_FILE_IS_NOT_EXIST_IN_REPO_ERROR(remote.path))   
               
-           if not existInSyncStore(remote.sha, remote.size): # §II.9: дешевий stat+size, без хешу —
+           if not existInSyncStore(remote.sha): # §II.9: голий stat, без хешу —
                                                               # ми вже тримаємо перевірені байти
                saveBlobToSyncStore(remote)
 
     if base.blob is null:
-        base.blob = getBlobFromSyncStore(base.sha, base.size) # §II.9 — та сама семантика, що й вище
+        base.blob = getBlobFromSyncStore(base.sha) # §II.9 — та сама семантика, що й вище
         if base.blob is null:
             # вантажаимо цей блоб з repo i зберігаємо його в `.runtime/sync_store`:
             (base.blob, error) = retryOnNetworkError(() => getBlobFromRepo(base.sha)) # §II.10;
@@ -1827,7 +1964,7 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
             if base.blob is null:
                return (null, BASE_FILE_IS_NOT_EXIST_IN_REPO_ERROR(base.path))   
     
-            if not existInSyncStore(base.sha, base.size): # §II.9: дешевий stat+size
+            if not existInSyncStore(base.sha): # §II.9: голий stat
                 saveBlobToSyncStore(base)
                                                                    
     # ⚠️ ВИРІШЕНО (2026-08-28, за наводкою власника — той самий механізм, що вже в проді для
@@ -1868,7 +2005,7 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
                    sha=  d_sha,
                    mode= ""
                    blob= d )                
-    if not existInSyncStore(d_sha, d_file.size): # §II.9: дешевий stat+size — d_file.blob уже в руках
+    if not existInSyncStore(d_sha): # §II.9: голий stat — d_file.blob уже в руках
         saveBlobToSyncStore(d_file)
         
     return (d_file, null)
@@ -1881,7 +2018,18 @@ def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - п
 # §III `process_conflicts()`, "TRACKED vs SYNTHETIC" нижче спирається на це визначення).
 # ==============================================================================================
 
-def getCommitDeviceLabelForPath(path, atSha):
+def getCommitInfoForPath(path, atSha):   # ⚠️ ПЕРЕЙМЕНОВАНО з getCommitDeviceLabelForPath
+                                          # (2026-08-29): повертає (device_label, committed_at) —
+                                          # ДВА поля з ОДНІЄЇ відповіді, без жодного додаткового
+                                          # запиту. Причина: `compare()` дат не повертає взагалі
+                                          # (§II.12, перевірено живцем), тож `tracked.remote.mtime`
+                                          # не мав ЖОДНОГО джерела — а §VII.4/§VII.5 вимагають його
+                                          # для імені sibling-файлу. Три сайти, яким потрібен
+                                          # device_label, — це РІВНО ті самі три, яким потрібен
+                                          # mtime, і вони вже платять за цей запит.
+                                          # ⚠️ `size` сюди НЕ додається: `commits?path=` не має
+                                          # `files[]` взагалі (перевірено). Це інший ресурс —
+                                          # розмір бере `getContentsMetadataAtRef` (§II.13).
     # ⚠️ НОВА функція, якої раніше не було в жодному §II — власник підтвердив (2026-08-25) LAZY-
     # стратегію: викликається ЛИШЕ (а) коли файл ЩОЙНО стає manual conflict (STEP1, §III main-
     # loop) і (б) коли pull освіжає remote для шляху, що ВЖЕ manual conflict (§III pull-folding).
@@ -1902,16 +2050,34 @@ def getCommitDeviceLabelForPath(path, atSha):
     if error == NETWORK_ERROR:
         return (null, NETWORK_ERROR)
     if len(commits) == 0:
-        return (UNKNOWN_DEVICE_LABEL, null)  # той самий сентинел, що й parseDeviceSuffix
+        return ((UNKNOWN_DEVICE_LABEL, null), null)  # той самий сентинел, що й parseDeviceSuffix
                                               # (src/sync2/commit-message.ts) для комітів без
                                               # розпізнаваного суфіксу — не помилка, просто
                                               # невідомий автор (напр., коміт зроблено НЕ цим
                                               # плагіном, руками на GitHub)
-    return (parseDeviceSuffix(commits[0].commit.message), null)  # РЕАЛЬНА, вже написана функція
+    return ((parseDeviceSuffix(commits[0].commit.message),   # РЕАЛЬНА, вже написана функція
                                               # (src/sync2/commit-message.ts:157) — той самий
                                               # парсер, що й history-versions.ts вже використовує
                                               # для GithubCommit.message; тут лише нове місце
                                               # виклику, не нова логіка парсингу
+             commits[0].commit.committer.date),  # ⚠️ mtime (§VII.5). Це НЕ push-час: наш плагін
+                                              # САМ проставляє дату коміту рівною моменту
+                                              # ЛОКАЛЬНОГО коміту — `createCommit({author:
+                                              # commitAuthorFor(batch.createdAt)})`
+                                              # (sync2-manager.ts:3781-3792), а клієнт шле її і як
+                                              # author, і як committer (client.ts:296-300). Тому
+                                              # для НАШИХ комітів це момент правки користувача, а
+                                              # для ЧУЖИХ (правка на github.com) — момент
+                                              # створення коміту, який там і Є моментом авторства.
+                                              # Правило одне — "коли вміст створено", джерело різне.
+                                              # ⚠️ ВІДОМА МЕЖА: якщо користувач не налаштував
+                                              # git-ім'я та email, `commitAuthorFor` повертає
+                                              # undefined (sync2-manager.ts:3478-3484), `author` не
+                                              # шлеться, і GitHub ставить push-час. Тоді дата в
+                                              # імені sibling-файлу = час синку, не час правки. На
+                                              # коректність не впливає (дати ніде не порівнюються
+                                              # поза §II.1 п.3.b), лише на читабельність імені.
+            null)
 
 
 def buildSiblingFilePath(basePath, mtime, device_label):
@@ -2666,8 +2832,8 @@ def drain():
                             # конфліктних серед них — рідкісний виняток (порівняно з eager-варіантом:
                             # запит на КОЖЕН змінений remote-файл незалежно від того, чи стане він
                             # конфліктом узагалі).
-                            (tracked_file.remote.device_label, error) = retryOnNetworkError(
-                                () => getCommitDeviceLabelForPath(file.path, head_hash))  # §II.10
+                            ((tracked_file.remote.device_label, tracked_file.remote.mtime), error) = retryOnNetworkError(
+                                () => getCommitInfoForPath(file.path, head_hash))  # §II.10
                             if error == TOKEN_EXPIRED:
                                 saveTokenExpiredMark()
                                 return error
@@ -2767,7 +2933,7 @@ def drain():
             # епілог пише теж `remote.mtime`. Тому фолбек `0` не має інших споживачів.
             # перевіряємо чи існує в sync_store blob файлу з даного batch (див. SYNC2-FIX, §12)
             if local.mode != DELETED:
-                local.blob = getBlobFromSyncStore(local.sha, local.size) # §II.9: null і на "нема
+                local.blob = getBlobFromSyncStore(local.sha) # §II.9: null і на "нема
                                                              # файлу", і на "є, але битий" — в обох
                                                              # випадках нижче однаково пробуємо
                                                              # відновити з Vault
@@ -2940,7 +3106,7 @@ def drain():
                     # push D
                     if D.blob is null:  # він може бути null, якщо _diff3 приймав рішення тільки по sha, а отже не було 
                                         # завантажено blob взагалі
-                        D.blob = getBlobFromSyncStore(D.sha, D.size) # §II.9: null і на "нема файлу",
+                        D.blob = getBlobFromSyncStore(D.sha) # §II.9: null і на "нема файлу",
                                                              # і на "є, але битий" — нижче однаково
                                                              # перекачуємо з repo
                         if D.blob is null: # blob може не бути ще в SyncStore, якщо це remote file. Local files вже всі
@@ -2957,7 +3123,7 @@ def drain():
                             if D.blob is null:
                                 return REMOTE_FILE_IS_NOT_EXIST_IN_REPO_ERROR(D.path)   
                                
-                            if not existInSyncStore(D.sha, D.size): # §II.9: дешевий stat+size
+                            if not existInSyncStore(D.sha): # §II.9: голий stat
                                 saveBlobToSyncStore(D)
                         
                     # D.mtime НЕ ставимо тут: TODO закрито (2026-08-23, за наводкою advisor) —
@@ -3025,8 +3191,8 @@ def drain():
                 # `_diff3` взагалі поверне MANUAL_CONFLICT). `tracked.remote` — вміст, що стане першим
                 # sibling-файлом у Vault-step нижче (§II.6, STEP3, `previous_sibling is null`) —
                 # device_label має бути заповнений ДО того виклику:
-                (tracked.remote.device_label, error) = retryOnNetworkError(
-                    () => getCommitDeviceLabelForPath(tracked.remote.path, head_hash))  # §II.10
+                ((tracked.remote.device_label, tracked.remote.mtime), error) = retryOnNetworkError(
+                    () => getCommitInfoForPath(tracked.remote.path, head_hash))  # §II.10
                 if error == TOKEN_EXPIRED:
                     saveTokenExpiredMark()
                     return error
@@ -3318,7 +3484,7 @@ def drain():
                            # щойно народженого (STEP1 завжди лишає sha заповненим) конфлікту.
                            # Запис лишається як є, наступний drain спробує знову.
              if tracked.remote.blob is null:
-                 tracked.remote.blob = getBlobFromSyncStore(tracked.remote.sha, tracked.remote.size)  # §II.9
+                 tracked.remote.blob = getBlobFromSyncStore(tracked.remote.sha)  # §II.9
                  if tracked.remote.blob is null:
                      (tracked.remote.blob, error) = retryOnNetworkError(
                          () => getBlobFromRepo(tracked.remote.sha))  # §II.10
@@ -3371,7 +3537,7 @@ def drain():
                          tracked.is_manual_conflict = false
                          conflicts.delete(tracked.remote.path)
                          continue
-                     if not existInSyncStore(tracked.remote.sha, tracked.remote.size):  # §II.9
+                     if not existInSyncStore(tracked.remote.sha):  # §II.9
                          saveBlobToSyncStore(tracked.remote)
              saveConflictSiblingFile(tracked.remote)  # timestamp + device_label з tracked.remote
                                                        # (заповнені при STEP1, вище, того самого
@@ -3566,7 +3732,7 @@ def drain():
                   # ні pull-folding-ом). `saveConflictSiblingFile` нижче писала б `blob=null` на
                   # диск без цього. Той самий блок, що й STEP3 гілка 1 — sync_store → мережа:
                   if tracked.remote.blob is null:
-                      tracked.remote.blob = getBlobFromSyncStore(tracked.remote.sha, tracked.remote.size)  # §II.9
+                      tracked.remote.blob = getBlobFromSyncStore(tracked.remote.sha)  # §II.9
                       if tracked.remote.blob is null:
                           (tracked.remote.blob, error) = retryOnNetworkError(
                               () => getBlobFromRepo(tracked.remote.sha))  # §II.10
@@ -3597,13 +3763,13 @@ def drain():
                               vault_step_errors.add({path: tracked.remote.path,
                                   error: REMOTE_FILE_IS_NOT_EXIST_IN_REPO_ERROR(tracked.remote.path)})
                               continue
-                          if not existInSyncStore(tracked.remote.sha, tracked.remote.size):  # §II.9
+                          if not existInSyncStore(tracked.remote.sha):  # §II.9
                               saveBlobToSyncStore(tracked.remote)
                   if tracked.remote.device_label is null:
                       # Третє (і останнє) місце народження конфлікту — STEP1 і pull-folding-refresh
                       # уже мають lazy device_label-fetch (§III), тут його не було ВЗАГАЛІ:
-                      (tracked.remote.device_label, error) = retryOnNetworkError(
-                          () => getCommitDeviceLabelForPath(tracked.remote.path, head_hash))  # §II.10
+                      ((tracked.remote.device_label, tracked.remote.mtime), error) = retryOnNetworkError(
+                          () => getCommitInfoForPath(tracked.remote.path, head_hash))  # §II.10
                       if error == TOKEN_EXPIRED:
                           saveTokenExpiredMark()
                           return error
@@ -3811,7 +3977,7 @@ def drain():
 | **sweep sync_store** (епілог крок 5)                                                                    | Так, за побудовою (§12.5) — тепер за ЧОТИРМА джерелами `referenced`, останнє — durable `conflicts`-store (SYNC2-FIX.md §12.5.D) | `referenced`-множина рахується заново з диска щоразу; повторний sweep при незмінному стані — той самий результат. Завершеність sweep-у тепер залежить від ДВОХ умов, не однієї: порожня черга (`push_queue/`) І порожній durable `conflicts` — поки живе хоч один manual conflict, його `conflictBase`-blob лишається в `referenced` і НЕ підмітається (§12.5.D) незалежно від того, скільки drain-ів минуло.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | **STEP3 blob-fetch + NOT_FOUND-cancel** (Vault-step, §III, `previous_sibling is null` гілка)            | Так, повним redo Vault-step                                                                                                     | Крах ДО завершення епілогу (журнал ще на диску) → наступний запуск повторює Vault-step з нуля для ВСІХ tracked, включно з цим шляхом: те саме `sync_store`→мережа читання, той самий NOT_FOUND (природа помилки не залежить від того, скільки разів її перевіряли), той самий `conflicts.delete` + `is_manual_conflict=false`. Немає проміжного стану, який redo міг би застати "напівскасованим" — обидва присвоєння в ОДНІЙ, не розбитій навпіл ділянці коду, до будь-якого диск-запису цього кроку.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | **Seeding** (`restoreTrackedFilesFromDiskOrCreateNewOne`, §III)                                         | Так, чиста функція від входу                                                                                                    | Вхід — `(журнал-з-диска, durable conflicts-з-диска)`, обидва не змінюються під час виконання функції; вихід — детермінована функція входу (журнал-гілка АБО reconcile-гілка від `conflicts`, без прихованого стану). Повторний виклик з тим самим входом (напр. після краху ДО першого запису епілогу) дає той самий `TrackedFiles`-масив, включно з `base: seeded_remote`-плейсхолдером для idle-шляхів і фолбеком `conflictBranchName = metadata.getConflictBranchName()`, коли журналу нема.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **Lazy device_label-fetch** (STEP1 / pull-folding-refresh / Vault-step-born-конфлікт, §III)             | Так, read-only                                                                                                                  | `getCommitDeviceLabelForPath` — чисте GET, без побічних ефектів на repo. Крах ДО чи ПІСЛЯ виклику не залишає проміжного стану, що вимагав би відкату — гірше, що можливо: значення просто перезапитується вдруге при redo.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **Lazy device_label+mtime-fetch** (STEP1 / pull-folding-refresh / Vault-step-born-конфлікт, §III)             | Так, read-only                                                                                                                  | `getCommitInfoForPath` — чисте GET, без побічних ефектів на repo. Крах ДО чи ПІСЛЯ виклику не залишає проміжного стану, що вимагав би відкату — гірше, що можливо: значення просто перезапитується вдруге при redo.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | **STEP3 replace-транзакція** (§II.11, mark → новий файл → durable-персист → видалення старого → unmark) | Так, через GUID-звірку + hash-on-load, БЕЗ fsync                                                                                | `recoverSiblingTransactionIfNeeded()` (§III, ОДИН РАЗ, ПЕРШИЙ рядок `drain()`, ПІД `running`-lock-ом — 2026-08-26, третя ревізія: НЕ всередині `process_conflicts()`, той самий принцип, що й journal-recovery) відновлює з мітки. Дискримінатор напрямку — ЛИШЕ цілісність нового sibling-файлу (size+SHA, §II.9-стиль, без мережевого fallback-у): запис уже prune-нутий (`current is null`) → прибрати ЛИШЕ новий файл (безумовно наш артефакт), старий не займати (він більше не tracked — доля за `process_conflicts()`), занулити `lastSiblingTxGuid` за потреби й unmark (конфлікт уже закрито); інакше валідний → накат ВПЕРЕД з першого недовершеного кроку (3-5), БАЙДУЖЕ, чи metadata вже нова — повного redo Vault-step тут не потрібно взагалі; битий/відсутній → відкат до перед-транзакційного стану (з обов'язковим `lastSiblingTxGuid=null`), прибрати новий файл, unmark. **⚠️ ВИПРАВЛЕНО (2026-08-29):** сам відкат розгалужується за ЦІЛІСНІСТЮ `mark.oldSibling` — цілий → `replaceLast(…, oldSibling)`; непридатний (нема АБО битий) → `dropLast(siblings)` (саме dropLast, не `[]` — старіші siblings цілі й мусять лишитись tracked). Беззастережний `replaceLast` (попередня редакція) лишав вказівник у нікуди, а каскад prune → RECONCILE → `baselineSha=R_m` поверх локального вмісту тихо затирав `R_m` наступним drain-ом (I2, §II.11). Сама злука (fold) свіжої remote-зміни доллється НЕ спеціальним кодом, а вже наявним механізмом — журнал лишається живим, Vault-step повторює fold сам (а в гілці `siblings: []` — ЦЬОГО Ж drain-у, через STEP3 `previous_sibling is null`). Простий локальний save/remove, що кидає необроблений виняток посеред транзакції, — поза гарантією цього документа (рішення власника, 2026-08-26): наступний `drain()` (будь-коли, під тим самим lock-ом) полагодить, спеціального try-catch усередині транзакції немає.                                                                                                                                                                                                                                                                                                                |
 
 **Передумова, на якій тримаються рядки 1/2 нижче (не мережевий side-effect, а чиста in-memory
@@ -4414,12 +4580,22 @@ STEP3 replace-транзакції (§II.11, IV.2 рядки 15-20 — sibling-d
 7. `retryOnNetworkError`: TOKEN_EXPIRED/ERROR422 НЕ ретраяться, повертаються одразу
 8. Відновлення мережі посеред drain-у: мітка знімається на ПЕРШОМУ успішному виклику, не на старті drain-у
 
-### F. `sync_store/` та sweep (§II.9, SYNC2-FIX.md §12.5) — 9 сценаріїв
+### F. `sync_store/` та sweep (§II.9, SYNC2-FIX.md §12.5) — 10 сценаріїв
 
-1. hash-on-load: розбіжність `size` → бита копія, `null`, без спроби читання (дешевий fail)
-2. hash-on-load: `size` збігається, SHA після читання — ні → бита копія, `null`
-3. hash-on-load: `verified_shas` кеш уникає повторного хешування того самого SHA за один drain
-4. `existInSyncStore`: лише stat+size, без хешу (дешевий dedup fast-path)
+1. **⚠️ ПЕРЕПИСАНО (2026-08-29):** hash-on-load приймає ЛИШЕ `sha` — жодного `size`-параметра. Файл із правильним
+   іменем, але СТОРОННІМ вмістом (обрізаний або сміттєвий після краху без fsync) → `getSha(bytes) != sha` → бита
+   копія, `null`. Раніше цей сценарій вимагав розбіжності `size` "без спроби читання"; тепер розмір не перевіряється
+   окремо взагалі, бо він і так входить у git-SHA (`sha1("blob " + size + "\0" + data)`)
+1a. **Регресія до дефекту, знайденого 2026-08-29:** blob лежить у `sync_store/`, цілий, ім'я правильне, а викликач
+   НЕ знає очікуваного розміру → мусить бути повернуто БАЙТИ, а не `null`. Стара сигнатура `(sha, size)` у цьому
+   випадку відкидала справний blob як "битий" (`stat.size != null` істинне завжди), давала вічний cache-miss і
+   качала кожен файл з мережі наново. Тест має падати на будь-якій спробі повернути size-параметр
+2. hash-on-load: SHA після читання не збігається → бита копія, `null` (без змін — це тепер ЄДИНА перевірка)
+3. hash-on-load: `verified_shas` кеш уникає повторного хешування того самого SHA за один drain (ЛИШАЄТЬСЯ —
+   рішення власника 2026-08-29: оптимізація виправдана, той самий blob читається десятки разів за drain)
+4. **⚠️ ПЕРЕПИСАНО:** `existInSyncStore(sha)` — голий `stat` "чи є файл із таким іменем", без розміру й без хешу.
+   Функція ЛИШАЄТЬСЯ (економить до 50 МБ зайвого запису на мобільному), прибрано лише параметр. Бита копія з
+   правильним іменем тут НЕ виявляється — і це навмисно: її зловить наступне читання (п.1/2)
 5. Sweep: `candidates \ referenced`, 4 джерела перевірені НЕЗАЛЕЖНО:
     - blob з metadata батчу в черзі переживає sweep
     - blob з `baseSha` журналу переживає sweep ("ours став theirs")
@@ -4545,7 +4721,7 @@ entry випадає з batch-у, решта продовжує; batch, у як�
 11. (integration, реальний GitHub) force-push сценарій — старий `base` недосяжний, `compare()` 404, Шар 1 повертає
     коректний список змін відносно `metadata.files`
 
-### P. Push-side перевірка — Шар 2 (§II.13) — 7 + 6 сценаріїв, unit з fake GitHub-клієнтом (+1 integration)
+### P. Push-side перевірка — Шар 2 (§II.13) — 7 + 6 + 12 сценаріїв, unit з fake GitHub-клієнтом (+2 integration)
 
 1. `live.sha == tracked.remote.sha` → без змін, звичайний шлях (коротке замикання або `_diff3`) не порушено
 2. `live.sha != tracked.remote.sha` (Шар 1 щось пропустив) → `tracked.remote` виправляється (`sha`/`size`/`mode`/
@@ -4604,6 +4780,48 @@ entry випадає з batch-у, решта продовжує; batch, у як�
     змінених є шлях з паралельною локальною правкою → перевірити, що після drain remote-вміст не
     втрачено. Це перевіряє Шар 1 і Шар 2 у зв'язці на РЕАЛЬНОМУ тригері truncation, а не на
     змодельованому
+
+**`HEAD`-транспорт і ETag (додано 2026-08-29, §II.13) — 5 сценаріїв:**
+
+14. `getContentsMetadataAtRef` йде `HEAD`-ом з `Accept: application/vnd.github.raw+json` і бере `sha` з `ETag`,
+    `size` з `Content-Length`; тіло відповіді НЕ читається. Fake-клієнт має падати, якщо код спробує прочитати `body`
+15. ETag у формі `W/"…"` та у звичайних лапках — обидві розбираються однаково (`stripWeakPrefixAndQuotes`)
+16. **ETag не схожий на blob-SHA** (не 40 hex — напр. `"abc123"`, base64, порожній) → фолбек на `GET`+json,
+    `sha`/`size` беруться з ДОКУМЕНТОВАНИХ полів, у лог іде warning
+17. **Фолбек зберігає blob:** `GET`+json повернув непорожній `content` → байти декодуються і КЛАДУТЬСЯ в
+    `sync_store/`; наступний `getBlobFromSyncStore(sha)` для цього шляху повертає їх БЕЗ мережі (перевірити, що
+    `getBlobFromRepo` не викликається жодного разу)
+18. Той самий фолбек на файлі **>1 МБ**: `content` порожній → blob НЕ зберігається, `sha`/`size` усе одно коректні,
+    подальший `getBlobFromRepo` відбувається штатно
+19. **(integration, реальний GitHub) КАНАРКА — перевірка РІВНОСТІ, не форми.** `HEAD`+raw для відомого шляху → `ETag`
+    мусить ДОСЛІВНО дорівнювати полю `sha` з `GET`+json для того самого шляху й ref. ⚠️ Сама лише перевірка форми тут
+    НЕ рятує: якщо GitHub колись покладе в ETag хеш ВІДПОВІДІ, він теж буде 40 hex і рантайм-guard його пропустить —
+    зловити підміну семантики може лише ця рівність. Той самий патерн, що CANARY в
+    `tests/integration/compare-api-300-limit.test.ts`. Червона — сигнал негайно вимкнути `HEAD`-шлях на користь
+    фолбеку, а не "полагодити тест"
+
+**Правило 7 і lazy-`size` (§II.1, додано 2026-08-29) — 3 сценарії:**
+
+20. `remote.size == null` на вході в правило 7 → рівно ОДИН `getContentsMetadataAtRef`, далі порівняння з
+    `maximum_auto_merge_file_size` відбувається з реальним розміром
+21. **Сценарій, заради якого це існує (наскрізний):** шлях змінено ТІЛЬКИ на remote (у жодному батчі його нема, тож
+    Шар 2 не спрацював) + користувач відредагував цей файл у Vault, НЕ закомітивши → Vault-step, обидві сторони
+    розійшлись → правило 7 отримує `remote.size == null`. Без lazy-догрузки тут падав би `assert`
+22. `remote.size` ВЖЕ заповнений (Шаром 2 у головному циклі або `tree[].size` у fallback) → жодного додаткового
+    запиту не робиться
+
+**`getCommitInfoForPath` (§III, додано 2026-08-29) — 4 сценарії:**
+
+23. Один запит повертає ОБИДВА поля: `device_label` з суфікса повідомлення і `mtime` з `commit.committer.date`.
+    Перевірити, що другого мережевого виклику заради дати НЕ відбувається
+24. Коміт БЕЗ розпізнаваного суфікса (зроблений не нашим плагіном) → `device_label == UNKNOWN_DEVICE_LABEL`,
+    але `mtime` усе одно реальний (`committer.date`) → ім'я sibling-файлу виходить виду
+    `idea.conflict-from-unknown-<дата>.md`, а не з порожньою датою
+25. `mtime` доходить до `buildSiblingFilePath` на ВСІХ трьох сайтах народження конфлікту (STEP1,
+    pull-folding-refresh, Vault-step-born) — параметризований тест, по одному на сайт
+26. **Регресія до дефекту 2026-08-29:** шлях, виявлений через discovery (де `mtime` завжди `null`, бо `compare()` дат
+    не віддає), стає конфліктом → sibling-файл МУСИТЬ мати дату в імені. До фіксу `buildSiblingFilePath` отримував
+    `null` і давав ім'я без timestamp, порушуючи §VII.4
 
 ### N. Заблоковано — НЕ писати GREEN-тест, лише зафіксувати сценарій
 
