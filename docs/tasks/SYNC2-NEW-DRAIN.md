@@ -1565,51 +1565,33 @@ def getContentsMetadataAtRef(path, ref):   # → {sha, size, blob?} або null 
 `tracked.remote.sha == local.sha` (не після — інакше хибний збіг `tracked.remote.sha` із
 `local.sha` пропускає перевірку взагалі, записуючи "синхронізовано" без жодного push):**
 
-```
-for each local in batch:   # той самий цикл, що й §III main-loop
-    ... # завантаження local.blob із sync_store/Vault — БЕЗ ЗМІН, як і раніше
+**⚠️ ВИКОНУВАНОГО КОДУ ТУТ НЕМА — і це навмисно (2026-08-29).** Раніше цей розділ ніс власну
+робочу копію main-loop-у, а §III лишався неторканим — тобто в документі жили ДВІ версії одного
+циклу, і кодували б за §III, де Шару 2 не було взагалі. Коли §III нарешті оновили, копії відразу
+почали розходитись (лічильник `layer2_corrections` з'явився лише в одній). Це вже третій випадок
+дублювання в цьому документі — тому копію знято остаточно, а не синхронізовано.
 
-    tracked = TrackedFiles.get(local.path)
-    if tracked == null:
-        ... # seed з metadata.files — БЕЗ ЗМІН, як і раніше
+**НОРМАТИВНА версія — §III, головний цикл** (блок `⚠️ ШАР 2 (§II.13) — ВШИТО СЮДИ`, одразу після
+`continue` гілки `is_manual_conflict` і ПЕРЕД коротким замиканням). Тут лишається тільки схема
+розміщення:
+
+```
+for each local in batch:
+    …завантаження local.blob…
+    …seed tracked з metadata.files, якщо його ще нема…
 
     if tracked.is_manual_conflict:
-        ... # STEP2 — БЕЗ ЗМІН (§II.6/§III). Шар 2 сюди НЕ застосовується: §II.7 вже має
-            # власну live-перевірку (`shouldPushToConflictBranch`) для conflict-branch —
-            # дублювати не потрібно.
+        …STEP2…                    # Шар 2 сюди НЕ доходить — гілка виходить через continue.
+        continue                    # §II.7 (shouldPushToConflictBranch) уже має власну
+                                    # live-перевірку проти conflict-branch, дублювати не треба
+
+    ►► ШАР 2 ТУТ ◄◄                # ← ЄДИНЕ, що фіксує ця схема: точка вставки
+
+    if tracked.remote.sha == local.sha:   # ← коротке замикання. Шар 2 МУСИТЬ бути ВИЩЕ за нього
+        …
         continue
-
-    #=========================================================================================
-    # ⚠️ ШАР 2 (§II.13) — ТУТ, до короткого замикання нижче. Дешевий live-виклик
-    # ({sha,size}, не blob) підтверджує, що НАША пам'ять (tracked.remote.sha) справді
-    # збігається з реальністю на `head_hash` (той самий head, проти якого цей batch буде
-    # запушено). Якщо Шар 1 щось пропустив — тут це виявляється ДО того, як щось зіпсується.
-    #=========================================================================================
-    (live, error) = retryOnNetworkError(() => getContentsMetadataAtRef(local.path, head_hash))  # §II.10
-    if error == TOKEN_EXPIRED:
-        saveTokenExpiredMark()
-        return error
-    if error == NETWORK_ERROR:
-        return error
-    liveSha = live?.sha ?? DELETED_SHA_HASH
-    trackedSha = tracked.remote.sha ?? DELETED_SHA_HASH
-    if liveSha != trackedSha:
-        # Шар 1 помилився для цього шляху — ВИПРАВЛЯЄМО пам'ять, нічого більше. Файл далі йде
-        # ЗВИЧАЙНИМ шляхом нижче (коротке замикання, diff3, можливо STEP1) — так само, якби Шар 1
-        # повідомив про цю зміну правильно з самого початку (той самий контракт, що й
-        # pull-folding, §III цикл "for file in remote_files").
-        tracked.remote.sha = live?.sha ?? DELETED_SHA_HASH
-        tracked.remote.size = live?.size
-        tracked.remote.mode = live is null ? DELETED : ""
-        tracked.remote.blob = null   # старий blob (якщо був) більше не актуальний
-        logWarning("Шар 2: discovery mismatch виправлено", local.path, trackedSha, liveSha)
-
-    if tracked.remote.sha is not null and tracked.remote.sha == local.sha: # змін не було
-       tracked.base = local
-       continue
-
-    (D, diff_error) = _diff3(tracked, local)
-    ... # решта §III main-loop — БЕЗ ЗМІН
+    (D, diff_error) = _diff3(tracked, local, head_hash)
+    …
 ```
 
 **Вартість:** один живий виклик на КОЖЕН файл batch-у, незалежно від того, чи Шар 1 спрацював
@@ -1759,8 +1741,17 @@ FINALIZE будує merge-коміт наново (§IV.2, новий рядок
 #      remote: FileInfo  # type:"remote"        
 #   } 
 
-def _diff3(tracked: FileInfo, local: FileInfo):  # return (FileInfo, error) - переможець, чи модифікований файл або помилка 
+def _diff3(tracked: FileInfo, local: FileInfo, head_hash: string):  # return (FileInfo, error) - переможець,
+                                                 # чи модифікований файл або помилка
                                                  #        (error=NETWORK_ERROR | error=TOKEN_EXPIRED | error=MANUAL_CONFLICT)
+                                                 # ⚠️ `head_hash` ДОДАНО 2026-08-29 і потрібен РІВНО для одного
+                                                 # місця — lazy-догрузки `remote.size` у правилі 7 (нижче), бо
+                                                 # `getContentsMetadataAtRef` вимагає ref. Завантаження blob-ів
+                                                 # його НЕ потребує й не використовує: Git Blobs API
+                                                 # content-addressed, достатньо sha. Тобто це не "функція тепер
+                                                 # знає про гілку", а один параметр для одного виклику.
+                                                 # Усі три сайти виклику (§III main-loop, STEP3, Vault-step
+                                                 # не-конфліктна гілка) — всередині drain(), де head_hash уже є.
     if tracked is null:
        base = FileInfo()   # equal to: {path: null, size: null, mtime: null, sha: null, blob: null, mode: null,
                             # device_label: null}. device_label — ⚠️ ДОДАНО (2026-08-25, власник): device, що
@@ -2599,6 +2590,17 @@ def drain():
     # ВСЕРЕДИНІ того захищеного блоку, не перед ним. Recovery під цим lock-ом структурно не може
     # перетнутись із жодним ІНШИМ drain-ом (другий виклик просто повертається одразу, `if this.running:
     # return`) — саме ця властивість, а не щось нове тут, і робить наступний рядок безпечним:
+    #==========================================================================================
+    # Drain-scoped стан. Живе рівно один запуск drain(), НЕ персистується, НЕ переживає рестарт.
+    # ⚠️ ДОДАНО ЯВНО (2026-08-29): проза §II.9 і §II.13 обіцяла "оголошується на старті drain()",
+    # але сам псевдокод цього не показував — тепер показує, щоб не було двох джерел істини.
+    #==========================================================================================
+    verified_shas = new Set()       # §II.9: SHA, уже перевірені хешуванням цього запуску —
+                                    # той самий blob читається десятки разів за drain
+    layer2_corrections = []         # §II.13: розбіжності discovery, які виправив Шар 2.
+                                    # ПОВЕРТАЄТЬСЯ з drain() (епілог) — це сигнал про блайндспот
+                                    # Шару 1, і він мусить бути перевіряємим тестом, не лише логом
+
     recoverSiblingTransactionIfNeeded()   # §II.11 — ОДИН РАЗ за весь запуск (не на кожному
                                           # 422-рестарті — жива мітка на вході в рестарт структурно
                                           # неможлива в межах ОДНОГО виконання drain(), бо STEP3
@@ -3092,7 +3094,7 @@ def drain():
                tracked.base = local
                continue
                    
-            (D, diff_error) = _diff3(tracked, local)  # tracked має всередині BASE і REMOTE FileInfo-структури
+            (D, diff_error) = _diff3(tracked, local, head_hash)  # tracked має всередині BASE і REMOTE FileInfo-структури
             if diff_error == TOKEN_EXPIRED:  # при спробі зчитати файли з repo для порівняння виникла помилка 
                                             # TOKEN_EXPIRED
                 # зберігаємо файл-ознаку TOKEN_EXPIRED і завершуємо drain з помилкою
@@ -3579,7 +3581,7 @@ def drain():
              # в різних циклах з однаковою назвою раніше зчитувались як суперечність (власник,
              # 2026-08-23) — окремі імена усувають плутанину структурно, без коментаря, який треба
              # пам'ятати читати.
-             (merged_sibling, diff_error) = _diff3(tracked, previous_sibling)
+             (merged_sibling, diff_error) = _diff3(tracked, previous_sibling, head_hash)
              if diff_error == TOKEN_EXPIRED:
                  # Термінально для ВСЬОГО drain (як і скрізь у §III) — токен не відновиться сам між
                  # файлами, продовжувати цикл лише витрачає марні виклики.
@@ -3718,7 +3720,7 @@ def drain():
                                     # структури, не як значуще значення
               # Назва навмисно НЕ `D` — див. коментар біля _diff3(tracked, previous_sibling) вище:
               # цей результат теж ніколи не пушиться, він йде прямо у Vault.
-              (vault_result, diff_error) = _diff3(tracked, local)  # tracked має всередині BASE і REMOTE FileInfo-структури
+              (vault_result, diff_error) = _diff3(tracked, local, head_hash)  # tracked має всередині BASE і REMOTE FileInfo-структури
               if diff_error == TOKEN_EXPIRED:
                   saveTokenExpiredMark()
                   return diff_error
@@ -4640,20 +4642,20 @@ STEP3 replace-транзакції (§II.11, IV.2 рядки 15-20 — sibling-d
 2026-08-26): кожна фазова межа мітка→новий файл→durable-персист→видалення старого→unmark, і
 окремо деградаційний випадок "обидва sibling-файли втрачені" (рядок 20).
 
-**Епілог крок 1 — `mtime: 0` у baseline (додано 2026-08-29) — 4 сценарії.** Перевіряють НЕ форму запису, а те, що
+**Епілог крок 1 — `mtime: 0` у baseline (додано 2026-08-29) — сценарії 13-16.** Перевіряють НЕ форму запису, а те, що
 жодна «оптимізація» цього поля не проходить непоміченою:
 
-D1. Епілог пише `metadata.files[path].mtime == 0` — НЕ `tracked.remote.mtime` (дата GitHub-коміту) і НЕ живий
+13. Епілог пише `metadata.files[path].mtime == 0` — НЕ `tracked.remote.mtime` (дата GitHub-коміту) і НЕ живий
     `stat.mtime`. Прямий регресійний вартовий проти повернення обох варіантів
-D2. **Самолікування (доводить, що ціна прийнятна):** після drain-у, що підтягнув файл, ПЕРШИЙ прохід
+14. **Самолікування (доводить, що ціна прийнятна):** після drain-у, що підтягнув файл, ПЕРШИЙ прохід
     `ChangeDetector` читає й хешує цей файл (замикання не спрацьовує), не емітує жодної зміни, і САМ перезаписує
     snapshot живими `mtime`+`size` (`change-detector.ts:330-341`). ДРУГИЙ прохід уже замикається накоротко, без
     читання. Тобто вартість — рівно одне хешування на файл, одноразово
-D3. **⚠️ Тест, заради якого `0` і обрано:** відтворити вікно втрати — drain записує файл у Vault, користувач
+15. **⚠️ Тест, заради якого `0` і обрано:** відтворити вікно втрати — drain записує файл у Vault, користувач
     редагує його ДО завершення епілогу, причому нова версія має ТОЙ САМИЙ розмір. З `mtime: 0` наступний
     `findChanges` МУСИТЬ побачити правку. (З живим `stat.mtime`, знятим в епілозі, він побачив би збіг
     `mtime`+`size` і замкнувся б накоротко — правка зникла б назавжди. Саме тому точність тут шкідлива.)
-D4. Redo епілогу після краху пише те саме `0` — байтово ідентичний результат, ідемпотентність збережена (§IV.1
+16. Redo епілогу після краху пише те саме `0` — байтово ідентичний результат, ідемпотентність збережена (§IV.1
     "Cold baseline-transfer")
 
 ### E. Уніфікація NETWORK_ERROR (сьогоднішній фікс, 2026-08-25) — ПРІОРИТЕТ, ще не верифіковано тестами
@@ -4809,7 +4811,7 @@ entry випадає з batch-у, решта продовжує; batch, у як�
 11. (integration, реальний GitHub) force-push сценарій — старий `base` недосяжний, `compare()` 404, Шар 1 повертає
     коректний список змін відносно `metadata.files`
 
-### P. Push-side перевірка — Шар 2 (§II.13) — 7 + 6 + 12 сценаріїв, unit з fake GitHub-клієнтом (+2 integration)
+### P. Push-side перевірка — Шар 2 (§II.13) — 29 сценаріїв, unit з fake GitHub-клієнтом (+2 integration)
 
 1. `live.sha == tracked.remote.sha` → без змін, звичайний шлях (коротке замикання або `_diff3`) не порушено
 2. `live.sha != tracked.remote.sha` (Шар 1 щось пропустив) → `tracked.remote` виправляється (`sha`/`size`/`mode`/
@@ -4888,14 +4890,14 @@ entry випадає з batch-у, решта продовжує; batch, у як�
     `tests/integration/compare-api-300-limit.test.ts`. Червона — сигнал негайно вимкнути `HEAD`-шлях на користь
     фолбеку, а не "полагодити тест"
 
-**Лічильник виправлень Шару 2 (додано 2026-08-29) — 3 сценарії:**
+**Лічильник виправлень Шару 2 (додано 2026-08-29) — сценарії 27-29:**
 
-П1. `drain()` повертає `layer2Corrections` як частину результату; для сценарію P.8 (брехливий discovery) список
+27. `drain()` повертає `layer2Corrections` як частину результату; для сценарію P.8 (брехливий discovery) список
     містить РІВНО один запис із `{path, expected, actual}`. Тест перевіряє ЧИСЛО, не парсить лог
-П2. **Щасливий шлях — теж зелений тест:** discovery коректний, Шар 2 нічого не виправляє → `layer2Corrections`
+28. **Щасливий шлях — теж зелений тест:** discovery коректний, Шар 2 нічого не виправляє → `layer2Corrections`
     ПОРОЖНІЙ. Це головний регресійний вартовий: якщо Шар 1 колись почне пропускати шляхи, цей тест почервоніє
     ОДРАЗУ, а не через місяці в полі
-П3. Лічильник живе рівно один запуск drain (не персистується) і не переживає 422-рестарт як подвоєння — той самий
+29. Лічильник живе рівно один запуск drain (не персистується) і не переживає 422-рестарт як подвоєння — той самий
     шлях, виправлений двічі в двох проходах, дає два записи, і це очікувано (кожен прохід — окремий факт)
 
 **Правило 7 і lazy-`size` (§II.1, додано 2026-08-29) — 3 сценарії:**
