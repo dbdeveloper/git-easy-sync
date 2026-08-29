@@ -1089,11 +1089,56 @@ metadata" лише підказує, з якого кроку продовжув
   redo-коду тут не потрібно — це вже наявний механізм, не окрема будова.
     - Якщо старий sibling-файл ФІЗИЧНО ще на диску (звичайний випадок — крок 4 транзакції або не
       виконувався, або щойно був довершений відкатом) — саме так і відбувається.
-    - Якщо старого ТЕЖ немає (крах ПІСЛЯ видалення старого, крок 4, + torn новий — без fsync немає
-      гарантії порядку durability МІЖ різними файлами) — обидва sibling-файли для цього шляху
-      втрачені; `process_conflicts()` (§III, дедуп, сценарій "tracked sibling фізично видалений")
-      prune-ить запис із порожнім `siblings`, а наступний STEP3 відбудовує ланцюжок з нуля, з першого
-      sibling (`sync_store/`) — деградація (втрата ОДНОГО проміжного sibling-запису), не корупція.
+    - Якщо старого ТЕЖ немає — АБО він фізично є, але битий (крах ПІСЛЯ видалення старого, крок 4,
+      + torn новий — без fsync немає гарантії порядку durability МІЖ різними файлами) — обидва
+      кандидати на ОСТАННІЙ елемент списку непридатні. Тоді відкат пише
+      `siblings: dropLast(current.siblings)`, а НЕ `replaceLast(…, mark.oldSibling)` — див.
+      "⚠️ ВИПРАВЛЕНО (2026-08-29)" нижче. Для типового `len == 1` це дає `[]`, і ланцюжок
+      відбудовується з першого sibling ЦЬОГО Ж drain-у (журнал живий, `tracked.remote` реальний,
+      тож STEP3 гілка `previous_sibling is null` спрацьовує одразу). Деградація (втрата ОДНОГО
+      проміжного fold-у), не корупція.
+
+**⚠️ ВИПРАВЛЕНО (2026-08-29, знайдено при наскрізній вичитці §IV.2 рядка 20; рішення власника —
+"цей варіант вважаю прийнятним"). Дискримінатор відкату — ЦІЛІСНІСТЬ `mark.oldSibling`, а не
+беззастережний `replaceLast`.** Рішення вище ("відбудовуємо ланцюжок з нуля") було ухвалене
+правильно, але механізм його НЕ реалізовував: backward-гілка писала
+`replaceLast(current.siblings, mark.oldSibling)` БЕЗУМОВНО, тобто клала в `siblings` вказівник на
+файл, якого вже немає. Далі каскад ішов повз намір:
+
+1. `process_conflicts()` §2.1 не знаходить файл → `removedTracked = {oldSibling}`;
+2. §2.4 (перехід непорожній→порожній) → **`conflicts.delete(path)`** — запис зникає;
+3. RECONCILE (`restoreTrackedFilesFromDiskOrCreateNewOne`) бачить `conflicts.get(path) is null` →
+   **`is_manual_conflict = false`**;
+4. Vault-step: інваріант конфлікт-режиму `tracked.base.sha == tracked.remote.sha` → гілка `else` →
+   Vault не чіпається (у ньому лишається ЛОКАЛЬНА версія користувача);
+5. Епілог крок 1: `tracked.remote.sha` = `R_m` ≠ null, тож guard (`sha is null → continue`) НЕ
+   спрацьовує → пише `baselineSha = R_m` для файлу, який цього вмісту НЕ МАЄ.
+
+Термінальний стан: наступний `[commit]` бачить розбіжність, наступний drain робить
+`_diff3(base=R_m, local=L, remote=R_m)` → правило 4 (§II.1) → local перемагає → **`L` тихо
+затирає `R_m`**. Це ТОЧНО той дефект, який епілог крок 1 описує у власному коментарі як закритий
+(Finding #2, 2026-08-25) — він повертався іншими дверима, повз guard. І обіцянка "наступний STEP3
+відбудовує ланцюжок" справдитись не могла: STEP3 виконується лише під `if tracked.is_manual_conflict`,
+а крок 3 щойно зняв цей прапорець.
+
+⚠️ Це НЕ екзотичний випадок: катастрофічний шлях потребує `len(siblings) == 1`, а це саме ЗВИЧАЙНА
+форма — `replaceLast` тримає довжину 1 незмінною, список росте лише на diff3-ERROR (append). Записи
+з кількома siblings, навпаки, переживають prune (лишається старіший елемент) і змін не потребують.
+
+Фікс — розрізняти за `verifySiblingFileIntegrity(mark.oldSibling)` (цілісність, НЕ `exists`: старий
+файл, що вцілів фізично, але битий, інакше пішов би байтами прямо в наступний `_diff3` без жодної
+перевірки), і на провалі писати `dropLast(current.siblings)`. ⚠️ Саме `dropLast`, а не `[]`:
+непридатний тут ЛИШЕ останній елемент, а старіші siblings (append-гілка §II.6 п.6) цілі — стерти
+їх означало б перевести їх у synthetic і зняти з них блокування FINALIZE. Для типового `len == 1`
+`dropLast` і дає `[]`. Нової машинерії не потрібно — весь ланцюг далі вже стоїть: `process_conflicts()` §2.4
+видаляє запис ЛИШЕ на переході (на вході `[]` → `len == 0` → запис виживає), seeding ставить
+`is_manual_conflict=true` для порожнього `siblings`, RECONCILE не спрацьовує (запис на місці),
+FINALIZE лишається заблокованим (`len(conflicts) != 0`).
+
+Розглянуто й ВІДХИЛЕНО: відновлювати байти `oldSibling` із `sync_store/` (куди `_diff3` зберігає
+кожен merge-результат) і зберегти навіть проміжний fold. Sibling-блоби не входять у ЖОДНЕ з 4
+джерел `referenced` для sweep (§12.5) — знадобилось би 5-те джерело з власними правилами захисту.
+Реальна нова машинерія заради того, що вже свідомо списано в бюджет деградації.
 
 (Детермінований redo — той самий принцип, що вже й так рятує append/first-sibling гілки — обидві
 навмисно ЛИШАЮТЬСЯ без цієї транзакції, бо не знищують жодного доказу, самолікуються редо самі по
@@ -1203,8 +1248,22 @@ if mark is not null:
         # НАЗАД — відкат до перед-транзакційного стану (`current` тут ГАРАНТОВАНО not null —
         # null-кейс уже відсіяний вище, до розгалуження):
         if guidMatches:
-            conflicts.set(mark.path, {conflictBase: current.conflictBase,
-                siblings: replaceLast(current.siblings, mark.oldSibling)})
+            # ⚠️ ВИПРАВЛЕНО (2026-08-29): дискримінатор — ЦІЛІСНІСТЬ старого, не беззастережний
+            # replaceLast. Інакше в siblings лягав би вказівник на неіснуючий/битий файл, і
+            # каскад prune → RECONCILE → отруєний baseline тихо затирав би R_m (див. прозу вище):
+            if not verifySiblingFileIntegrity(mark.oldSibling):
+                # старого теж немає (або він битий) — вказувати на нього НЕ МОЖНА. Викидаємо
+                # ОСТАННІЙ елемент (непридатний), решту списку зберігаємо: dropLast, НЕ `[]` —
+                # інакше старіші, цілі siblings (append-гілка §II.6 п.6) втратили б tracked-статус
+                # і перестали б блокувати FINALIZE. Для типового `len == 1` dropLast дає саме `[]`
+                # — ЛЕГІТИМНИЙ стан ("конфлікт живий, sibling-файлу ще нема"), той самий, що й у
+                # свіжого STEP1-запису: §2.4 його не prune-ить, seeding тримає прапорець, а STEP3
+                # гілка `previous_sibling is null` відбудує перший sibling ЦЬОГО Ж drain-у
+                conflicts.set(mark.path, {conflictBase: current.conflictBase,
+                    siblings: dropLast(current.siblings)})
+            else:
+                conflicts.set(mark.path, {conflictBase: current.conflictBase,
+                    siblings: replaceLast(current.siblings, mark.oldSibling)})
             conflicts.lastSiblingTxGuid = null # ⚠️ ОБОВ'ЯЗКОВО (не опціонально): bak переживає лише
                                                 # крахи ВСЕРЕДИНІ самого виклику saveConflictsToStore
                                                 # (sweep його не зачищає до return); будь-який крах
@@ -1217,9 +1276,10 @@ if mark is not null:
             saveConflictsToStore(conflicts)    # реверс кроку 3
         removeFromVaultIfExists(buildSiblingFilePath(mark.newSibling.path, mark.newSibling.mtime,
             mark.newSibling.device_label))     # прибрати биту/часткову спробу
-        # Старий sibling-файл тут НІЧИМ не займаємо — журнал живий, наступний Vault-step сам
-        # домержить fold (чи, якщо старого теж немає, process_conflicts() prune-ить порожній
-        # запис і STEP3 відбудує ланцюжок з нуля) — див. "Рішення власника" вище.
+        # Старий sibling-ФАЙЛ тут нічим не займаємо (не видаляємо й не переписуємо) — якщо він
+        # цілий, журнал живий і наступний Vault-step сам домержить fold; якщо ні — запис уже
+        # переведено в `siblings: []` вище, і ланцюжок відбудується з першого sibling ЦЬОГО Ж
+        # drain-у. Див. "Рішення власника" і "⚠️ ВИПРАВЛЕНО (2026-08-29)" вище.
     deleteSiblingTransactionMark()
 ```
 
@@ -2006,9 +2066,30 @@ def recoverSiblingTransactionIfNeeded():
         if guidMatches:
             # metadata вже стверджувала новий стан, але сам файл битий/відсутній — відкочуємо
             # durable-запис на старий sibling (undo replaceLast), інакше наступний STEP3 читав би
-            # last(siblings) = биту версію й впав би на LOCAL_FILE_IS_NOT_FOUND_ERROR:
-            conflicts.set(mark.path, {conflictBase: current.conflictBase,
-                siblings: replaceLast(current.siblings, mark.oldSibling)})
+            # last(siblings) = биту версію й впав би на LOCAL_FILE_IS_NOT_FOUND_ERROR.
+            # ⚠️ ВИПРАВЛЕНО (2026-08-29, §II.11 "⚠️ ВИПРАВЛЕНО"): відкат ЛИШЕ якщо старий справді
+            # придатний. Дискримінатор — ЦІЛІСНІСТЬ (не `exists`): битий-але-присутній старий файл
+            # інакше пішов би байтами прямо в наступний _diff3 без перевірки. Беззастережний
+            # replaceLast клав у siblings вказівник у нікуди, а далі каскад
+            # prune → RECONCILE → отруєний baseline тихо затирав R_m (правило 4, §II.1) — той самий
+            # I2-дефект, що й Finding #2, лише повз guard епілогу:
+            if not verifySiblingFileIntegrity(mark.oldSibling):
+                # Обидва кандидати на ОСТАННІЙ елемент непридатні (новий битий, старий битий або
+                # відсутній) — викидаємо саме його, решту списку зберігаємо. ⚠️ `dropLast`, а НЕ
+                # `[]`: старіші siblings (append-гілка §II.6 п.6) цілі, вони мусять лишитись
+                # tracked, інакше стануть synthetic і перестануть блокувати FINALIZE.
+                # Для типового `len == 1` (replace тримає довжину 1; список росте лише на
+                # diff3-ERROR) dropLast дає `[]` — ЛЕГІТИМНИЙ стан, тотожний свіжому STEP1-запису:
+                # §2.4 (`process_conflicts()`) не prune-ить його (видалення лише на ПЕРЕХОДІ
+                # непорожній→порожній), seeding тримає is_manual_conflict=true, RECONCILE не
+                # спрацьовує, FINALIZE лишається заблокованим. Перший sibling відбудується ЦЬОГО Ж
+                # drain-у: журнал живий, tracked.remote реальний (не плейсхолдер), тож STEP3 гілка
+                # `previous_sibling is null` спрацює нижче:
+                conflicts.set(mark.path, {conflictBase: current.conflictBase,
+                    siblings: dropLast(current.siblings)})
+            else:
+                conflicts.set(mark.path, {conflictBase: current.conflictBase,
+                    siblings: replaceLast(current.siblings, mark.oldSibling)})
             conflicts.lastSiblingTxGuid = null   # ⚠️ ОБОВ'ЯЗКОВО — без цього повторний recovery
                                                   # по тій самій мітці (крах ПОСЕРЕД самого
                                                   # recovery) тримався б лише на випадковому
@@ -2019,10 +2100,11 @@ def recoverSiblingTransactionIfNeeded():
         removeFromVaultIfExists(buildSiblingFilePath(mark.newSibling.path, mark.newSibling.mtime,
             mark.newSibling.device_label))  # прибираємо незалежно від того, чи він взагалі
                                              # з'явився, і чи битий — однаково не довіряємо
-        # Старий sibling-файл тут НІЧИМ не займаємо. Якщо він фізично ще на диску — журнал живий,
-        # наступний Vault-step сам домержить свіжу remote-зміну (fold) для цього шляху; якщо його
-        # ТЕЖ немає (крах ПІСЛЯ кроку 4 + torn новий) — process_conflicts() prune-ить порожній
-        # запис, STEP3 відбудує ланцюжок з нуля (деградація, не корупція) — §II.11.
+        # Старий sibling-ФАЙЛ тут нічим не займаємо (не видаляємо й не переписуємо). Якщо він цілий
+        # — журнал живий, наступний Vault-step сам домержить свіжу remote-зміну (fold) для цього
+        # шляху; якщо ні (крах ПІСЛЯ кроку 4 + torn новий, АБО старий на місці, але битий) — запис
+        # уже переведено в `siblings: []` вище, і STEP3 відбудує ланцюжок з першого sibling ЦЬОГО Ж
+        # drain-у (деградація = втрата проміжного fold, не корупція) — §II.11.
     deleteSiblingTransactionMark()
 
 
@@ -3599,7 +3681,7 @@ def drain():
 | **STEP3 blob-fetch + NOT_FOUND-cancel** (Vault-step, §III, `previous_sibling is null` гілка)            | Так, повним redo Vault-step                                                                                                     | Крах ДО завершення епілогу (журнал ще на диску) → наступний запуск повторює Vault-step з нуля для ВСІХ tracked, включно з цим шляхом: те саме `sync_store`→мережа читання, той самий NOT_FOUND (природа помилки не залежить від того, скільки разів її перевіряли), той самий `conflicts.delete` + `is_manual_conflict=false`. Немає проміжного стану, який redo міг би застати "напівскасованим" — обидва присвоєння в ОДНІЙ, не розбитій навпіл ділянці коду, до будь-якого диск-запису цього кроку.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | **Seeding** (`restoreTrackedFilesFromDiskOrCreateNewOne`, §III)                                         | Так, чиста функція від входу                                                                                                    | Вхід — `(журнал-з-диска, durable conflicts-з-диска)`, обидва не змінюються під час виконання функції; вихід — детермінована функція входу (журнал-гілка АБО reconcile-гілка від `conflicts`, без прихованого стану). Повторний виклик з тим самим входом (напр. після краху ДО першого запису епілогу) дає той самий `TrackedFiles`-масив, включно з `base: seeded_remote`-плейсхолдером для idle-шляхів і фолбеком `conflictBranchName = metadata.getConflictBranchName()`, коли журналу нема.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | **Lazy device_label-fetch** (STEP1 / pull-folding-refresh / Vault-step-born-конфлікт, §III)             | Так, read-only                                                                                                                  | `getCommitDeviceLabelForPath` — чисте GET, без побічних ефектів на repo. Крах ДО чи ПІСЛЯ виклику не залишає проміжного стану, що вимагав би відкату — гірше, що можливо: значення просто перезапитується вдруге при redo.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| **STEP3 replace-транзакція** (§II.11, mark → новий файл → durable-персист → видалення старого → unmark) | Так, через GUID-звірку + hash-on-load, БЕЗ fsync                                                                                | `recoverSiblingTransactionIfNeeded()` (§III, ОДИН РАЗ, ПЕРШИЙ рядок `drain()`, ПІД `running`-lock-ом — 2026-08-26, третя ревізія: НЕ всередині `process_conflicts()`, той самий принцип, що й journal-recovery) відновлює з мітки. Дискримінатор напрямку — ЛИШЕ цілісність нового sibling-файлу (size+SHA, §II.9-стиль, без мережевого fallback-у): запис уже prune-нутий (`current is null`) → прибрати ЛИШЕ новий файл (безумовно наш артефакт), старий не займати (він більше не tracked — доля за `process_conflicts()`), занулити `lastSiblingTxGuid` за потреби й unmark (конфлікт уже закрито); інакше валідний → накат ВПЕРЕД з першого недовершеного кроку (3-5), БАЙДУЖЕ, чи metadata вже нова — повного redo Vault-step тут не потрібно взагалі; битий/відсутній → відкат до перед-транзакційного стану (undo `replaceLast`, з обов'язковим `lastSiblingTxGuid=null`), прибрати новий файл, unmark. Сама злука (fold) свіжої remote-зміни в цьому кейсі доллється НЕ спеціальним кодом, а вже наявним механізмом — журнал лишається живим, наступний Vault-step повторює fold сам. Простий локальний save/remove, що кидає необроблений виняток посеред транзакції, — поза гарантією цього документа (рішення власника, 2026-08-26): наступний `drain()` (будь-коли, під тим самим lock-ом) полагодить, спеціального try-catch усередині транзакції немає.                                                                                                                                                                                                                                                                                                                |
+| **STEP3 replace-транзакція** (§II.11, mark → новий файл → durable-персист → видалення старого → unmark) | Так, через GUID-звірку + hash-on-load, БЕЗ fsync                                                                                | `recoverSiblingTransactionIfNeeded()` (§III, ОДИН РАЗ, ПЕРШИЙ рядок `drain()`, ПІД `running`-lock-ом — 2026-08-26, третя ревізія: НЕ всередині `process_conflicts()`, той самий принцип, що й journal-recovery) відновлює з мітки. Дискримінатор напрямку — ЛИШЕ цілісність нового sibling-файлу (size+SHA, §II.9-стиль, без мережевого fallback-у): запис уже prune-нутий (`current is null`) → прибрати ЛИШЕ новий файл (безумовно наш артефакт), старий не займати (він більше не tracked — доля за `process_conflicts()`), занулити `lastSiblingTxGuid` за потреби й unmark (конфлікт уже закрито); інакше валідний → накат ВПЕРЕД з першого недовершеного кроку (3-5), БАЙДУЖЕ, чи metadata вже нова — повного redo Vault-step тут не потрібно взагалі; битий/відсутній → відкат до перед-транзакційного стану (з обов'язковим `lastSiblingTxGuid=null`), прибрати новий файл, unmark. **⚠️ ВИПРАВЛЕНО (2026-08-29):** сам відкат розгалужується за ЦІЛІСНІСТЮ `mark.oldSibling` — цілий → `replaceLast(…, oldSibling)`; непридатний (нема АБО битий) → `dropLast(siblings)` (саме dropLast, не `[]` — старіші siblings цілі й мусять лишитись tracked). Беззастережний `replaceLast` (попередня редакція) лишав вказівник у нікуди, а каскад prune → RECONCILE → `baselineSha=R_m` поверх локального вмісту тихо затирав `R_m` наступним drain-ом (I2, §II.11). Сама злука (fold) свіжої remote-зміни доллється НЕ спеціальним кодом, а вже наявним механізмом — журнал лишається живим, Vault-step повторює fold сам (а в гілці `siblings: []` — ЦЬОГО Ж drain-у, через STEP3 `previous_sibling is null`). Простий локальний save/remove, що кидає необроблений виняток посеред транзакції, — поза гарантією цього документа (рішення власника, 2026-08-26): наступний `drain()` (будь-коли, під тим самим lock-ом) полагодить, спеціального try-catch усередині транзакції немає.                                                                                                                                                                                                                                                                                                                |
 
 **Передумова, на якій тримаються рядки 1/2 нижче (не мережевий side-effect, а чиста in-memory
 реконструкція): reconciliation `is_manual_conflict` при відновленні.** `restoreTrackedFilesFromDiskOrCreateNewOne`
@@ -3649,7 +3731,7 @@ crash/redo від того, щоб побачити напівзаповнени
 | 17 ⚠️ НОВЕ (2026-08-26, §II.11, друга ревізія) | ПІСЛЯ durable-персисту (крок 3, `conflicts.lastSiblingTxGuid` уже новий), ДО видалення старого sibling-файлу (крок 4)                                                                                                                         | Мітка на диску; новий файл справжній І зареєстрований; старий файл ФІЗИЧНО ще на диску, але вже НЕ в `siblings`-списку (synthetic)                                               | Новий файл валідний → ВПЕРЕД: `guidMatches=true` → крок 3 вже не потрібен (no-op), лишається довершити ЛИШЕ крок 4 (видалити старий) і unmark, БЕЗ redo Vault-step для цього шляху — саме та властивість, заради якої й писалась ця транзакція                                                                                                                                                                                                                                                          | IV.1 "STEP3 replace-транзакція"                                                                                                                                                                                                                                                                                                                                                                                                             |
 | 18 ⚠️ НОВЕ (2026-08-26, §II.11, друга ревізія) | Між записом валідного нового sibling-файлу (крок 2 повністю успішний) і durable-персистом (крок 3 ще НЕ виконався) — вікно, якого перша версія контракту трактувала як повний rollback+redo                                                   | Мітка на диску; новий файл справжній і ПРОХОДИТЬ перевірку; `conflicts.lastSiblingTxGuid` ЩЕ СТАРИЙ (`guidMatches=false`)                                                        | Новий файл валідний → ВПЕРЕД, попри те що `guidMatches=false`: `conflicts.set` (реконструкція old+мітка→new) + `lastSiblingTxGuid=mark.guid` + `saveConflictsToStore` (довершує крок 3), потім крок 4 (видалити старий), unmark. Redo Vault-step НЕ потрібен — це і є зміна другої ревізії відносно першої (яка тут форсувала повний rollback)                                                                                                                                                          | IV.1 "STEP3 replace-транзакція"                                                                                                                                                                                                                                                                                                                                                                                                             |
 | 19 ⚠️ НОВЕ (2026-08-26, §II.11, друга ревізія) | ПІСЛЯ durable-персисту (крок 3), ДО видалення старого (крок 4) — новий sibling-файл на диску ВИЯВЛЯЄТЬСЯ битим при відновленні (torn write, реальний ризик без fsync — §II.11), СТАРИЙ файл ще фізично на диску                               | Мітка на диску; `conflicts.lastSiblingTxGuid` новий, `verifySiblingFileIntegrity` провалюється; старий sibling-файл ще присутній (крок 4 не виконувався)                         | НАЗАД: `guidMatches=true` → відкат durable-запису на `mark.oldSibling` (undo `replaceLast`, `lastSiblingTxGuid=null`), прибрати биту копію нового, unmark. Старий файл нікуди не діли — журнал живий, наступний Vault-step сам домержить fold для цього шляху, спеціального redo-коду не потрібно                                                                                                                                                                                                       | IV.1 "STEP3 replace-транзакція"                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 20 ⚠️ НОВЕ (2026-08-26, §II.11, друга ревізія) | ПІСЛЯ видалення старого sibling-файлу (крок 4), новий sibling-файл на диску ВИЯВЛЯЄТЬСЯ битим при відновленні (torn write без fsync-гарантії порядку durability МІЖ окремими файлами, тому "новий записався раніше за старий" не гарантовано) | Мітка на диску; `conflicts.lastSiblingTxGuid` новий, `verifySiblingFileIntegrity` провалюється; старого sibling-файлу ТЕЖ немає на диску (крок 4 уже виконався)                  | НАЗАД: `guidMatches=true` → відкат durable-запису на `mark.oldSibling` (undo `replaceLast`, `lastSiblingTxGuid=null`), прибрати биту копію нового, unmark. Але `mark.oldSibling`-ФАЙЛУ фізично вже немає — метадата вказує в нікуди. `process_conflicts()` (сценарій C.6, "tracked sibling фізично видалений") prune-ить запис із порожнім `siblings`; наступний STEP3 відбудовує ланцюжок з нуля, з першого sibling (`sync_store/`). Деградація (втрата ОДНОГО проміжного sibling-запису), не корупція | IV.1 "STEP3 replace-транзакція"; §II.11 "Рішення власника"                                                                                                                                                                                                                                                                                                                                                                                  |
+| 20 ⚠️ НОВЕ (2026-08-26, §II.11, друга ревізія) | ПІСЛЯ видалення старого sibling-файлу (крок 4), новий sibling-файл на диску ВИЯВЛЯЄТЬСЯ битим при відновленні (torn write без fsync-гарантії порядку durability МІЖ окремими файлами, тому "новий записався раніше за старий" не гарантовано) | Мітка на диску; `conflicts.lastSiblingTxGuid` новий, `verifySiblingFileIntegrity` провалюється; старого sibling-файлу ТЕЖ немає на диску (крок 4 уже виконався)                  | НАЗАД, гілка "старий непридатний" (⚠️ ПЕРЕПИСАНО 2026-08-29): `verifySiblingFileIntegrity(mark.oldSibling)` = false (файлу нема — або він є, але битий) → durable-запис переводиться в **`siblings: dropLast(current.siblings)`**, а НЕ в `replaceLast(…, oldSibling)` (той клав би вказівник у нікуди) і НЕ в `[]` (це стерло б цілі старіші siblings, знявши з них блокування FINALIZE). `lastSiblingTxGuid=null`, бита копія нового прибирається, unmark. Запис ЛИШАЄТЬСЯ живим: §2.4 не prune-ить порожній список на вході (видалення лише на ПЕРЕХОДІ), seeding тримає `is_manual_conflict=true`, RECONCILE не спрацьовує, FINALIZE заблокований. Для типового `len == 1` список стає порожнім і перший sibling відбудовується **ЦЬОГО Ж drain-у** (журнал живий, `tracked.remote` реальний → STEP3 гілка `previous_sibling is null`). Деградація = втрата ОДНОГО проміжного fold, не корупція. **Попередня редакція цього рядка описувала недосяжний сценарій:** беззастережний `replaceLast` вів у `conflicts.delete(path)` → RECONCILE знімав прапорець → епілог писав `baselineSha=R_m` для файлу з ЛОКАЛЬНИМ вмістом → наступний drain тихо затирав `R_m` (правило 4, §II.1) — I2-клас, той самий Finding #2, лише повз guard | IV.1 "STEP3 replace-транзакція"; §II.11 "⚠️ ВИПРАВЛЕНО (2026-08-29)"                                                                                                                                                                                                                                                                                                                                                                                  |
 | 21 ⚠️ НОВЕ (2026-08-26, §II.11, третя ревізія) | Мітка лишилась від in-session винятку/незавершеної транзакції; МІЖ тим і наступним `drain()` користувач сам вручну розв'язав конфлікт у diff-editor — durable-запис P зник (prune-нутий `process_conflicts()`)                                | Мітка на диску; `conflicts.get(mark.path)` = null (запис P відсутній); можливо новий і/або старий sibling-файл ще фізично на диску (звичайні synthetic-файли, більше не tracked) | `current is null` → нема з чим накатувати ні вперед, ні назад: якщо `guidMatches` — занулити `lastSiblingTxGuid` і `saveConflictsToStore` (інакше guid безстроково стверджував би "транзакція закомітилась"); прибрати ЛИШЕ новий файл (безумовно наш артефакт); старий НЕ займати (доля за наступним скану `process_conflicts()`, C.4/C.6); unmark. Без null-guard тут був би null-deref на `current.conflictBase`                                                                                     | IV.1 "STEP3 replace-транзакція"; §II.11                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 22 ⚠️ НОВЕ (2026-08-29, §II.14) | FINALIZE, МІЖ `createCommit` (merge-коміт створено) і `updateReference` (`main` ще на нього не вказує) | У repo лежить недосяжний ("orphan") commit-об'єкт; `main` не зрушив; `conflictBranchName` ще не занулений (журнал/hot його несуть) | Наступний FINALIZE (наступний drain) бачить `isAncestorOf` = false (гілка не влита — ref не оновився) і будує merge-коміт НАНОВО. Orphan-об'єкт ні на що не впливає: недосяжний, невидимий у жодному API-переліку, прибирається GitHub-івським GC. Спеціального прибирання не потребує | IV.1 "Merge conflict-branch → main"; §II.14 |
 
@@ -4072,7 +4154,7 @@ seeding) + рідший integration-рівень (реальний GitHub, пі�
    `.obsidian/`: усередині `.obsidian/` перша рука та сама (тихе видалення, через 3.b.2.a), а друга — інша: живий
    remote тихо воскрешає файл замість MANUAL_CONFLICT (3.b.2.c, §II.1 п.3.b, §VIII A.1 п.9-10)
 
-### C. Manual Conflict lifecycle (§II.6) — 22 сценарії
+### C. Manual Conflict lifecycle (§II.6) — 24 сценарії (22 + 19a/19b, додані 2026-08-29)
 
 1. STEP1: конфлікт народжується з `_diff3` ERROR → `conflicts.set(path, {conflictBase, siblings: []})`, push у
    conflict-branch, `base=remote=R_m`, `is_manual_conflict=true`
@@ -4109,15 +4191,29 @@ seeding) + рідший integration-рівень (реальний GitHub, пі�
 17. **Крах ПІСЛЯ durable-персисту (крок 3), ДО видалення старого (крок 4)** (`lastSiblingTxGuid` уже новий, новий
     sibling-файл справжній) → ВПЕРЕД, крок 3 вже no-op → відновлення довершує ЛИШЕ крок 4, БЕЗ redo Vault-step для цього
     шляху
-18. **Новий sibling-файл виявляється битим при відновленні, СТАРИЙ фізично ще на диску** (крок 4 не виконувався) →
-    НАЗАД: відкат durable-запису на старий sibling (undo `replaceLast`, `lastSiblingTxGuid=null`), бита копія
-    прибирається, unmark. Сама злука (fold) свіжої remote-зміни НЕ відновлюється тут спеціальним кодом — журнал живий,
-    наступний Vault-step сам повторює fold для цього шляху
-19. **⚠️ НОВИЙ (2026-08-26, друга ревізія): новий sibling-файл битий ПРИ відновленні, І старий ТЕЖ фізично відсутній** (
-    крах ПІСЛЯ видалення старого, крок 4, + torn новий — без fsync немає гарантії порядку durability МІЖ окремими
-    файлами) → НАЗАД відкочує metadata на `mark.oldSibling`, але сам файл цей уже видалено — метадата вказує в нікуди →
-    `process_conflicts()` (сценарій C.6) prune-ить запис, наступний STEP3 відбудовує ланцюжок з нуля, з першого
-    sibling (`sync_store/`) — деградація (втрата ОДНОГО проміжного sibling-запису), не корупція
+18. **Новий sibling-файл виявляється битим при відновленні, СТАРИЙ фізично ще на диску І ЦІЛИЙ** (крок 4 не
+    виконувався) → НАЗАД: `verifySiblingFileIntegrity(mark.oldSibling)` ПРОХОДИТЬ → відкат durable-запису на старий
+    sibling (`replaceLast`, `lastSiblingTxGuid=null`), бита копія прибирається, unmark. Сама злука (fold) свіжої
+    remote-зміни НЕ відновлюється тут спеціальним кодом — журнал живий, наступний Vault-step сам повторює fold для
+    цього шляху
+19. **⚠️ ПЕРЕПИСАНО (2026-08-29): новий sibling-файл битий ПРИ відновленні, І старий непридатний** — ДВА підваріанти,
+    обидва мусять дати ОДИН результат: (а) старого фізично немає (крах ПІСЛЯ кроку 4 + torn новий); (б) старий
+    фізично Є, але битий (`verifySiblingFileIntegrity` провалюється на ньому теж) → durable-запис переводиться в
+    **`dropLast(siblings)`**; при `len == 1` це `[]`, запис НЕ зникає, `is_manual_conflict` НЕ скидається, FINALIZE
+    лишається заблокованим, і STEP3 відбудовує перший sibling **у цьому ж drain-і**. Підваріант (б) — окремий тест
+    саме тому, що `exists`-перевірка його б пропустила й згодувала биті байти в наступний `_diff3`
+19a. **Регресія до п.19 (найважливіший тест категорії, 2026-08-29):** пройти сценарій 19 до кінця і ПЕРЕВІРИТИ, що
+    `conflicts.get(path)` НЕ `null` після recovery. Якщо запис зникає — вмикається каскад
+    `conflicts.delete` → RECONCILE (`is_manual_conflict=false`) → епілог пише `baselineSha = R_m` для файлу, що
+    містить ЛОКАЛЬНИЙ вміст → наступний drain робить `_diff3(base=R_m, local=L, remote=R_m)` → правило 4 (§II.1) →
+    **`L` тихо затирає `R_m`**. Тест має доводити ВІДСУТНІСТЬ цього затирання наскрізь (два drain-и поспіль + перевірка
+    remote), а не лише форму запису одразу після recovery
+19b. **`dropLast`, а не `[]` — межа застосування:** той самий крах, але `len(siblings) == 2` (є старіший sibling з
+    попередньої append-гілки, його файл ЦІЛИЙ на диску) → після recovery `siblings` містить РІВНО цей старіший
+    елемент, а не порожній список. Регресійний сенс: якби відкат писав `[]`, цілий старіший sibling перетворився б на
+    synthetic — перестав би блокувати FINALIZE (§III гейт дивиться лише на tracked), і conflict-branch міг би
+    змерджитись при живому, видимому користувачеві конфлікт-файлі. Заразом показує, що катастрофічний шлях п.19a
+    потребує саме `len(siblings) == 1` — типової форми конфлікту, що весь час чисто зливався
 20. **Крах ПОСЕРЕД самого recovery** (мітка з попереднього краху вже читається вдруге — сам
     `recoverSiblingTransactionIfNeeded()` не встиг завершитись): forward-гілка — крах між `saveConflictsToStore` і
     `removeFromVaultIfExists(oldSibling)` (крок 3→4) АБО між `removeFromVaultIfExists(oldSibling)` і
