@@ -821,6 +821,12 @@ export class Sync2Manager {
     this.logger.info("Sync2 cancelDrain requested");
   }
 
+  // RESET-PLUGIN O3: reset cancels a running drain and polls this
+  // until idle before wiping `.runtime/`.
+  isDrainRunning(): boolean {
+    return this.running;
+  }
+
   // Stage 7 error capture. Called by main.ts's sync() catch block
   // (and backgroundDrain) right before re-throwing or swallowing
   // an error. Surfaces in the Settings drain-status section as

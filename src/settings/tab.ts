@@ -1023,9 +1023,15 @@ class ResetConfirmModal extends Modal {
 
     contentEl.createEl("p", {
       text:
-        "This will wipe the GitHub token, repository settings, sync " +
-        "history, pending push queue, and pending conflicts. Local " +
-        "vault files are NOT touched. This cannot be undone.",
+        "This resets the plugin to a clean state. It will permanently " +
+        "erase: the GitHub token and repository settings; the sync " +
+        "history; local commits that have not reached GitHub yet; " +
+        "pending conflicts; unsaved edits in open conflict editors; " +
+        "and the plugin's trash (one-cycle recovery copies of recently " +
+        "deleted files). Your notes are not touched. Conflict-copy " +
+        "files in the vault stay in place; if you re-enable the plugin " +
+        "later, it will pick them up as conflicts again. This cannot " +
+        "be undone.",
     });
     contentEl.createEl("p", {
       text: `Type ${this.phrase} below to confirm.`,

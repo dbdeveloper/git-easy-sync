@@ -431,11 +431,10 @@ export default class ConflictStore {
   // detects the user pointed the plugin at a different
   // (owner, repo, branch).
   //
-  // Does NOT touch vault sibling files — that's the caller's job via
-  // renameVaultSiblingsToUnresolved() when the trigger is Reset
-  // — siblings get renamed via renameVaultSiblingsToUnresolved()
-  // before clearAll() — or no-op when the trigger is repo switch.
-  // (Vault siblings stay as live conflicts against the new remote.)
+  // Does NOT touch vault sibling files (RESET-PLUGIN D4, reversed by
+  // the owner 2026-08-30): they stay in place; a later re-enable
+  // picks them up as synthetic conflicts. On a repo switch they stay
+  // as live conflicts against the new remote.
   async clearAll(): Promise<void> {
     this.records.clear();
     this.byPath.clear();
@@ -443,47 +442,6 @@ export default class ConflictStore {
     if (await this.vault.adapter.exists(this.conflictsRoot)) {
       await this.vault.adapter.rmdir(this.conflictsRoot, true);
     }
-  }
-
-  // Reset-only: walk the vault for sibling files matching
-  // `*.conflict-from-*` and rename each to
-  // `<stem>.unresolved-<original-ts>.<ext>`. Decouples the rename
-  // from clearAll so the repo-switch path can wipe records without
-  // disturbing user-visible files. Returns count renamed.
-  //
-  // Mobile/Capacitor safety: rename throws if destination exists, so
-  // we skip silently when a stale `.unresolved-*` artifact is already
-  // there (user's prior reset that didn't get pushed yet).
-  async renameVaultSiblingsToUnresolved(): Promise<number> {
-    let count = 0;
-    const walk = async (dir: string): Promise<void> => {
-      let listing: { files: string[]; folders: string[] };
-      try {
-        listing = await this.vault.adapter.list(dir);
-      } catch {
-        return;
-      }
-      for (const filePath of listing.files) {
-        const slash = filePath.lastIndexOf("/");
-        const fileName = slash >= 0 ? filePath.slice(slash + 1) : filePath;
-        const renamed = unresolvedNameFor(fileName);
-        if (renamed === null) continue;
-        const dirPart = slash >= 0 ? filePath.slice(0, slash + 1) : "";
-        const newPath = `${dirPart}${renamed}`;
-        try {
-          if (await this.vault.adapter.exists(newPath)) continue;
-          await this.vault.adapter.rename(filePath, newPath);
-          count++;
-        } catch {
-          // Best-effort; a partial reset is acceptable.
-        }
-      }
-      for (const sub of listing.folders) {
-        await walk(sub);
-      }
-    };
-    await walk("/");
-    return count;
   }
 
   // ── Quick-access queries ────────────────────────────────────────────
@@ -690,23 +648,6 @@ export function buildSiblingPath(
   const safeLabel = remoteDevice.replace(/\(/g, "[").replace(/\)/g, "]");
   const iso = new Date(ts).toISOString().replace(/[:.]/g, "-").replace(/-\d{3}Z$/, "Z");
   return `${dir}${stem}.conflict-from-${safeLabel}-${iso}${ext}`;
-}
-
-// Reset-time helper: given a sibling filename of the shape
-// `<stem>.conflict-from-<label>-<isoTs><ext>` produced by
-// buildSiblingPath, return the rewritten "unresolved" form
-// `<stem>.unresolved-<isoTs><ext>` — dropping the device label so
-// the rename survives across plugin re-enables on different
-// devices. The `<isoTs>` segment is anchored on buildSiblingPath's
-// exact shape (YYYY-MM-DDTHH-MM-SSZ); names that don't match
-// return null so the reset walker leaves unrelated files alone.
-export function unresolvedNameFor(filename: string): string | null {
-  const m = filename.match(
-    /^(.+?)\.conflict-from-.+-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)(\..+)?$/,
-  );
-  if (!m) return null;
-  const [, stem, ts, ext = ""] = m;
-  return `${stem}.unresolved-${ts}${ext}`;
 }
 
 // ── Defensive load coercion ────────────────────────────────────────────

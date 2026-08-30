@@ -54,6 +54,12 @@ import { TrashWatcher } from "./diff2/trash-watcher";
 import { sweepOnload as trashSweepOnload } from "./diff2/trash-recovery";
 import { recoverAutosaveDirs } from "./diff2/onload-recovery";
 import { setAutosaveRoot, AUTOSAVE_ROOT, autosaveDir } from "./diff2/autosave-store";
+import {
+  hasResetMarker,
+  removeResetMarker,
+  resetRuntimeState,
+  wipeRuntimeDir,
+} from "./sync2/reset";
 import { DiffPanelView, DIFF2_PANEL_VIEW_TYPE, type DiffEditViewDeps } from "./diff2/diff-panel-view";
 import { DiffEditorView, DIFF2_EDITOR_VIEW_TYPE } from "./diff2/diff-editor-view";
 import { findRightNeighborIndex, type Rect } from "./diff2/split-nav";
@@ -204,6 +210,11 @@ export default class GitHubSyncPlugin extends Plugin {
   // Exposed for the settings tab's "Push plugins data.json" toggle,
   // which reads/writes the allow line directly via this owner.
   invariants!: GitignoreInvariants;
+  // Metadata stores — durable references so reset can re-init their
+  // in-memory state after wiping .runtime/ (RESET-PLUGIN O2).
+  hotMeta!: HotMetadataStore;
+  baselines!: FileBaselinesStore;
+  invariantState!: InvariantStateStore;
   // Cached value of the toggle for synchronous use in the settings
   // tab. Refreshed at onload from invariants.getPushPluginsDataJson()
   // and after every successful set from the tab's onChange. Settings
@@ -295,6 +306,40 @@ export default class GitHubSyncPlugin extends Plugin {
   async onload(): Promise<void> {
     const startedAt = Date.now();
     try {
+      // RESET-PLUGIN O6 — THE VERY FIRST check at load, before every
+      // other recovery (self-update bootloader, atomic-write sweep,
+      // conflict/autosave recovery): a surviving .reset-in-progress
+      // marker cancels them all — the state they would "recover" was
+      // condemned by a reset the user already confirmed. Replay the
+      // tail: wipe .runtime/ → settings = DEFAULTS → marker gone.
+      // Logger doesn't exist yet; failures go to console and leave
+      // the marker in place so the next load retries.
+      try {
+        if (await hasResetMarker(this.app.vault, manifest.id)) {
+          await wipeRuntimeDir(this.app.vault, manifest.id);
+          this.settings = Object.assign({}, DEFAULT_SETTINGS);
+          await this.saveSettings();
+          await removeResetMarker(this.app.vault, manifest.id);
+          try {
+            new Notice(
+              "Git Easy Sync: an interrupted reset was completed.",
+              8000,
+            );
+          } catch {
+            // Notice may be unavailable in some environments
+          }
+        }
+      } catch (err) {
+        try {
+          console.error(
+            "[git-easy-sync] interrupted-reset catch-up failed; will retry next load",
+            err,
+          );
+        } catch {
+          // ignore
+        }
+      }
+
       // 2.0.2-beta2 self-update bootloader. Runs BEFORE loadSettings,
       // before logger init, before anything else — handles pending
       // ges-tmp + marker pairs for OUR plugin's main.js /
@@ -765,49 +810,61 @@ export default class GitHubSyncPlugin extends Plugin {
   // re-enter the GitHub token, owner, repo, branch before the next
   // sync will reach a remote.
   async resetPluginState(): Promise<void> {
-    if (this.sync2Manager) {
-      const m = this.sync2Manager as unknown as {
-        hotMeta: HotMetadataStore;
-        baselines: FileBaselinesStore;
-        queue: PushQueue;
-      };
-      // Cold first, then hot — same idempotent ordering as the
-      // identity-mismatch wipe. (Phase 1.6 RESET-PLUGIN will replace
-      // this with an rm -rf of the whole .runtime/.)
-      await m.baselines.clear();
-      await m.hotMeta.update({
-        lastSyncCommitSha: null,
-        lastSyncTreeSha: null,
-        lastCommitMtime: null,
-        remoteIdentity: null,
-        conflictBranch: null,
-      });
-      await m.queue.clearAll();
+    // RESET-PLUGIN (Phase 1.6) — D1: one recursive wipe of .runtime/
+    // instead of per-store cleanup; D4 (reversed): the vault is NOT
+    // touched — conflict-copy files stay in place and a later
+    // re-enable picks them up as synthetic conflicts. Order is O2/O6:
+    // scheduler off → cancel drain + await idle → .reset-in-progress
+    // marker (top-level dot-file in the plugin dir; survives until
+    // after data.json) → wipe → in-memory re-inits → latch → settings
+    // → marker gone LAST → scheduler back on.
+    if (this.intervalScheduler) this.intervalScheduler.stop();
+
+    const outcome = await resetRuntimeState({
+      vault: this.app.vault,
+      selfPluginId: manifest.id,
+      cancelDrain: () => this.sync2Manager?.cancelDrain(),
+      isDrainRunning: () => this.sync2Manager?.isDrainRunning() ?? false,
+      reinitStores: async () => {
+        // Every store that caches runtime state re-reads the (now
+        // empty) disk — without this, write-through would resurrect
+        // pre-reset ghosts from RAM (RESET-PLUGIN §1's motivating
+        // bug). TrashStore keeps no in-memory index and its writes
+        // ensureDir lazily (O4), so it needs no re-init.
+        await this.hotMeta?.load();
+        await this.baselines?.clear();
+        await this.invariantState?.load();
+        await this.conflictStore?.load();
+        await this.pendingDeletions?.load();
+        this.conflictCounter?.markDirty();
+        await this.conflictCounter?.flush();
+      },
+    });
+    if (outcome === "drain-stuck") {
+      // O3: never wipe under a live drain. The cancel was requested;
+      // something (a long network retry) is holding it past the
+      // ceiling — tell the user and change nothing.
+      new Notice(
+        "Reset aborted: a sync is still finishing. Try again in a moment.",
+        8000,
+      );
+      if (this.intervalScheduler) this.intervalScheduler.start();
+      return;
     }
-    if (this.conflictStore) {
-      // Rename vault sibling files BEFORE dropping the record index,
-      // so a future re-enable doesn't collide with the user's
-      // leftover conflict-from artifacts.
-      await this.conflictStore.renameVaultSiblingsToUnresolved();
-      await this.conflictStore.clearAll();
-    }
-    if (this.pendingDeletions) {
-      // SYNC2 §4.2 Reset semantics — pending-deletions
-      // queue is plugin-managed state and gets wiped along with the
-      // snapshot, conflict store, and push queue. No user data is
-      // lost (the queue records intents to delete remote paths; on
-      // Reset the user explicitly opts out of those intents).
-      await this.pendingDeletions.clear();
-    }
-    if (this.trashStore) {
-      // Same reset semantics as pending-deletions above: trash is
-      // plugin-managed state; Reset explicitly opts out of pending
-      // recovery for any previously-trashed files. See R3.5
-      // closing-paragraph note on Reset uniformity.
-      await this.trashStore.clearAll();
-    }
+
+    // §35: the disk marker died with .runtime/; drop the in-memory
+    // latch (repaints the red icon) — consistent with the "credentials
+    // edited" clear rule, since the token itself is wiped just below.
+    this.tokenExpiredFlag?.clear();
+
     this.settings = Object.assign({}, DEFAULT_SETTINGS);
     await this.saveSettings();
+
+    // O6: the marker dies LAST — after data.json — so a crash anywhere
+    // above leaves it in place and the next load finishes the job.
+    await removeResetMarker(this.app.vault, manifest.id);
+
+    if (this.intervalScheduler) this.intervalScheduler.start();
   }
 
   // ── engine init ─────────────────────────────────────────────────────
@@ -835,10 +892,12 @@ export default class GitHubSyncPlugin extends Plugin {
       selfPluginId: manifest.id,
     });
     await hotMeta.load();
+    this.hotMeta = hotMeta;
     const baselines = new FileBaselinesStore({
       vault: this.app.vault,
       selfPluginId: manifest.id,
     });
+    this.baselines = baselines;
     this.logger.info("initSync2: hot metadata loaded", {
       lastSyncCommitSha: hotMeta.getLastSyncCommitSha(),
     });
@@ -882,6 +941,7 @@ export default class GitHubSyncPlugin extends Plugin {
       selfPluginId: manifest.id,
     });
     await invariantState.load();
+    this.invariantState = invariantState;
     this.invariants = new GitignoreInvariants({
       vault: this.app.vault,
       state: invariantState,

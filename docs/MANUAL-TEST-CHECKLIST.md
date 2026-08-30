@@ -127,7 +127,7 @@ suite (`pnpm test:integration`).
 
 - [ ] Token / owner / repo / branch fields trim input; invalid values produce a clear error (not a silent 404).
 - [ ] The settings connection test works and does not disturb sync state.
-- [ ] **Reset** (type the confirmation phrase) wipes the token, repo settings, sync history, pending queue, and conflicts; local vault files are untouched; unresolved siblings are renamed to `.unresolved`.
+- [ ] **Reset** (type the confirmation phrase) wipes the token, repo settings, sync history, pending local commits, conflicts, unsaved conflict-editor edits, and the plugin trash (the whole `.runtime/`); vault files are NOT touched — conflict-copy files stay in place and are re-detected as conflicts on re-enable. A `.reset-in-progress` marker in the plugin dir makes an interrupted reset finish on the next load.
 - [ ] Toggling **"sync config folder"** includes/excludes `.obsidian/*` accordingly.
 - [ ] Changing the **device label** makes new commits carry the new `(label)` suffix.
 - [ ] Switching repositories resets state correctly.
