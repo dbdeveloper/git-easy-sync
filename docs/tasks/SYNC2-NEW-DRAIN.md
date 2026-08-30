@@ -1024,7 +1024,7 @@ def retryOnNetworkError(op):  # op: () -> result; може кинути TOKEN_EX
     while true:
         try:
             result = op()
-            markNetworkRecoveredIfNeeded()  # знімає `.runtime/sync_network_error` ОДИН РАЗ за
+            markNetworkRecoveredIfNeeded()  # знімає `.runtime/.sync_network_error` ОДИН РАЗ за
                                             # весь drain, на ПЕРШОМУ успішному мережевому виклику
                                             # (не на кожному — зайві FS-записи), і НЕ на самому
                                             # старті drain (це збрехало б користувачу "мережа є",
@@ -1033,7 +1033,7 @@ def retryOnNetworkError(op):  # op: () -> result; може кинути TOKEN_EX
         catch e: NETWORK_ERROR:
             attempt += 1
             if attempt >= MAX_ATTEMPTS:
-                writeNetworkErrorMark(e)   # `.runtime/sync_network_error` — причина збою; ribbon-
+                writeNetworkErrorMark(e)   # `.runtime/.sync_network_error` — причина збою; ribbon-
                                            # іконка sync червона, hint показує причину; в settings,
                                            # секція "GitHub Sync Status" — та сама помилка з
                                            # рекомендацією повторити Sync, коли з'явиться мережа
@@ -2969,7 +2969,7 @@ def drain():
                 saveTokenExpiredMark()
                 return error
             if error == NETWORK_ERROR:
-                return error   # спроби вичерпано, .runtime/sync_network_error уже виставлено
+                return error   # спроби вичерпано, .runtime/.sync_network_error уже виставлено
 
             #==========================================================================================
             # Отримуємо список змінених з останнього drain файлів в репо MAIN-BRANCH (path, sha, size, type, etc.)
@@ -4977,7 +4977,7 @@ STEP3 replace-транзакції (§II.11, IV.2 рядки 15-20 — sibling-d
 3. device_label NETWORK_ERROR на STEP1 абортує весь drain
 4. device_label NETWORK_ERROR на pull-folding-refresh абортує весь drain
 5. device_label NETWORK_ERROR на Vault-step-born-конфлікт сайті абортує весь drain (консистентність усіх 3 сайтів)
-6. `retryOnNetworkError`: вичерпання `MAX_ATTEMPTS` з експоненційним backoff, запис `.runtime/sync_network_error`
+6. `retryOnNetworkError`: вичерпання `MAX_ATTEMPTS` з експоненційним backoff, запис `.runtime/.sync_network_error`
 7. `retryOnNetworkError`: TOKEN_EXPIRED/ERROR422 НЕ ретраяться, повертаються одразу
 8. Відновлення мережі посеред drain-у: мітка знімається на ПЕРШОМУ успішному виклику, не на старті drain-у
 

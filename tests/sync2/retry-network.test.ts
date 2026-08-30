@@ -28,7 +28,7 @@ describe("NetworkRetry (§VIII E.6-E.8)", () => {
       "plugins",
       PLUGIN_ID,
       ".runtime",
-      "sync_network_error",
+      ".sync_network_error",
     );
 
   const makeRetry = (): NetworkRetry =>
@@ -143,7 +143,7 @@ describe("NetworkRetry (§VIII E.6-E.8)", () => {
 
   it("mark path helper points inside .runtime (never a top-level plugin file)", () => {
     expect(networkErrorMarkPath(vault as never, PLUGIN_ID)).toBe(
-      `.obsidian/plugins/${PLUGIN_ID}/.runtime/sync_network_error`,
+      `.obsidian/plugins/${PLUGIN_ID}/.runtime/.sync_network_error`,
     );
   });
 });

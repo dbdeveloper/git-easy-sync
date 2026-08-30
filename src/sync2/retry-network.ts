@@ -8,7 +8,9 @@
 // immediately — the layer that owns that error class (422-CAP, the
 // token latch) stays external and unchanged.
 //
-// The `.runtime/sync_network_error` mark is the user-facing trace:
+// The `.runtime/.sync_network_error` mark is the user-facing trace
+// (dot-prefixed per the §2.2 п.4 naming rule — MARKER files keep the
+// dot, data files don't):
 // written when attempts are exhausted (ribbon turns red, settings
 // show the reason + "retry when the network is back"), removed ONCE
 // per run on the FIRST successful network call — not on run start
@@ -22,7 +24,7 @@
 import { normalizePath, type Vault } from "obsidian";
 import { NetworkError } from "../errors";
 
-export const NETWORK_ERROR_MARK_NAME = "sync_network_error";
+export const NETWORK_ERROR_MARK_NAME = ".sync_network_error";
 
 export function networkErrorMarkPath(
   vault: Vault,

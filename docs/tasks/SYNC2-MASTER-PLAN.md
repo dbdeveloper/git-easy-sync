@@ -430,7 +430,7 @@ D1 («reset зносить `.runtime/` цілком») після Фази 1 с�
 | Примітив | Спека | Тести |
 |---|---|---|
 | `.runtime/sync_store/` + hash-on-load (`getBlobFromSyncStore`/`existInSyncStore`/`saveBlobToSyncStore`), sweep за 4 джерелами | SYNC2-FIX §12 + NEW-DRAIN §II.9 | §VIII **F** (10) |
-| `retryOnNetworkError` (backoff, MAX_ATTEMPTS=5, мітка `.runtime/sync_network_error`) | §II.10 | §VIII **E** п.6-8 |
+| `retryOnNetworkError` (backoff, MAX_ATTEMPTS=5, мітка `.runtime/.sync_network_error`) | §II.10 | §VIII **E** п.6-8 |
 | `getBatch()` + R3b claim-протокол + commit-side `.attempted-commit` + crash-recovery | §II.8 + SYNC2-FIX §6/R3b | §VIII **H** (6), T4.4/T4.5 |
 | Новий формат батчу: метадані `{path,sha,size,mtime}`, байти — в `sync_store/` | SYNC2-FIX §12.1 + §II.8 | H |
 | `buildSiblingFilePath` / `siblingGlobPattern` / `saveConflictSiblingFile` / `readSiblingFileFromVault` / `findConflictSiblingFilesInVault` | §III (допоміжні) | C п.7 |
@@ -1919,7 +1919,7 @@ replica-lag відкривається на старті наступного dr
 | Пункт гейта | Стан |
 |---|---|
 | §VIII **F** (sync_store: hash-on-load, sweep за ін'єктованими джерелами) | ✅ 15 тестів (`sync-store.test.ts`), включно з fast-path транспортом §2.2 п.5 |
-| §VIII **E** п.6-8 (`retryOnNetworkError`, мітка `sync_network_error`) | ✅ 6 тестів (`retry-network.test.ts`) |
+| §VIII **E** п.6-8 (`retryOnNetworkError`, мітка `.sync_network_error`) | ✅ 6 тестів (`retry-network.test.ts`) |
 | §VIII **H** (`getBatch()`/R3b + T4.4/T4.5 crash-класи) | ✅ 9 тестів (`get-batch.test.ts`) + 3 crash-парні у writer-сюїті |
 | Новий формат батчу — commit-бік | ✅ 21 тест (`batch-writer.test.ts`): §12.4 порядок (RED-верифіковано інверсією — падає 5), §7.3 явний дедуп (§VIII L), §7.2 mtime при консолідації, R3b tail-only + backoff |
 | Sibling-хелпери | ✅ 12 тестів (`conflict-siblings.test.ts`), формат імені запінений байт-у-байт із v1 |
