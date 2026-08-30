@@ -1956,7 +1956,7 @@ bridge-полів у `meta.json`, без wiring-у (sweep + onload-recovery → 
   ремонт належить claimer-у. Commit клеймить лише хвіст, drain лише голову —
   колізія можлива тільки при довжині черги 1.
 
-#### ✅ Фаза 3 (Discovery, два шари) — ЗАВЕРШЕНО 2026-08-30 (коміти `f074874` + `448fb93`; шоста фаза за день)
+#### ✅ Фаза 3 (Discovery, два шари) — ЗАВЕРШЕНО 2026-08-30 (коміти `f074874` + `448fb93`; п'ята фаза за день)
 
 Гейт по пунктах:
 
@@ -1982,3 +1982,11 @@ bridge-полів у `meta.json`, без wiring-у (sweep + onload-recovery → 
 - Помилковий контракт: 404 compare ковтається всередині; NetworkError/AuthError/
   TreeTruncatedError ЛЕТЯТЬ — §III-сайт обгортає в retryOnNetworkError і володіє
   token-latch-ем.
+- ⚠️ **Перевірити на пристрої (device-pass Фази 4, record-only — коду не треба):**
+  на Capacitor fetch worker-а CORS-bound, тож видимість `ETag` залежить від
+  `Access-Control-Expose-Headers` GitHub-а (`Content-Length` у safelist,
+  `ETag` — ні за замовчуванням). Не вгадуємо: якщо ETag на пристрої невидимий,
+  shape-guard і так штатно деградує в GET-фолбек (повільніше, але коректно) —
+  просто пересвідчитись, ЯКИЙ шлях реально працює на мобільному, і зафіксувати.
+  Header-plumbing обох транспортів перевірено кодом: network-worker.ts:64-68 і
+  worker-client.ts:170-174 копіюють `resp.headers` у відповідь.
