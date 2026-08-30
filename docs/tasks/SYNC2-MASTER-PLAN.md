@@ -1687,7 +1687,7 @@ drain-у (`normalization/`, `settings-lifecycle/`, `gitignore/`) → має ли
 | conflict-classifier | **M** | rows 1-9 класифікації + `evaluateConflictState` | GREEN | `ConflictRecord` v1 → conflicts v2 (§II.6; §7.8.1 — без адаптера) | Фаза 5 | — |
 | conflict-counter | **M** | дебаунс, підрахунок нерозв'язаних | GREEN | споживач №1 у таблиці §7.8.1 — поведінка виживає, API v2 | Фаза 5 | — |
 | conflict-detection | **M** | `classifyConflictKind` + auto-merge + §28 semver-бандл (атомарність групи) | GREEN | правила — інваріант; переписати проти `_diff3` (§II.1, plugin-гілка п.3.a — стаб у Фазі 4) | Фаза 4 | — |
-| conflict-store | **M** | `buildSiblingPath` формат, create/persist | GREEN | store v1 → v2 (§II.6); формат sibling-імені — інваріант (Фаза 2 `buildSiblingFilePath`) | Фаза 5 | — |
+| conflict-store | **M** | `buildSiblingPath` формат, create/persist | GREEN | store v1 → v2 (§II.6); формат sibling-імені — інваріант (Фаза 2 `buildSiblingFilePath`). **D-запис Фази 1.6:** кейси `renameVaultSiblingsToUnresolved` + `unresolvedNameFor` видалено разом із механізмом (власник скасував D4 2026-08-30 — reset не чіпає vault; єдиний викликач зник) | Фаза 5 | — |
 | conflict-watcher | **M** | event-driven листенери, ідемпотентний start/stop | GREEN | поведінка виживає ([[project-conflict-resolution-is-event-driven]]); API v2 | Фаза 5 | — |
 | cross-platform | **K** | санітайзер 12 заборонених ASCII + Obsidian-символів | GREEN | факт про зовнішній світ — §4 п.8 ЗАПОЗИЧУЄМО | — | не червоніє |
 | encode-path | **K** | `encodePathForGithub`: UTF-8/percent-екодинг | GREEN | те саме | — | не червоніє |
@@ -1734,7 +1734,7 @@ drain-у (`normalization/`, `settings-lifecycle/`, `gitignore/`) → має ли
 | normalization/resume-bootstrap-pull | **M** | kill посеред bootstrap-pull → resume без повторного викачування | GREEN | старий bootstrap-loop зникає (§6.6); інваріант «resume без re-download» → `sync_store` (§II.9) | Фаза 4 | — |
 | normalization/resume-push-blob | **M** | kill на N-му createBlob → resume з меншою кількістю createBlob | GREEN | інваріант виживає через `uploadedBlobs` (§II.15) | Фаза 4 | — |
 | normalization/resume-push-with-remote-race | **M** | crash mid-push + remote-зміна в черзі → 3-way merge, без втрат (I1/I2) | GREEN | `processBatch`-гарнес → NEW-DRAIN §III | Фаза 4 | — |
-| settings-lifecycle/I1-reset-metadata | **M** | reset → наступний sync вирівнюється БЕЗ re-push ідентичного | GREEN | reset перевизначається RESET-PLUGIN (Фаза 1.6) поверх METAFILE | Фаза 1.6 | — |
+| settings-lifecycle/I1-reset-metadata | **M** ✅ | reset → наступний sync вирівнюється БЕЗ re-push ідентичного | GREEN (переписано у Фазі 1.6 на СПРАВЖНЄ ядро `resetRuntimeState`; гейт-тест фази: нуль файлів під `.runtime/`, re-align без re-push, findChanges порожній) | виконано 2026-08-30 | — | — |
 | settings-lifecycle/I2-I6, connection-probe-existing (6) | **K** | syncConfigDir ON/OFF обидва боки, device-label, зміна гілки, probe на непорожньому repo | GREEN | не залежить від drain | — | не червоніє |
 
 #### 8.1.3 Точкові `tests/diff2/` (6)
@@ -1841,3 +1841,29 @@ replica-lag відкривається на старті наступного dr
 Виконане понад мінімум, зафіксоване рішеннями по ходу: реверс §2.1 (каталоги батчів лишаються — рішення власника); правило групових операцій §2.2.1 (рішення власника) вбудоване як ОСНОВНЕ API і як покошиковий скан `findChanges` (без нього 20k-vault коштував би тисячі читань кошиків на клік); phantom-міграція 2.0.1-beta видалена (білий лист); bare-repo 409 + «settings-зміна не потребує bootstrap» — записані у Фазу 1.5/§6.4. **Побічний виграш підтверджено: O1 RESET-PLUGIN закрито** — всі метадані тепер у `.runtime/`.
 
 Карта `save()`-сайтів → нова модель — у повідомленні swap-коміту `e9ff71c`; порядок §7.9 (marker → push → cold → hot → clear) збережено, якір lastSync тепер атомарний одним слот-записом (§2.1.2), finalize згортає clear+anchor в один запис.
+
+#### ✅ Фаза 1.6 (RESET-PLUGIN) — ЗАВЕРШЕНО 2026-08-30 (той самий день; коміти spec-рішень + `306f055` + закриття)
+
+Гейт: **`reset` → жодного файлу під `.runtime/` → sync → без re-push → `findChanges`
+порожній** — ✅ запінено переписаним I1, що викликає СПРАВЖНЄ ядро `resetRuntimeState`
+(зелений проти реального GitHub). Повний гейт-прогін: **91 файл / 148 = 145 passed +
+рівно 3 expected fail** — утретє ідентичний підпис. Юніт 126/1918, build чистий.
+
+Рішення власника, ухвалені в цій фазі (усі в спеці той самий крок):
+- **D4 СКАСОВАНО**: reset не торкається vault; `*.conflict-from-*` лишаються і
+  підхоплюються як синтетичні конфлікти при повторному вмиканні. Дефект §2.1
+  (модалка брехала) розв'язано зміною ПОВЕДІНКИ. `renameVaultSiblingsToUnresolved`
+  + `unresolvedNameFor` видалені з тестами (D-запис у §8.1.1/conflict-store).
+- **O3**: drain СКАСОВУЄТЬСЯ (`cancelDrain` + очікування idle, стеля 60 с →
+  «drain-stuck», нічого не чіпається) — «користувач вже підтвердив зупинку».
+- **O6 (три ітерації до фіналу)**: мітка **`.reset-in-progress`** — top-level
+  dot-файл У ТЕЦІ ПЛАГІНА (DOT ховає від індексу/вотчера; allowlist-гітігнор
+  не пускає в sync — обидва факти перевірені), живе до `data.json` включно,
+  гине останньою; перевірка мітки — **НАЙПЕРША дія onload**, до bootloader-а і
+  всіх recovery («вона відміняє всі решта відновлень»).
+- **O4**: reset не створює нічого; теки — ліниво при першому записі (перевірено
+  всі write-шляхи).
+
+Головний юніт-тест фази — «привиди не воскресають» (мотивуючий баг спеки §1):
+пост-reset write-through не повертає жодного до-reset значення; hot-пара стартує
+з seq 0; сторонній НЕвідомий файл під `.runtime/` гине (сенс D1).
