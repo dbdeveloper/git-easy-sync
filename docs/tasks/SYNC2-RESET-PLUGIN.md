@@ -96,7 +96,8 @@ conflict-редакторах, і сьогодні reset їх НЕ чіпає �
 (залишковий файл на старому vault синкнеться раз як звичайний файл — санкціоновано).
 
 **O2. ✅ Порядок операцій:** `стоп scheduler → cancel drain + дочекатись idle (O3) →
-rm -rf .runtime/ → ре-ініт памʼяті сторів (hotMeta.load / baselines.clear /
+ЗАПИС мітки .runtime/reset-in-progress (O6) → двофазний знос .runtime/ (мітка гине
+останньою) → ре-ініт памʼяті сторів (hotMeta.load / baselines.clear /
 invariantState.load / conflictStore.load / pendingDeletions.load / counter flush) →
 token-latch clear + UI → settings = DEFAULTS ОСТАННІМ → рестарт scheduler`. Settings
 останніми навмисно: крах посеред reset лишає налаштування «сконфігурованими» —
@@ -122,6 +123,13 @@ yet; pending conflicts; unsaved edits in open conflict editors; and the plugin's
 Conflict-copy files in the vault stay in place; if you re-enable the plugin later, it
 will pick them up as conflicts again. This cannot be undone.»
 
-**O6. ✅ Ідемпотентність повторним запуском.** Недочищена `.runtime/` — стан не гірший
-за K1-K5 (самозцілення); settings-останніми робить недороблений reset ВИДИМИМ; жодного
-окремого crash-механізму не потрібно.
+**O6. ✅ Файл-мітка `reset-in-progress` (доповнення власника, 2026-08-30).** Reset
+ПОЧИНАЄТЬСЯ записом мітки `.runtime/reset-in-progress` і вона зникає ОСТАННЬОЮ, разом
+із текою. Оскільки рекурсивний `rmdir` видаляє вміст у невизначеному порядку, знос
+двофазний: (1) видалити все під `.runtime/` КРІМ мітки → (2) видалити мітку + саму
+теку. Крах будь-де у фазі 1 лишає мітку на місці. **Симетрична половина — onload:**
+якщо мітка існує при старті плагіна (ДО завантаження сторів), перерваний знос
+доганяється автоматично тим самим двофазним шляхом. Settings-частина мітки не
+потребує: крах між зносом і скиданням settings видимий (поля досі «сконфігуровані»,
+O2) — користувач повторює reset, який тепер тривіально швидкий. Недочищена
+`.runtime/` без мітки неможлива за побудовою; з міткою — доганяється.
