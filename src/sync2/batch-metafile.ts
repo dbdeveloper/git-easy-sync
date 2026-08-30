@@ -10,14 +10,20 @@
 // Layout after the format switch:
 //   <configDir>/plugins/<self>/.runtime/push-queue/
 //     <batchid>/
-//       .meta.json         ← BatchMetafile below (THE only content list)
+//       meta.json          ← BatchMetafile below (THE only content list)
 //       .attempted         ← R3b drain-claim marker (§II.8)
 //       .attempted-commit  ← R3b commit-claim marker (§II.8)
 //   bytes live in .runtime/sync_store/{sha} (metadata is written
 //   BEFORE blobs — §12.4).
 
+// Naming rule (MASTER-PLAN §2.2 п.4, owner decision 2026-08-30):
+// inside `.runtime/` DATA files carry no dot prefix — the directory
+// itself is already hidden and no vault file can collide here (the
+// batch dir holds no `vault/` copy). MARKER files keep the dot
+// (`.attempted`, `.attempted-commit`) as the visual cue telling
+// markers apart from data.
 export const QUEUE_DIRNAME = ".runtime/push-queue";
-export const BATCH_META_FILE = ".meta.json";
+export const BATCH_META_FILE = "meta.json";
 export const ATTEMPTED_MARKER = ".attempted";
 export const ATTEMPTED_COMMIT_MARKER = ".attempted-commit";
 
