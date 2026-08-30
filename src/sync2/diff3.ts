@@ -33,6 +33,7 @@ import {
 import { hasTextExtension } from "../utils";
 import { DELETED_SHA_HASH } from "./discovery";
 import SyncStore from "./sync-store";
+import { utf8RoundTrip } from "./text-normalize";
 import { mergeText } from "./three-way-merge";
 
 // The spec's DELETED mode sentinel. `mode: ""` = ordinary file;
@@ -365,25 +366,15 @@ export async function mergeBlobsWithMainThreadDiff3(
   theirs: ArrayBuffer,
 ): Promise<{ kind: "clean"; merged: ArrayBuffer } | { kind: "conflict" }> {
   if (!hasTextExtension(path)) return { kind: "conflict" };
-  const dec = new TextDecoder();
-  const enc = new TextEncoder();
-  const roundTrips = (bytes: ArrayBuffer): string | null => {
-    const text = dec.decode(bytes);
-    const back = enc.encode(text);
-    if (back.byteLength !== bytes.byteLength) return null;
-    const a = new Uint8Array(bytes);
-    for (let i = 0; i < a.length; i++) if (a[i] !== back[i]) return null;
-    return text;
-  };
-  const baseText = roundTrips(base);
-  const oursText = roundTrips(ours);
-  const theirsText = roundTrips(theirs);
+  const baseText = utf8RoundTrip(base);
+  const oursText = utf8RoundTrip(ours);
+  const theirsText = utf8RoundTrip(theirs);
   if (baseText === null || oursText === null || theirsText === null) {
     return { kind: "conflict" };
   }
   const outcome = mergeText(oursText, baseText, theirsText);
   if (outcome.kind === "conflict") return { kind: "conflict" };
-  const encoded = enc.encode(outcome.content);
+  const encoded = new TextEncoder().encode(outcome.content);
   return {
     kind: "clean",
     merged: encoded.buffer.slice(

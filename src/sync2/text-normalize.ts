@@ -37,6 +37,23 @@ export function shouldCanonicalize(path: string, configDir: string): boolean {
 
 const BOM_CODEPOINT = 0xfeff;
 
+// UTF-8 round-trip PROOF (NEW-DRAIN §II.15 / §12.9 principle: "size
+// is an invitation, SHA is proof" — here "extension is an invitation,
+// round-trip is proof"). Returns the decoded text when
+// encode(decode(bytes)) reproduces the bytes EXACTLY, else null.
+// Invalid UTF-8 under a text extension (a cp1251 .csv, a stray 0x80,
+// a lone surrogate) decodes with U+FFFD substitutions and can never
+// round-trip — the two silent-corruption paths this guards are
+// inline tree content (§II.15) and text 3-way merges (_diff3).
+export function utf8RoundTrip(bytes: ArrayBuffer): string | null {
+  const text = new TextDecoder().decode(bytes);
+  const back = new TextEncoder().encode(text);
+  if (back.byteLength !== bytes.byteLength) return null;
+  const a = new Uint8Array(bytes);
+  for (let i = 0; i < a.length; i++) if (a[i] !== back[i]) return null;
+  return text;
+}
+
 export function normalizeText(input: string): NormalizeResult {
   let s = input;
   if (s.length > 0 && s.charCodeAt(0) === BOM_CODEPOINT) {
