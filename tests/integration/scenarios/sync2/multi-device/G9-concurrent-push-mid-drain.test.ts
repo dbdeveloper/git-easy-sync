@@ -35,6 +35,17 @@ import {
 // note7..note10, or reconcile/merge them? (Traces predicted a clobber
 // because chaining skips the per-batch pull and the fast-path skips
 // reconcile when our chained head matches.)
+//
+// ARMED 2026-08-30 (Phase 0 of the sync2 rewrite, MASTER-PLAN §8.1):
+// the diagnostic run confirmed the clobber reproduces (theirs 7..10
+// silently lost after three syncAlls, zero conflicts), so the
+// correctness criterion below is now asserted for real, wrapped in
+// `it.fails` — the suite stays green while the defect exists, and the
+// moment the new drain (Фаза 5) fixes it, `it.fails` itself fails,
+// forcing the marker's removal (the RED→GREEN gate in marker form).
+// CAVEAT of it.fails: an UNRELATED failure (network, setup) also
+// counts as "expected failure" — if this test's diagnostics look off,
+// re-run it without the marker to see the real error.
 
 describe.skipIf(!integrationEnabled())(
   "sync2 G9 — concurrent remote change to later-commit files mid-drain",
@@ -60,8 +71,8 @@ describe.skipIf(!integrationEnabled())(
       await deleteBranchIfExists(branch);
     });
 
-    it(
-      "injects remote changes to note7..note10 before the 6th push; observe clobber vs merge",
+    it.fails(
+      "injects remote changes to note7..note10 before the 6th push; theirs must survive as conflict or merge (I2)",
       async () => {
         client = await createSync2Client({ branch });
 
@@ -138,11 +149,46 @@ describe.skipIf(!integrationEnabled())(
 
         fs.writeFileSync("/tmp/g9-result.txt", `QUEUED BATCHES: ${queued.length}\n${out.join("\n")}\n`);
 
-        // Diagnostic run — no hard assertion yet. Correctness (to encode
-        // once behavior is understood): after convergence note7..note10
-        // are CONFLICTS or merged (never silently clobbered to "ours"),
-        // and note1..note6 are "ours" (never reverted to "base").
-        expect(true).toBe(true);
+        // THE CONTRACT (I2 — no foreign change is silently overwritten),
+        // asserted after convergence (three syncAlls above):
+        //
+        // note7..note10: the concurrent "theirs i" content must survive
+        // SOMEWHERE — as a registered conflict for the path, or merged
+        // into the remote/vault content. "ours everywhere + zero
+        // conflicts" is the silent clobber this test exists to catch.
+        const conflictPaths = client.conflictStore
+          .getAll()
+          .map((r) => r.vaultPath);
+        for (let i = 7; i <= N; i++) {
+          const remote = await readRemoteFile(branch, file(i));
+          const p = path.join(client.vaultPath, file(i));
+          const vault = fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "";
+          const theirsSurvived =
+            remote.includes(`theirs ${i}`) || vault.includes(`theirs ${i}`);
+          const conflictRegistered = conflictPaths.includes(file(i));
+          expect(
+            theirsSurvived || conflictRegistered,
+            `${file(i)}: concurrent remote change silently clobbered ` +
+              `(remote=${JSON.stringify(remote)} vault=${JSON.stringify(vault)} ` +
+              `conflicts=${JSON.stringify(conflictPaths)})`,
+          ).toBe(true);
+        }
+
+        // note1..note6: untouched by the injection — they must land as
+        // "ours" and never revert to "base".
+        for (let i = 1; i <= 6; i++) {
+          const remote = await readRemoteFile(branch, file(i));
+          expect(remote, `${file(i)} must stay ours on remote`).toBe(
+            `ours ${i}\n`,
+          );
+          const vault = fs.readFileSync(
+            path.join(client.vaultPath, file(i)),
+            "utf8",
+          );
+          expect(vault, `${file(i)} must stay ours in vault`).toBe(
+            `ours ${i}\n`,
+          );
+        }
       },
       600_000,
     );

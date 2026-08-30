@@ -1640,10 +1640,11 @@ drain-у (`normalization/`, `settings-lifecycle/`, `gitignore/`) → має ли
 2026-08-30: **82 файли / 137 тестів, усі passed, exit 0** (~26 хв; вбудований
 `retry: 1` — жодних стабільних RED, флейків теж не було).
 
-⚠️ **Головна знахідка прогону 0.2:** «усі GREEN» НЕ означає «дефектів нема». G9 —
-діагностика без assert (зелений за побудовою), і його дамп ПІДТВЕРДИВ живий clobber
-(див. рядок G9 нижче). Гейт Фази 0 «G9 підтверджено RED» виконується лише після
-озброєння тесту готовим критерієм з його ж коментаря.
+⚠️ **Головна знахідка прогону 0.2:** «усі GREEN» НЕ означає «дефектів нема». G9 був
+діагностикою без assert (зелений за побудовою), і його дамп ПІДТВЕРДИВ живий clobber.
+✅ **Закрито того ж дня:** тест озброєно `it.fails` (рішення власника), верифіковано
+окремим прогоном — «1 expected fail». Гейт «G9 підтверджено RED» виконано у формі
+маркера (див. рядок G9 нижче).
 
 #### 8.1.1 Юніт `tests/sync2/` (26)
 
@@ -1699,7 +1700,7 @@ drain-у (`normalization/`, `settings-lifecycle/`, `gitignore/`) → має ли
 | manifest-corruption/K1-K5 (5) | **M** | самозцілення метаданих: garbage/unlink/stale-lastSync/unknown-fields/empty-map → БЕЗ повторного пушу ідентичного | GREEN | сам маніфест замінюється (METAFILE §2.1/§2.2, recovery = remote-not-rescan); інваріант «зіпсовані метадані ≠ втрата і ≠ re-push» мусить перейти | Фаза 1 | — |
 | multi-device/G1, G2 (2) | **K** | I1/I2 базис: ротація трьох пристроїв, disjoint-правки одного файлу | GREEN | | — | Фаза 4 |
 | multi-device/G3, G4 (2) | **K** | same-line і binary конфлікт між пристроями (I2) | GREEN | | — | Фаза 5 |
-| multi-device/**G9**-concurrent-push-mid-drain | **K** | **I2 — головний контракт-тест проєкту** | ⚠️ **GREEN-порожній**: тест діагностичний, `expect(true).toBe(true)` — RED бути НЕ МОЖЕ. Але **дефект ВІДТВОРЕНО 2026-08-30** дампом (`/tmp/g9-result.txt`): після 3× syncAll `theirs 7-10` затерто на `ours` всюди, конфліктів нуль | критерій уже написаний у коментарі самого тесту (рядки 141-144): note7-10 = конфлікт або merge, ніколи мовчки `ours`; note1-6 = `ours`, ніколи відкат. **Озброїти assert = крок Фази 0** — без цього гейт «G9 підтверджено RED» невиконуваний | — | Фаза 5 (RED→GREEN після озброєння) |
+| multi-device/**G9**-concurrent-push-mid-drain | **K** | **I2 — головний контракт-тест проєкту** | ✅ **ОЗБРОЄНО 2026-08-30** (рішення власника, варіант `it.fails`): критерій з коментаря закодовано в assert-и (theirs 7-10 виживає як конфлікт/merge; ours 1-6 без відкату), обгорнуто в `it.fails`. Верифіковано окремим прогоном: «1 expected fail» = assert-и ПАДАЮТЬ на живому clobber (дефект відтворено вдруге за день, дамп ідентичний), сюїта лишається зелена | RED-семантика тепер = «expected fail»; коли Фаза 5 полагодить clobber, `it.fails` сам впаде і змусить зняти маркер — це і є гейт RED→GREEN у формі маркера. ⚠️ Каверза `it.fails`: НЕзв'язане падіння (мережа, setup) теж рахується «expected» — при дивній поведінці перезапустити без маркера (застереження в коментарі тесту) | — | Фаза 5 (зняття `it.fails`) |
 | normalization/{binary-byte-exact, idempotent-double-sync, multi-device-convergence, pull-of-bom, pull-of-crlf, push-of-local-crlf} (6) | **K** | EOL/BOM канонізація, no-thrash, byte-exact binary | GREEN | не залежить від drain | — | не червоніє |
 | normalization/resume-bootstrap-pull | **M** | kill посеред bootstrap-pull → resume без повторного викачування | GREEN | старий bootstrap-loop зникає (§6.6); інваріант «resume без re-download» → `sync_store` (§II.9) | Фаза 4 | — |
 | normalization/resume-push-blob | **M** | kill на N-му createBlob → resume з меншою кількістю createBlob | GREEN | інваріант виживає через `uploadedBlobs` (§II.15) | Фаза 4 | — |
