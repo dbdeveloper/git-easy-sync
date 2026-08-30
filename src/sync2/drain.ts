@@ -137,6 +137,23 @@ export interface DrainClient {
     path: string,
     atSha: string,
   ): Promise<{ deviceLabel: string; committedAtMs: number } | null>;
+  // ── FINALIZE surface (§II.14) ───────────────────────────────────
+  // A commit with an EXPLICIT parent pair — the reachability merge.
+  createMergeCommit(args: {
+    treeSha: string;
+    parents: [string, string]; // [main_head, conflict_head] — POSITIONAL
+    message: string;
+  }): Promise<{ sha: string }>;
+  // Non-force PATCH of the MAIN ref. Throws ValidationError on 422
+  // (another device moved main while the merge commit was built).
+  updateMainRef(sha: string): Promise<void>;
+  // isAncestorOf via compare().status: "ahead"/"identical" = ancestor.
+  compareStatus(
+    base: string,
+    head: string,
+  ): Promise<"ahead" | "behind" | "identical" | "diverged">;
+  // 404 = already gone = success.
+  deleteBranch(branch: string): Promise<void>;
 }
 
 export interface VaultFileReader {
@@ -188,6 +205,9 @@ export interface DrainDeps {
     // without a journal via the hot pair.
     getConflictBranch(): { name: string } | null;
   };
+  // formatMergeConflictBranchMessage in production — keeps the
+  // trailing "(deviceLabel)" contract.
+  mergeMessage(): string;
   conflictStore: ConflictStoreV2;
   siblingTx: SiblingTx;
   tokenExpired(): Promise<boolean>;
@@ -232,6 +252,9 @@ export interface DrainResult {
   conflictVerdicts: ConflictVerdict[];
   vaultStepErrors: Array<{ path: string; error: string }>;
   pushedCommits: string[]; // main-branch commit shas, in order
+  // FINALIZE outcome: the merge commit that closed the conflict
+  // branch this run, or null (no finalize / deferred / nothing to do).
+  finalizedMergeSha: string | null;
 }
 
 const ERROR_422_CAP = 5;
@@ -243,6 +266,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   const conflictVerdicts: ConflictVerdict[] = [];
   const vaultStepErrors: Array<{ path: string; error: string }> = [];
   const pushedCommits: string[] = [];
+  let finalizedMergeSha: string | null = null;
 
   const result = (status: DrainStatus): DrainResult => ({
     status,
@@ -250,6 +274,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     conflictVerdicts,
     vaultStepErrors,
     pushedCommits,
+    finalizedMergeSha,
   });
 
   // §II.11: STEP3 replace-transaction recovery — ONCE per run, first
@@ -835,8 +860,94 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     await deps.removeBatchDir(claimed.dir);
   }
 
-  // PHASE5: FINALIZE (merge conflict branch → main, tree-of-main,
-  // ancestor-check idempotency, 422 = defer).
+  // ── FINALIZE (§II.14) — ONCE, after the batch loop, BEFORE the
+  // Vault-step (a per-batch merge would move the main head under the
+  // next push). Gate: a branch name exists AND no unresolved tracked
+  // conflicts remain. The merge is a REACHABILITY merge: the commit
+  // carries the MAIN tree (content no-op) with parents
+  // [main, conflict] — POST /merges is never used (a content merge
+  // would resurrect the superseded C_n over the user's resolution).
+  if (state.conflictBranchName !== null && conflicts!.entries.size === 0) {
+    {
+      const r = await deps.retry.run(() => deps.client.getGuardedHead());
+      if (r.error !== null) return statusFromError(r.error, result);
+      headHash = r.result; // fresh, not the last batch-push value
+    }
+    const ch = await deps.retry.run(() =>
+      deps.client.getBranchHeadSha(state.conflictBranchName!),
+    );
+    if (ch.error !== null) return statusFromError(ch.error, result);
+    const conflictTip = ch.result;
+
+    if (conflictTip === null) {
+      // 404: already deleted (crash after delete, before the journal
+      // write) — "already finalized", just clean the field.
+      state.conflictBranchName = null;
+      await deps.journal.persist(state);
+    } else {
+      const cmp = await deps.retry.run(() =>
+        deps.client.compareStatus(conflictTip, headHash!),
+      );
+      if (cmp.error !== null) return statusFromError(cmp.error, result);
+      const isAncestor =
+        cmp.result === "ahead" || cmp.result === "identical";
+      if (isAncestor) {
+        // Idempotency: the tip is already reachable from main (a
+        // previous merge succeeded, the crash hit after it) — no
+        // second merge, just the delete.
+        const del = await deps.retry.run(() =>
+          deps.client.deleteBranch(state.conflictBranchName!),
+        );
+        if (del.error !== null) return statusFromError(del.error, result);
+        state.conflictBranchName = null;
+        await deps.journal.persist(state);
+      } else {
+        const headCommit = await deps.retry.run(() =>
+          deps.client.getCommit({ sha: headHash!, retry: true }),
+        );
+        if (headCommit.error !== null) {
+          return statusFromError(headCommit.error, result);
+        }
+        const merge = await deps.retry.run(() =>
+          deps.client.createMergeCommit({
+            treeSha: headCommit.result!.tree.sha, // ⚠️ THE MAIN TREE — this line is what makes the merge safe
+            parents: [headHash!, conflictTip], // §4.3 order: main FIRST
+            message: deps.mergeMessage(),
+          }),
+        );
+        if (merge.error !== null) return statusFromError(merge.error, result);
+        const upd = await deps.retry.run(() =>
+          deps.client.updateMainRef(merge.result!.sha),
+        );
+        if (upd.error !== null) {
+          if (upd.error instanceof ValidationError) {
+            // 422: another device moved main while we built the merge
+            // commit. DEFER (§II.14 policy): keep the name, keep the
+            // branch, go on — the next drain's FINALIZE retries, and
+            // the ancestor check keeps it idempotent. The orphan
+            // commit is GC fodder.
+            deps.logger?.warn(
+              "FINALIZE deferred: main moved during the merge (422)",
+              { branch: state.conflictBranchName },
+            );
+          } else {
+            return statusFromError(upd.error, result);
+          }
+        } else {
+          // MANDATORY (§II.14): the anchor must be honest — without
+          // this the epilogue would record the PRE-merge commit.
+          headHash = merge.result!.sha;
+          finalizedMergeSha = merge.result!.sha;
+          const del = await deps.retry.run(() =>
+            deps.client.deleteBranch(state.conflictBranchName!),
+          );
+          if (del.error !== null) return statusFromError(del.error, result);
+          state.conflictBranchName = null;
+          await deps.journal.persist(state);
+        }
+      }
+    }
+  }
 
   // Ensure the remote half's bytes are on hand (sync_store first,
   // network second; save-back on fetch). null result = confirmed
@@ -878,7 +989,14 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           `STEP3: no conflict record for ${path} — RECONCILE guarantee broken`,
         );
       }
-      tracked.base = current.conflictBase; // §III: base ← conflict-branch half
+      // ⚠️ conflictBase is passed to the fold's _diff3 DIRECTLY, never
+      // assigned into tracked.base: the conflict-mode invariant is
+      // tracked.base == tracked.remote (§II.11 cascade item 4 — the
+      // Vault-step gate and the post-RECONCILE clean push both lean on
+      // it). Mutating it here poisoned the journal: after the user
+      // resolved a conflict, the next drain read base=conflictBase and
+      // re-birthed the conflict instead of cleanly pushing the
+      // resolution (found by G.9).
       const previousSibling =
         current.siblings.length > 0
           ? current.siblings[current.siblings.length - 1]

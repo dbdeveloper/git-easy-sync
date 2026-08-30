@@ -124,6 +124,18 @@ function adaptClient(client: GithubClient): DrainClient {
     getCommitInfoForPath: async () => {
       throw new Error("no conflict-birth sites expected in this live test");
     },
+    createMergeCommit: async () => {
+      throw new Error("no FINALIZE expected in this live test");
+    },
+    updateMainRef: async () => {
+      throw new Error("no FINALIZE expected in this live test");
+    },
+    compareStatus: async () => {
+      throw new Error("no FINALIZE expected in this live test");
+    },
+    deleteBranch: async () => {
+      throw new Error("no FINALIZE expected in this live test");
+    },
   };
 }
 
@@ -289,6 +301,7 @@ describe.skipIf(!integrationEnabled())(
           computeSha: calculateGitBlobSHA,
           maxAutoMergeFileSize: () => 10_000_000,
           deviceLabel: () => "t36-device",
+          mergeMessage: () => "Merge conflict branch (t36-device)",
           commitMessage: () => "Sync at t36 (t36-device)",
           now: () => Date.now(),
         };
@@ -489,6 +502,7 @@ describe.skipIf(!integrationEnabled())(
           computeSha: calculateGitBlobSHA,
           maxAutoMergeFileSize: () => 10_000_000,
           deviceLabel: () => "p13-device",
+          mergeMessage: () => "Merge conflict branch (p13-device)",
           commitMessage: () => "Sync at p13 (p13-device)",
           now: () => Date.now(),
         });

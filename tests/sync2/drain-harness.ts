@@ -26,7 +26,22 @@ export class FakeWorld {
   readonly blobs = new Map<string, ArrayBuffer>();
   readonly commits: string[] = [];
   readonly branchHeads = new Map<string, string>(); // conflict branches
+  readonly commitParents = new Map<string, string[]>();
   committedAt = 1_700_000_000_000;
+
+  // Reachability over recorded parents (BFS) — powers compareStatus.
+  isReachable(ancestor: string, from: string): boolean {
+    const queue = [from];
+    const seen = new Set<string>();
+    while (queue.length > 0) {
+      const c = queue.pop()!;
+      if (c === ancestor) return true;
+      if (seen.has(c)) continue;
+      seen.add(c);
+      for (const p of this.commitParents.get(c) ?? []) queue.push(p);
+    }
+    return false;
+  }
 
   filesAt(ref: string): RepoFiles {
     const tree = this.commitTrees.get(ref);
@@ -57,6 +72,7 @@ export class FakeWorld {
     this.trees.set(treeSha, next);
     const commitSha = `commit-${++this.commitSeq}`;
     this.commitTrees.set(commitSha, treeSha);
+    this.commitParents.set(commitSha, this.head === null ? [] : [this.head]);
     this.commits.push(commitSha);
     this.head = commitSha;
     return commitSha;
@@ -132,6 +148,7 @@ export class FakeWorld {
         }
         const commitSha = `commit-${++this.commitSeq}`;
         this.commitTrees.set(commitSha, treeSha);
+        this.commitParents.set(commitSha, parent === null ? [] : [parent]);
         this.commits.push(commitSha);
         this.head = commitSha;
         return { sha: commitSha, committedAt: (this.committedAt += 1000) };
@@ -154,6 +171,7 @@ export class FakeWorld {
         );
         const commitSha = `cbranch-${++this.commitSeq}`;
         this.commitTrees.set(commitSha, treeSha);
+        this.commitParents.set(commitSha, cur === null ? [] : [cur]);
         this.branchHeads.set(branch, commitSha);
         return { sha: commitSha };
       },
@@ -161,6 +179,30 @@ export class FakeWorld {
         deviceLabel: "other-device",
         committedAtMs: this.committedAt,
       }),
+      createMergeCommit: async ({ treeSha, parents }) => {
+        const commitSha = `merge-${++this.commitSeq}`;
+        this.commitTrees.set(commitSha, treeSha);
+        this.commitParents.set(commitSha, [...parents]);
+        return { sha: commitSha };
+      },
+      updateMainRef: async (sha) => {
+        // Non-force fast-forward semantics: the new commit must have
+        // the CURRENT head among its ancestors.
+        if (this.head !== null && !this.isReachable(this.head, sha)) {
+          throw new ValidationError("422: not a fast forward");
+        }
+        this.commits.push(sha);
+        this.head = sha;
+      },
+      compareStatus: async (base, head) => {
+        if (base === head) return "identical";
+        if (this.isReachable(base, head)) return "ahead";
+        if (this.isReachable(head, base)) return "behind";
+        return "diverged";
+      },
+      deleteBranch: async (branch) => {
+        this.branchHeads.delete(branch); // 404-tolerant by construction
+      },
     };
   }
 }

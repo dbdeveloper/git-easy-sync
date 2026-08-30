@@ -183,6 +183,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     maxAutoMergeFileSize: () => 10_000_000,
     deviceLabel: () => "test-device",
     commitMessage: () => "Sync at test (test-device)",
+    mergeMessage: () => "Merge conflict branch (test-device)",
     now: () => 1_700_000_500_000,
     onProgress: (a, b) => progressLog.push([a, b]),
     ...over,

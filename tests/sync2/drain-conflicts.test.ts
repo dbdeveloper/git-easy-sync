@@ -179,6 +179,7 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
       maxAutoMergeFileSize: () => 10_000_000,
       deviceLabel: () => "this-device",
       commitMessage: () => "Sync at test (this-device)",
+      mergeMessage: () => "Merge conflict branch (this-device)",
       now: () => 1_800_000_000_000,
       ...over,
     };
@@ -562,3 +563,348 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
     expect((await drainOnce(deps)).status).toBe("network-error");
   });
 });
+
+describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
+  // Reuses the same harness shape as the lifecycle suite above but
+  // with its own state (fresh per test).
+  let dir: string;
+  let vault: Vault;
+  let world: FakeWorld;
+  let syncStore: SyncStore;
+  let journal: DrainJournal;
+  let conflictStore: ConflictStoreV2;
+  let siblingTx: SiblingTx;
+  let vaultFiles: FakeVaultFiles;
+  let baselines: Map<string, { baselineSha: string; mtime: number; size: number }>;
+  let batches: Array<{ claimed: ClaimedBatch; removed: boolean }>;
+  let baseCommit: string | null;
+  let seq: number;
+
+  const NOTE2 = "note.md";
+  const V0b = "one\ntwo\nthree\n";
+  const REMOTE_B = "REMOTE\ntwo\nthree\n";
+  const LOCAL_B = "LOCAL\ntwo\nthree\n";
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "drain-fin-test-"));
+    vault = new Vault(dir);
+    world = new FakeWorld();
+    syncStore = new SyncStore({ vault: vault as never, selfPluginId: PLUGIN_ID });
+    journal = new DrainJournal({ vault: vault as never, selfPluginId: PLUGIN_ID });
+    conflictStore = new ConflictStoreV2({ vault: vault as never, selfPluginId: PLUGIN_ID });
+    siblingTx = new SiblingTx({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+      store: conflictStore,
+      computeSha: calculateGitBlobSHA,
+    });
+    vaultFiles = new FakeVaultFiles();
+    baselines = new Map();
+    batches = [];
+    baseCommit = null;
+    seq = 0;
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const honest = async (base: string | null, head: string): Promise<RemoteFileChange[]> => {
+    const headFiles = world.filesAt(head);
+    const baseFiles: RepoFiles = base === null ? new Map() : world.filesAt(base);
+    const out: RemoteFileChange[] = [];
+    for (const p of new Set([...headFiles.keys(), ...baseFiles.keys()])) {
+      const h = headFiles.get(p) ?? null;
+      const b = baseFiles.get(p) ?? null;
+      if (h?.sha === b?.sha) continue;
+      out.push({
+        path: p,
+        sha: h?.sha ?? DELETED_SHA_HASH,
+        size: h?.bytes.byteLength ?? null,
+        mtime: null,
+        deleted: h === null,
+      });
+    }
+    return out;
+  };
+
+  const stage = async (files: Record<string, string>): Promise<void> => {
+    const entries: BatchEntry[] = [];
+    for (const [p, content] of Object.entries(files)) {
+      const s = await sha(content);
+      await syncStore.saveBlobToSyncStore(s, enc(content));
+      entries.push({ path: p, sha: s, size: enc(content).byteLength, mtime: 100 });
+    }
+    const id = `g${++seq}`;
+    batches.push({
+      claimed: { id, dir: `queue/${id}`, meta: { v: 1, id, createdAt: 0, entries } },
+      removed: false,
+    });
+  };
+
+  const deps = (over?: Partial<DrainDeps>): DrainDeps => ({
+    vault: vault as never,
+    selfPluginId: PLUGIN_ID,
+    client: world.makeClient(),
+    syncStore,
+    journal,
+    retry: new NetworkRetry({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+      maxAttempts: 2,
+      sleep: async () => {},
+    }),
+    claimBatch: async () => {
+      const next = batches.find((b) => !b.removed);
+      return next ? next.claimed : null;
+    },
+    removeBatchDir: async (d) => {
+      const b = batches.find((x) => x.claimed.dir === d);
+      if (b) b.removed = true;
+    },
+    baselines: { get: async (p) => baselines.get(p) },
+    discoverChangedFiles: honest,
+    hot: { getLastSyncCommitSha: () => baseCommit, getConflictBranch: () => null },
+    conflictStore,
+    siblingTx,
+    tokenExpired: async () => false,
+    vaultFiles,
+    mergeBlobs: mergeBlobsWithMainThreadDiff3,
+    computeSha: calculateGitBlobSHA,
+    maxAutoMergeFileSize: () => 10_000_000,
+    deviceLabel: () => "this-device",
+    commitMessage: () => "Sync at test (this-device)",
+    mergeMessage: () => "Merge conflict branch (this-device)",
+    now: () => 1_800_000_000_000,
+    ...over,
+  });
+
+  const setup = async (): Promise<void> => {
+    baseCommit = await world.commitFiles({ [NOTE2]: V0b });
+    baselines.set(NOTE2, {
+      baselineSha: await sha(V0b),
+      mtime: 50,
+      size: enc(V0b).byteLength,
+    });
+    vaultFiles.files.set(NOTE2, { content: V0b, mtime: 50 });
+  };
+
+  // Births a conflict (STEP1 + first sibling) and returns the branch name.
+  const birthConflict = async (): Promise<string> => {
+    await world.commitFiles({ [NOTE2]: REMOTE_B });
+    await stage({ [NOTE2]: LOCAL_B });
+    vaultFiles.files.set(NOTE2, { content: LOCAL_B, mtime: 100 });
+    const r = await drainOnce(deps());
+    expect(r.status).toBe("ok");
+    return [...world.branchHeads.keys()][0];
+  };
+
+  it("G.7: FINALIZE never fires while unresolved tracked conflicts remain — the branch stays", async () => {
+    await setup();
+    const branch = await birthConflict();
+    expect(world.branchHeads.has(branch)).toBe(true);
+    // Another idle drain: conflict still unresolved → still no merge.
+    baseCommit = world.head;
+    const r = await drainOnce(deps());
+    expect(r.status).toBe("ok");
+    expect(r.finalizedMergeSha).toBeNull();
+    expect(world.branchHeads.has(branch)).toBe(true);
+  });
+
+  it("G.9 🔑 + G.10 + G.12: resolution → FINALIZE reachability-merge — main tree byte-identical, parents [main, conflict] positionally, empty diff", async () => {
+    await setup();
+    const branch = await birthConflict();
+    const rec = (await conflictStore.load()).entries.get(NOTE2)!;
+
+    // The user resolves: reconciles the base file and deletes the
+    // sibling (Scenario C — all siblings gone = conflict closed).
+    const sibName = buildSiblingFilePath(NOTE2, rec.siblings[0].mtime!, "other-device");
+    fs.rmSync(path.join(dir, sibName));
+    // The resolved content gets committed as a normal batch.
+    const RESOLVED = "RESOLVED\ntwo\nthree\n";
+    await stage({ [NOTE2]: RESOLVED });
+    vaultFiles.files.set(NOTE2, { content: RESOLVED, mtime: 300 });
+    baseCommit = world.head;
+
+    let mergeArgs: { treeSha: string; parents: [string, string] } | null = null;
+    const d = deps();
+    const origMerge = d.client.createMergeCommit.bind(d.client);
+    d.client.createMergeCommit = async (args) => {
+      mergeArgs = { treeSha: args.treeSha, parents: args.parents };
+      return origMerge(args);
+    };
+
+    const preMergeMainFiles = () => world.headFiles();
+    const r = await drainOnce(d);
+    expect(r.status).toBe("ok");
+    expect(r.pushedCommits).toHaveLength(1); // the resolved content
+    expect(r.finalizedMergeSha).not.toBeNull();
+
+    // G.9: the merge commit carries the MAIN tree — content unchanged.
+    const mergeFiles = world.filesAt(r.finalizedMergeSha!);
+    expect(dec(mergeFiles.get(NOTE2)!.bytes)).toBe(RESOLVED);
+    expect(world.head).toBe(r.finalizedMergeSha); // ref moved to the merge
+    // G.10: positional parents [main_head, conflict_head].
+    expect(mergeArgs!.parents[0]).toBe(r.pushedCommits[0]);
+    expect(mergeArgs!.parents[1].startsWith("cbranch-")).toBe(true);
+    // G.12: the merge changed NOTHING vs the pre-merge main tree.
+    const pre = world.filesAt(mergeArgs!.parents[0]);
+    expect([...mergeFiles.keys()].sort()).toEqual([...pre.keys()].sort());
+    for (const [p, f] of mergeFiles) {
+      expect(f.sha).toBe(pre.get(p)!.sha);
+    }
+    // Branch gone; name cleared in the journal.
+    expect(world.branchHeads.has(branch)).toBe(false);
+    const journalState = await journal.load();
+    expect(journalState!.conflictBranchName).toBeNull();
+    void preMergeMainFiles;
+  });
+
+  it("G.8: tip already reachable from main (crash after merge, before delete) → NO second merge, just the delete; 404 branch → just the field cleanup", async () => {
+    await setup();
+    const branch = await birthConflict();
+    // Resolve + finalize fully once.
+    const rec = (await conflictStore.load()).entries.get(NOTE2)!;
+    fs.rmSync(path.join(dir, buildSiblingFilePath(NOTE2, rec.siblings[0].mtime!, "other-device")));
+    await stage({ [NOTE2]: "RESOLVED\ntwo\nthree\n" });
+    vaultFiles.files.set(NOTE2, { content: "RESOLVED\ntwo\nthree\n", mtime: 300 });
+    baseCommit = world.head;
+    const r1 = await drainOnce(deps());
+    expect(r1.finalizedMergeSha).not.toBeNull();
+
+    // Crash simulation: the branch resurrects pointing at its old tip
+    // (already merged = reachable), and the journal still holds the
+    // name — the exact post-merge/pre-delete window.
+    const oldTip = r1.finalizedMergeSha!;
+    world.branchHeads.set(branch, oldTip); // tip == merge sha → identical/ahead
+    const js = (await journal.load())!;
+    js.conflictBranchName = branch;
+    await journal.persist(js);
+    baseCommit = world.head;
+
+    let merges = 0;
+    const d = deps();
+    const origMerge = d.client.createMergeCommit.bind(d.client);
+    d.client.createMergeCommit = async (a) => {
+      merges += 1;
+      return origMerge(a);
+    };
+    const r2 = await drainOnce(d);
+    expect(r2.status).toBe("ok");
+    expect(merges).toBe(0); // ancestor-check: no second merge
+    expect(world.branchHeads.has(branch)).toBe(false);
+
+    // 404 variant: name set, branch gone → field cleanup only.
+    const js2 = (await journal.load())!;
+    js2.conflictBranchName = "ghost-branch";
+    await journal.persist(js2);
+    const r3 = await drainOnce(deps());
+    expect(r3.status).toBe("ok");
+    expect((await journal.load())!.conflictBranchName).toBeNull();
+  });
+
+  it("G.13: 422 on the main-ref move → FINALIZE DEFERS (branch + name kept, drain ok); the next drain merges", async () => {
+    await setup();
+    const branch = await birthConflict();
+    const rec = (await conflictStore.load()).entries.get(NOTE2)!;
+    fs.rmSync(path.join(dir, buildSiblingFilePath(NOTE2, rec.siblings[0].mtime!, "other-device")));
+    await stage({ [NOTE2]: "RESOLVED\ntwo\nthree\n" });
+    vaultFiles.files.set(NOTE2, { content: "RESOLVED\ntwo\nthree\n", mtime: 300 });
+    baseCommit = world.head;
+
+    const d = deps();
+    const origUpd = d.client.updateMainRef.bind(d.client);
+    let blocked = true;
+    d.client.updateMainRef = async (sha) => {
+      if (blocked) {
+        blocked = false;
+        throw new (await import("../../src/errors")).ValidationError(
+          "422: main moved",
+        );
+      }
+      return origUpd(sha);
+    };
+    const r1 = await drainOnce(d);
+    expect(r1.status).toBe("ok"); // deferral is NOT an error
+    expect(r1.finalizedMergeSha).toBeNull();
+    expect(world.branchHeads.has(branch)).toBe(true); // kept
+    expect((await journal.load())!.conflictBranchName).toBe(branch); // kept
+
+    baseCommit = world.head;
+    const r2 = await drainOnce(deps());
+    expect(r2.status).toBe("ok");
+    expect(r2.finalizedMergeSha).not.toBeNull(); // retried and landed
+    expect(world.branchHeads.has(branch)).toBe(false);
+  });
+
+  it("G.6: the branch name survives BETWEEN drains via the hot fallback when no journal exists", async () => {
+    await setup();
+    await journal.clear();
+    // A live unresolved conflict blocks FINALIZE — otherwise the
+    // 404-branch cleanup would legitimately null the field (a
+    // hot-carried name whose branch never existed IS "already
+    // finalized").
+    const durable = await conflictStore.load();
+    const sib = {
+      path: NOTE2,
+      size: 2,
+      mtime: 700,
+      sha: await sha("s\n"),
+      blob: null,
+      mode: "" as const,
+      deviceLabel: "other-device",
+    };
+    durable.entries.set(NOTE2, {
+      conflictBase: { ...sib, sha: await sha(V0b) },
+      siblings: [sib],
+    });
+    await conflictStore.save(durable);
+    fs.writeFileSync(
+      path.join(dir, buildSiblingFilePath(NOTE2, 700, "other-device")),
+      "s\n",
+    );
+    const heads: string[] = [];
+    const d = deps({
+      hot: {
+        getLastSyncCommitSha: () => baseCommit,
+        getConflictBranch: () => ({ name: "hot-carried-branch" }),
+      },
+    });
+    const origHead = d.client.getBranchHeadSha.bind(d.client);
+    d.client.getBranchHeadSha = async (b) => {
+      heads.push(b);
+      return origHead(b);
+    };
+    const r = await drainOnce(d);
+    expect(r.status).toBe("ok");
+    expect(heads).toContain("hot-carried-branch"); // NOT a regenerated name
+    expect((await journal.load())!.conflictBranchName).toBe(
+      "hot-carried-branch",
+    );
+  });
+
+  it("G.3: crash-recovery dedup — the journal doesn't confirm, but the LIVE branch already holds the sha → push skipped", async () => {
+    await setup();
+    const branch = await birthConflict();
+    const tipAfterBirth = world.branchHeads.get(branch)!;
+
+    // Simulate "push succeeded, disk didn't": the durable conflictBase
+    // regresses to V0 (≠ local), while the branch tip already carries
+    // LOCAL_B. The next drain's STEP2 must skip the push via the LIVE
+    // check, not duplicate the commit.
+    const durable = await conflictStore.load();
+    const rec = durable.entries.get(NOTE2)!;
+    durable.entries.set(NOTE2, {
+      conflictBase: { ...rec.conflictBase, sha: await sha(V0b) },
+      siblings: rec.siblings,
+    });
+    await conflictStore.save(durable);
+    await stage({ [NOTE2]: LOCAL_B }); // same content again
+    baseCommit = world.head;
+
+    const r = await drainOnce(deps());
+    expect(r.status).toBe("ok");
+    expect(world.branchHeads.get(branch)).toBe(tipAfterBirth); // no new commit
+  });
+});
+
