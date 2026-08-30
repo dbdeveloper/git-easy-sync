@@ -57,7 +57,9 @@ export function emptyDrainState(): DrainState {
 type Slot = "a" | "b";
 
 // FileInfo → JSON without the blob (and back, blob always null).
-function fileInfoToJson(f: FileInfo): Record<string, unknown> {
+// Exported: the durable conflict store v2 (Phase 5) serializes the
+// SAME FileInfo/ConflictEntry shapes — one codec, no forked formats.
+export function fileInfoToJson(f: FileInfo): Record<string, unknown> {
   return {
     path: f.path,
     size: f.size,
@@ -68,7 +70,7 @@ function fileInfoToJson(f: FileInfo): Record<string, unknown> {
   };
 }
 
-function fileInfoFromJson(raw: unknown): FileInfo {
+export function fileInfoFromJson(raw: unknown): FileInfo {
   const out = emptyFileInfo();
   if (typeof raw !== "object" || raw === null) return out;
   const r = raw as Record<string, unknown>;
