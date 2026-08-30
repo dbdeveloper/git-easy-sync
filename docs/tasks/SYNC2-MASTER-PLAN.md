@@ -546,16 +546,24 @@ D1 («reset зносить `.runtime/` цілком») після Фази 1 с�
    `fullTreeDiffAgainstColdBaseline` **зобов'язаний читати `truncated` і на `true`
    падати голосно** (наш `getRepoContent` прапорець сьогодні ігнорує — compare-300
    probe D). Запасний хід (не будуємо, YAGNI): некурсивний по-каталожний обхід.
-1. `getChangedFilesFromGitHubRepo(base, head)` — `compare()` → 300/404 →
+1. ✅ `getChangedFilesFromGitHubRepo(base, head)` — `compare()` → 300/404 →
    `fullTreeDiffAgainstColdBaseline(head)`. **Залежить від Фази 1** (читає
-   `metadata.files` по-шляхово — це вже cold-кошики).
-2. `getContentsMetadataAtRef(path, ref)` — `HEAD` + `vnd.github.raw+json`, ETag-як-SHA з
-   перевіркою форми і `GET`-фолбеком, що ще й кладе blob у `sync_store/`.
-3. `getCommitInfoForPath(path, atSha)` — `(device_label, committed_at)` одним запитом.
+   `metadata.files` по-шляхово — це вже cold-кошики). → `src/sync2/discovery.ts`
+   (+ `DELETED_SHA_HASH` = git null-sha, `TreeTruncatedError` в `errors.ts`,
+   адитивний `GithubClient.getRepoTree(sha)` — ЄДИНИЙ читач `truncated`).
+2. ✅ `getContentsMetadataAtRef(path, ref)` — `HEAD` + `vnd.github.raw+json`, ETag-як-SHA з
+   перевіркою форми і `GET`-фолбеком, що ще й кладе blob у `sync_store/` (через
+   ін'єктований `blobSink`). → реалізовано як **`GithubClient.getContentsMetadataViaHead`**:
+   старий GET-метод `getContentsMetadataAtRef` НЕ торкнуто (живий двигун, §2.2 п.1) —
+   на cutover-і Фази 4 старий видаляється, новий може успадкувати ім'я зі спеки.
+3. ✅ `getCommitInfoForPath(path, atSha)` — `(device_label, committed_at)` одним запитом
+   (`listCommitsForPath(perPage=1)` + `parseDeviceSuffix`). → `discovery.ts`.
 
 **Гейт:** §VIII **O** (11, з них 2 integration) + **P** п.14-19 (HEAD/ETag) + P п.23-26
 (`getCommitInfoForPath`) зелені. Окремо — **канарка P.19** (ETag ≡ `sha` дослівно) має
 бути в integration-сюїті, бо це спостереження, не контракт GitHub.
+✅ **ВИКОНАНО 2026-08-30** — деталі в §8.2 (Фаза 3); P.25 — санкціоноване відкладення
+до Фази 4 (три сайти народження конфлікту ще не існують).
 
 ### Фаза 4 — Головний цикл drain
 
@@ -1947,3 +1955,30 @@ bridge-полів у `meta.json`, без wiring-у (sweep + onload-recovery → 
 - `consolidateIntoTail` НЕ ремонтує битий tail-метафайл — відступає (append);
   ремонт належить claimer-у. Commit клеймить лише хвіст, drain лише голову —
   колізія можлива тільки при довжині черги 1.
+
+#### ✅ Фаза 3 (Discovery, два шари) — ЗАВЕРШЕНО 2026-08-30 (коміти `f074874` + `448fb93`; шоста фаза за день)
+
+Гейт по пунктах:
+
+| Пункт гейта | Стан |
+|---|---|
+| п.0 PROBE ліміту `POST /git/trees` | ✅ [`SPIKE-TREES-LIMIT.md`](./SPIKE-TREES-LIMIT.md) + постійний regression `trees-entry-limit.test.ts`: 1k/5k/20k → усі 201, ліміту кількості на стелі НЕМАЄ; count-флаш акумулятору не потрібен. ⚠️ Побічно: READ-бік 20k = 5.57 МБ ≈ 80% документованої 7 МБ-стелі → `truncated` навантажений уже на ~25k |
+| §VIII **O** (Шар 1) | ✅ O.1-O.9 юніт (fake-клієнт + СПРАВЖНІЙ FileBaselinesStore; +O.1a rename→set-difference) + O.10/O.11 проти живого GitHub (301-файловий tree-fallback без утрат; 404-base → коректний diff проти baselines). RED-верифіковано: off-by-one на 300 валить O.2, зняття truncated-помилки валить O.7 |
+| §VIII **P** п.14-18 (HEAD/ETag) | ✅ юніт з fake-worker-ом; exploding-proxy на `json` пінить «тіло НЕ читається»; W/-префікс і лапки; not-a-sha → GET-фолбек з warn; фолбек ЗБЕРІГАЄ inline-blob у sync_store (>1 МБ — ні) |
+| Канарка **P.19** (integration) | ✅ ЖИВЦЕМ: ETag ≡ `sha` дослівно (`9738e0…`, size 380/380). Червона = вимкнути HEAD-шлях, не «лагодити тест» |
+| §VIII **P** п.23-26 (`getCommitInfoForPath`) | ✅ P.23 (ОДИН запит → обидва поля), P.24 (чужий коміт → unknown-label + СПРАВЖНЯ дата → sibling-ім'я з датою), P.26 (регресія: discovery.mtime=null за дизайном, дату дає лише getCommitInfoForPath). ⚠️ **P.25 — санкціоноване відкладення до Фази 4**: параметризація по трьох сайтах народження конфлікту неможлива, доки сайтів нема |
+
+Юніт 133/2004 GREEN, build чистий. Живий двигун НЕ торкнуто (правило §2.2 п.1 діє й
+тут): `getContentsMetadataAtRef` (GET) лишився як був — нова HEAD-реалізація живе поруч
+як `getContentsMetadataViaHead` і успадкує ім'я зі спеки на cutover-і; `getRepoTree` —
+адитивний. Іменування зафіксовано у Фазі 3 п.2 плану.
+
+Ключові факти для Фази 4:
+- `DELETED_SHA_HASH` (git null-sha) визначено в `discovery.ts` — §III бере звідти.
+- Discovery фільтрує `isSyncable` на ОБОХ шляхах (compare і tree) — фільтр §II.1 п.1
+  у drain стає подвійним захистом, не єдиним.
+- `blobSink` — структурна ін'єкція (`has`/`save`), клієнт НЕ імпортує sync2; Фаза 4
+  підключає реальний SyncStore одним об'єктом-адаптером.
+- Помилковий контракт: 404 compare ковтається всередині; NetworkError/AuthError/
+  TreeTruncatedError ЛЕТЯТЬ — §III-сайт обгортає в retryOnNetworkError і володіє
+  token-latch-ем.
