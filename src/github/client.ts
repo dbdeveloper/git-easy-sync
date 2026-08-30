@@ -358,6 +358,88 @@ export default class GithubClient {
   }
 
   /**
+   * §II.15 (Phase 4): create a commit on a READY tree and move the
+   * branch ref — the MAIN-push tail of the new drain. Distinct from
+   * the conflict branch's pushCommit-with-a-blob-list by NAME, per
+   * the spec's 2026-08-30 rename note (one name meaning two shapes
+   * on two sites was the hazard).
+   *
+   * Returns BOTH the new commit sha and committer date (ms) from the
+   * same Create-Commit response — the mtime invariant stamps
+   * committed_at onto every pushed path, and the response is parsed
+   * for the sha anyway.
+   *
+   * `parent: null` = bare repo: a parentless commit + createReference
+   * (the ref doesn't exist yet). Otherwise a plain non-force PATCH —
+   * its 422 ("not a fast forward") throws ValidationError, which the
+   * drain's 422-restart path catches.
+   */
+  async pushCommitFromTree({
+    treeSha,
+    parent,
+    message,
+    retry = false,
+    maxRetries = 5,
+  }: {
+    treeSha: string;
+    parent: string | null;
+    message: string;
+    retry?: boolean;
+    maxRetries?: number;
+  }): Promise<{ sha: string; committedAt: number }> {
+    const response = await retryUntil(
+      async () => {
+        return this.timed(
+          {
+            url: `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/git/commits`,
+            headers: this.headers(),
+            method: "POST",
+            body: JSON.stringify({
+              message,
+              tree: treeSha,
+              parents: parent === null ? [] : [parent],
+            }),
+            throw: false,
+          },
+          "commit-from-tree",
+        );
+      },
+      (res) => !isWriteRetriableStatus(res.status),
+      retry ? maxRetries : 0,
+    );
+    if (response.status < 200 || response.status >= 400) {
+      this.logger.error("Failed to create commit from tree", response);
+      throw makeGithubAPIError(
+        response.status,
+        `Failed to create commit from tree, status ${response.status}`,
+      );
+    }
+    const sha = response.json.sha as string;
+    const dateIso =
+      (response.json.committer?.date as string | undefined) ??
+      (response.json.author?.date as string | undefined) ??
+      "";
+    const committedAt = Date.parse(dateIso) || 0;
+
+    if (parent === null) {
+      await this.createReference({
+        ref: `refs/heads/${this.settings.githubBranch}`,
+        sha,
+        retry,
+        maxRetries,
+      });
+    } else {
+      await this.updateReference({
+        ref: `heads/${this.settings.githubBranch}`,
+        sha,
+        retry,
+        maxRetries,
+      });
+    }
+    return { sha, committedAt };
+  }
+
+  /**
    * Fetch a single commit's metadata (we only need its tree SHA).
    * Sync2 uses this during conflict reconciliation: after a HEAD
    * drift, we re-target the in-flight batch onto the new head, which
