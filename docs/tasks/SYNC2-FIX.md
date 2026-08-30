@@ -769,6 +769,14 @@ snapshot-а нема → читаємо й хешуємо все, економі
 - **T6.1** Три конфлікти в одну сесію (як Scenario E): 3 sibling-и, 1 conflict-branch
   з 3 комітами; резолюція по одному → 3 «resolve conflict» коміти на main; finalize
   зливає гілку лише коли store порожній. `[I1]` (регресія — має лишитись GREEN)
+  ⚠️ **ЕМПІРИКА 2026-08-30 (Фаза 0, тест написано, розбито на 3 контракти):**
+  (1) **реєстрація — RED**: tip conflict-гілки після 3 конфліктів в один sync несе
+  ours лише ОСТАННЬОГО шляху (`theirs 1 / theirs 2 / ours 3`) — pre-conflict стан
+  c1/c2 не має ЖОДНОЇ копії на GitHub до резолюції (вікно втрати при смерті
+  пристрою); під `it.fails`. (2) **гейт finalize — GREEN**: гілка живе, доки store
+  непорожній, зникає після останньої резолюції. (3) **збіжність main — GREEN**:
+  після всіх accept-ours резолюцій main несе ours для всіх трьох.
+  Тест: `conflicts/T6.1-three-conflicts-finalize-gate`.
 - **T6.2a** local:delete × remote:modify → **КОНФЛІКТ** `delete-vs-modify`
   (реєструється sibling з theirs, `oursBlobSha:null`). `[I2]` (регресія GREEN)
 - **T6.2b** local:modify × remote:delete → **АВТО modify-wins** (файл воскресає на
