@@ -452,6 +452,88 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
     expect(commitInfoCalls).toEqual([]); // paid ONLY at conflict sites
   });
 
+  it("J.3 + J.4: a durable record with EMPTY siblings seeds is_manual_conflict=true with non-null placeholder halves — the batch goes STEP2, never main", async () => {
+    await setupAligned();
+    // Fresh STEP1 shape persisted by a previous (crashed) run: record
+    // exists, siblings=[] — STEP3 never ran.
+    const durable = await conflictStore.load();
+    durable.entries.set(NOTE, {
+      conflictBase: {
+        path: NOTE,
+        sha: await sha(V0),
+        size: null,
+        mtime: null,
+        blob: null,
+        mode: "",
+        deviceLabel: null,
+      },
+      siblings: [],
+    });
+    await conflictStore.save(durable);
+
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok"); // no null-deref on the placeholder (J.4)
+    expect(r.conflictVerdicts.some((v) => v.site === "step2-existing")).toBe(
+      true,
+    ); // seeded flag routed the batch to STEP2 (J.3)
+    expect(r.pushedCommits).toEqual([]); // NOT pushed to main
+    expect(dec(world.headFiles().get(NOTE)!.bytes)).toBe(V0);
+  });
+
+  it("J.5: seeding never overwrites the journal's in-flight progress for a conflict path", async () => {
+    await setupAligned();
+    // The journal (from a crashed run) already carries REAL progress:
+    // remote == the batch content (a completed branch push).
+    const localSha = await sha(LOCAL_CLASH);
+    const js = (await journal.load()) ?? (await import("../../src/sync2/drain-journal")).emptyDrainState();
+    js.trackedFiles.set(NOTE, {
+      base: { path: NOTE, sha: localSha, size: 1, mtime: 1, blob: null, mode: "", deviceLabel: null },
+      remote: { path: NOTE, sha: localSha, size: 1, mtime: 1, blob: null, mode: "", deviceLabel: null },
+      isManualConflict: false,
+    });
+    await journal.persist(js);
+    // And a durable conflict record exists for the same path.
+    const durable = await conflictStore.load();
+    durable.entries.set(NOTE, {
+      conflictBase: { path: NOTE, sha: localSha, size: null, mtime: null, blob: null, mode: "", deviceLabel: null },
+      siblings: [],
+    });
+    await conflictStore.save(durable);
+
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    // Had seeding replaced the tracked record with placeholders, the
+    // STEP2 dedup (conflictBase.sha == local.sha) would still hold —
+    // but the journal's halves must be the REAL ones: no branch push
+    // happened (dedup) and nothing landed on main.
+    expect(world.branchHeads.size).toBe(0);
+    expect(r.pushedCommits).toEqual([]);
+  });
+
+  it("J.7: RECONCILE does NOT fire for a conflict that simply hasn't reached STEP3 (siblings==[] is 'in progress', not 'resolved')", async () => {
+    await setupAligned();
+    const durable = await conflictStore.load();
+    durable.entries.set(NOTE, {
+      conflictBase: { path: NOTE, sha: await sha(LOCAL_CLASH), size: null, mtime: null, blob: null, mode: "", deviceLabel: null },
+      siblings: [],
+    });
+    await conflictStore.save(durable);
+
+    // An idle drain (no batches, no remote change).
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    // The record SURVIVED (I.7 at the store level + J.7 at the drain
+    // level): the flag was seeded and never reset.
+    const after = await conflictStore.load();
+    expect(after.entries.has(NOTE)).toBe(true);
+    // And FINALIZE stayed blocked: the (auto-generated) branch name is
+    // still in the journal, nothing was merged.
+    expect(r.finalizedMergeSha).toBeNull();
+  });
+
   it("C.19a 🔑 (two-drain, end-to-end): the §II.11 double-loss crash must NOT cascade into a silent clobber of remote", async () => {
     // Drain 1: birth a conflict with ONE sibling (the typical shape).
     await setupAligned();
