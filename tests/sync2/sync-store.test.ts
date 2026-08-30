@@ -185,3 +185,123 @@ describe("SyncStore (§VIII F)", () => {
     expect(fs.readdirSync(storeAbs())).toHaveLength(1);
   });
 });
+
+// Byte-transport fast path (MASTER-PLAN §2.2 п.5): when the adapter
+// exposes getResourcePath, bytes travel via WebView fetch — the
+// pattern field-proven in PushQueue.readFile because the plain
+// readBinary bridge blocked mobile sync on files >1 MB. Validation
+// (hash-on-load) is transport-independent.
+describe("SyncStore fast-path transport", () => {
+  let dir: string;
+  let vault: Vault;
+  let readBinaryCalls: string[];
+  let fetchCalls: string[];
+  let fetchFails: boolean;
+
+  const makeFastVault = (): unknown => ({
+    configDir: vault.configDir,
+    adapter: {
+      exists: (p: string) => vault.adapter.exists(p),
+      mkdir: (p: string) => vault.adapter.mkdir(p),
+      writeBinary: (p: string, b: ArrayBuffer) =>
+        vault.adapter.writeBinary(p, b),
+      list: (p: string) => vault.adapter.list(p),
+      remove: (p: string) => vault.adapter.remove(p),
+      readBinary: (p: string) => {
+        readBinaryCalls.push(p);
+        return vault.adapter.readBinary(p);
+      },
+      getResourcePath: (p: string) => `res://${p}`,
+    },
+  });
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "sync-store-fast-"));
+    vault = new Vault(dir);
+    readBinaryCalls = [];
+    fetchCalls = [];
+    fetchFails = false;
+    // WebView fetch stand-in: serves res:// URLs from the real files.
+    (globalThis as { fetch?: unknown }).fetch = async (url: string) => {
+      fetchCalls.push(url);
+      if (fetchFails) throw new Error("network layer down");
+      const rel = url.slice("res://".length);
+      const bytes = fs.readFileSync(path.join(dir, rel));
+      return {
+        ok: true,
+        arrayBuffer: async () =>
+          bytes.buffer.slice(
+            bytes.byteOffset,
+            bytes.byteOffset + bytes.byteLength,
+          ),
+      };
+    };
+  });
+
+  afterEach(() => {
+    delete (globalThis as { fetch?: unknown }).fetch;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("getResourcePath present → bytes come via fetch, readBinary untouched; hash-on-load still verifies", async () => {
+    const store = new SyncStore({
+      vault: makeFastVault() as never,
+      selfPluginId: PLUGIN_ID,
+    });
+    const sha = await shaOfStr("fast\n");
+    await store.saveBlobToSyncStore(sha, enc("fast\n"));
+
+    const verified = new Set<string>();
+    const got = await store.getBlobFromSyncStore(sha, verified);
+    expect(dec(got!)).toBe("fast\n");
+    expect(fetchCalls).toHaveLength(1);
+    expect(readBinaryCalls).toHaveLength(0);
+    expect(verified.has(sha)).toBe(true);
+
+    // Verified-scope re-read rides the fast path too.
+    await store.getBlobFromSyncStore(sha, verified);
+    expect(fetchCalls).toHaveLength(2);
+    expect(readBinaryCalls).toHaveLength(0);
+  });
+
+  it("corrupt copy via the fast path is still rejected — validation is transport-independent", async () => {
+    const store = new SyncStore({
+      vault: makeFastVault() as never,
+      selfPluginId: PLUGIN_ID,
+    });
+    const sha = await shaOfStr("real content");
+    await store.saveBlobToSyncStore(sha, enc("garbage with the same name"));
+    expect(await store.getBlobFromSyncStore(sha, new Set())).toBeNull();
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it("fetch failure degrades to readBinary — slow but correct, never a failed read", async () => {
+    const store = new SyncStore({
+      vault: makeFastVault() as never,
+      selfPluginId: PLUGIN_ID,
+    });
+    const sha = await shaOfStr("fallback\n");
+    await store.saveBlobToSyncStore(sha, enc("fallback\n"));
+    fetchFails = true;
+    const got = await store.getBlobFromSyncStore(sha, new Set());
+    expect(dec(got!)).toBe("fallback\n");
+    expect(readBinaryCalls).toHaveLength(1);
+  });
+
+  it("no getResourcePath on the adapter → plain readBinary path (mock/desktop parity)", async () => {
+    const store = new SyncStore({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+    });
+    const sha = await shaOfStr("plain\n");
+    await store.saveBlobToSyncStore(sha, enc("plain\n"));
+    expect(dec((await store.getBlobFromSyncStore(sha, new Set()))!)).toBe(
+      "plain\n",
+    );
+    expect(fetchCalls).toHaveLength(0);
+  });
+});
+
+function shaOfStr(s: string): Promise<string> {
+  return calculateGitBlobSHA(enc(s));
+}

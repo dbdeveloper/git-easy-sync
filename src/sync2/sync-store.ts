@@ -78,12 +78,12 @@ export default class SyncStore {
       // Content-addressed: bytes under this name never change to
       // OTHER content behind our back within the scope.
       if (!(await this.vault.adapter.exists(p))) return null;
-      return this.vault.adapter.readBinary(p);
+      return this.readBytes(p);
     }
     if (!(await this.vault.adapter.exists(p))) {
       return null; // plain cache miss — not an error
     }
-    const bytes = await this.vault.adapter.readBinary(p);
+    const bytes = await this.readBytes(p);
     const actual = await calculateGitBlobSHA(bytes);
     if (actual !== sha) {
       // Catches BOTH corruption kinds: a truncated file AND the
@@ -159,6 +159,33 @@ export default class SyncStore {
       removed += 1;
     }
     return { removed, kept: candidates.length - removed };
+  }
+
+  // Byte TRANSPORT only — validation stays with hash-on-load above.
+  // Primary path: `adapter.getResourcePath(p)` + WebView fetch — the
+  // pattern field-proven in PushQueue.readFile, chosen there because
+  // the plain `readBinary` JS↔native bridge empirically BLOCKED the
+  // mobile sync flow on files >1 MB (Capacitor serves
+  // `http://localhost/_capacitor_file_/…` without a bridge
+  // round-trip; desktop gets an `app://` URL). Fallback: `readBinary`
+  // — mock-obsidian has no getResourcePath, and any fetch hiccup
+  // (racing delete, future platform change) degrades to the slow
+  // correct path instead of failing the read outright; a wrong byte
+  // outcome is impossible either way because the caller hashes.
+  private async readBytes(p: string): Promise<ArrayBuffer> {
+    const getResourcePath = (
+      this.vault.adapter as { getResourcePath?: (q: string) => string }
+    ).getResourcePath;
+    if (typeof getResourcePath === "function") {
+      try {
+        const url = getResourcePath.call(this.vault.adapter, p);
+        const resp = await fetch(url);
+        if (resp.ok) return await resp.arrayBuffer();
+      } catch {
+        // fall through to readBinary
+      }
+    }
+    return this.vault.adapter.readBinary(p);
   }
 
   private async ensureDir(): Promise<void> {
