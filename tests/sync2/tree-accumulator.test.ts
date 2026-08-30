@@ -305,7 +305,7 @@ describe("tree accumulator (§VIII Q)", () => {
       createTree: async (args) => {
         if (rejected === 0) {
           rejected += 1;
-          throw new ValidationError(422, "tree references a GC-ed blob");
+          throw new ValidationError("tree references a GC-ed blob");
         }
         return client.createTree(args);
       },
