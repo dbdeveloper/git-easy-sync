@@ -461,6 +461,37 @@ describe("BatchWriter (Phase 2 group B)", () => {
     ]);
   });
 
+  it("batch cap: consolidation that would exceed 100 paths → back off (split), tail untouched; same-path replacement does NOT count against the cap", async () => {
+    const writer = makeWriter();
+    // Tail at exactly the cap.
+    const first = Array.from({ length: 100 }, (_, i) => {
+      putVaultFile(`f-${i}.md`, `v${i}\n`);
+      return modified(`f-${i}.md`);
+    });
+    const id = await writer.writeBatch(first);
+    expect(readMeta(id!).entries).toHaveLength(100);
+
+    // Same-path replacement: count stays 100 → merges fine.
+    putVaultFile("f-0.md", "v0-updated\n");
+    expect(await writer.consolidateIntoTail([modified("f-0.md")])).toBe(id);
+    expect(readMeta(id!).entries).toHaveLength(100);
+
+    // A genuinely new path would make 101 → back off, marker released,
+    // tail byte-identical; the caller appends a fresh batch.
+    const before = fs.readFileSync(
+      path.join(queueAbs(), id!, BATCH_META_FILE),
+      "utf8",
+    );
+    putVaultFile("new.md", "new\n");
+    expect(await writer.consolidateIntoTail([modified("new.md")])).toBeNull();
+    expect(
+      fs.readFileSync(path.join(queueAbs(), id!, BATCH_META_FILE), "utf8"),
+    ).toBe(before);
+    expect(
+      fs.existsSync(path.join(queueAbs(), id!, ATTEMPTED_COMMIT_MARKER)),
+    ).toBe(false);
+  });
+
   it("consolidateIntoTail: corrupt tail metafile → back off cleanly (repair is the claimer's job)", async () => {
     putVaultFile("a.md", "a\n");
     const writer = makeWriter();

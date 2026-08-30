@@ -59,6 +59,14 @@ import {
   QUEUE_DIRNAME,
 } from "./batch-metafile";
 
+// Owner decision 2026-08-30: `[commit]` slices changes into batches of
+// at most 100 paths. Consolidation honours the same cap — a merge that
+// would grow the tail past it BACKS OFF (returns null) and the caller
+// appends a fresh batch instead ("Consolidate commits" must still
+// split once the rolling commit reaches the split size). Same-path
+// replacements don't grow the count — only genuinely new paths do.
+export const MAX_BATCH_ENTRIES = 100;
+
 export interface BatchWriterLogger {
   info(message: string, data?: unknown): void;
   warn(message: string, data?: unknown): void;
@@ -187,6 +195,17 @@ export default class BatchWriter {
     }
 
     const merged = await this.mergeEntries(meta.entries, changes);
+    if (merged.length > MAX_BATCH_ENTRIES) {
+      // The rolling commit reached the split size — the new changes go
+      // to a fresh batch (the caller's writeBatch) instead of growing
+      // this one without bound. The tail keeps its current content.
+      this.logger?.info?.(
+        "consolidateIntoTail: merge would exceed the batch cap — splitting",
+        { tail: meta.id, mergedCount: merged.length },
+      );
+      await this.removeIfExists(marker);
+      return null;
+    }
     const updated: BatchMetafile = { ...meta, entries: merged };
     // §12.4 again: manifest first, bytes second.
     await this.vault.adapter.write(metaPath, JSON.stringify(updated));
