@@ -161,6 +161,36 @@ describe("FileBaselinesStore", () => {
     expect(fresh.stats.bucketReads).toBe(3); // grouped read, not 10
   });
 
+  it("getMany omits missing paths but still costs K bucket reads", async () => {
+    const [p1, p2] = pathsInSameBucket(2);
+    const [pOther] = pathsInDistinctBuckets(2).filter(
+      (p) => bucketIdForPath(p) !== bucketIdForPath(p1),
+    );
+    await store.setMany([{ path: p1, ...entry("s1") }]);
+
+    const fresh = freshStore();
+    // p2 (same bucket, absent) + pOther (other bucket, absent): the
+    // result carries only p1, the read cost is 2 buckets — one per
+    // touched bucket, absent paths add nothing.
+    const got = await fresh.getMany([p1, p2, pOther]);
+    expect([...got.keys()]).toEqual([p1]);
+    expect(fresh.stats.bucketReads).toBe(2);
+  });
+
+  it("removeMany across several buckets = one write per touched bucket", async () => {
+    const [pA, pB] = pathsInDistinctBuckets(2);
+    await store.setMany([
+      { path: pA, ...entry("a") },
+      { path: pB, ...entry("b") },
+    ]);
+    const writesBefore = store.stats.bucketWrites;
+    await store.removeMany([pA, pB]);
+    expect(store.stats.bucketWrites).toBe(writesBefore + 2);
+    const fresh = freshStore();
+    expect(await fresh.get(pA)).toBeUndefined();
+    expect(await fresh.get(pB)).toBeUndefined();
+  });
+
   it("MRU: recency is ANY access — a cache-hit bucket survives, the stale one is evicted", async () => {
     const small = freshStore(2); // capacity 2 for a deterministic test
     const [pA, pB, pC] = pathsInDistinctBuckets(3);
