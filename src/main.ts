@@ -31,6 +31,7 @@ import ChangeDetector from "./sync2/change-detector";
 import PushQueue from "./sync2/push-queue";
 import TreeBuilder from "./sync2/tree-builder";
 import GitignoreInvariants from "./sync2/gitignore-invariants";
+import InvariantStateStore from "./sync2/invariant-state";
 import { Sync2Manager } from "./sync2/sync2-manager";
 import { IntervalScheduler } from "./sync2/interval-scheduler";
 import ConflictStore from "./sync2/conflict-store";
@@ -903,9 +904,14 @@ export default class GitHubSyncPlugin extends Plugin {
       configDir: this.app.vault.configDir,
       selfPluginId: manifest.id,
     });
+    const invariantState = new InvariantStateStore({
+      vault: this.app.vault,
+      selfPluginId: manifest.id,
+    });
+    await invariantState.load();
     this.invariants = new GitignoreInvariants({
       vault: this.app.vault,
-      store,
+      state: invariantState,
       configDir: this.app.vault.configDir,
       selfPluginId: manifest.id,
     });

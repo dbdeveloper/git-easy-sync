@@ -24,6 +24,7 @@ import { Sync2Manager } from "../../../../src/sync2/sync2-manager";
 import SnapshotStore from "../../../../src/sync2/snapshot-store";
 import ChangeDetector from "../../../../src/sync2/change-detector";
 import GitignoreInvariants from "../../../../src/sync2/gitignore-invariants";
+import InvariantStateStore from "../../../../src/sync2/invariant-state";
 import PushQueue from "../../../../src/sync2/push-queue";
 import TreeBuilder from "../../../../src/sync2/tree-builder";
 import ConflictStore from "../../../../src/sync2/conflict-store";
@@ -149,9 +150,14 @@ export async function createSync2Client(
     configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
   });
+  const invariantState = new InvariantStateStore({
+    vault,
+    selfPluginId: SELF_PLUGIN_ID,
+  });
+  await invariantState.load();
   const invariants = new GitignoreInvariants({
     vault,
-    store,
+    state: invariantState,
     configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
   });

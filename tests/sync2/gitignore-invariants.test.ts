@@ -16,7 +16,7 @@ import GitignoreInvariants, {
   extractInvariantBlock,
   blockHasAllowLine,
 } from "../../src/sync2/gitignore-invariants";
-import SnapshotStore from "../../src/sync2/snapshot-store";
+import InvariantStateStore from "../../src/sync2/invariant-state";
 import { Vault } from "../../mock-obsidian";
 
 const CONFIG_DIR = ".obsidian";
@@ -32,14 +32,17 @@ function fixture() {
     recursive: true,
   });
   const vault = new Vault(root);
-  const store = new SnapshotStore(vault as unknown as import("obsidian").Vault);
+  const state = new InvariantStateStore({
+    vault: vault as unknown as import("obsidian").Vault,
+    selfPluginId: SELF,
+  });
   const inv = new GitignoreInvariants({
     vault: vault as unknown as import("obsidian").Vault,
-    store,
+    state,
     configDir: CONFIG_DIR,
     selfPluginId: SELF,
   });
-  return { root, vault, store, inv };
+  return { root, vault, state, inv };
 }
 
 const cdGitignore = (root: string) =>
@@ -85,7 +88,7 @@ describe("GitignoreInvariants.enforce", () => {
 
   beforeEach(async () => {
     f = fixture();
-    await f.store.load();
+    await f.state.load();
   });
 
   afterEach(() => {
@@ -195,7 +198,7 @@ describe("GitignoreInvariants.enforce", () => {
 
     // Cached state now matches new mtime.
     const stat = fs.statSync(cdPath);
-    expect(f.store.getInvariantState().configDirGitignore?.mtime).toBe(
+    expect(f.state.get().configDirGitignore?.mtime).toBe(
       stat.mtimeMs,
     );
   });
@@ -230,7 +233,7 @@ describe("GitignoreInvariants.enforce", () => {
 
     await f.inv.notePathSelfWritten(`${CONFIG_DIR}/.gitignore`);
     const stat = fs.statSync(cdPath);
-    expect(f.store.getInvariantState().configDirGitignore?.mtime).toBe(
+    expect(f.state.get().configDirGitignore?.mtime).toBe(
       stat.mtimeMs,
     );
 
@@ -243,17 +246,18 @@ describe("GitignoreInvariants.enforce", () => {
     expect(fs.readFileSync(cdPath, "utf8")).toBe(before);
   });
 
-  it("invariant state survives across new instances (persisted in store)", async () => {
+  it("invariant state survives across new instances (own .runtime file, write-through)", async () => {
     await f.inv.enforce();
-    await f.store.save();
+    // No explicit save: InvariantStateStore persists on every set.
 
     // New instance, fresh load.
-    const store2 = new SnapshotStore(
-      f.vault as unknown as import("obsidian").Vault,
-    );
-    await store2.load();
-    expect(store2.getInvariantState().configDirGitignore).toBeDefined();
-    expect(store2.getInvariantState().selfPluginGitignore).toBeDefined();
+    const state2 = new InvariantStateStore({
+      vault: f.vault as unknown as import("obsidian").Vault,
+      selfPluginId: SELF,
+    });
+    await state2.load();
+    expect(state2.get().configDirGitignore).toBeDefined();
+    expect(state2.get().selfPluginGitignore).toBeDefined();
   });
 
   // ─── enforce() applies new canonical block on plugin upgrade ────────
@@ -292,7 +296,7 @@ describe("GitignoreInvariants.enforce", () => {
 
     // Seed the store's invariant state to claim this exact stale
     // content was recorded last enforce.
-    f.store.setInvariantState("configDirGitignore", {
+    await f.state.set("configDirGitignore", {
       mtime: staleStat.mtimeMs,
       hash: staleHash,
     });

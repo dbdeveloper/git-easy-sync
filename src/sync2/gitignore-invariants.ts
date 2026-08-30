@@ -4,7 +4,7 @@
 
 import { Vault } from "obsidian";
 import { calculateGitBlobSHA } from "../utils";
-import SnapshotStore, { InvariantFileState } from "./snapshot-store";
+import InvariantStateStore, { InvariantFileState } from "./invariant-state";
 
 // Invariant block markers. Editing anything between BEGIN and END on
 // disk triggers a rewrite back to canonical on the next sync.
@@ -140,7 +140,7 @@ $RECYCLE.BIN/
 
 export interface GitignoreInvariantsDeps {
   vault: Vault;
-  store: SnapshotStore;
+  state: InvariantStateStore;
   configDir: string;
   selfPluginId: string;
 }
@@ -153,7 +153,7 @@ export interface GitignoreInvariantsDeps {
 //                next enforce() sees an immediate cache hit.
 export default class GitignoreInvariants {
   private readonly vault: Vault;
-  private readonly store: SnapshotStore;
+  private readonly state: InvariantStateStore;
   private readonly configDirGitignorePath: string;
   private readonly selfPluginGitignorePath: string;
   // Root <vault>/.gitignore. Bare ".gitignore" — relative to vault root.
@@ -161,7 +161,7 @@ export default class GitignoreInvariants {
 
   constructor(deps: GitignoreInvariantsDeps) {
     this.vault = deps.vault;
-    this.store = deps.store;
+    this.state = deps.state;
     this.configDirGitignorePath = `${deps.configDir}/.gitignore`;
     this.selfPluginGitignorePath = `${deps.configDir}/plugins/${deps.selfPluginId}/.gitignore`;
   }
@@ -268,7 +268,7 @@ export default class GitignoreInvariants {
   ): Promise<void> {
     const slot = "configDirGitignore" as const;
     const path = this.configDirGitignorePath;
-    const recorded = this.store.getInvariantState()[slot];
+    const recorded = this.state.get()[slot];
 
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
@@ -322,7 +322,7 @@ export default class GitignoreInvariants {
     );
     if (fixed === content) {
       // Nothing to change on disk; just refresh the cache.
-      this.store.setInvariantState(slot, { mtime: stat.mtime, hash });
+      await this.state.set(slot, { mtime: stat.mtime, hash });
       return;
     }
     await this.write(path, fixed);
@@ -335,7 +335,7 @@ export default class GitignoreInvariants {
   private async enforceRootGitignore(): Promise<void> {
     const slot = "rootGitignore" as const;
     const path = this.rootGitignorePath;
-    const recorded = this.store.getInvariantState()[slot];
+    const recorded = this.state.get()[slot];
 
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
@@ -359,7 +359,7 @@ export default class GitignoreInvariants {
 
     const fixed = spliceInvariantBlock(content, ROOT_INVARIANT_BLOCK);
     if (fixed === content) {
-      this.store.setInvariantState(slot, { mtime: stat.mtime, hash });
+      await this.state.set(slot, { mtime: stat.mtime, hash });
       return;
     }
     await this.write(path, fixed);
@@ -369,7 +369,7 @@ export default class GitignoreInvariants {
   private async enforceSelfPluginGitignore(): Promise<void> {
     const slot = "selfPluginGitignore" as const;
     const path = this.selfPluginGitignorePath;
-    const recorded = this.store.getInvariantState()[slot];
+    const recorded = this.state.get()[slot];
 
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
@@ -387,7 +387,7 @@ export default class GitignoreInvariants {
     const hash = await sha1Of(content);
     if (content === SELF_PLUGIN_GITIGNORE) {
       // Already canonical — refresh cache only.
-      this.store.setInvariantState(slot, { mtime: stat.mtime, hash });
+      await this.state.set(slot, { mtime: stat.mtime, hash });
       return;
     }
 
@@ -398,14 +398,14 @@ export default class GitignoreInvariants {
   }
 
   private async refreshState(
-    slot: keyof ReturnType<SnapshotStore["getInvariantState"]>,
+    slot: keyof ReturnType<InvariantStateStore["get"]>,
     path: string,
   ): Promise<void> {
     const stat = await this.vault.adapter.stat(path);
     if (!stat) return;
     const content = await this.vault.adapter.read(path);
     const hash = await sha1Of(content);
-    this.store.setInvariantState(slot as never, {
+    await this.state.set(slot as never, {
       mtime: stat.mtime,
       hash,
     } as InvariantFileState);
