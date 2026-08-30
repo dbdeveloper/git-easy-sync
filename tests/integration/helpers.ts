@@ -485,6 +485,40 @@ export async function getBranchCommitMessages(
   return out;
 }
 
+/**
+ * Walk the branch's commit history (first-parent) and return each
+ * commit's SHA, newest first. Same walk as getBranchCommitMessages,
+ * capped at 100. Tests that need per-commit file content slice this
+ * list down to "commits after <baseline>" and pass each SHA where a
+ * tree-ish is accepted (getRemoteFileSha / readRemoteFile take any
+ * tree-ish, not just a branch name).
+ */
+export async function getBranchCommitShas(
+  branch: string,
+  env: RepoEnv = requireEnv(),
+): Promise<string[]> {
+  const { token, owner, repo } = env;
+  const head = await getBranchHead(branch, env);
+  if (head === null) return [];
+  const out: string[] = [];
+  let sha: string | null = head;
+  let count = 0;
+  while (sha !== null && count < 100) {
+    count += 1;
+    const res = await ghFetch(
+      `${GH}/repos/${owner}/${repo}/git/commits/${sha}`,
+      { token },
+    );
+    if (res.status !== 200) {
+      throw new Error(`getBranchCommitShas walk → ${res.status}: ${res.text}`);
+    }
+    out.push(sha);
+    const parents = res.json.parents as Array<{ sha: string }>;
+    sha = parents.length > 0 ? parents[0].sha : null;
+  }
+  return out;
+}
+
 export async function countBranchCommits(
   branch: string,
   env: RepoEnv = requireEnv(),
