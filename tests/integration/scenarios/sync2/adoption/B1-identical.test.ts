@@ -120,7 +120,7 @@ describe.skipIf(!integrationEnabled())(
 
         // Adoption set the snapshot — next sync would route through
         // the fast path (Case 3) instead of bootstrapIfNeeded.
-        expect(client.store.getLastSyncCommitSha()).not.toBeNull();
+        expect(client.hotMeta.getLastSyncCommitSha()).not.toBeNull();
 
         // The invariant gitignores didn't exist on either side until
         // enforce() wrote them locally during adoption; the follow-up

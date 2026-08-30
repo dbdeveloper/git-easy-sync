@@ -7,8 +7,8 @@
 // line: when pull-side sanitize rewrites a GitHub-side forbidden path
 // to a canonical local path, we need to "remember to delete the
 // forbidden path on the next push." Phase 1 (beta3) recorded that
-// intent by writing a fake SnapshotStore entry with mtime=0 / size=0.
-// That broke the SnapshotStore invariant ("every entry is a path we
+// intent by writing a fake snapshot entry with mtime=0 / size=0.
+// That broke the snapshot invariant ("every entry is a path we
 // observed on GitHub at this SHA") and the phantom entries were
 // confusingly persistent across reset/uninstall edges. Phase 2 moves
 // the intent out into this dedicated store whose semantics are

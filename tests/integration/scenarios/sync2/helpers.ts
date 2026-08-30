@@ -21,7 +21,8 @@ import GithubClient from "../../../../src/github/client";
 import Logger from "../../../../src/logger";
 import GI from "../../../../src/gi";
 import { Sync2Manager } from "../../../../src/sync2/sync2-manager";
-import SnapshotStore from "../../../../src/sync2/snapshot-store";
+import HotMetadataStore from "../../../../src/sync2/hot-metadata";
+import FileBaselinesStore from "../../../../src/sync2/file-baselines";
 import ChangeDetector from "../../../../src/sync2/change-detector";
 import GitignoreInvariants from "../../../../src/sync2/gitignore-invariants";
 import InvariantStateStore from "../../../../src/sync2/invariant-state";
@@ -71,7 +72,8 @@ export interface Sync2TestClient {
   vault: ObsidianVault;
   vaultPath: string;
   manager: Sync2Manager;
-  store: SnapshotStore;
+  hotMeta: HotMetadataStore;
+  baselines: FileBaselinesStore;
   detector: ChangeDetector;
   queue: PushQueue;
   builder: TreeBuilder;
@@ -125,8 +127,15 @@ export async function createSync2Client(
   const logger = new Logger(vault, SELF_PLUGIN_ID, opts.enableLogging ?? false);
   const client = new GithubClient(settings, logger);
 
-  const store = new SnapshotStore(vault);
-  await store.load();
+  const hotMeta = new HotMetadataStore({
+    vault,
+    selfPluginId: SELF_PLUGIN_ID,
+  });
+  await hotMeta.load();
+  const baselines = new FileBaselinesStore({
+    vault,
+    selfPluginId: SELF_PLUGIN_ID,
+  });
   const gi = new GI(vaultPath);
   const queue = new PushQueue({
     vault,
@@ -135,7 +144,8 @@ export async function createSync2Client(
   });
   const detector = new ChangeDetector({
     vault,
-    store,
+    hotMeta,
+    baselines,
     gi,
     configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
@@ -200,7 +210,8 @@ export async function createSync2Client(
 
   const manager = new Sync2Manager({
     vault,
-    store,
+    hotMeta,
+    baselines,
     detector,
     queue,
     builder,
@@ -242,7 +253,8 @@ export async function createSync2Client(
     vault,
     vaultPath,
     manager,
-    store,
+    hotMeta,
+    baselines,
     detector,
     queue,
     builder,

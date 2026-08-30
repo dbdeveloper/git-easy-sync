@@ -16,7 +16,8 @@ import {
 } from "../../src/sync2/sync2-manager";
 import ChangeDetector from "../../src/sync2/change-detector";
 import PushQueue from "../../src/sync2/push-queue";
-import SnapshotStore from "../../src/sync2/snapshot-store";
+import HotMetadataStore from "../../src/sync2/hot-metadata";
+import FileBaselinesStore from "../../src/sync2/file-baselines";
 import TreeBuilder from "../../src/sync2/tree-builder";
 import ConflictStoreNew from "../../src/sync2/conflict-store";
 import GI from "../../src/gi";
@@ -378,7 +379,8 @@ function fixture(opts?: {
 }): {
   root: string;
   vault: Vault;
-  store: SnapshotStore;
+  hot: HotMetadataStore;
+  store: FileBaselinesStore;
   detector: ChangeDetector;
   queue: PushQueue;
   builder: TreeBuilder;
@@ -392,9 +394,14 @@ function fixture(opts?: {
   );
   fs.mkdirSync(path.join(root, CONFIG_DIR), { recursive: true });
   const vault = new Vault(root);
-  const store = new SnapshotStore(
-    vault as unknown as import("obsidian").Vault,
-  );
+  const hot = new HotMetadataStore({
+    vault: vault as unknown as import("obsidian").Vault,
+    selfPluginId: SELF_PLUGIN_ID,
+  });
+  const store = new FileBaselinesStore({
+    vault: vault as unknown as import("obsidian").Vault,
+    selfPluginId: SELF_PLUGIN_ID,
+  });
   const gi = new GI(root);
   let current = new Date("2026-05-03T09:38:23.000Z");
   const clock = {
@@ -424,7 +431,8 @@ function fixture(opts?: {
     });
   const detector = new ChangeDetector({
     vault: vault as unknown as import("obsidian").Vault,
-    store,
+    hotMeta: hot,
+    baselines: store,
     gi,
     configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
@@ -443,7 +451,8 @@ function fixture(opts?: {
   });
   const manager = new Sync2Manager({
     vault: vault as unknown as import("obsidian").Vault,
-    store,
+    hotMeta: hot,
+    baselines: store,
     detector,
     queue,
     builder,
@@ -476,6 +485,7 @@ function fixture(opts?: {
   return {
     root,
     vault,
+    hot,
     store,
     detector,
     queue,
@@ -506,7 +516,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
   beforeEach(async () => {
     f = fixture();
-    await f.store.load();
+    await f.hot.load();
   });
 
   afterEach(() => {
@@ -525,7 +535,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     writeVaultFile(f.root, "Notes/x.md", "hello\n");
     // Pretend we synced once already so the manager has a baseline
     // for HEAD comparison and parents.
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
     f.client.setBranchHead("BRANCH_HEAD_INIT");
 
     await f.manager.syncAll();
@@ -544,13 +554,13 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
     // Snapshot store now reflects the push: file is recorded with the
     // canonical-form SHA git would have computed.
-    const snap = f.store.get("Notes/x.md");
+    const snap = await f.store.get("Notes/x.md");
     expect(snap).toBeDefined();
-    expect(snap?.remoteSha).toBe(await shaOf("hello\n"));
+    expect(snap?.baselineSha).toBe(await shaOf("hello\n"));
 
     // lastSync points at the commit + tree we just produced.
-    expect(f.store.getLastSyncCommitSha()).toBe("COMMIT_SHA_1");
-    expect(f.store.getLastSyncTreeSha()).toBe("TREE_SHA_1");
+    expect(f.hot.getLastSyncCommitSha()).toBe("COMMIT_SHA_1");
+    expect(f.hot.getLastSyncTreeSha()).toBe("TREE_SHA_1");
 
     // Queue is empty after success.
     expect(await f.queue.list()).toEqual([]);
@@ -558,7 +568,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
   it("commit message uses the hardcoded `sync ({deviceLabel})` format", async () => {
     writeVaultFile(f.root, "x.md", "v");
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
     await f.manager.syncAll();
 
@@ -572,7 +582,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
   it("no gitAuthor configured → createCommit carries NO author override", async () => {
     const f2 = fixture(); // no gitAuthor opt
     writeVaultFile(f2.root, "x.md", "v");
-    f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
     await f2.manager.syncAll();
 
@@ -587,7 +597,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       gitAuthor: () => ({ name: "TestUser", email: "test@example.com" }),
     });
     writeVaultFile(f2.root, "x.md", "v");
-    f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
     await f2.manager.syncAll();
 
@@ -610,7 +620,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
   it("creates a binary blob first, references its SHA in the tree", async () => {
     const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     writeVaultFile(f.root, "img.png", bytes);
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
     await f.manager.syncAll();
 
@@ -622,19 +632,18 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     expect(imgEntry?.content).toBeUndefined();
 
     // Snapshot stores the same SHA.
-    expect(f.store.get("img.png")?.remoteSha).toBe(imgEntry?.sha);
+    expect(await (await f.store.get("img.png"))?.baselineSha).toBe(imgEntry?.sha);
   });
 
   it("delete propagates: snapshot dropped, tree carries sha:null", async () => {
     // Pretend the file existed in a previous sync and has now been
     // removed locally.
-    f.store.set("Notes/old.md", {
-      path: "Notes/old.md",
-      remoteSha: "OLDSHA",
+    await f.store.set("Notes/old.md", {
+      baselineSha: "OLDSHA",
       mtime: 1,
       size: 1,
     });
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
     // Pre-flight validation (PSEUDO-MERGE-MODE §12.1) calls
     // `getContentsAtRef(path, currentHead)` for every deletion entry
     // before sending the tree-create. The seed represents the file's
@@ -649,14 +658,14 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     const entry = tree.find((e) => e.path === "Notes/old.md");
     expect(entry?.sha).toBeNull();
 
-    expect(f.store.get("Notes/old.md")).toBeUndefined();
+    expect(await f.store.get("Notes/old.md")).toBeUndefined();
   });
 
   it("multiple changes in one batch result in a single commit", async () => {
     writeVaultFile(f.root, "a.md", "1");
     writeVaultFile(f.root, "b.md", "2");
     writeVaultFile(f.root, "c.md", "3");
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
     await f.manager.syncAll();
 
@@ -670,7 +679,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
   it("HEAD moved but our path untouched on remote → reconcile is a no-op merge, push proceeds onto new head", async () => {
     writeVaultFile(f.root, "x.md", "v");
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
     // Remote moved past us. From the perspective of x.md though, the
     // file is identical at both refs (no remote-side change). The
     // reconcile pass should detect that, leave the batch alone, and
@@ -717,7 +726,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     // in state.lastCommit, so its `parent` field reflects the second
     // commit's parent — which is the seed.
     expect(f.client.state.lastCommit?.parent).toBe("COMMIT_SHA_1");
-    expect(f.store.getLastSyncCommitSha()).toBe("COMMIT_SHA_2");
+    expect(f.hot.getLastSyncCommitSha()).toBe("COMMIT_SHA_2");
   });
 
   it("first-ever sync against existing branch: parent=currentHead, base_tree=its tree", async () => {
@@ -738,7 +747,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
   it("base_tree from manifest's lastSyncTreeSha when set", async () => {
     writeVaultFile(f.root, "x.md", "v");
-    f.store.setLastSync("BRANCH_HEAD_INIT", "EXISTING_TREE_SHA");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "EXISTING_TREE_SHA" });
 
     await f.manager.syncAll();
 
@@ -751,18 +760,18 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
   it("lastCommitMtime is set to the local clock after a successful push", async () => {
     writeVaultFile(f.root, "x.md", "v");
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
     await f.manager.syncAll();
 
-    expect(f.store.getLastCommitMtime()).toBe(f.clock.nowMs());
+    expect(f.hot.getLastCommitMtime()).toBe(f.clock.nowMs());
   });
 
   it("multiple pending batches drain oldest-first", async () => {
     // Manually enqueue two batches so processQueue has work to drain
     // even before findChanges contributes.
     writeVaultFile(f.root, "a.md", "1");
-    f.store.setLastSync("BRANCH_HEAD_INIT", "TREE_0");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "TREE_0" });
     const id1 = await f.queue.enqueue(
       [{ kind: "added", path: "a.md", size: 1, mtime: 0 }],
       {
@@ -783,19 +792,16 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     // findChanges sees nothing new (snapshots aren't there yet but the
     // files exist so it would emit "added" for both). Snapshot them
     // explicitly so syncAll's findChanges yields no extra batch.
-    f.store.set("a.md", {
-      path: "a.md",
-      remoteSha: await shaOf("1"),
+    await f.store.set("a.md", {
+      baselineSha: await shaOf("1"),
       mtime: fs.statSync(path.join(f.root, "a.md")).mtimeMs,
       size: 1,
     });
-    f.store.set("b.md", {
-      path: "b.md",
-      remoteSha: await shaOf("2"),
+    await f.store.set("b.md", {
+      baselineSha: await shaOf("2"),
       mtime: fs.statSync(path.join(f.root, "b.md")).mtimeMs,
       size: 1,
     });
-    await f.store.save();
 
     await f.manager.resumeQueue();
 
@@ -829,7 +835,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     // chaining, batch 2's commit parent is the stale INIT (RED). With chaining it is COMMIT_SHA_1.
     writeVaultFile(f.root, "a.md", "1");
     writeVaultFile(f.root, "b.md", "2");
-    f.store.setLastSync("BRANCH_HEAD_INIT", "TREE_0");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "TREE_0" });
     const id1 = await f.queue.enqueue(
       [{ kind: "added", path: "a.md", size: 1, mtime: 0 }],
       { parentCommitSha: "BRANCH_HEAD_INIT", parentTreeSha: "TREE_0" },
@@ -840,19 +846,16 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     );
     expect(id2 > id1).toBe(true);
     // Snapshot both so findChanges yields no extra batch.
-    f.store.set("a.md", {
-      path: "a.md",
-      remoteSha: await shaOf("1"),
+    await f.store.set("a.md", {
+      baselineSha: await shaOf("1"),
       mtime: fs.statSync(path.join(f.root, "a.md")).mtimeMs,
       size: 1,
     });
-    f.store.set("b.md", {
-      path: "b.md",
-      remoteSha: await shaOf("2"),
+    await f.store.set("b.md", {
+      baselineSha: await shaOf("2"),
       mtime: fs.statSync(path.join(f.root, "b.md")).mtimeMs,
       size: 1,
     });
-    await f.store.save();
 
     // The lag: after batch 1 advances the head to COMMIT_SHA_1, reads still show the OLD head.
     f.client.setHeadReadOverride((real) =>
@@ -881,7 +884,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     // Drain 2 batches → the engine CONFIRMS COMMIT_SHA_1 then COMMIT_SHA_2.
     writeVaultFile(g.root, "a.md", "1");
     writeVaultFile(g.root, "b.md", "2");
-    g.store.setLastSync("BRANCH_HEAD_INIT", "TREE_0");
+    await g.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "TREE_0" });
     await g.queue.enqueue([{ kind: "added", path: "a.md", size: 1, mtime: 0 }], {
       parentCommitSha: "BRANCH_HEAD_INIT",
       parentTreeSha: "TREE_0",
@@ -890,19 +893,16 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       parentCommitSha: "BRANCH_HEAD_INIT",
       parentTreeSha: "TREE_0",
     });
-    g.store.set("a.md", {
-      path: "a.md",
-      remoteSha: await shaOf("1"),
+    await g.store.set("a.md", {
+      baselineSha: await shaOf("1"),
       mtime: fs.statSync(path.join(g.root, "a.md")).mtimeMs,
       size: 1,
     });
-    g.store.set("b.md", {
-      path: "b.md",
-      remoteSha: await shaOf("2"),
+    await g.store.set("b.md", {
+      baselineSha: await shaOf("2"),
       mtime: fs.statSync(path.join(g.root, "b.md")).mtimeMs,
       size: 1,
     });
-    await g.store.save();
     await g.manager.resumeQueue();
     expect(g.client.calls.filter((c) => c.op === "createCommit")).toHaveLength(2);
     // Head is now COMMIT_SHA_2; recentConfirmedHeads = [COMMIT_SHA_1, COMMIT_SHA_2].
@@ -934,18 +934,16 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       staleHeadGuardConfig: { windowMs: 100_000, baseDelayMs: 1, maxDelayMs: 2 },
     });
     writeVaultFile(g.root, "a.md", "1");
-    g.store.setLastSync("BRANCH_HEAD_INIT", "TREE_0");
+    await g.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "TREE_0" });
     await g.queue.enqueue([{ kind: "added", path: "a.md", size: 1, mtime: 0 }], {
       parentCommitSha: "BRANCH_HEAD_INIT",
       parentTreeSha: "TREE_0",
     });
-    g.store.set("a.md", {
-      path: "a.md",
-      remoteSha: await shaOf("1"),
+    await g.store.set("a.md", {
+      baselineSha: await shaOf("1"),
       mtime: fs.statSync(path.join(g.root, "a.md")).mtimeMs,
       size: 1,
     });
-    await g.store.save();
 
     // The first PATCH is rejected 422 (someone else moved the head); the retry succeeds.
     g.client.setPatchFailuresRemaining(1);
@@ -980,14 +978,12 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       staleHeadGuardConfig: { windowMs: 100_000, baseDelayMs: 1, maxDelayMs: 2 },
     });
     writeVaultFile(g.root, "note.md", ours);
-    g.store.setLastSync("C0", "TREE_0");
-    g.store.set("note.md", {
-      path: "note.md",
-      remoteSha: await shaOf(base),
+    await g.hot.update({ lastSyncCommitSha: "C0", lastSyncTreeSha: "TREE_0" });
+    await g.store.set("note.md", {
+      baselineSha: await shaOf(base),
       mtime: fs.statSync(path.join(g.root, "note.md")).mtimeMs,
       size: base.length,
     });
-    await g.store.save();
     await g.queue.enqueue(
       [
         {
@@ -1027,26 +1023,25 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     // Fixed behaviour: it advances to "C1" (the live head), matching pre-3a98c96 semantics —
     // so a FUTURE edit to this path reconciles against the correct (current) base instead of
     // re-deriving the same stale conflict on every future sync.
-    expect(g.store.getLastSyncCommitSha()).toBe("C1");
+    expect(g.hot.getLastSyncCommitSha()).toBe("C1");
   });
 
   it("syncFile: nothing to sync when file matches snapshot", async () => {
     writeVaultFile(f.root, "x.md", "v");
     const stat = fs.statSync(path.join(f.root, "x.md"));
-    f.store.set("x.md", {
-      path: "x.md",
-      remoteSha: await shaOf("v"),
+    await f.store.set("x.md", {
+      baselineSha: await shaOf("v"),
       mtime: stat.mtimeMs,
       size: stat.size,
     });
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
     await f.manager.syncFile("x.md");
     expect(f.client.calls.filter((c) => c.op === "createCommit")).toEqual([]);
   });
 
   it("syncFile: pushes a single-file batch with the hardcoded `sync ({device})` message", async () => {
     writeVaultFile(f.root, "Notes/note.md", "fresh\n");
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
     await f.manager.syncFile("Notes/note.md");
 
@@ -1063,19 +1058,18 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     expect(tree.map((e) => e.path)).toEqual(["Notes/note.md"]);
 
     // Snapshot recorded.
-    expect(f.store.get("Notes/note.md")?.remoteSha).toBe(
+    expect(await (await f.store.get("Notes/note.md"))?.baselineSha).toBe(
       await shaOf("fresh\n"),
     );
   });
 
   it("syncFile: deleted file → push with sha:null, snapshot dropped", async () => {
-    f.store.set("x.md", {
-      path: "x.md",
-      remoteSha: "OLD",
+    await f.store.set("x.md", {
+      baselineSha: "OLD",
       mtime: 1,
       size: 1,
     });
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
     // Seed the path at currentHead so pre-flight validation
     // (PSEUDO-MERGE-MODE §12.1) confirms the deletion is real (file
     // still on remote) rather than stale (already removed by another
@@ -1087,13 +1081,13 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     expect(tree).toEqual([
       { path: "x.md", mode: "100644", type: "blob", sha: null },
     ]);
-    expect(f.store.get("x.md")).toBeUndefined();
+    expect(await f.store.get("x.md")).toBeUndefined();
   });
 
   it("syncFile: ignored path → no batch, no commit", async () => {
     writeVaultFile(f.root, ".gitignore", "*.log\n");
     writeVaultFile(f.root, "noise.log", "ignored");
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
     await f.manager.syncFile("noise.log");
     expect(f.client.calls.filter((c) => c.op === "createCommit")).toEqual([]);
     expect(await f.queue.list()).toEqual([]);
@@ -1102,15 +1096,15 @@ describe("Sync2Manager.syncAll — basic flow", () => {
   it("syncFile: only the active file goes in the batch (others stay dirty)", async () => {
     writeVaultFile(f.root, "a.md", "1\n");
     writeVaultFile(f.root, "b.md", "2\n");
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
     await f.manager.syncFile("a.md");
 
     const tree = f.client.state.lastTree!;
     expect(tree.map((e) => e.path)).toEqual(["a.md"]);
     // b.md is still untracked locally — next syncAll picks it up.
-    expect(f.store.get("a.md")?.remoteSha).toBe(await shaOf("1\n"));
-    expect(f.store.get("b.md")).toBeUndefined();
+    expect(await (await f.store.get("a.md"))?.baselineSha).toBe(await shaOf("1\n"));
+    expect(await f.store.get("b.md")).toBeUndefined();
   });
 
   describe("conflict reconciliation", () => {
@@ -1126,13 +1120,12 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // "modified" (snapshot.remoteSha == base.sha, vault has ours).
       const stat = fs.statSync(path.join(f.root, "x.md"));
       const baseSha = await shaOf(base);
-      f.store.set("x.md", {
-        path: "x.md",
-        remoteSha: baseSha,
+      await f.store.set("x.md", {
+        baselineSha: baseSha,
         mtime: 0, // forces re-hash inside findChangeForPath
         size: stat.size,
       });
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("REMOTE_HEAD");
       f.client.setTreeShaForCommit("REMOTE_HEAD", "REMOTE_TREE");
       f.client.setContentAtRef("BASE_HEAD", "x.md", base);
@@ -1157,7 +1150,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     it("binary files skip auto-merge: batch ours wins on push", async () => {
       const bytes = Buffer.from([1, 2, 3, 4]);
       writeVaultFile(f.root, "img.png", bytes);
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("REMOTE_HEAD");
       f.client.setTreeShaForCommit("REMOTE_HEAD", "REMOTE_TREE");
       // Even if we set conflicting contents at refs, sync2 should NOT
@@ -1188,13 +1181,12 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // entire resolution dance instead of registering a conflict.
       const convergedBytes = "shared bytes - same on both sides\n";
       writeVaultFile(f.root, "x.md", convergedBytes);
-      f.store.set("x.md", {
-        path: "x.md",
-        remoteSha: await shaOf("old version"),
+      await f.store.set("x.md", {
+        baselineSha: await shaOf("old version"),
         mtime: 0,
         size: convergedBytes.length,
       });
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("BASE_HEAD", "x.md", "old version");
@@ -1247,19 +1239,17 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       writeVaultFile(f.root, manifestPath, oursManifest);
       writeVaultFile(f.root, mainJsPath, oursMainJs);
       // Snapshot at BASE so both files emit as modified.
-      f.store.set(manifestPath, {
-        path: manifestPath,
-        remoteSha: await shaOf(baseManifest),
+      await f.store.set(manifestPath, {
+        baselineSha: await shaOf(baseManifest),
         mtime: 0,
         size: oursManifest.length,
       });
-      f.store.set(mainJsPath, {
-        path: mainJsPath,
-        remoteSha: await shaOf(baseMainJs),
+      await f.store.set(mainJsPath, {
+        baselineSha: await shaOf(baseMainJs),
         mtime: 0,
         size: oursMainJs.length,
       });
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("BASE_HEAD", manifestPath, baseManifest);
@@ -1308,9 +1298,9 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // modification and enqueues main.js with fileMtimes[main.js] = tLocal (the
       // oursMtime the reconcile reads). A matching snapshot mtime would mark it
       // unchanged → a remote-only pull, which never exercises the tie-break.
-      f.store.set(manifestPath, { path: manifestPath, remoteSha: await shaOf(baseManifest), mtime: 0, size: sameManifest.length });
-      f.store.set(mainJsPath, { path: mainJsPath, remoteSha: await shaOf(baseMainJs), mtime: 0, size: oursMainJs.length });
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.store.set(manifestPath, { baselineSha: await shaOf(baseManifest), mtime: 0, size: sameManifest.length });
+      await f.store.set(mainJsPath, { baselineSha: await shaOf(baseMainJs), mtime: 0, size: oursMainJs.length });
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("BASE_HEAD", manifestPath, baseManifest);
@@ -1377,8 +1367,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // Snapshot FROZEN at the old head with the old base bytes (the crash prevented the
       // advance to NEW_HEAD/v1). mtime 0 ≠ the file's real mtime → change-detector sees the
       // local edit and enqueues it.
-      f.store.set(X, { path: X, remoteSha: await shaOf(baseV0), mtime: 0, size: baseV0.length });
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.store.set(X, { baselineSha: await shaOf(baseV0), mtime: 0, size: baseV0.length });
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       // Remote is ALREADY advanced (the interrupted push's commit landed): HEAD = NEW_HEAD,
       // X = v1 there.
       f.client.setBranchHead("NEW_HEAD");
@@ -1411,8 +1401,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       const theirsV1 = "alpha\nBETA-remote\ngamma\n"; // our pushed content = current vault (NO post-edit)
 
       writeVaultFile(f.root, X, theirsV1);
-      f.store.set(X, { path: X, remoteSha: await shaOf(baseV0), mtime: 0, size: baseV0.length });
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.store.set(X, { baselineSha: await shaOf(baseV0), mtime: 0, size: baseV0.length });
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("BASE_HEAD", X, baseV0);
@@ -1441,8 +1431,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       const oursV2 = "alpha\nBETA-local\ngamma\n"; // post-crash local edit
 
       writeVaultFile(f.root, X, oursV2);
-      f.store.set(X, { path: X, remoteSha: await shaOf(baseV0), mtime: 0, size: baseV0.length });
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.store.set(X, { baselineSha: await shaOf(baseV0), mtime: 0, size: baseV0.length });
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("BASE_HEAD", X, baseV0);
@@ -1465,7 +1455,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       expect(conflicts.some((c) => c.vaultPath === X)).toBe(false);
       // The snapshot is no longer the stale BASE_HEAD — recovery healed it to NEW_HEAD and
       // then the post-crash edit (v2) pushed cleanly on top, advancing it further.
-      expect(f.store.getLastSyncCommitSha()).not.toBe("BASE_HEAD");
+      expect(f.hot.getLastSyncCommitSha()).not.toBe("BASE_HEAD");
       // The marker was consumed by the recovery (and the v2 push's own marker cleared too).
       expect(
         await readPushInflight(
@@ -1489,9 +1479,9 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // Post-crash state: the merge LANDED on the remote (MERGE_HEAD, tree == MAIN_TREE),
       // but the snapshot froze at MAIN_HEAD and the conflict-branch bookkeeping is still set.
       writeVaultFile(f.root, X, edited);
-      f.store.set(X, { path: X, remoteSha: await shaOf(orig), mtime: 0, size: orig.length });
-      f.store.setLastSync("MAIN_HEAD", "MAIN_TREE");
-      f.store.setConflictBranch({ name: "gc-conflicts-Device-1", head: "CB_HEAD" });
+      await f.store.set(X, { baselineSha: await shaOf(orig), mtime: 0, size: orig.length });
+      await f.hot.update({ lastSyncCommitSha: "MAIN_HEAD", lastSyncTreeSha: "MAIN_TREE" });
+      await f.hot.update({ conflictBranch: { name: "gc-conflicts-Device-1", head: "CB_HEAD" } });
       // conflictStore empty (all resolved) → finalize is "ready".
       f.client.setBranchHead("MERGE_HEAD");
       f.client.setTreeShaForCommit("MERGE_HEAD", "MAIN_TREE"); // merge tree == main tree
@@ -1505,15 +1495,15 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // (a) NO false conflict (merge tree == main tree → theirs == base for the edited file).
       expect((f.manager["conflictStore"]?.getAll() ?? []).some((c) => c.vaultPath === X)).toBe(false);
       // (b) conflict-branch bookkeeping cleared — re-finalize completed.
-      expect(f.store.getConflictBranch()).toBeNull();
+      expect(f.hot.getConflictBranch()).toBeNull();
       // (c) snapshot advanced past the stale MAIN_HEAD.
-      expect(f.store.getLastSyncCommitSha()).not.toBe("MAIN_HEAD");
+      expect(f.hot.getLastSyncCommitSha()).not.toBe("MAIN_HEAD");
 
       // (d) a SECOND drain is a no-op — cb stays cleared, no runaway re-merge.
-      const before = f.store.getLastSyncCommitSha();
+      const before = f.hot.getLastSyncCommitSha();
       await f.manager.syncAll();
-      expect(f.store.getConflictBranch()).toBeNull();
-      expect(f.store.getLastSyncCommitSha()).toBe(before);
+      expect(f.hot.getConflictBranch()).toBeNull();
+      expect(f.hot.getLastSyncCommitSha()).toBe(before);
     });
 
     it("register-conflict path also keeps in-memory batch.files in sync with disk", async () => {
@@ -1542,19 +1532,17 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
       writeVaultFile(f.root, manifestPath, oursManifest);
       writeVaultFile(f.root, mainJsPath, "ours main");
-      f.store.set(manifestPath, {
-        path: manifestPath,
-        remoteSha: await shaOf(baseManifest),
+      await f.store.set(manifestPath, {
+        baselineSha: await shaOf(baseManifest),
         mtime: 0,
         size: oursManifest.length,
       });
-      f.store.set(mainJsPath, {
-        path: mainJsPath,
-        remoteSha: await shaOf("base main"),
+      await f.store.set(mainJsPath, {
+        baselineSha: await shaOf("base main"),
         mtime: 0,
         size: 8,
       });
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("BASE_HEAD", manifestPath, baseManifest);
@@ -1569,7 +1557,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
     it("re-targets parent + base_tree onto the new head after reconcile", async () => {
       writeVaultFile(f.root, "x.md", "ours-content");
-      f.store.setLastSync("OLD_HEAD", "OLD_TREE");
+      await f.hot.update({ lastSyncCommitSha: "OLD_HEAD", lastSyncTreeSha: "OLD_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("OLD_HEAD", "x.md", "ours-content");
@@ -1584,7 +1572,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     it("cascading rebase: Q1 resolved, Q2 with same path is auto-rebased", async () => {
       // Manually enqueue two batches that both touch x.md.
       writeVaultFile(f.root, "x.md", "V1\nshared\ntail");
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       const id1 = await f.queue.enqueue(
         [{ kind: "added", path: "x.md", size: 1, mtime: 0 }],
         {
@@ -1616,8 +1604,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       const f2 = fixture();
       // Mirror the BASE_HEAD / REMOTE_HEAD content + per-batch state.
       writeVaultFile(f2.root, "x.md", "V2-extra\nV1\nshared\ntail");
-      await f2.store.load();
-      f2.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f2.hot.load();
+      await f2.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       const id1b = await f2.queue.enqueue(
         [{ kind: "added", path: "x.md", size: 1, mtime: 0 }],
         {
@@ -1674,15 +1662,15 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       ).toBe("beta\n");
 
       // Snapshot recorded for both.
-      expect(f.store.get("Notes/a.md")?.remoteSha).toBeTruthy();
-      expect(f.store.get("Notes/b.md")?.remoteSha).toBeTruthy();
+      expect(await (await f.store.get("Notes/a.md"))?.baselineSha).toBeTruthy();
+      expect(await (await f.store.get("Notes/b.md"))?.baselineSha).toBeTruthy();
 
       // lastSync moved to currentHead.
-      expect(f.store.getLastSyncCommitSha()).toBe("FRESH_HEAD");
+      expect(f.hot.getLastSyncCommitSha()).toBe("FRESH_HEAD");
     });
 
     it("no-op when lastSyncCommitSha is already set", async () => {
-      f.store.setLastSync("EXISTING", "EXISTING_TREE");
+      await f.hot.update({ lastSyncCommitSha: "EXISTING", lastSyncTreeSha: "EXISTING_TREE" });
       f.client.setBranchHead("EXISTING");
       // Pre-recorded contents — bootstrap shouldn't touch them.
       f.client.setContentAtRef("EXISTING", "ghost.md", "should-not-pull");
@@ -1713,7 +1701,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // Bootstrap-from-remote was skipped; the local file proceeds
       // through the first-sync-against-bare path (processBatch case 1).
       // Seed = COMMIT_SHA_1, sync commit on top = COMMIT_SHA_2.
-      expect(f.store.getLastSyncCommitSha()).toBe("COMMIT_SHA_2");
+      expect(f.hot.getLastSyncCommitSha()).toBe("COMMIT_SHA_2");
     });
 
     it("skips ignored paths during download", async () => {
@@ -1752,7 +1740,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     });
 
     it("no-op when HEAD hasn't moved", async () => {
-      f.store.setLastSync("HEAD_X", "TREE_X");
+      await f.hot.update({ lastSyncCommitSha: "HEAD_X", lastSyncTreeSha: "TREE_X" });
       f.client.setBranchHead("HEAD_X");
       f.client.setTreeShaForCommit("HEAD_X", "TREE_X");
       await f.manager.syncAll();
@@ -1760,7 +1748,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     });
 
     it("applies a remote add to the local vault", async () => {
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       // Canonical input → text canonicalisation normalizer is a no-op, so this
@@ -1783,24 +1771,23 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       expect(written).toBe("fresh content\n");
       // Snapshot records the canonical-form git blob SHA (which equals
       // the remote SHA when remote was already canonical).
-      expect(f.store.get("Notes/new.md")?.remoteSha).toBe(
+      expect(await (await f.store.get("Notes/new.md"))?.baselineSha).toBe(
         await shaOf("fresh content\n"),
       );
       // lastSync moved forward.
-      expect(f.store.getLastSyncCommitSha()).toBe("NEW_HEAD");
+      expect(f.hot.getLastSyncCommitSha()).toBe("NEW_HEAD");
     });
 
     it("applies a remote delete when local matches snapshot", async () => {
       writeVaultFile(f.root, "Notes/gone.md", "going");
       const stat = fs.statSync(path.join(f.root, "Notes/gone.md"));
       const sha = await shaOf("going");
-      f.store.set("Notes/gone.md", {
-        path: "Notes/gone.md",
-        remoteSha: sha,
+      await f.store.set("Notes/gone.md", {
+        baselineSha: sha,
         mtime: stat.mtimeMs,
         size: stat.size,
       });
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setCompareResult("BASE_HEAD", "NEW_HEAD", {
@@ -1813,12 +1800,12 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       await f.manager.syncAll();
 
       expect(fs.existsSync(path.join(f.root, "Notes/gone.md"))).toBe(false);
-      expect(f.store.get("Notes/gone.md")).toBeUndefined();
+      expect(await f.store.get("Notes/gone.md")).toBeUndefined();
     });
 
     it("ignored remote path is silently dropped from pull (two-way mute)", async () => {
       writeVaultFile(f.root, ".gitignore", "secret/\n");
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("NEW_HEAD", "secret/note.md", "private");
@@ -1839,13 +1826,12 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       writeVaultFile(f.root, "img.png", Buffer.from([1, 2, 3]));
       const stat = fs.statSync(path.join(f.root, "img.png"));
       const sha = await shaOf("\x01\x02\x03");
-      f.store.set("img.png", {
-        path: "img.png",
-        remoteSha: sha,
+      await f.store.set("img.png", {
+        baselineSha: sha,
         mtime: stat.mtimeMs,
         size: stat.size,
       });
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       // Remote bumped the file. Local is clean.
@@ -1871,13 +1857,12 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       const localStat = fs.statSync(path.join(f.root, "img.png"));
       // Snapshot from "long ago" so findChangeForPath flags local
       // as modified (snapshot.mtime stale).
-      f.store.set("img.png", {
-        path: "img.png",
-        remoteSha: "OLDSHA",
+      await f.store.set("img.png", {
+        baselineSha: "OLDSHA",
         mtime: 0,
         size: localStat.size,
       });
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setCommitDate(
@@ -1902,7 +1887,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
     it("compare 404 (force-push or GC'd commit) is graceful", async () => {
       writeVaultFile(f.root, "x.md", "v");
-      f.store.setLastSync("LOST_BASE", "LOST_TREE");
+      await f.hot.update({ lastSyncCommitSha: "LOST_BASE", lastSyncTreeSha: "LOST_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       // Override compare to throw 404.
@@ -1927,13 +1912,12 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // sent. Pre-flight validation must drop the entry AND clear
       // the snapshot row, so the next sync's ChangeDetector doesn't
       // re-emit the same stale deletion.
-      f.store.set("Notes/stale.md", {
-        path: "Notes/stale.md",
-        remoteSha: "OLDSHA",
+      await f.store.set("Notes/stale.md", {
+        baselineSha: "OLDSHA",
         mtime: 1,
         size: 1,
       });
-      f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       // Deliberately NO setContentAtRef for `Notes/stale.md` — the
       // fake's `getContentsAtRef` returns null for this path,
       // simulating the cross-device race where another device
@@ -1959,26 +1943,24 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // ChangeDetector's next pass would re-emit the same stale
       // deletion and we'd re-validate-and-drop forever — one wasted
       // round-trip per sync.
-      expect(f.store.get("Notes/stale.md")).toBeUndefined();
+      expect(await f.store.get("Notes/stale.md")).toBeUndefined();
     });
 
     it("pre-flight validation: batch becomes empty after dropping all stale deletions → push skipped", async () => {
       // Two phantom snapshot entries that both turn out to be stale
       // at currentHead. No modify entries. After validation, entries.length
       // === 0 → push must be skipped entirely.
-      f.store.set("a.md", {
-        path: "a.md",
-        remoteSha: "SHA_A",
+      await f.store.set("a.md", {
+        baselineSha: "SHA_A",
         mtime: 1,
         size: 1,
       });
-      f.store.set("b.md", {
-        path: "b.md",
-        remoteSha: "SHA_B",
+      await f.store.set("b.md", {
+        baselineSha: "SHA_B",
         mtime: 1,
         size: 1,
       });
-      f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       // No setContentAtRef → both paths null at currentHead.
 
       await f.manager.syncAll();
@@ -1993,8 +1975,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       ).toEqual([]);
 
       // Both snapshot rows cleared.
-      expect(f.store.get("a.md")).toBeUndefined();
-      expect(f.store.get("b.md")).toBeUndefined();
+      expect(await f.store.get("a.md")).toBeUndefined();
+      expect(await f.store.get("b.md")).toBeUndefined();
     });
 
     it("pre-flight validation: deletion targeting a live remote path passes through unchanged", async () => {
@@ -2002,13 +1984,12 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // legitimate (file still on remote), the entry must reach the
       // tree-create request with sha:null intact. Confirms the
       // validator doesn't over-drop.
-      f.store.set("Notes/live.md", {
-        path: "Notes/live.md",
-        remoteSha: "LIVE_SHA",
+      await f.store.set("Notes/live.md", {
+        baselineSha: "LIVE_SHA",
         mtime: 1,
         size: 1,
       });
-      f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       f.client.setContentAtRef("BRANCH_HEAD_INIT", "Notes/live.md", "still-there");
 
       await f.manager.syncFile("Notes/live.md");
@@ -2018,7 +1999,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
         { path: "Notes/live.md", mode: "100644", type: "blob", sha: null },
       ]);
       // Snapshot dropped via the normal post-push pathway.
-      expect(f.store.get("Notes/live.md")).toBeUndefined();
+      expect(await f.store.get("Notes/live.md")).toBeUndefined();
     });
 
     it("pre-flight validation: validator network failure aborts push and keeps lastSync (PSEUDO-MERGE-MODE §12.1)", async () => {
@@ -2027,13 +2008,12 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // abort the push and let the next drain retry — better than
       // optimistically proceeding and reintroducing the 422 we
       // were trying to prevent.
-      f.store.set("Notes/will-fail-validation.md", {
-        path: "Notes/will-fail-validation.md",
-        remoteSha: "SHA",
+      await f.store.set("Notes/will-fail-validation.md", {
+        baselineSha: "SHA",
         mtime: 1,
         size: 1,
       });
-      f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
       // Override getContentsAtRef to throw a network-like error.
       const origGet = f.client.getContentsAtRef.bind(f.client);
@@ -2048,11 +2028,11 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       ).rejects.toThrow(/ECONNRESET/);
 
       // lastSync stays put — next drain will retry the whole batch.
-      expect(f.store.getLastSyncCommitSha()).toBe("BRANCH_HEAD_INIT");
+      expect(f.hot.getLastSyncCommitSha()).toBe("BRANCH_HEAD_INIT");
       // The snapshot row also survives the failed validation —
       // dropping it would be premature (we don't know yet whether
       // the deletion was stale).
-      expect(f.store.get("Notes/will-fail-validation.md")).toBeDefined();
+      expect(await f.store.get("Notes/will-fail-validation.md")).toBeDefined();
 
       // Restore for any later test isolation.
       f.client.getContentsAtRef = origGet;
@@ -2073,7 +2053,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // loop aborts, lastSync stays at expectedHead, and the next sync
       // retries. Either succeeds (transient race / permission drift) or
       // re-fails until the underlying bug (URL encoding, etc) is fixed.
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       // Compare advertises the file as added — but we intentionally do
@@ -2097,7 +2077,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // re-attempt the same compare and try to fetch the same path
       // again — once the underlying cause is gone, recovery is
       // automatic with no manual Reset needed.
-      expect(f.store.getLastSyncCommitSha()).toBe("BASE_HEAD");
+      expect(f.hot.getLastSyncCommitSha()).toBe("BASE_HEAD");
       // Local file is NOT in vault (we never got the bytes).
       expect(fs.existsSync(path.join(f.root, "Notes/ghost.md"))).toBe(false);
     });
@@ -2113,7 +2093,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
   // the server converges on the canonical form over one extra click.
   describe("text canonicalisation on pull (text canonicalisation)", () => {
     it("CRLF in remote text → local LF + next syncAll pushes canonical", async () => {
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("NEW_HEAD", "doc.md", "line1\r\nline2\r\n");
@@ -2130,7 +2110,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       ).toBe("line1\nline2\n");
       // First syncAll deliberately does NOT recordSync the canonical
       // SHA — that's how the next findChanges spots the divergence.
-      expect(f.store.get("doc.md")).toBeUndefined();
+      expect(await f.store.get("doc.md")).toBeUndefined();
       // No commit fired in this first syncAll — just pull.
       expect(f.client.calls.filter((c) => c.op === "createCommit"))
         .toEqual([]);
@@ -2142,13 +2122,13 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       expect(tree.find((e) => e.path === "doc.md")?.content).toBe(
         "line1\nline2\n",
       );
-      expect(f.store.get("doc.md")?.remoteSha).toBe(
+      expect(await (await f.store.get("doc.md"))?.baselineSha).toBe(
         await shaOf("line1\nline2\n"),
       );
     });
 
     it("BOM-prefixed remote text → BOM stripped locally + next syncAll pushes canonical", async () => {
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("NEW_HEAD", "doc.md", "﻿title\n");
@@ -2171,7 +2151,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     });
 
     it("missing trailing newline on remote → \\n added locally + next syncAll pushes canonical", async () => {
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("NEW_HEAD", "doc.md", "no trailing nl");
@@ -2196,7 +2176,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     });
 
     it("already-canonical remote text → no auto-republish push fires", async () => {
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("NEW_HEAD", "doc.md", "clean\n");
@@ -2214,7 +2194,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       expect(commits).toEqual([]);
 
       // lastSync stayed at NEW_HEAD (no further commits beyond pull).
-      expect(f.store.getLastSyncCommitSha()).toBe("NEW_HEAD");
+      expect(f.hot.getLastSyncCommitSha()).toBe("NEW_HEAD");
     });
 
     it("bootstrap with non-canonical remote text → canonical locally + auto-republish", async () => {
@@ -2239,7 +2219,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     });
 
     it("syncFile: target normalized during pull → next syncFile pushes canonical", async () => {
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("NEW_HEAD", "x.md", "content\r\n");
@@ -2269,7 +2249,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // syncFile has narrow scope: only the target gets pushed in this
       // batch. Other paths the pull canonicalized stay clean locally;
       // their republish has to wait for the next syncAll.
-      f.store.setLastSync("BASE_HEAD", "BASE_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BASE_HEAD", lastSyncTreeSha: "BASE_TREE" });
       f.client.setBranchHead("NEW_HEAD");
       f.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f.client.setContentAtRef("NEW_HEAD", "other.md", "from-web\r\n");
@@ -2311,7 +2291,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       writeVaultFile(f2.root, "a.md", "v1\n");
       writeVaultFile(f2.root, "b.md", "v1\n");
       writeVaultFile(f2.root, "c.md", "v1\n");
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       f2.client.setBranchHead("BRANCH_HEAD_INIT");
 
       await f2.manager.syncAll();
@@ -2323,7 +2303,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     it("onLocalCommitted does NOT fire when there's nothing to enqueue", async () => {
       const calls: number[] = [];
       const f2 = fixture({ onLocalCommitted: (n) => calls.push(n) });
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       f2.client.setBranchHead("BRANCH_HEAD_INIT");
 
       await f2.manager.syncAll();
@@ -2365,7 +2345,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
       const manager = new Sync2Manager({
         vault: f2.vault as unknown as import("obsidian").Vault,
-        store: f2.store,
+        hotMeta: f2.hot,
+        baselines: f2.store,
         detector: f2.detector,
         queue: f2.queue,
         builder: f2.builder,
@@ -2379,11 +2360,11 @@ describe("Sync2Manager.syncAll — basic flow", () => {
         now: () => f2.clock.nowMs(),
       });
 
-      await f2.store.load();
+      await f2.hot.load();
       writeVaultFile(f2.root, "a.md", "edited locally\n");
       writeVaultFile(f2.root, "b.md", "clean-b\n");
       writeVaultFile(f2.root, "c.md", "clean-c\n");
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       f2.client.setBranchHead("BRANCH_HEAD_INIT");
 
       await manager.syncAll();
@@ -2397,7 +2378,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       const f2 = fixture({
         onNoLocalChanges: () => noChangesCalls.push(1),
       });
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       f2.client.setBranchHead("BRANCH_HEAD_INIT");
 
       await f2.manager.syncAll();
@@ -2428,12 +2409,11 @@ describe("Sync2Manager.syncAll — basic flow", () => {
           parentTreeSha: null,
         },
       );
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       // Snapshot already records stranded.md so findChanges sees nothing.
       const stat = fs.statSync(path.join(f2.root, "stranded.md"));
-      f2.store.set("stranded.md", {
-        path: "stranded.md",
-        remoteSha: await shaOf("v1\n"),
+      await f2.store.set("stranded.md", {
+        baselineSha: await shaOf("v1\n"),
         mtime: stat.mtimeMs,
         size: stat.size,
       });
@@ -2450,7 +2430,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       const calls: number[] = [];
       const f2 = fixture({ onLocalCommitted: (n) => calls.push(n) });
       writeVaultFile(f2.root, "x.md", "v1\n");
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       f2.client.setBranchHead("BRANCH_HEAD_INIT");
 
       await f2.manager.syncFile("x.md");
@@ -2466,13 +2446,12 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       });
       writeVaultFile(f2.root, "x.md", "v1\n");
       const stat = fs.statSync(path.join(f2.root, "x.md"));
-      f2.store.set("x.md", {
-        path: "x.md",
-        remoteSha: await shaOf("v1\n"),
+      await f2.store.set("x.md", {
+        baselineSha: await shaOf("v1\n"),
         mtime: stat.mtimeMs,
         size: stat.size,
       });
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       f2.client.setBranchHead("BRANCH_HEAD_INIT");
 
       await f2.manager.syncFile("x.md");
@@ -2508,14 +2487,14 @@ describe("Sync2Manager.syncAll — basic flow", () => {
         fs.readFileSync(path.join(f2.root, "Notes/beta.md"), "utf8"),
       ).toBe("beta\n");
       // lastSync now set — subsequent calls skip bootstrap.
-      expect(f2.store.getLastSyncCommitSha()).toBe("FRESH_HEAD");
+      expect(f2.hot.getLastSyncCommitSha()).toBe("FRESH_HEAD");
       fs.rmSync(f2.root, { recursive: true, force: true });
     });
 
     it("drain on an already-bootstrapped client doesn't re-bootstrap", async () => {
       // After lastSync is set, bootstrapIfNeeded returns null in O(1)
       // — no getRepoContent call, no re-adoption.
-      f.store.setLastSync("HEAD_X", "TREE_X");
+      await f.hot.update({ lastSyncCommitSha: "HEAD_X", lastSyncTreeSha: "TREE_X" });
       f.client.setBranchHead("HEAD_X");
 
       await f.manager.resumeQueue();
@@ -2534,7 +2513,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // Simulate a previous Sync2Manager that enqueued but crashed
       // before pushing.
       writeVaultFile(f.root, "stale.md", "stranded content");
-      f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       const id = await f.queue.enqueue(
         [{ kind: "added", path: "stale.md", size: 1, mtime: 0 }],
         {
@@ -2567,7 +2546,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
     it("resumeQueue clears stale .in-progress markers and pushes anyway", async () => {
       writeVaultFile(f.root, "x.md", "v");
-      f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       const id = await f.queue.enqueue(
         [{ kind: "added", path: "x.md", size: 1, mtime: 0 }],
         {
@@ -2618,8 +2597,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // batch — symmetric to the accumulate=OFF behaviour below.
       const f2 = brokenNetworkFixture();
       writeVaultFile(f2.root, "a.md", "v1");
-      await f2.store.load();
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.load();
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
       await expect(f2.manager.syncAll()).rejects.toThrow(
         /simulated network outage/,
@@ -2658,8 +2637,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
         return x;
       })();
       writeVaultFile(fOff.root, "a.md", "v1");
-      await fOff.store.load();
-      fOff.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await fOff.hot.load();
+      await fOff.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       await expect(fOff.manager.syncAll()).rejects.toThrow();
       writeVaultFile(fOff.root, "b.md", "v2");
       await expect(fOff.manager.syncAll()).rejects.toThrow();
@@ -2671,8 +2650,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     it("accumulate ON but queue empty: enqueue normally", async () => {
       const f2 = fixture({ consolidateCommits: true });
       writeVaultFile(f2.root, "a.md", "v");
-      await f2.store.load();
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.load();
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
       await f2.manager.syncAll();
 
@@ -2694,8 +2673,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       // ends empty.
       const f2 = brokenNetworkFixture();
       writeVaultFile(f2.root, "a.md", "v1");
-      await f2.store.load();
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.load();
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       await expect(f2.manager.syncAll()).rejects.toThrow();
       writeVaultFile(f2.root, "b.md", "v2");
       await expect(f2.manager.syncAll()).rejects.toThrow();
@@ -2729,8 +2708,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
         },
       });
       writeVaultFile(f2.root, "x.md", "v");
-      await f2.store.load();
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.load();
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       await f2.manager.syncAll();
       // Lazy-open on the first pre-op tick. A single file reads
       // "Pushing 1 file to GitHub…" (no meaningless "1/1", no "0/N").
@@ -2752,8 +2731,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
           };
         },
       });
-      await f2.store.load();
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "TREE_0");
+      await f2.hot.load();
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "TREE_0" });
       writeVaultFile(f2.root, "a.md", "1");
       await f2.queue.enqueue(
         [{ kind: "added", path: "a.md", size: 1, mtime: 0 }],
@@ -2771,19 +2750,16 @@ describe("Sync2Manager.syncAll — basic flow", () => {
         },
       );
       // Pre-record snapshots for these so syncAll doesn't add a new batch.
-      f2.store.set("a.md", {
-        path: "a.md",
-        remoteSha: await shaOf("1"),
+      await f2.store.set("a.md", {
+        baselineSha: await shaOf("1"),
         mtime: fs.statSync(path.join(f2.root, "a.md")).mtimeMs,
         size: 1,
       });
-      f2.store.set("b.md", {
-        path: "b.md",
-        remoteSha: await shaOf("2"),
+      await f2.store.set("b.md", {
+        baselineSha: await shaOf("2"),
         mtime: fs.statSync(path.join(f2.root, "b.md")).mtimeMs,
         size: 1,
       });
-      await f2.store.save();
 
       await f2.manager.resumeQueue();
 
@@ -2802,7 +2778,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
 
     it("no onProgress provided: sync runs without crashing", async () => {
       writeVaultFile(f.root, "x.md", "v");
-      f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       await f.manager.syncAll();
       // No assertion needed beyond completion.
     });
@@ -2818,8 +2794,8 @@ describe("Sync2Manager.syncAll — basic flow", () => {
           };
         },
       });
-      await f2.store.load();
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.load();
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       // Mixed batch: 2 text files + 2 binaries. The counter has to
       // span all four, not just the binary uploads.
       writeVaultFile(f2.root, "a.md", "one");
@@ -2893,7 +2869,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
         },
         progressBytesThreshold: Infinity,
       });
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       await f2.manager.syncAll();
       expect(messages).toEqual(["Sync done"]);
       fs.rmSync(f2.root, { recursive: true, force: true });
@@ -2920,7 +2896,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       ).onSyncCompleted = (s) => summaries.push(s);
 
       // Push-only: lastSync set + a fresh local file → one push.
-      f2.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+      await f2.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
       writeVaultFile(f2.root, "x.md", "v");
 
       await f2.manager.syncAll();
@@ -2981,7 +2957,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
       });
       // Pretend we've already synced at OLD_HEAD; the branch moved
       // forward and two files changed on the remote side.
-      f2.store.setLastSync("OLD_HEAD", "OLD_TREE");
+      await f2.hot.update({ lastSyncCommitSha: "OLD_HEAD", lastSyncTreeSha: "OLD_TREE" });
       f2.client.setBranchHead("NEW_HEAD");
       f2.client.setTreeShaForCommit("NEW_HEAD", "NEW_TREE");
       f2.client.setCompareResult("OLD_HEAD", "NEW_HEAD", {
@@ -3044,7 +3020,7 @@ describe("Sync2Manager.syncAll — basic flow", () => {
     // Simulate concurrent syncAll() invocations: kick off two without
     // awaiting in between; only one drain loop should run.
     writeVaultFile(f.root, "a.md", "1");
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
     const p1 = f.manager.syncAll();
     const p2 = f.manager.syncAll();
@@ -3253,7 +3229,7 @@ describe("Sync2Manager — onPluginsAffected (BRAT-style auto-reload trigger)", 
       onPluginsAffected: (ids) => calls.push(ids.slice()),
     });
     // Idle sync — no remote changes, no local changes.
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
     await f.manager.syncAll();
 
@@ -3302,9 +3278,8 @@ describe("Sync2Manager — zero-byte restore guard (SYNC2 §2.9)", () => {
     // GitHub holds the good blob (fake getBlob resolves by SHA).
     f.client.setContentAtRef("ANYREF", "Notes/a.md", good);
     // snapshot says last-synced size was non-zero.
-    f.store.set("Notes/a.md", {
-      path: "Notes/a.md",
-      remoteSha: goodSha,
+    await f.store.set("Notes/a.md", {
+      baselineSha: goodSha,
       mtime: 1,
       size: good.length,
     });
@@ -3354,9 +3329,8 @@ describe("Sync2Manager — zero-byte restore guard (SYNC2 §2.9)", () => {
 
   it("snapshot.size === 0 (was already empty) + local zero → NOT restored, path stays", async () => {
     const f = fixture();
-    f.store.set("Notes/empty.md", {
-      path: "Notes/empty.md",
-      remoteSha: await shaOf(""),
+    await f.store.set("Notes/empty.md", {
+      baselineSha: await shaOf(""),
       mtime: 1,
       size: 0,
     });
@@ -3384,9 +3358,8 @@ describe("Sync2Manager — zero-byte restore guard (SYNC2 §2.9)", () => {
 
   it("non-zero local file → guard is a no-op (path stays)", async () => {
     const f = fixture();
-    f.store.set("Notes/ok.md", {
-      path: "Notes/ok.md",
-      remoteSha: await shaOf("old\n"),
+    await f.store.set("Notes/ok.md", {
+      baselineSha: await shaOf("old\n"),
       mtime: 1,
       size: 4,
     });
@@ -3419,9 +3392,8 @@ describe("Sync2Manager — zero-byte restore guard (SYNC2 §2.9)", () => {
     const staleSha = await shaOf(stale);
     // GitHub has the stale (last-synced) version.
     f.client.setContentAtRef("ANYREF", "Notes/a.md", stale);
-    f.store.set("Notes/a.md", {
-      path: "Notes/a.md",
-      remoteSha: staleSha,
+    await f.store.set("Notes/a.md", {
+      baselineSha: staleSha,
       mtime: 1,
       size: stale.length,
     });
@@ -3474,9 +3446,8 @@ describe("Sync2Manager — zero-byte restore guard (SYNC2 §2.9)", () => {
     const good = "content\n";
     const goodSha = await shaOf(good);
     f.client.setContentAtRef("ANYREF", "Notes/a.md", good);
-    f.store.set("Notes/a.md", {
-      path: "Notes/a.md",
-      remoteSha: goodSha,
+    await f.store.set("Notes/a.md", {
+      baselineSha: goodSha,
       mtime: 1,
       size: good.length,
     });
@@ -3514,33 +3485,33 @@ describe("Sync2Manager — reconcileRemoteIdentity", () => {
   it("first observation: records identity, doesn't reset (upgrade-safe)", async () => {
     const handle = { owner: "alice", repo: "vault", branch: "main" };
     const f = fixture({ remoteIdentity: () => handle });
-    f.store.setLastSync("EXISTING_SHA", "EXISTING_TREE");
-    expect(f.store.getRemoteIdentity()).toBeNull();
+    await f.hot.update({ lastSyncCommitSha: "EXISTING_SHA", lastSyncTreeSha: "EXISTING_TREE" });
+    expect(f.hot.getRemoteIdentity()).toBeNull();
 
     await reconcile(f.manager);
 
-    expect(f.store.getRemoteIdentity()).toEqual(handle);
+    expect(f.hot.getRemoteIdentity()).toEqual(handle);
     // lastSync untouched — no reset happened.
-    expect(f.store.getLastSyncCommitSha()).toBe("EXISTING_SHA");
+    expect(f.hot.getLastSyncCommitSha()).toBe("EXISTING_SHA");
   });
 
   it("matching identity: no-op", async () => {
     const handle = { owner: "alice", repo: "vault", branch: "main" };
     const f = fixture({ remoteIdentity: () => handle });
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
-    f.store.setRemoteIdentity({ ...handle });
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
+    await f.hot.update({ remoteIdentity: { ...handle } });
 
     await reconcile(f.manager);
 
-    expect(f.store.getRemoteIdentity()).toEqual(handle);
-    expect(f.store.getLastSyncCommitSha()).toBe("BRANCH_HEAD_INIT");
+    expect(f.hot.getRemoteIdentity()).toEqual(handle);
+    expect(f.hot.getLastSyncCommitSha()).toBe("BRANCH_HEAD_INIT");
   });
 
   it("repo change: wipes snapshot + push-queue, records new identity", async () => {
     const handle = { owner: "alice", repo: "vault", branch: "main" };
     const f = fixture({ remoteIdentity: () => handle });
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
-    f.store.setRemoteIdentity({ ...handle });
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
+    await f.hot.update({ remoteIdentity: { ...handle } });
     // Leave a pending batch on disk (a failed earlier push).
     writeVaultFile(f.root, "stale.md", "from old repo");
     const id = await f.queue.enqueue(
@@ -3564,51 +3535,51 @@ describe("Sync2Manager — reconcileRemoteIdentity", () => {
 
     await reconcile(f.manager);
 
-    expect(f.store.getRemoteIdentity()).toEqual({
+    expect(f.hot.getRemoteIdentity()).toEqual({
       owner: "alice",
       repo: "different-vault",
       branch: "main",
     });
-    expect(f.store.getLastSyncCommitSha()).toBeNull();
+    expect(f.hot.getLastSyncCommitSha()).toBeNull();
     expect(await f.queue.list()).not.toContain(id);
   });
 
   it("branch change: also triggers reset (treated same as repo change)", async () => {
     const handle = { owner: "alice", repo: "vault", branch: "main" };
     const f = fixture({ remoteIdentity: () => handle });
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
-    f.store.setRemoteIdentity({ ...handle });
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
+    await f.hot.update({ remoteIdentity: { ...handle } });
 
     handle.branch = "dev";
 
     await reconcile(f.manager);
 
-    expect(f.store.getLastSyncCommitSha()).toBeNull();
-    expect(f.store.getRemoteIdentity()?.branch).toBe("dev");
+    expect(f.hot.getLastSyncCommitSha()).toBeNull();
+    expect(f.hot.getRemoteIdentity()?.branch).toBe("dev");
   });
 
   it("owner change: also triggers reset", async () => {
     const handle = { owner: "alice", repo: "vault", branch: "main" };
     const f = fixture({ remoteIdentity: () => handle });
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
-    f.store.setRemoteIdentity({ ...handle });
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
+    await f.hot.update({ remoteIdentity: { ...handle } });
 
     handle.owner = "bob";
 
     await reconcile(f.manager);
 
-    expect(f.store.getLastSyncCommitSha()).toBeNull();
-    expect(f.store.getRemoteIdentity()?.owner).toBe("bob");
+    expect(f.hot.getLastSyncCommitSha()).toBeNull();
+    expect(f.hot.getRemoteIdentity()?.owner).toBe("bob");
   });
 
   it("no remoteIdentity getter: reconcile is a no-op", async () => {
     const f = fixture(); // no opts.remoteIdentity
-    f.store.setLastSync("BRANCH_HEAD_INIT", "INITIAL_TREE");
+    await f.hot.update({ lastSyncCommitSha: "BRANCH_HEAD_INIT", lastSyncTreeSha: "INITIAL_TREE" });
 
     await reconcile(f.manager);
 
-    expect(f.store.getRemoteIdentity()).toBeNull();
-    expect(f.store.getLastSyncCommitSha()).toBe("BRANCH_HEAD_INIT");
+    expect(f.hot.getRemoteIdentity()).toBeNull();
+    expect(f.hot.getLastSyncCommitSha()).toBe("BRANCH_HEAD_INIT");
   });
 });
 
@@ -3667,10 +3638,10 @@ describe("Sync2Manager — §28 plugin-dir atomic resolution", () => {
     writeVaultFile(f.root, MANI, semverTieManifest);
     writeVaultFile(f.root, MAIN, baseMain);
     writeVaultFile(f.root, STY, localSty);
-    f.store.set(MANI, { path: MANI, remoteSha: await shaOf(semverTieManifest), mtime: 0, size: semverTieManifest.length });
-    f.store.set(MAIN, { path: MAIN, remoteSha: await shaOf(baseMain), mtime: 0, size: baseMain.length });
-    f.store.set(STY, { path: STY, remoteSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
-    f.store.setLastSync("BASE", "BASE_TREE");
+    await f.store.set(MANI, { baselineSha: await shaOf(semverTieManifest), mtime: 0, size: semverTieManifest.length });
+    await f.store.set(MAIN, { baselineSha: await shaOf(baseMain), mtime: 0, size: baseMain.length });
+    await f.store.set(STY, { baselineSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
+    await f.hot.update({ lastSyncCommitSha: "BASE", lastSyncTreeSha: "BASE_TREE" });
     f.client.setBranchHead("NEW");
     f.client.setTreeShaForCommit("NEW", "NEW_TREE");
     f.client.setContentAtRef("BASE", MAIN, baseMain);
@@ -3712,10 +3683,10 @@ describe("Sync2Manager — §28 plugin-dir atomic resolution", () => {
     writeVaultFile(f.root, MANI, semverTieManifest);
     writeVaultFile(f.root, MAIN, sameMain);
     writeVaultFile(f.root, STY, localSty);
-    f.store.set(MANI, { path: MANI, remoteSha: await shaOf(semverTieManifest), mtime: 0, size: semverTieManifest.length });
-    f.store.set(MAIN, { path: MAIN, remoteSha: await shaOf(sameMain), mtime: 0, size: sameMain.length });
-    f.store.set(STY, { path: STY, remoteSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
-    f.store.setLastSync("BASE", "BASE_TREE");
+    await f.store.set(MANI, { baselineSha: await shaOf(semverTieManifest), mtime: 0, size: semverTieManifest.length });
+    await f.store.set(MAIN, { baselineSha: await shaOf(sameMain), mtime: 0, size: sameMain.length });
+    await f.store.set(STY, { baselineSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
+    await f.hot.update({ lastSyncCommitSha: "BASE", lastSyncTreeSha: "BASE_TREE" });
     f.client.setBranchHead("NEW");
     f.client.setTreeShaForCommit("NEW", "NEW_TREE");
     f.client.setContentAtRef("NEW", MAIN, sameMain); // bundle identical → codeDiffers false
@@ -3742,8 +3713,8 @@ describe("Sync2Manager — §28 plugin-dir atomic resolution", () => {
     const localData = '{"n":1}';
     const remoteData = '{"n":2}';
     writeVaultFile(f.root, DATA, localData);
-    f.store.set(DATA, { path: DATA, remoteSha: await shaOf(baseData), mtime: 0, size: baseData.length });
-    f.store.setLastSync("BASE", "BASE_TREE");
+    await f.store.set(DATA, { baselineSha: await shaOf(baseData), mtime: 0, size: baseData.length });
+    await f.hot.update({ lastSyncCommitSha: "BASE", lastSyncTreeSha: "BASE_TREE" });
     f.client.setBranchHead("NEW");
     f.client.setTreeShaForCommit("NEW", "NEW_TREE");
     f.client.setContentAtRef("BASE", DATA, baseData);
@@ -3767,8 +3738,8 @@ describe("Sync2Manager — §28 plugin-dir atomic resolution", () => {
     const baseSty = "a{color:base}";
     const remoteSty = "a{color:REMOTE}";
     // Local: styles.css DELETED (snapshot present, no file on disk).
-    f.store.set(STY, { path: STY, remoteSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
-    f.store.setLastSync("BASE", "BASE_TREE");
+    await f.store.set(STY, { baselineSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
+    await f.hot.update({ lastSyncCommitSha: "BASE", lastSyncTreeSha: "BASE_TREE" });
     f.client.setBranchHead("NEW");
     f.client.setTreeShaForCommit("NEW", "NEW_TREE");
     f.client.setContentAtRef("NEW", STY, remoteSty);
@@ -3793,8 +3764,8 @@ describe("Sync2Manager — §28 plugin-dir atomic resolution", () => {
     const localMain = "module.exports={V:'LOCAL'};";
     const remoteMain = "module.exports={V:'REMOTE'};";
     writeVaultFile(f.root, BLK, localMain);
-    f.store.set(BLK, { path: BLK, remoteSha: await shaOf(localMain), mtime: 0, size: localMain.length });
-    f.store.setLastSync("BASE", "BASE_TREE");
+    await f.store.set(BLK, { baselineSha: await shaOf(localMain), mtime: 0, size: localMain.length });
+    await f.hot.update({ lastSyncCommitSha: "BASE", lastSyncTreeSha: "BASE_TREE" });
     f.client.setBranchHead("NEW");
     f.client.setTreeShaForCommit("NEW", "NEW_TREE");
     f.client.setContentAtRef("NEW", BLK, remoteMain);
@@ -3817,8 +3788,8 @@ describe("Sync2Manager — §28 plugin-dir atomic resolution", () => {
     const localData = '{"githubToken":"secret"}';
     const remoteData = '{"githubToken":"LEAKED"}';
     writeVaultFile(f.root, SELF_DATA, localData);
-    f.store.set(SELF_DATA, { path: SELF_DATA, remoteSha: await shaOf(localData), mtime: 0, size: localData.length });
-    f.store.setLastSync("BASE", "BASE_TREE");
+    await f.store.set(SELF_DATA, { baselineSha: await shaOf(localData), mtime: 0, size: localData.length });
+    await f.hot.update({ lastSyncCommitSha: "BASE", lastSyncTreeSha: "BASE_TREE" });
     f.client.setBranchHead("NEW");
     f.client.setTreeShaForCommit("NEW", "NEW_TREE");
     f.client.setContentAtRef("NEW", SELF_DATA, remoteData);
@@ -3852,10 +3823,10 @@ describe("Sync2Manager — §28 plugin-dir atomic resolution", () => {
     writeVaultFile(f.root, MANI, localMani);
     writeVaultFile(f.root, MAIN, localMain);
     writeVaultFile(f.root, STY, localSty);
-    f.store.set(MANI, { path: MANI, remoteSha: await shaOf(baseMani), mtime: 0, size: baseMani.length });
-    f.store.set(MAIN, { path: MAIN, remoteSha: await shaOf(baseMain), mtime: 0, size: baseMain.length });
-    f.store.set(STY, { path: STY, remoteSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
-    f.store.setLastSync("BASE", "BASE_TREE");
+    await f.store.set(MANI, { baselineSha: await shaOf(baseMani), mtime: 0, size: baseMani.length });
+    await f.store.set(MAIN, { baselineSha: await shaOf(baseMain), mtime: 0, size: baseMain.length });
+    await f.store.set(STY, { baselineSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
+    await f.hot.update({ lastSyncCommitSha: "BASE", lastSyncTreeSha: "BASE_TREE" });
     f.client.setBranchHead("NEW");
     f.client.setTreeShaForCommit("NEW", "NEW_TREE");
     f.client.setContentAtRef("BASE", MANI, baseMani);
@@ -3886,8 +3857,8 @@ describe("Sync2Manager — §28 plugin-dir atomic resolution", () => {
     const f = fixture();
     const baseData = '{"n":0}', localData = '{"n":1}', remoteData = '{"n":2}';
     writeVaultFile(f.root, DATA, localData);
-    f.store.set(DATA, { path: DATA, remoteSha: await shaOf(baseData), mtime: 0, size: baseData.length });
-    f.store.setLastSync("BASE", "BASE_TREE");
+    await f.store.set(DATA, { baselineSha: await shaOf(baseData), mtime: 0, size: baseData.length });
+    await f.hot.update({ lastSyncCommitSha: "BASE", lastSyncTreeSha: "BASE_TREE" });
     f.client.setBranchHead("NEW");
     f.client.setTreeShaForCommit("NEW", "NEW_TREE");
     f.client.setContentAtRef("BASE", DATA, baseData);
@@ -3911,8 +3882,8 @@ describe("Sync2Manager — §28 plugin-dir atomic resolution", () => {
     const baseSty = "a{color:base}", remoteSty = "a{color:REMOTE}";
     // Local deleted styles.css (snapshot present, no disk file) → enqueued
     // as a deletion; the remote modified it → reconcile deletions loop.
-    f.store.set(STY, { path: STY, remoteSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
-    f.store.setLastSync("BASE", "BASE_TREE");
+    await f.store.set(STY, { baselineSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
+    await f.hot.update({ lastSyncCommitSha: "BASE", lastSyncTreeSha: "BASE_TREE" });
     f.client.setBranchHead("NEW");
     f.client.setTreeShaForCommit("NEW", "NEW_TREE");
     f.client.setContentAtRef("BASE", STY, baseSty);
@@ -3940,10 +3911,10 @@ describe("Sync2Manager — §28 plugin-dir atomic resolution", () => {
     writeVaultFile(f.root, MANI, manifest);
     writeVaultFile(f.root, MAIN, baseMain);
     writeVaultFile(f.root, STY, localSty);
-    f.store.set(MANI, { path: MANI, remoteSha: await shaOf(manifest), mtime: 0, size: manifest.length });
-    f.store.set(MAIN, { path: MAIN, remoteSha: await shaOf(baseMain), mtime: 0, size: baseMain.length });
-    f.store.set(STY, { path: STY, remoteSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
-    f.store.setLastSync("BASE", "BASE_TREE");
+    await f.store.set(MANI, { baselineSha: await shaOf(manifest), mtime: 0, size: manifest.length });
+    await f.store.set(MAIN, { baselineSha: await shaOf(baseMain), mtime: 0, size: baseMain.length });
+    await f.store.set(STY, { baselineSha: await shaOf(baseSty), mtime: 0, size: baseSty.length });
+    await f.hot.update({ lastSyncCommitSha: "BASE", lastSyncTreeSha: "BASE_TREE" });
     f.client.setBranchHead("NEW");
     f.client.setTreeShaForCommit("NEW", "NEW_TREE");
     f.client.setContentAtRef("BASE", MANI, manifest);
@@ -4006,7 +3977,7 @@ describe("Sync2Manager — §40 no duplicate commit for an unchanged file", () =
     await enqueueVersion(f, "v1", "added"); // oldest batch = v1
     await enqueueVersion(f, "v2", "modified"); // newest batch = v2; disk = v2
     // Stale snapshot → findChanges flags PMAIN "modified" absent the dedup.
-    f.store.set(PMAIN, { path: PMAIN, remoteSha: "STALE", mtime: 0, size: 1 });
+    await f.store.set(PMAIN, { baselineSha: "STALE", mtime: 0, size: 1 });
     const before = (await f.queue.list()).length;
 
     await f.manager.commitOnly();
@@ -4021,7 +3992,7 @@ describe("Sync2Manager — §40 no duplicate commit for an unchanged file", () =
     await enqueueVersion(f, "v1", "added");
     await enqueueVersion(f, "v2", "modified"); // newest = v2
     writeVaultFile(f.root, PMAIN, "v1"); // disk reverted to v1 (an OLD version)
-    f.store.set(PMAIN, { path: PMAIN, remoteSha: "STALE", mtime: 0, size: 1 });
+    await f.store.set(PMAIN, { baselineSha: "STALE", mtime: 0, size: 1 });
     const before = (await f.queue.list()).length;
 
     await f.manager.commitOnly();
@@ -4035,7 +4006,7 @@ describe("Sync2Manager — §40 no duplicate commit for an unchanged file", () =
     const f = fixture();
     // Synced at v1: snapshot.remoteSha = the last PUSH (v1).
     writeVaultFile(f.root, PMAIN, "v1");
-    f.store.set(PMAIN, { path: PMAIN, remoteSha: await shaOf("v1"), mtime: 0, size: 1 });
+    await f.store.set(PMAIN, { baselineSha: await shaOf("v1"), mtime: 0, size: 1 });
     const count = async (): Promise<number> => (await f.queue.list()).length;
 
     // 1. add a char → v2 → commit
@@ -4106,7 +4077,7 @@ describe("Sync2Manager — §26 tracked-conflict base", () => {
       baseSha: await shaOf(baseContent),
       remoteDevice: "Phone",
     });
-    f.store.set(TC, { path: TC, remoteSha: "MAIN-OLD-SHA", mtime: 0, size: 1 });
+    await f.store.set(TC, { baselineSha: "MAIN-OLD-SHA", mtime: 0, size: 1 });
   }
 
   it("UNCHANGED base → NOT committed (matches its branch value, though ≠ main)", async () => {

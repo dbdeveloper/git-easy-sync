@@ -718,7 +718,7 @@ const VALID_KINDS: ReadonlySet<ConflictKind> = new Set<ConflictKind>([
 
 // Sanitize a JSON-parsed record. Returns null when required identity
 // fields are missing or malformed; coerces optional fields to safe
-// defaults. The strict-vs-lenient line follows SnapshotStore.migrate's
+// defaults. The strict-vs-lenient line follows the old snapshot-store migrate's
 // example: identity (id/vaultPath/kind/siblingPath) is strict, cache
 // fields are lenient.
 function coerceRecord(raw: Record<string, unknown>): ConflictRecord | null {

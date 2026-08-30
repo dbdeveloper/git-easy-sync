@@ -98,7 +98,7 @@ describe.skipIf(!integrationEnabled())(
         const remoteFinalBytes = Buffer.from(remoteBlob.content, "base64");
         expect(remoteFinalBytes.equals(remoteBytes)).toBe(true);
 
-        expect(client.store.getLastSyncCommitSha()).not.toBeNull();
+        expect(client.hotMeta.getLastSyncCommitSha()).not.toBeNull();
       },
       210_000,
     );

@@ -92,7 +92,7 @@ describe.skipIf(!integrationEnabled())(
         );
 
         // "Re-enable" the plugin: brand-new client over the same
-        // on-disk vault. SnapshotStore.load() reads the persisted
+        // on-disk vault. The metadata stores read the persisted
         // lastSyncCommitSha; findChanges walks the vault on the
         // next click and detects the edit purely by stat+SHA
         // (snapshot watermark works regardless of whether the

@@ -27,7 +27,8 @@ import {
 import { StaleStateError, AuthError } from "../errors";
 import GitignoreInvariants from "./gitignore-invariants";
 import PushQueue, { EnqueueMeta } from "./push-queue";
-import SnapshotStore, { RemoteIdentity } from "./snapshot-store";
+import HotMetadataStore, { RemoteIdentity } from "./hot-metadata";
+import FileBaselinesStore from "./file-baselines";
 import TreeBuilder from "./tree-builder";
 import {
   pluginDirFileRole,
@@ -323,7 +324,8 @@ export interface Sync2Logger {
 
 export interface Sync2ManagerDeps {
   vault: Vault;
-  store: SnapshotStore;
+  hotMeta: HotMetadataStore;
+  baselines: FileBaselinesStore;
   detector: ChangeDetector;
   queue: PushQueue;
   builder: TreeBuilder;
@@ -531,7 +533,8 @@ export interface DrainStatus {
 
 export class Sync2Manager {
   private readonly vault: Vault;
-  private readonly store: SnapshotStore;
+  private readonly hotMeta: HotMetadataStore;
+  private readonly baselines: FileBaselinesStore;
   private readonly detector: ChangeDetector;
   private readonly queue: PushQueue;
   private readonly builder: TreeBuilder;
@@ -634,7 +637,8 @@ export class Sync2Manager {
 
   constructor(deps: Sync2ManagerDeps) {
     this.vault = deps.vault;
-    this.store = deps.store;
+    this.hotMeta = deps.hotMeta;
+    this.baselines = deps.baselines;
     this.detector = deps.detector;
     this.queue = deps.queue;
     this.builder = deps.builder;
@@ -742,7 +746,6 @@ export class Sync2Manager {
       await this.sanitizeForbiddenFilenames();
       const changes = await this.detector.findChanges();
       if (changes.length === 0) {
-        await this.store.save();
         // "Nothing local AND nothing pending in the queue" is the
         // truly idle case — fire onNoLocalChanges so plugin code can
         // flash a brief "Nothing to commit" notice. If the queue still has
@@ -889,7 +892,6 @@ export class Sync2Manager {
     }
     const change = await this.detector.findChangeForPath(path);
     if (change === null) {
-      await this.store.save();
       this.logger.info("Sync2 commitFile: nothing to commit for path", {
         path,
       });
@@ -922,7 +924,6 @@ export class Sync2Manager {
     await this.sanitizeForbiddenFilenames();
     const changes = await this.detector.findChanges();
     if (changes.length === 0) {
-      await this.store.save();
       this.onNoLocalChanges?.();
       this.logger.info("Sync2 commitOnly: nothing to commit");
       return;
@@ -966,7 +967,6 @@ export class Sync2Manager {
       }
       const change = await this.detector.findChangeForPath(path);
       if (!change) {
-        await this.store.save();
         const pendingBatches = await this.queue.list();
         if (pendingBatches.length === 0) this.onNoLocalChanges?.();
         await this.drain(progress);
@@ -978,8 +978,8 @@ export class Sync2Manager {
       // `sync ({deviceLabel})` at push time from batch.synthetic +
       // current deviceLabel setting via commitMessageForBatch.
       const enqueued = await this.enqueueOrMerge([change], {
-        parentCommitSha: this.store.getLastSyncCommitSha(),
-        parentTreeSha: this.store.getLastSyncTreeSha(),
+        parentCommitSha: this.hotMeta.getLastSyncCommitSha(),
+        parentTreeSha: this.hotMeta.getLastSyncTreeSha(),
       });
       syncedFiles = enqueued;
       // SYNC2 §4.3 — same depth-changed signal as syncAll.
@@ -1083,8 +1083,10 @@ export class Sync2Manager {
       // the remote → pullIfNeeded sees no drift → a post-crash edit pushes cleanly onto this
       // head instead of 3-way-conflicting against a stale base. Delete the completed batch
       // (its content already landed) so it doesn't re-push.
-      this.store.setLastSync(marker.newHead, marker.newTreeSha);
-      await this.store.save();
+      await this.hotMeta.update({
+        lastSyncCommitSha: marker.newHead,
+        lastSyncTreeSha: marker.newTreeSha,
+      });
       if (marker.batchId) await this.queue.delete(marker.batchId);
       this.logger.info("Sync2 push-inflight recovered (push landed; snapshot re-recorded)", {
         newHead: marker.newHead,
@@ -1154,7 +1156,7 @@ export class Sync2Manager {
   private async pullIfNeeded(
     sharedProgress: ProgressHandle | null = null,
   ): Promise<string | null> {
-    const expectedHead = this.store.getLastSyncCommitSha();
+    const expectedHead = this.hotMeta.getLastSyncCommitSha();
     if (expectedHead === null) return null;
 
     let currentHead: string | null;
@@ -1194,9 +1196,11 @@ export class Sync2Manager {
           sha: currentHead,
           retry: true,
         });
-        this.store.setLastSync(currentHead, headCommit.tree.sha);
-        this.store.setLastCommitMtime(this.now());
-        await this.store.save();
+        await this.hotMeta.update({
+          lastSyncCommitSha: currentHead,
+          lastSyncTreeSha: headCommit.tree.sha,
+          lastCommitMtime: this.now(),
+        });
         return currentHead;
       }
       throw err;
@@ -1385,9 +1389,8 @@ export class Sync2Manager {
             if (localSha === f.sha) {
               const stat = await this.vault.adapter.stat(f.filename);
               if (stat) {
-                this.store.set(f.filename, {
-                  path: f.filename,
-                  remoteSha: f.sha,
+                await this.baselines.set(f.filename, {
+                  baselineSha: f.sha,
                   mtime: stat.mtime,
                   size: stat.size,
                 });
@@ -1464,9 +1467,11 @@ export class Sync2Manager {
       sha: currentHead,
       retry: true,
     });
-    this.store.setLastSync(currentHead, headCommit.tree.sha);
-    this.store.setLastCommitMtime(this.now());
-    await this.store.save();
+    await this.hotMeta.update({
+      lastSyncCommitSha: currentHead,
+      lastSyncTreeSha: headCommit.tree.sha,
+      lastCommitMtime: this.now(),
+    });
     return currentHead;
   }
 
@@ -1604,7 +1609,6 @@ export class Sync2Manager {
         // path, and remove() on either is idempotent — calling both
         // unconditionally is the safe pattern.
         droppedStale.push(entry.path);
-        this.store.remove(entry.path);
         if (this.pendingDeletions) {
           await this.pendingDeletions.remove(entry.path);
         }
@@ -1617,11 +1621,11 @@ export class Sync2Manager {
         `Sync2 pre-flight validation: dropped ${droppedStale.length} stale deletion(s); snapshot + pending-deletions cleared`,
         { paths: droppedStale },
       );
-      // Persist the snapshot mutation so a subsequent crash before
-      // push completion doesn't leave the phantoms re-discoverable.
-      // PendingDeletionsStore.remove() is self-persisting (writes
-      // through to disk on each call) so no equivalent save() needed.
-      await this.store.save();
+      // Drop the baseline rows in one grouped write (§2.2.1); the
+      // write-through persist closes the same crash window the old
+      // save() did. PendingDeletionsStore.remove() above is already
+      // self-persisting.
+      await this.baselines.removeMany(droppedStale);
     }
     return out;
   }
@@ -1631,13 +1635,12 @@ export class Sync2Manager {
   private async reconcileRemoteIdentity(): Promise<void> {
     if (!this.remoteIdentity) return;
     const current = this.remoteIdentity();
-    const recorded = this.store.getRemoteIdentity();
+    const recorded = this.hotMeta.getRemoteIdentity();
     if (recorded === null) {
       // First-ever observation. Record and continue — don't treat
       // this as a mismatch (an upgrade from an older sync2 version
       // would land here once and shouldn't wipe state).
-      this.store.setRemoteIdentity(current);
-      await this.store.save();
+      await this.hotMeta.update({ remoteIdentity: current });
       return;
     }
     if (
@@ -1651,9 +1654,16 @@ export class Sync2Manager {
       "Sync2 remote identity changed; wiping local state",
       { from: recorded, to: current },
     );
-    this.store.clear();
-    this.store.setRemoteIdentity(current);
-    await this.store.save();
+    // Cold first, then hot: a crash between the two re-detects the
+    // mismatch on the next sync and repeats the wipe (idempotent).
+    await this.baselines.clear();
+    await this.hotMeta.update({
+      lastSyncCommitSha: null,
+      lastSyncTreeSha: null,
+      lastCommitMtime: null,
+      conflictBranch: null,
+      remoteIdentity: current,
+    });
     await this.queue.clearAll();
     if (this.conflictStore) {
       await this.conflictStore.clearAll();
@@ -1668,7 +1678,7 @@ export class Sync2Manager {
   private async bootstrapIfNeeded(
     sharedProgress: ProgressHandle | null = null,
   ): Promise<string | null> {
-    if (this.store.getLastSyncCommitSha() !== null) return null;
+    if (this.hotMeta.getLastSyncCommitSha() !== null) return null;
     let currentHead: string | null;
     try {
       currentHead = await this.client.getBranchHeadSha({ retry: true });
@@ -1850,9 +1860,8 @@ export class Sync2Manager {
           // syncs short-circuit via the watermark+stat-equality check.
           const stat = await this.vault.adapter.stat(filePath);
           if (stat) {
-            this.store.set(filePath, {
-              path: filePath,
-              remoteSha: item.sha,
+            await this.baselines.set(filePath, {
+              baselineSha: item.sha,
               mtime: stat.mtime,
               size: stat.size,
             });
@@ -1877,9 +1886,8 @@ export class Sync2Manager {
         ) {
           const stat = await this.vault.adapter.stat(filePath);
           if (stat) {
-            this.store.set(filePath, {
-              path: filePath,
-              remoteSha: localSha,
+            await this.baselines.set(filePath, {
+              baselineSha: localSha,
               mtime: stat.mtime,
               size: stat.size,
             });
@@ -1918,9 +1926,11 @@ export class Sync2Manager {
       if (ownPullProgress) pullProgress?.hide();
     }
 
-    this.store.setLastSync(currentHead, headCommit.tree.sha ?? treeSha);
-    this.store.setLastCommitMtime(this.now());
-    await this.store.save();
+    await this.hotMeta.update({
+      lastSyncCommitSha: currentHead,
+      lastSyncTreeSha: headCommit.tree.sha ?? treeSha,
+      lastCommitMtime: this.now(),
+    });
     this.logger.info("Sync2 adoption-from-remote done", {
       pulled,
       identical,
@@ -1959,9 +1969,8 @@ export class Sync2Manager {
       await this.vault.adapter.writeBinary(filePath, bytes);
       const stat = await this.vault.adapter.stat(filePath);
       if (stat) {
-        this.store.set(filePath, {
-          path: filePath,
-          remoteSha: item.sha,
+        await this.baselines.set(filePath, {
+          baselineSha: item.sha,
           mtime: stat.mtime,
           size: stat.size,
         });
@@ -2273,7 +2282,7 @@ export class Sync2Manager {
   ): Promise<void> {
     const exists = await this.vault.adapter.exists(path);
     if (!exists) {
-      this.detector.recordDeletion(path);
+      await this.detector.recordDeletions([path]);
       return;
     }
 
@@ -2295,7 +2304,7 @@ export class Sync2Manager {
         }
       }
       await this.vault.adapter.remove(path);
-      this.detector.recordDeletion(path);
+      await this.detector.recordDeletions([path]);
       return;
     }
 
@@ -2626,7 +2635,7 @@ export class Sync2Manager {
   //     blob's SHA.
   //   - null        → deletion (tree entry `sha: null`).
   //
-  // Updates SnapshotStore.conflictBranch with the new head and
+  // Updates the hot conflictBranch state with the new head and
   // persists. Caller is responsible for ordering vs other writes.
   private async pushConflictPathsToBranch(
     entries: Array<{ path: string; content: ArrayBuffer | null }>,
@@ -2643,7 +2652,7 @@ export class Sync2Manager {
     const mainTreeSha = mainCommit.tree.sha;
 
     // 2. Resolve / create the conflict branch.
-    let cb = this.store.getConflictBranch();
+    let cb = this.hotMeta.getConflictBranch();
     if (cb === null) {
       // Eager creation: name = git-easy-sync-conflicts-{label}-{ts}-{mmm}.
       // On the rare 422 "Reference already exists" (cross-device
@@ -2672,8 +2681,7 @@ export class Sync2Manager {
           throw err;
         }
       }
-      this.store.setConflictBranch(cb);
-      await this.store.save();
+      await this.hotMeta.update({ conflictBranch: cb });
       this.logger.info("Sync2 conflict-branch created", {
         name: cb.name,
         baseSha: mainHead,
@@ -2736,8 +2744,9 @@ export class Sync2Manager {
       sha: commitSha,
       retry: true,
     });
-    this.store.setConflictBranch({ name: cb.name, head: commitSha });
-    await this.store.save();
+    await this.hotMeta.update({
+      conflictBranch: { name: cb.name, head: commitSha },
+    });
     // TODO §26 — advance each routed base's branch value so the change-
     // detector stops re-committing the (now unchanged) base every sync.
     if (this.conflictStore) {
@@ -2783,8 +2792,8 @@ export class Sync2Manager {
         path: closedPath,
         content,
         contentSha,
-        parentCommitSha: this.store.getLastSyncCommitSha() ?? "",
-        parentTreeSha: this.store.getLastSyncTreeSha() ?? "",
+        parentCommitSha: this.hotMeta.getLastSyncCommitSha() ?? "",
+        parentTreeSha: this.hotMeta.getLastSyncTreeSha() ?? "",
         // R3.5 layer 1b marker. After this side-batch lands on GitHub,
         // processBatch fires trashHooks.confirmResolved(closedPath) →
         // TrashStore wipes sibling-trash entries for the just-resolved
@@ -2827,7 +2836,7 @@ export class Sync2Manager {
   // Safe to call multiple times — idempotent on a "nothing to do"
   // input.
   private async finalizeConflictBranchIfReady(): Promise<void> {
-    const cb = this.store.getConflictBranch();
+    const cb = this.hotMeta.getConflictBranch();
     if (cb === null) return;
     if (!this.conflictStore) return;
     if (this.conflictStore.getAll().length > 0) return;
@@ -2866,9 +2875,13 @@ export class Sync2Manager {
       retry: true,
     });
 
-    this.store.clearConflictBranch();
-    this.store.setLastSync(mergeCommit, mainTreeSha);
-    await this.store.save();
+    // One slot write: branch-clear + anchor advance land together
+    // (today they could tear between clear and setLastSync).
+    await this.hotMeta.update({
+      conflictBranch: null,
+      lastSyncCommitSha: mergeCommit,
+      lastSyncTreeSha: mainTreeSha,
+    });
     this.logger.info("Sync2 conflict-branch finalized", {
       branch: cb.name,
       mergeCommit,
@@ -3009,8 +3022,8 @@ export class Sync2Manager {
       // commitMessage is not persisted; processBatch derives
       // `sync ({deviceLabel})` from batch.synthetic + the current
       // setting at push time.
-      parentCommitSha: this.store.getLastSyncCommitSha(),
-      parentTreeSha: this.store.getLastSyncTreeSha(),
+      parentCommitSha: this.hotMeta.getLastSyncCommitSha(),
+      parentTreeSha: this.hotMeta.getLastSyncTreeSha(),
     };
   }
 
@@ -3222,7 +3235,7 @@ export class Sync2Manager {
           // the SAME stale conflict against the SAME stale base, even after the user resolves
           // it. Forcing chainedHead=null here restores that call on the very next iteration.
           chainedHead = realPushHappened
-            ? this.store.getLastSyncCommitSha()
+            ? this.hotMeta.getLastSyncCommitSha()
             : null;
           pushedAnyBatch = true;
         }
@@ -3379,12 +3392,12 @@ export class Sync2Manager {
         continue;
       }
       if (oursSize === null || oursSize !== 0) continue; // not zeroed
-      const snap = this.store.get(path);
+      const snap = await this.baselines.get(path);
       if (!snap || snap.size === 0) continue; // brand-new OR was-empty
       // Zero-collapse confirmed — restore from the last good version.
       let restored: { bytes: ArrayBuffer; source: string } | null = null;
       try {
-        restored = await this.findLastGoodVersion(path, id, snap.remoteSha);
+        restored = await this.findLastGoodVersion(path, id, snap.baselineSha);
       } catch (err) {
         this.logger.warn("Sync2 zero-byte restore: lookup failed", {
           path,
@@ -3539,7 +3552,7 @@ export class Sync2Manager {
           else throw err;
         }
       }
-      const expectedHead = this.store.getLastSyncCommitSha();
+      const expectedHead = this.hotMeta.getLastSyncCommitSha();
       if (expectedHead === null && currentHead === null) {
         // Case 1: bare repo. Seed turns the repo into a non-bare
         // one-commit state and rewrites the batch's parent SHAs so
@@ -3812,6 +3825,9 @@ export class Sync2Manager {
       // Update local state. recordSync re-stats the file so its mtime
       // is current; subsequent findChanges() short-circuits via the
       // stat-cache for these paths.
+      // §2.2.1 — one grouped baseline write for the whole batch
+      // instead of a bucket write per file.
+      const recordEntries: Array<{ path: string; sha: string }> = [];
       for (const path of batch.files) {
         const sha = shaByPath.get(path);
         if (sha === undefined) {
@@ -3820,7 +3836,7 @@ export class Sync2Manager {
           );
           continue;
         }
-        await this.detector.recordSync(path, sha);
+        recordEntries.push({ path, sha });
         // If the file we just pushed is one of the managed gitignores,
         // refresh the invariant cache too — otherwise the next sync
         // would see mtime drift, re-read, find the hash matches, and
@@ -3829,9 +3845,8 @@ export class Sync2Manager {
           await this.invariants.notePathSelfWritten(path);
         }
       }
-      for (const path of batch.deletions) {
-        this.detector.recordDeletion(path);
-      }
+      await this.detector.recordSyncMany(recordEntries);
+      await this.detector.recordDeletions(batch.deletions);
       // Pending-deletions queue cleanup (SYNC2 §4.2):
       // every queue entry whose path was just successfully deleted on
       // GitHub (or was injected from the queue into this batch and
@@ -3849,10 +3864,12 @@ export class Sync2Manager {
           await this.pendingDeletions.remove(path);
         }
       }
-      this.store.setLastSync(commitSha, newTreeSha);
-      this.store.setLastCommitMtime(this.now());
-      await this.store.save();
-      // SYNC2 §7.9 — snapshot persisted; the push→record window is closed.
+      await this.hotMeta.update({
+        lastSyncCommitSha: commitSha,
+        lastSyncTreeSha: newTreeSha,
+        lastCommitMtime: this.now(),
+      });
+      // SYNC2 §7.9 — anchor persisted; the push→record window is closed.
       await clearPushInflight(this.vault, this.selfPluginId);
 
       await this.queue.delete(id);

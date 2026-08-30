@@ -51,7 +51,6 @@ function configDirInvariantBlock(opts: {
 # Editing this block triggers a rewrite to canonical on next load.
 
 # Per-device state — never propagate between machines.
-git-easy-sync-metadata.json
 workspace.json
 workspace-mobile.json
 community-plugins.json

@@ -125,7 +125,7 @@ describe.skipIf(!integrationEnabled())(
           "shared content\n",
         );
 
-        expect(client.store.getLastSyncCommitSha()).not.toBeNull();
+        expect(client.hotMeta.getLastSyncCommitSha()).not.toBeNull();
       },
       210_000,
     );

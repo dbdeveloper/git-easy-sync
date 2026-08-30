@@ -109,11 +109,7 @@ describe.skipIf(!integrationEnabled())(
           `${file(i)} must be pending`,
         ).toBe(true);
       }
-      const cb = (
-        client.store as unknown as {
-          data: { conflictBranch: { name: string; head: string } | null };
-        }
-      ).data.conflictBranch;
+      const cb = client!.hotMeta.getConflictBranch();
       expect(cb).not.toBeNull();
       conflictBranchToCleanup = cb!.name;
       return cb!;
@@ -174,11 +170,7 @@ describe.skipIf(!integrationEnabled())(
         await sync2AllAndAssertNoErrors(client!);
         expect(await getBranchHead(cb.name)).toBeNull();
         conflictBranchToCleanup = undefined;
-        const cbAfter = (
-          client!.store as unknown as {
-            data: { conflictBranch: { name: string; head: string } | null };
-          }
-        ).data.conflictBranch;
+        const cbAfter = client!.hotMeta.getConflictBranch();
         expect(cbAfter).toBeNull();
 
         // End state of the accept-ours resolutions: the local vault

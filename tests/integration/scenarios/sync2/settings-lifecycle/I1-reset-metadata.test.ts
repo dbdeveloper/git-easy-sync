@@ -65,8 +65,14 @@ describe.skipIf(!integrationEnabled())(
         // Reset the snapshot store. Mirrors what a "Reset metadata"
         // button would do — wipes everything sync2 knows about prior
         // pushes. The vault files are NOT touched.
-        client.store.clear();
-        await client.store.save();
+        await client.baselines.clear();
+        await client.hotMeta.update({
+          lastSyncCommitSha: null,
+          lastSyncTreeSha: null,
+          lastCommitMtime: null,
+          remoteIdentity: null,
+          conflictBranch: null,
+        });
 
         // Sync again. findChanges will see a.md and b.md as "added"
         // (snapshot is empty), but the upload path computes their

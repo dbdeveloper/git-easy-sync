@@ -152,7 +152,7 @@ describe.skipIf(!integrationEnabled())(
 
         // Some files exist on disk; lastSyncCommitSha must still be
         // null because the bootstrap loop never reached its tail.
-        expect(client.store.getLastSyncCommitSha()).toBeNull();
+        expect(client.hotMeta.getLastSyncCommitSha()).toBeNull();
         const filesAfterCrash = listAllUnder(client.vaultPath).filter(
           (p) => !p.startsWith(".obsidian/"),
         );
@@ -211,7 +211,7 @@ describe.skipIf(!integrationEnabled())(
 
         // Snapshot now points at a real head — third call would route
         // through Case 3 fast-path, not bootstrap again.
-        expect(client.store.getLastSyncCommitSha()).not.toBeNull();
+        expect(client.hotMeta.getLastSyncCommitSha()).not.toBeNull();
       },
       210_000,
     );

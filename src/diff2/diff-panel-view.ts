@@ -22,7 +22,6 @@
 //   - docs/tasks/SPLIT-PANEL-EDITOR-FEASIBILITY.md §12 (the split), R-A/R-D (panel/[←])
 
 import { ItemView, type Vault, WorkspaceLeaf } from "obsidian";
-import type SnapshotStore from "../sync2/snapshot-store";
 import type { ConflictCounter } from "../sync2/conflict-counter";
 import type ConflictStore from "../sync2/conflict-store";
 import {
@@ -53,7 +52,6 @@ export interface DiffEditViewDeps {
   // recordSync step lines up with the snapshot's expectations.
   // Optional in test fixtures; required in production for
   // crash-safety per PSEUDO-MERGE-MODE.md §9.3 5-step protocol.
-  snapshotStore?: SnapshotStore;
   // Local device label for the top-marker / "Keep all local
   // (<label>)" button text. Falls back to "local" when undefined.
   localDeviceLabel?: () => string;

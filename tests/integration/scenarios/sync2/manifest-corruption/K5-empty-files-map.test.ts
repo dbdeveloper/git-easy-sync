@@ -24,13 +24,12 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 
-// K5 — manifest with lastSync intact but files: {}. Mimics a
-// partial corruption where lastSync/lastSyncTreeSha survive but the
-// per-file SHA cache is gone (e.g. user-induced trim). findChanges
-// re-emits everything as "added" via the snapshot-empty path; the
-// SHAs match what's on remote, so the tree-build skips the commit.
+// K5 — the whole baseline map is gone (every bucket file deleted)
+// while the hot pair (lastSync anchor) survives. Next sync re-aligns:
+// identical content is NOT re-pushed (no-op tree skip on matching
+// SHAs), no commit lands.
 
-const MANIFEST_REL = ".obsidian/git-easy-sync-metadata.json";
+const RUNTIME_REL = ".obsidian/plugins/git-easy-sync/.runtime";
 
 describe.skipIf(!integrationEnabled())(
   "sync2 K5 — empty files map but lastSync set",
@@ -75,11 +74,11 @@ describe.skipIf(!integrationEnabled())(
         await sync2AllAndAssertNoErrors(first);
         const afterFirst = await countBranchCommits(branch);
 
-        // Wipe just the files map; leave lastSync* alone.
-        const manifestAbs = path.join(vaultPath, MANIFEST_REL);
-        const raw = JSON.parse(fs.readFileSync(manifestAbs, "utf8"));
-        raw.files = {};
-        fs.writeFileSync(manifestAbs, JSON.stringify(raw));
+        // Wipe just the baseline buckets; leave the hot pair alone.
+        fs.rmSync(path.join(vaultPath, RUNTIME_REL, "file-baselines"), {
+          recursive: true,
+          force: true,
+        });
 
         client = await createSync2Client({
           branch,

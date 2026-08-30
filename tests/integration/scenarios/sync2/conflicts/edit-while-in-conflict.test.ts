@@ -96,11 +96,7 @@ describe.skipIf(!integrationEnabled())(
 
         const records = client.conflictStore.getByPath("note.md");
         expect(records).toHaveLength(1);
-        const cb = (
-          client.store as unknown as {
-            data: { conflictBranch: { name: string; head: string } | null };
-          }
-        ).data.conflictBranch;
+        const cb = client!.hotMeta.getConflictBranch();
         expect(cb).not.toBeNull();
         conflictBranchToCleanup = cb!.name;
 
@@ -126,11 +122,7 @@ describe.skipIf(!integrationEnabled())(
         // conflict-branch — initial registration and
         // edit-while-in-conflict pushes alike — uses the same
         // hardcoded `conflict ({deviceLabel})` message.
-        const updatedCb = (
-          client.store as unknown as {
-            data: { conflictBranch: { name: string; head: string } | null };
-          }
-        ).data.conflictBranch;
+        const updatedCb = client!.hotMeta.getConflictBranch();
         expect(updatedCb!.head).not.toBe(branchHeadAfterRegister);
         const messages = await getBranchCommitMessages(updatedCb!.name);
         // At least 2 conflict commits now: initial registration +

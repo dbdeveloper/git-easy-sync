@@ -121,7 +121,7 @@ describe.skipIf(!integrationEnabled())(
         }
         expect(await client.queue.list()).toEqual([]);
         expect(client.conflictStore.getAll()).toEqual([]);
-        expect(client.store.getLastSyncCommitSha()).toBe(
+        expect(client.hotMeta.getLastSyncCommitSha()).toBe(
           await getBranchHead(branch),
         );
       },

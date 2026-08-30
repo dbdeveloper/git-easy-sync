@@ -5,9 +5,11 @@
 import { TFile, Vault } from "obsidian";
 import GI from "../gi";
 import { calculateGitBlobSHA } from "../utils";
-import SnapshotStore, {
-  SYNC2_MANIFEST_FILE_NAME,
-} from "./snapshot-store";
+import HotMetadataStore from "./hot-metadata";
+import FileBaselinesStore, {
+  FileBaseline,
+  bucketIdForPath,
+} from "./file-baselines";
 import { FileChange } from "./types";
 
 // isSyncable for sync2: hardcoded deny list + per-device configDir
@@ -28,7 +30,6 @@ export async function isSyncable(
     abs: string,
   ) => Promise<{ content: string; mtime: number } | null>,
 ): Promise<boolean> {
-  if (path === `${configDir}/${SYNC2_MANIFEST_FILE_NAME}`) return false;
   if (path === `${configDir}/plugins/${selfPluginId}/data.json`) return false;
   // Per-device configDir gate — symmetric: OFF blocks the whole
   // <configDir>/ subtree on both push and pull.
@@ -79,7 +80,11 @@ const CONFLICT_SIBLING_PATTERN =
 
 export interface ChangeDetectorDeps {
   vault: Vault;
-  store: SnapshotStore;
+  // Watermark source (hot pair): getLastCommitMtime.
+  hotMeta: HotMetadataStore;
+  // Per-file baselines (cold buckets). All group operations in this
+  // file follow METAFILE §2.2.1 — bucket-grouped access.
+  baselines: FileBaselinesStore;
   gi: GI;
   configDir: string;
   selfPluginId: string;
@@ -129,7 +134,8 @@ type FileLike = {
 
 export default class ChangeDetector {
   private readonly vault: Vault;
-  private readonly store: SnapshotStore;
+  private readonly hotMeta: HotMetadataStore;
+  private readonly baselines: FileBaselinesStore;
   private readonly gi: GI;
   private readonly configDir: string;
   private readonly selfPluginId: string;
@@ -142,7 +148,8 @@ export default class ChangeDetector {
 
   constructor(deps: ChangeDetectorDeps) {
     this.vault = deps.vault;
-    this.store = deps.store;
+    this.hotMeta = deps.hotMeta;
+    this.baselines = deps.baselines;
     this.gi = deps.gi;
     this.configDir = deps.configDir;
     this.selfPluginId = deps.selfPluginId;
@@ -177,7 +184,7 @@ export default class ChangeDetector {
   // read+SHA.
   async findChanges(): Promise<FileChange[]> {
     const out: FileChange[] = [];
-    const watermark = this.store.getLastCommitMtime();
+    const watermark = this.hotMeta.getLastCommitMtime();
     const allFiles: FileLike[] = this.vault.getFiles().map((f) => ({
       path: f.path,
       stat: { mtime: f.stat.mtime, size: f.stat.size },
@@ -195,6 +202,18 @@ export default class ChangeDetector {
     if (this.syncConfigDir()) {
       allFiles.push(...(await this.walkConfigDir()));
     }
+    // §2.2.1 — Pass 1 walks the files GROUPED BY BASELINE BUCKET, so
+    // every bucket is opened exactly once per scan. An unordered walk
+    // would page buckets through the 6-slot MRU pathologically (a 20k
+    // vault ≈ thousands of bucket re-reads per Commit click). Stable
+    // sort (ES2019): bucket id first, original enumeration order
+    // within a bucket. Visible form change, same emitted SET: the
+    // changes list is now bucket-ordered instead of vault-ordered.
+    allFiles.sort((a, b) => {
+      const ba = bucketIdForPath(a.path);
+      const bb = bucketIdForPath(b.path);
+      return ba < bb ? -1 : ba > bb ? 1 : 0;
+    });
     // Track syncable paths we examined this pass so Pass 2 can tell
     // apart "snapshot points at a path that's still tracked but
     // unchanged" from "snapshot points at a path that's gone or
@@ -203,13 +222,16 @@ export default class ChangeDetector {
     // stale snapshot rows silently rather than emit `deleted`.
     const seenSyncable = new Set<string>();
     const seenIgnored = new Set<string>();
+    // Stat-cache refreshes discovered during Pass 1 — flushed as one
+    // grouped setMany after the scan (§2.2.1).
+    const statRefreshes: Array<{ path: string } & FileBaseline> = [];
 
     // Pass 1: candidates whose stat.mtime exceeds the watermark.
     // First-ever sync (watermark === null) treats every file as a
     // candidate so the initial bootstrap walks the whole vault once.
     for (const file of allFiles) {
       if (watermark !== null && file.stat.mtime <= watermark) {
-        const snap = this.store.get(file.path);
+        const snap = await this.baselines.get(file.path);
         // Cache-hit short-circuit only when the snapshot's recorded
         // stat matches reality — that's our proof the file actually
         // matched the last sync. Without this proof (no snapshot, or
@@ -237,7 +259,7 @@ export default class ChangeDetector {
       }
       seenSyncable.add(file.path);
 
-      const snap = this.store.get(file.path);
+      const snap = await this.baselines.get(file.path);
       if (!snap) {
         // Candidate "added". Before emitting, check whether the file
         // is already represented in any pending queue batch with the
@@ -321,18 +343,22 @@ export default class ChangeDetector {
           path: file.path,
           size: file.stat.size,
           mtime: file.stat.mtime,
-          previousRemoteSha: snap.remoteSha,
+          previousRemoteSha: snap.baselineSha,
         });
         continue;
       }
 
-      const lastCommittedSha = queuedSha ?? snap.remoteSha;
+      const lastCommittedSha = queuedSha ?? snap.baselineSha;
       if (sha === lastCommittedSha) {
         // Unchanged since the last commit. When it also matches the
         // pushed remote (nothing pending, or the pending IS the remote),
         // refresh the stat-cache so later walks short-circuit cheaply.
-        if (sha === snap.remoteSha) {
-          this.store.set(file.path, {
+        // Collected and flushed as ONE grouped setMany after the scan
+        // (§2.2.1) — a per-file write-through here would re-write the
+        // same bucket once per touched file.
+        if (sha === snap.baselineSha) {
+          statRefreshes.push({
+            path: file.path,
             ...snap,
             mtime: file.stat.mtime,
             size: file.stat.size,
@@ -346,39 +372,43 @@ export default class ChangeDetector {
         path: file.path,
         size: file.stat.size,
         mtime: file.stat.mtime,
-        previousRemoteSha: snap.remoteSha,
+        previousRemoteSha: snap.baselineSha,
       });
     }
 
-    // Pass 2: snapshot paths Pass 1 didn't claim as still-syncable.
+    // Pass 2: baseline paths Pass 1 didn't claim as still-syncable.
     //   - seenIgnored: file exists on disk but is now ignored → silent
     //     cleanup (gitignore is a two-way mute).
     //   - neither seen: file is genuinely gone from disk → emit `deleted`.
     //   - seenSyncable: nothing to do here.
-    for (const path of this.store.paths()) {
-      if (seenSyncable.has(path)) continue;
-      if (seenIgnored.has(path)) {
-        this.store.remove(path);
-        continue;
+    // §2.2.1 full scan: forEachBucket reads every bucket exactly once
+    // (cached buckets served from cache, disk-only ones NOT inserted),
+    // removals are collected and flushed as one grouped removeMany.
+    const removals: string[] = [];
+    await this.baselines.forEachBucket(async (files) => {
+      for (const [path, snap] of files) {
+        if (seenSyncable.has(path)) continue;
+        if (seenIgnored.has(path)) {
+          removals.push(path);
+          continue;
+        }
+        // Path not in vault at all. Could be deleted, or could have
+        // become ignored at a path that no longer exists. Re-check
+        // syncability one more time: if ignored, drop silently;
+        // otherwise emit deleted.
+        if (!(await this.checkSyncable(path))) {
+          removals.push(path);
+          continue;
+        }
+        out.push({
+          kind: "deleted",
+          path,
+          previousRemoteSha: snap.baselineSha,
+        });
       }
-      // Path not in vault at all. Could be deleted, or could have
-      // become ignored at a path that no longer exists. Re-check
-      // syncability one more time: if ignored, drop silently;
-      // otherwise emit deleted.
-      if (!(await this.checkSyncable(path))) {
-        this.store.remove(path);
-        continue;
-      }
-      const snap = this.store.get(path);
-      if (!snap) continue;
-      out.push({
-        kind: "deleted",
-        path,
-        previousRemoteSha: snap.remoteSha,
-      });
-    }
-
-    await this.store.save();
+    });
+    if (removals.length > 0) await this.baselines.removeMany(removals);
+    if (statRefreshes.length > 0) await this.baselines.setMany(statRefreshes);
     return out;
   }
 
@@ -391,14 +421,14 @@ export default class ChangeDetector {
     if (!(await this.checkSyncable(path))) return null;
 
     const stat = await this.vault.adapter.stat(path);
-    const snap = this.store.get(path);
+    const snap = await this.baselines.get(path);
 
     if (!stat) {
       if (!snap) return null;
       return {
         kind: "deleted",
         path,
-        previousRemoteSha: snap.remoteSha,
+        previousRemoteSha: snap.baselineSha,
       };
     }
 
@@ -418,15 +448,15 @@ export default class ChangeDetector {
     const buf = await this.readBinaryOrSkip(path);
     if (buf === null) return null; // SYNC2 §6 skip-class — vanished mid-detect
     const sha = await calculateGitBlobSHA(buf);
-    if (sha === snap.remoteSha) {
+    if (sha === snap.baselineSha) {
       // Touched but unchanged — refresh stat so future calls
-      // short-circuit, then report "nothing to do".
-      this.store.set(path, {
+      // short-circuit (write-through persists it), then report
+      // "nothing to do".
+      await this.baselines.set(path, {
         ...snap,
         mtime: stat.mtime,
         size: stat.size,
       });
-      await this.store.save();
       return null;
     }
 
@@ -435,30 +465,49 @@ export default class ChangeDetector {
       path,
       size: stat.size,
       mtime: stat.mtime,
-      previousRemoteSha: snap.remoteSha,
+      previousRemoteSha: snap.baselineSha,
     };
   }
 
   // Called by Sync2Manager after a successful upload of `path` with the
   // new GitHub blob SHA. Re-stats the file so subsequent findChanges()
-  // short-circuits via the snapshot cache.
-  async recordSync(path: string, newRemoteSha: string): Promise<void> {
-    const stat = await this.vault.adapter.stat(path);
-    if (!stat) {
-      this.store.remove(path);
-      return;
-    }
-    this.store.set(path, {
-      path,
-      remoteSha: newRemoteSha,
-      mtime: stat.mtime,
-      size: stat.size,
-    });
+  // short-circuits via the baseline stat-cache. Single-path variant for
+  // call sites with network round-trips between paths (adoption); batch
+  // epilogues MUST use recordSyncMany (§2.2.1).
+  async recordSync(path: string, newBaselineSha: string): Promise<void> {
+    await this.recordSyncMany([{ path, sha: newBaselineSha }]);
   }
 
-  // Called after a remote-driven deletion is applied locally.
-  recordDeletion(path: string): void {
-    this.store.remove(path);
+  // Grouped variant (§2.2.1): re-stats every path, then lands all
+  // baselines with ONE bucket-grouped setMany (and one removeMany for
+  // paths that vanished between push and record).
+  async recordSyncMany(
+    entries: Array<{ path: string; sha: string }>,
+  ): Promise<void> {
+    const sets: Array<{ path: string } & FileBaseline> = [];
+    const gone: string[] = [];
+    for (const { path, sha } of entries) {
+      const stat = await this.vault.adapter.stat(path);
+      if (!stat) {
+        gone.push(path);
+        continue;
+      }
+      sets.push({
+        path,
+        baselineSha: sha,
+        mtime: stat.mtime,
+        size: stat.size,
+      });
+    }
+    if (sets.length > 0) await this.baselines.setMany(sets);
+    if (gone.length > 0) await this.baselines.removeMany(gone);
+  }
+
+  // Called after remote-driven deletions are applied locally. Grouped
+  // (§2.2.1) — the batch epilogue passes all of a batch's deletions at
+  // once.
+  async recordDeletions(paths: string[]): Promise<void> {
+    if (paths.length > 0) await this.baselines.removeMany(paths);
   }
 
   // Public so Sync2Manager.pullIfNeeded can ask the same question for

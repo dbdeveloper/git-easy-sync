@@ -183,7 +183,7 @@ describe.skipIf(!integrationEnabled())(
         // the "interrupted commit completes before others" invariant.
         const finalQueue = await client.queue.list();
         expect(finalQueue).toEqual([]);
-        expect(client.store.getLastSyncCommitSha()).not.toBeNull();
+        expect(client.hotMeta.getLastSyncCommitSha()).not.toBeNull();
       },
       210_000,
     );

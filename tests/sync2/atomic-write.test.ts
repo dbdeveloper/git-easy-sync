@@ -10,7 +10,7 @@ import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
 import { Vault } from "../../mock-obsidian";
-import SnapshotStore from "../../src/sync2/snapshot-store";
+import FileBaselinesStore from "../../src/sync2/file-baselines";
 import {
   atomicWriteFile,
   AtomicWriteRecovery,
@@ -43,14 +43,14 @@ import { calculateGitBlobSHA } from "../../src/utils";
 //     record + finalPath missing, SHA bad → delete (record drops later)
 //   *.ges-bak (Path A only, no dispatch):
 //     no <file>                           → restore from .ges-bak
-//     <file> + SHA == snapshot.remoteSha  → delete .ges-bak [cleanup race]
+//     <file> + SHA == baselineSha         → delete .ges-bak [cleanup race]
 //     <file> + SHA mismatch               → restore from .ges-bak
 //     <file>, no snapshot entry           → restore from .ges-bak (conservative)
 
 function fixture(): {
   root: string;
   vault: Vault;
-  store: SnapshotStore;
+  store: FileBaselinesStore;
   cleanup: () => void;
 } {
   const root = path.join(
@@ -59,9 +59,10 @@ function fixture(): {
   );
   fs.mkdirSync(path.join(root, ".obsidian"), { recursive: true });
   const vault = new Vault(root);
-  const store = new SnapshotStore(
-    vault as unknown as import("obsidian").Vault,
-  );
+  const store = new FileBaselinesStore({
+    vault: vault as unknown as import("obsidian").Vault,
+    selfPluginId: "git-easy-sync",
+  });
   return {
     root,
     vault,
@@ -218,9 +219,8 @@ describe("AtomicWriteRecovery.sweep", () => {
     // the backup.
     fs.writeFileSync(path.join(f.root, "x.md"), "v2");
     fs.writeFileSync(path.join(f.root, "x.ges-bak.md"), "v1");
-    f.store.set("x.md", {
-      path: "x.md",
-      remoteSha: await shaOf("v2"),
+    await f.store.set("x.md", {
+      baselineSha: await shaOf("v2"),
       mtime: 0,
       size: 2,
     });
@@ -241,9 +241,8 @@ describe("AtomicWriteRecovery.sweep", () => {
     // The mismatch tells us we can't trust the install — restore.
     fs.writeFileSync(path.join(f.root, "x.md"), "newPartialOrNotCommitted");
     fs.writeFileSync(path.join(f.root, "x.ges-bak.md"), "previous-good");
-    f.store.set("x.md", {
-      path: "x.md",
-      remoteSha: await shaOf("previous-good"),
+    await f.store.set("x.md", {
+      baselineSha: await shaOf("previous-good"),
       mtime: 0,
       size: 13,
     });
@@ -419,7 +418,7 @@ describe("stagingPathFor", () => {
 // dropped + logged; the record is left for the next drain Phase B
 // to clean up. See docs/PSEUDO-MERGE-MODE.md §9.5.
 describe("AtomicWriteRecovery SHA-verify (ConflictStore-owned siblings)", () => {
-  // Fixture that wires AtomicWriteRecovery against both SnapshotStore
+  // Fixture that wires AtomicWriteRecovery against both the baseline store
   // and ConflictStore so sweep can dispatch by ownership. We plant
   // a ConflictStore record manually (via create + remove final), then
   // place a `.ges-tmp` staging file and exercise the sweep.

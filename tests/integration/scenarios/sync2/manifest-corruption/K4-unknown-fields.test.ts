@@ -24,12 +24,31 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 
-// K4 — forward-compat: unknown top-level keys plus unknown per-file
-// keys must be silently dropped. The migrate() function reads only
-// the fields it knows about; anything else is ignored so older
-// builds keep working when a newer build wrote extra state.
+// K4 — forward-compat: unknown keys in the hot slot AND unknown keys
+// inside baseline-bucket entries must be silently dropped. Both
+// stores read only the fields they know about, so older builds keep
+// working when a newer build wrote extra state.
 
-const MANIFEST_REL = ".obsidian/git-easy-sync-metadata.json";
+const RUNTIME_REL = ".obsidian/plugins/git-easy-sync/.runtime";
+
+// Read the CURRENT (max valid seq) hot slot: [absPath, parsedJson].
+function readMaxHotSlot(vaultPath: string): [string, Record<string, unknown>] {
+  let best: [string, Record<string, unknown>] | null = null;
+  for (const slot of ["a", "b"]) {
+    const abs = path.join(vaultPath, RUNTIME_REL, `metadata-${slot}.json`);
+    if (!fs.existsSync(abs)) continue;
+    try {
+      const raw = JSON.parse(fs.readFileSync(abs, "utf8"));
+      if (typeof raw.seq !== "number") continue;
+      if (best === null || raw.seq > (best[1].seq as number)) best = [abs, raw];
+    } catch {
+      continue;
+    }
+  }
+  if (best === null) throw new Error("no valid hot slot on disk");
+  return best;
+}
+
 
 describe.skipIf(!integrationEnabled())(
   "sync2 K4 — unknown manifest fields (forward-compat)",
@@ -73,17 +92,24 @@ describe.skipIf(!integrationEnabled())(
         await sync2AllAndAssertNoErrors(first);
         const afterFirst = await countBranchCommits(branch);
 
-        // Hand-edit the manifest: keep known fields, sprinkle in
-        // unknown ones at both top level and per-file level.
-        const manifestAbs = path.join(vaultPath, MANIFEST_REL);
-        const raw = JSON.parse(fs.readFileSync(manifestAbs, "utf8"));
+        // Hand-edit the CURRENT hot slot: keep known fields, sprinkle
+        // in unknown ones.
+        const [slotAbs, raw] = readMaxHotSlot(vaultPath);
         raw.future_feature_xyz = "newer-build-wrote-this";
         raw.experimental = { from: "2030", count: 42 };
-        for (const k of Object.keys(raw.files)) {
-          raw.files[k].xattr = "extra";
-          raw.files[k].futureSha = "sha-from-newer-build";
+        fs.writeFileSync(slotAbs, JSON.stringify(raw));
+        // And every baseline bucket: unknown per-entry keys.
+        const bucketsDir = path.join(vaultPath, RUNTIME_REL, "file-baselines");
+        for (const f of fs.readdirSync(bucketsDir)) {
+          const bAbs = path.join(bucketsDir, f);
+          const bRaw = JSON.parse(fs.readFileSync(bAbs, "utf8"));
+          for (const k of Object.keys(bRaw.files ?? {})) {
+            bRaw.files[k].xattr = "extra";
+            bRaw.files[k].futureSha = "sha-from-newer-build";
+          }
+          bRaw.future_bucket_field = true;
+          fs.writeFileSync(bAbs, JSON.stringify(bRaw));
         }
-        fs.writeFileSync(manifestAbs, JSON.stringify(raw));
 
         // Re-instantiate, sync — unknown fields are dropped silently.
         client = await createSync2Client({

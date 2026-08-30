@@ -130,7 +130,7 @@ describe.skipIf(!integrationEnabled())(
 
         // I6/I5 — clean exit with consistent state.
         expect(await client.queue.list()).toEqual([]);
-        expect(client.store.getLastSyncCommitSha()).toBe(
+        expect(client.hotMeta.getLastSyncCommitSha()).toBe(
           await getBranchHead(branch),
         );
       },

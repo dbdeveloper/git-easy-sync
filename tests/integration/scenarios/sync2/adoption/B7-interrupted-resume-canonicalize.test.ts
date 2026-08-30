@@ -151,8 +151,8 @@ describe.skipIf(!integrationEnabled())(
         );
 
         // Confirm pre-condition: snapshot empty, lastSync null.
-        expect(client.store.getLastSyncCommitSha()).toBeNull();
-        expect(client.store.paths()).toEqual([]);
+        expect(client.hotMeta.getLastSyncCommitSha()).toBeNull();
+        expect(await client.baselines.allPaths()).toEqual([]);
 
         // Now click Sync. bootstrapIfNeeded → bootstrapFromRemote
         // should run the canonicalize-aware resume check, recognize
@@ -177,10 +177,10 @@ describe.skipIf(!integrationEnabled())(
         // Assertion 2 — snapshot now has entries for all three with
         // canonical SHAs recorded, and lastSync is set. This is the
         // adoption-success state.
-        expect(client.store.getLastSyncCommitSha()).not.toBeNull();
-        expect(client.store.get("with-crlf.md")).toBeDefined();
-        expect(client.store.get("Folder/with-bom.md")).toBeDefined();
-        expect(client.store.get("Folder/plain.md")).toBeDefined();
+        expect(client.hotMeta.getLastSyncCommitSha()).not.toBeNull();
+        expect(await client.baselines.get("with-crlf.md")).toBeDefined();
+        expect(await client.baselines.get("Folder/with-bom.md")).toBeDefined();
+        expect(await client.baselines.get("Folder/plain.md")).toBeDefined();
 
         // Assertion 3 — THE KEY CHECK: the commit history on the
         // branch did not gain a "Sync at ..." convergence commit

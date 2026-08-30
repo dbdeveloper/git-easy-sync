@@ -25,7 +25,8 @@ import Logger from "./logger";
 import { describeError } from "./utils";
 import GithubClient from "./github/client";
 import GI from "./gi";
-import SnapshotStore from "./sync2/snapshot-store";
+import HotMetadataStore from "./sync2/hot-metadata";
+import FileBaselinesStore from "./sync2/file-baselines";
 import { AtomicWriteRecovery } from "./sync2/atomic-write";
 import ChangeDetector from "./sync2/change-detector";
 import PushQueue from "./sync2/push-queue";
@@ -765,13 +766,23 @@ export default class GitHubSyncPlugin extends Plugin {
   // sync will reach a remote.
   async resetPluginState(): Promise<void> {
     if (this.sync2Manager) {
-      const store = (this.sync2Manager as unknown as { store: SnapshotStore })
-        .store;
-      const queue = (this.sync2Manager as unknown as { queue: PushQueue })
-        .queue;
-      store.clear();
-      await store.save();
-      await queue.clearAll();
+      const m = this.sync2Manager as unknown as {
+        hotMeta: HotMetadataStore;
+        baselines: FileBaselinesStore;
+        queue: PushQueue;
+      };
+      // Cold first, then hot — same idempotent ordering as the
+      // identity-mismatch wipe. (Phase 1.6 RESET-PLUGIN will replace
+      // this with an rm -rf of the whole .runtime/.)
+      await m.baselines.clear();
+      await m.hotMeta.update({
+        lastSyncCommitSha: null,
+        lastSyncTreeSha: null,
+        lastCommitMtime: null,
+        remoteIdentity: null,
+        conflictBranch: null,
+      });
+      await m.queue.clearAll();
     }
     if (this.conflictStore) {
       // Rename vault sibling files BEFORE dropping the record index,
@@ -799,51 +810,6 @@ export default class GitHubSyncPlugin extends Plugin {
     await this.saveSettings();
   }
 
-  // One-pass migration from 2.0.1-beta2/beta3 phantom-snapshot entries
-  // into the new pending-deletions queue (SYNC2 §4.2).
-  // A phantom entry is a SnapshotStore row with mtime === 0 AND
-  // size === 0 — the signature pull-side sanitize wrote when
-  // recording "delete this forbidden GitHub path on next push"
-  // intents before this refactor. Each such entry is moved to the
-  // queue and removed from the snapshot; subsequent loads find
-  // nothing to migrate (idempotent).
-  //
-  // No `observedAtCommit` is available in the phantom signature
-  // (we never recorded it). We use `store.getLastSyncCommitSha()`
-  // as the best approximation — it's the most recent commit this
-  // device synced against and is therefore the latest point at
-  // which the phantom's `remoteSha` was plausibly correct.
-  // Empty string when lastSync is null (fresh install); in
-  // practice that combination doesn't happen because phantoms only
-  // exist after a sync that observed the forbidden path.
-  private async migratePhantomSnapshotsToPendingDeletions(
-    store: SnapshotStore,
-    pendingDeletions: PendingDeletionsStore,
-  ): Promise<void> {
-    const observedAtCommit = store.getLastSyncCommitSha() ?? "";
-    const migrated: string[] = [];
-    for (const path of store.paths()) {
-      const snap = store.get(path);
-      if (!snap) continue;
-      if (snap.mtime === 0 && snap.size === 0) {
-        await pendingDeletions.add(path, {
-          source: "migration-from-snapshot",
-          observedAtCommit,
-          remoteSha: snap.remoteSha,
-        });
-        store.remove(path);
-        migrated.push(path);
-      }
-    }
-    if (migrated.length > 0) {
-      await store.save();
-      this.logger.info(
-        `Sync2 migration: phantom-snapshot → pending-deletions queue`,
-        { count: migrated.length, paths: migrated },
-      );
-    }
-  }
-
   // ── engine init ─────────────────────────────────────────────────────
 
   private async initSync2(): Promise<void> {
@@ -864,11 +830,17 @@ export default class GitHubSyncPlugin extends Plugin {
       this.logger,
       this.workerClient,
     );
-    const store = new SnapshotStore(this.app.vault);
-    await store.load();
-    this.logger.info("initSync2: SnapshotStore loaded", {
-      lastSyncCommitSha: store.getLastSyncCommitSha(),
-      paths: store.paths().length,
+    const hotMeta = new HotMetadataStore({
+      vault: this.app.vault,
+      selfPluginId: manifest.id,
+    });
+    await hotMeta.load();
+    const baselines = new FileBaselinesStore({
+      vault: this.app.vault,
+      selfPluginId: manifest.id,
+    });
+    this.logger.info("initSync2: hot metadata loaded", {
+      lastSyncCommitSha: hotMeta.getLastSyncCommitSha(),
     });
     // AtomicWriteRecovery sweep runs AFTER ConflictStore.load (see
     // block below) so the sweep can resolve `.ges-tmp` staging
@@ -884,7 +856,8 @@ export default class GitHubSyncPlugin extends Plugin {
     });
     const detector = new ChangeDetector({
       vault: this.app.vault,
-      store,
+      hotMeta,
+      baselines,
       gi,
       configDir: this.app.vault.configDir,
       selfPluginId: manifest.id,
@@ -936,10 +909,8 @@ export default class GitHubSyncPlugin extends Plugin {
     // Pending-deletions queue (SYNC2 §4.2). Replaces
     // the 2.0.1-beta2 phantom-snapshot trick: pull-side sanitize
     // records "delete this forbidden GitHub path on next push"
-    // intent in this queue rather than as a phantom SnapshotStore
-    // entry. On first plugin load after the 2.0.1-beta4 upgrade,
-    // any leftover phantom entries in the snapshot get migrated
-    // into the queue and removed from the snapshot.
+    // intent in this queue rather than as a phantom baseline
+    // entry.
     const pendingDeletions = new PendingDeletionsStore({
       vault: this.app.vault,
       configDir: this.app.vault.configDir,
@@ -947,7 +918,9 @@ export default class GitHubSyncPlugin extends Plugin {
     });
     await pendingDeletions.load();
     this.pendingDeletions = pendingDeletions;
-    await this.migratePhantomSnapshotsToPendingDeletions(store, pendingDeletions);
+    // (The 2.0.1-beta phantom-snapshot migration lived here; deleted
+    // with the blank-slate cutover — the new baseline store can never
+    // contain monolith-era phantom rows.)
 
     // diff2 TrashStore — captures user-driven deletes for one-drain-
     // cycle recovery (R3.4 + R3.5). Instantiated and recovery-swept
@@ -1001,7 +974,7 @@ export default class GitHubSyncPlugin extends Plugin {
     try {
       const recovery = new AtomicWriteRecovery(
         this.app.vault,
-        store,
+        baselines,
         conflictStore,
       );
       const result = await recovery.sweep();
@@ -1057,7 +1030,8 @@ export default class GitHubSyncPlugin extends Plugin {
 
     this.sync2Manager = new Sync2Manager({
       vault: this.app.vault,
-      store,
+      hotMeta,
+      baselines,
       detector,
       queue,
       builder,

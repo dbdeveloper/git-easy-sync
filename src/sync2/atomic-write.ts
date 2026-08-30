@@ -4,7 +4,7 @@
 
 import { TFile, Vault } from "obsidian";
 import { calculateGitBlobSHA } from "../utils";
-import type SnapshotStore from "./snapshot-store";
+import type FileBaselinesStore from "./file-baselines";
 import { safeRename } from "./cross-platform";
 
 // Atomic-with-backup write of a vault file. Crash-safe sequence:
@@ -513,7 +513,7 @@ interface ConflictStoreLike {
 //        finalPath missing                                  → rename(bak
 //                                                             → finalPath)
 //                                                            [restore]
-//        finalPath exists, snapshot.remoteSha === SHA(file) → delete bak
+//        finalPath exists, baselineSha === SHA(file)       → delete bak
 //                                                            [cleanup race]
 //        mismatch / no snapshot                             → restore bak
 //
@@ -521,7 +521,7 @@ interface ConflictStoreLike {
 export class AtomicWriteRecovery {
   constructor(
     private readonly vault: Vault,
-    private readonly store: SnapshotStore,
+    private readonly baselines: FileBaselinesStore,
     private readonly conflictStore?: ConflictStoreLike,
   ) {}
 
@@ -619,7 +619,8 @@ export class AtomicWriteRecovery {
           continue;
         }
         // Both files exist. Disambiguate via snapshot SHA.
-        const expectedSha = this.store.get(originalPath)?.remoteSha;
+        const expectedSha = (await this.baselines.get(originalPath))
+          ?.baselineSha;
         if (expectedSha === undefined) {
           // No snapshot entry → can't verify the install. Conservative:
           // keep the previous version (we own a known-good backup,

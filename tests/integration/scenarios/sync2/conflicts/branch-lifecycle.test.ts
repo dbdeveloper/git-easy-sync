@@ -100,13 +100,7 @@ describe.skipIf(!integrationEnabled())(
         // Conflict registered + branch created on GitHub.
         const records = client.conflictStore.getByPath("note.md");
         expect(records).toHaveLength(1);
-        const cb = (
-          client.store as unknown as {
-            data: {
-              conflictBranch: { name: string; head: string } | null;
-            };
-          }
-        ).data.conflictBranch;
+        const cb = client!.hotMeta.getConflictBranch();
         expect(cb).not.toBeNull();
         conflictBranchToCleanup = cb!.name;
         expect(cb!.name).toMatch(/^git-easy-sync-conflicts-/);
@@ -154,13 +148,7 @@ describe.skipIf(!integrationEnabled())(
         expect(afterFinalize).toBeNull();
 
         // Local state cleared.
-        const cbAfter = (
-          client.store as unknown as {
-            data: {
-              conflictBranch: { name: string; head: string } | null;
-            };
-          }
-        ).data.conflictBranch;
+        const cbAfter = client!.hotMeta.getConflictBranch();
         expect(cbAfter).toBeNull();
         conflictBranchToCleanup = undefined;
       },

@@ -73,7 +73,7 @@ describe.skipIf(!integrationEnabled())(
         expect(remoteFiles).toContain("y.md");
 
         // Snapshot dropped x.md (no orphan entry).
-        expect(client.store.paths()).not.toContain("x.md");
+        expect(await client.baselines.allPaths()).not.toContain("x.md");
       },
       240_000,
     );

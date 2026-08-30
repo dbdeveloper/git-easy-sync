@@ -24,12 +24,14 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 
-// K1 — invalid JSON in the snapshot manifest. SnapshotStore.load()'s
-// migrate() tolerates garbage by falling back to fresh metadata; the
-// next syncAll re-aligns with remote via the no-op tree skip (SHAs
-// already match, no spurious commit lands).
+// K1 — every metadata file is garbage: both hot slots (each reads as
+// seq −1 → fresh state, next write self-heals the pair) and every
+// baseline bucket (each reads as empty — the §3 degraded mode). The
+// invariant carried over from the monolith era: corrupt metadata is
+// total amnesia, never data loss and never a re-push — the next
+// syncAll re-aligns via the no-op tree skip (SHAs already match).
 
-const MANIFEST_REL = ".obsidian/git-easy-sync-metadata.json";
+const RUNTIME_REL = ".obsidian/plugins/git-easy-sync/.runtime";
 
 describe.skipIf(!integrationEnabled())(
   "sync2 K1 — invalid JSON in snapshot manifest",
@@ -78,12 +80,20 @@ describe.skipIf(!integrationEnabled())(
         const afterFirst = await countBranchCommits(branch);
         expect(afterFirst - baselineCommits).toBe(1);
 
-        // Corrupt the manifest. Garbage that's nowhere near JSON.
-        const manifestAbs = path.join(vaultPath, MANIFEST_REL);
-        fs.writeFileSync(manifestAbs, "{not valid json at all,;\n");
+        // Corrupt EVERYTHING: both hot slots and every bucket.
+        for (const slot of ["a", "b"]) {
+          fs.writeFileSync(
+            path.join(vaultPath, RUNTIME_REL, `metadata-${slot}.json`),
+            "{not valid json at all,;\n",
+          );
+        }
+        const bucketsDir = path.join(vaultPath, RUNTIME_REL, "file-baselines");
+        for (const f of fs.readdirSync(bucketsDir)) {
+          fs.writeFileSync(path.join(bucketsDir, f), "{not valid json,;\n");
+        }
 
-        // Re-instantiate over the same vault. load() catches the
-        // parse error and falls back to fresh metadata.
+        // Re-instantiate over the same vault. Both stores degrade to
+        // fresh/empty instead of crashing.
         client = await createSync2Client({
           branch,
           vaultPath,

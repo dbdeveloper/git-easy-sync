@@ -108,18 +108,20 @@ describe.skipIf(!integrationEnabled())(
         // (a) The synced files' snapshot SHAs equal the real remote
         //     blob SHAs.
         for (let i = 1; i <= N; i++) {
-          const snap = client.store.get(file(i));
-          expect(snap, `${file(i)} must have a snapshot entry`).toBeDefined();
-          expect(snap!.remoteSha).toBe(await getRemoteFileSha(branch, file(i)));
+          const snap = await client.baselines.get(file(i));
+          expect(snap, `${file(i)} must have a baseline entry`).toBeDefined();
+          expect(snap!.baselineSha).toBe(
+            await getRemoteFileSha(branch, file(i)),
+          );
         }
-        // (b) No orphan snapshot entries: every snapshot path exists
+        // (b) No orphan baseline entries: every recorded path exists
         //     on the remote tree.
         const remotePaths = new Set(await listRemoteFiles(branch));
-        for (const p of client.store.paths()) {
-          expect(remotePaths.has(p), `orphan snapshot entry: ${p}`).toBe(true);
+        for (const p of await client.baselines.allPaths()) {
+          expect(remotePaths.has(p), `orphan baseline entry: ${p}`).toBe(true);
         }
         // (c) The recorded lastSync head is the branch's real head.
-        expect(client.store.getLastSyncCommitSha()).toBe(
+        expect(client.hotMeta.getLastSyncCommitSha()).toBe(
           await getBranchHead(branch),
         );
       },

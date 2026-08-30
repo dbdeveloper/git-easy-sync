@@ -11,7 +11,8 @@ import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
 import GI from "../../src/gi";
-import SnapshotStore from "../../src/sync2/snapshot-store";
+import HotMetadataStore from "../../src/sync2/hot-metadata";
+import FileBaselinesStore from "../../src/sync2/file-baselines";
 import ChangeDetector from "../../src/sync2/change-detector";
 import { Vault } from "../../mock-obsidian";
 import { calculateGitBlobSHA } from "../../src/utils";
@@ -22,7 +23,8 @@ const SELF_PLUGIN_ID = "git-easy-sync";
 function fixture(): {
   root: string;
   vault: Vault;
-  store: SnapshotStore;
+  hot: HotMetadataStore;
+  store: FileBaselinesStore;
   gi: GI;
   detector: ChangeDetector;
 } {
@@ -32,20 +34,26 @@ function fixture(): {
   );
   fs.mkdirSync(path.join(root, CONFIG_DIR), { recursive: true });
   const vault = new Vault(root);
-  const store = new SnapshotStore(
-    vault as unknown as import("obsidian").Vault,
-  );
+  const hot = new HotMetadataStore({
+    vault: vault as unknown as import("obsidian").Vault,
+    selfPluginId: SELF_PLUGIN_ID,
+  });
+  const store = new FileBaselinesStore({
+    vault: vault as unknown as import("obsidian").Vault,
+    selfPluginId: SELF_PLUGIN_ID,
+  });
   const gi = new GI(root);
   const detector = new ChangeDetector({
     vault: vault as unknown as import("obsidian").Vault,
-    store,
+    hotMeta: hot,
+    baselines: store,
     gi,
     configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
     vaultRoot: root,
     syncConfigDir: () => true,
   });
-  return { root, vault, store, gi, detector };
+  return { root, vault, hot, store, gi, detector };
 }
 
 function writeFile(root: string, rel: string, content: string | Buffer): void {
@@ -71,7 +79,7 @@ describe("ChangeDetector", () => {
 
   beforeEach(async () => {
     f = fixture();
-    await f.store.load();
+    await f.hot.load();
   });
 
   afterEach(() => {
@@ -86,16 +94,6 @@ describe("ChangeDetector", () => {
       const paths = out.map((c) => c.path).sort();
       expect(paths).toEqual(["Notes/x.md", "Notes/y.md"]);
       expect(out.every((c) => c.kind === "added")).toBe(true);
-    });
-
-    it("hardcoded deny: skips sync2 manifest itself", async () => {
-      writeFile(
-        f.root,
-        `${CONFIG_DIR}/git-easy-sync-metadata.json`,
-        "{}",
-      );
-      const out = await f.detector.findChanges();
-      expect(out).toEqual([]);
     });
 
     it("hardcoded deny: skips our plugin's data.json", async () => {
@@ -222,14 +220,13 @@ describe("ChangeDetector", () => {
       writeFile(f.root, "Notes/old.md", "untouched");
       const oldStat = fs.statSync(path.join(f.root, "Notes/old.md"));
       const sha = await shaOf("untouched");
-      f.store.set("Notes/old.md", {
-        path: "Notes/old.md",
-        remoteSha: sha,
+      await f.store.set("Notes/old.md", {
+        baselineSha: sha,
         mtime: oldStat.mtimeMs,
         size: oldStat.size,
       });
       // Watermark equals the file's mtime → file is skipped.
-      f.store.setLastCommitMtime(oldStat.mtimeMs);
+      await f.hot.update({ lastCommitMtime: oldStat.mtimeMs });
 
       const adapter = f.vault.adapter as unknown as {
         readBinary: (p: string) => Promise<Buffer>;
@@ -254,9 +251,8 @@ describe("ChangeDetector", () => {
       writeFile(f.root, "Notes/old.md", "v1");
       setMtime(f.root, "Notes/old.md", 1_000_000_000_000);
       const oldSha = await shaOf("v1");
-      f.store.set("Notes/old.md", {
-        path: "Notes/old.md",
-        remoteSha: oldSha,
+      await f.store.set("Notes/old.md", {
+        baselineSha: oldSha,
         mtime: 1_000_000_000_000,
         size: 2,
       });
@@ -265,7 +261,7 @@ describe("ChangeDetector", () => {
       writeFile(f.root, "Notes/new.md", "fresh");
       setMtime(f.root, "Notes/new.md", 2_000_000_000_000);
 
-      f.store.setLastCommitMtime(1_500_000_000_000);
+      await f.hot.update({ lastCommitMtime: 1_500_000_000_000 });
 
       const out = await f.detector.findChanges();
       expect(out).toMatchObject([
@@ -277,13 +273,12 @@ describe("ChangeDetector", () => {
       writeFile(f.root, "Notes/x.md", "v1");
       setMtime(f.root, "Notes/x.md", 1_000_000_000_000);
       const oldSha = await shaOf("v1");
-      f.store.set("Notes/x.md", {
-        path: "Notes/x.md",
-        remoteSha: oldSha,
+      await f.store.set("Notes/x.md", {
+        baselineSha: oldSha,
         mtime: 1_000_000_000_000,
         size: 2,
       });
-      f.store.setLastCommitMtime(1_000_000_000_000);
+      await f.hot.update({ lastCommitMtime: 1_000_000_000_000 });
 
       // Edit. mtime advances past watermark.
       writeFile(f.root, "Notes/x.md", "v2-bigger");
@@ -307,14 +302,13 @@ describe("ChangeDetector", () => {
       for (const name of ["Notes/vanish.md", "Notes/ok.md"]) {
         writeFile(f.root, name, "v1");
         setMtime(f.root, name, 1_000_000_000_000);
-        f.store.set(name, {
-          path: name,
-          remoteSha: await shaOf("v1"),
+        await f.store.set(name, {
+          baselineSha: await shaOf("v1"),
           mtime: 1_000_000_000_000,
           size: 2,
         });
       }
-      f.store.setLastCommitMtime(1_000_000_000_000);
+      await f.hot.update({ lastCommitMtime: 1_000_000_000_000 });
       // Edit both → modified candidates past the watermark.
       writeFile(f.root, "Notes/vanish.md", "v2-bigger");
       setMtime(f.root, "Notes/vanish.md", 2_000_000_000_000);
@@ -358,29 +352,27 @@ describe("ChangeDetector", () => {
       writeFile(f.root, "Notes/x.md", "same");
       setMtime(f.root, "Notes/x.md", 1_000_000_000_000);
       const sha = await shaOf("same");
-      f.store.set("Notes/x.md", {
-        path: "Notes/x.md",
-        remoteSha: sha,
+      await f.store.set("Notes/x.md", {
+        baselineSha: sha,
         mtime: 1_000_000_000_000,
         size: 4,
       });
-      f.store.setLastCommitMtime(1_000_000_000_000);
+      await f.hot.update({ lastCommitMtime: 1_000_000_000_000 });
 
       // Bump mtime without changing content.
       setMtime(f.root, "Notes/x.md", 3_000_000_000_000);
 
       const out = await f.detector.findChanges();
       expect(out).toEqual([]);
-      const refreshed = f.store.get("Notes/x.md");
+      const refreshed = await f.store.get("Notes/x.md");
       expect(refreshed?.mtime).toBe(3_000_000_000_000);
     });
   });
 
   describe("findChanges() — Pass 2: snapshot-only paths", () => {
     it("emits deleted when snapshot exists and file is gone", async () => {
-      f.store.set("Notes/gone.md", {
-        path: "Notes/gone.md",
-        remoteSha: "abc",
+      await f.store.set("Notes/gone.md", {
+        baselineSha: "abc",
         mtime: 1,
         size: 1,
       });
@@ -393,16 +385,15 @@ describe("ChangeDetector", () => {
     it("path now ignored: snapshot dropped silently, no delete emitted", async () => {
       writeFile(f.root, "old.log", "still here");
       writeFile(f.root, ".gitignore", "*.log\n");
-      f.store.set("old.log", {
-        path: "old.log",
-        remoteSha: "stalesha",
+      await f.store.set("old.log", {
+        baselineSha: "stalesha",
         mtime: 1,
         size: 10,
       });
 
       const out = await f.detector.findChanges();
       expect(out.find((c) => c.path === "old.log")).toBeUndefined();
-      expect(f.store.get("old.log")).toBeUndefined();
+      expect(await f.store.get("old.log")).toBeUndefined();
     });
 
     it("path now syncable: surfaces as added on next findChanges", async () => {
@@ -443,20 +434,19 @@ describe("ChangeDetector", () => {
       await f.detector.recordSync("Notes/x.md", "abc");
       fs.rmSync(path.join(f.root, "Notes/x.md"));
       await f.detector.recordSync("Notes/x.md", "def");
-      expect(f.store.get("Notes/x.md")).toBeUndefined();
+      expect(await f.store.get("Notes/x.md")).toBeUndefined();
     });
   });
 
-  describe("recordDeletion()", () => {
-    it("snapshot is removed", () => {
-      f.store.set("Notes/x.md", {
-        path: "Notes/x.md",
-        remoteSha: "abc",
+  describe("recordDeletions()", () => {
+    it("snapshot is removed", async () => {
+      await f.store.set("Notes/x.md", {
+        baselineSha: "abc",
         mtime: 1,
         size: 1,
       });
-      f.detector.recordDeletion("Notes/x.md");
-      expect(f.store.get("Notes/x.md")).toBeUndefined();
+      await f.detector.recordDeletions(["Notes/x.md"]);
+      expect(await f.store.get("Notes/x.md")).toBeUndefined();
     });
   });
 
@@ -470,9 +460,8 @@ describe("ChangeDetector", () => {
     it("file present, snapshot matches stat → null (cache hit)", async () => {
       writeFile(f.root, "Notes/x.md", "v1");
       const stat = fs.statSync(path.join(f.root, "Notes/x.md"));
-      f.store.set("Notes/x.md", {
-        path: "Notes/x.md",
-        remoteSha: await shaOf("v1"),
+      await f.store.set("Notes/x.md", {
+        baselineSha: await shaOf("v1"),
         mtime: stat.mtimeMs,
         size: stat.size,
       });
@@ -482,22 +471,20 @@ describe("ChangeDetector", () => {
     it("file present, mtime moved but content unchanged → null + snapshot mtime refreshed", async () => {
       writeFile(f.root, "Notes/x.md", "v1");
       const sha = await shaOf("v1");
-      f.store.set("Notes/x.md", {
-        path: "Notes/x.md",
-        remoteSha: sha,
+      await f.store.set("Notes/x.md", {
+        baselineSha: sha,
         mtime: 0,
         size: 2,
       });
       expect(await f.detector.findChangeForPath("Notes/x.md")).toBeNull();
       const stat = fs.statSync(path.join(f.root, "Notes/x.md"));
-      expect(f.store.get("Notes/x.md")?.mtime).toBe(stat.mtimeMs);
+      expect((await f.store.get("Notes/x.md"))?.mtime).toBe(stat.mtimeMs);
     });
 
     it("file present, content changed → modified", async () => {
       writeFile(f.root, "Notes/x.md", "v1");
-      f.store.set("Notes/x.md", {
-        path: "Notes/x.md",
-        remoteSha: await shaOf("v1"),
+      await f.store.set("Notes/x.md", {
+        baselineSha: await shaOf("v1"),
         mtime: 1,
         size: 2,
       });
@@ -507,9 +494,8 @@ describe("ChangeDetector", () => {
     });
 
     it("file absent, snapshot exists → deleted", async () => {
-      f.store.set("Notes/gone.md", {
-        path: "Notes/gone.md",
-        remoteSha: "OLD",
+      await f.store.set("Notes/gone.md", {
+        baselineSha: "OLD",
         mtime: 1,
         size: 1,
       });
@@ -549,13 +535,12 @@ describe("ChangeDetector", () => {
       writeFile(f.root, "drafts/a.md", "content");
       const sha = await shaOf("content");
       const stat = fs.statSync(path.join(f.root, "drafts/a.md"));
-      f.store.set("drafts/a.md", {
-        path: "drafts/a.md",
-        remoteSha: sha,
+      await f.store.set("drafts/a.md", {
+        baselineSha: sha,
         mtime: stat.mtimeMs,
         size: stat.size,
       });
-      f.store.setLastCommitMtime(stat.mtimeMs);
+      await f.hot.update({ lastCommitMtime: stat.mtimeMs });
 
       // Rename a.md → b.md. The new path's mtime is fresh (bumped on
       // rename in most filesystems, but we set it explicitly to be
@@ -577,9 +562,8 @@ describe("ChangeDetector", () => {
       writeFile(f.root, "drafts/note.md", "content");
       const sha = await shaOf("content");
       const stat = fs.statSync(path.join(f.root, "drafts/note.md"));
-      f.store.set("drafts/note.md", {
-        path: "drafts/note.md",
-        remoteSha: sha,
+      await f.store.set("drafts/note.md", {
+        baselineSha: sha,
         mtime: stat.mtimeMs,
         size: stat.size,
       });
@@ -587,13 +571,12 @@ describe("ChangeDetector", () => {
       // baseline and we can isolate the rename effect.
       const giStat = fs.statSync(path.join(f.root, ".gitignore"));
       const giSha = await shaOf("archive/\n");
-      f.store.set(".gitignore", {
-        path: ".gitignore",
-        remoteSha: giSha,
+      await f.store.set(".gitignore", {
+        baselineSha: giSha,
         mtime: giStat.mtimeMs,
         size: giStat.size,
       });
-      f.store.setLastCommitMtime(Math.max(stat.mtimeMs, giStat.mtimeMs));
+      await f.hot.update({ lastCommitMtime: Math.max(stat.mtimeMs, giStat.mtimeMs) });
 
       fs.mkdirSync(path.join(f.root, "archive"), { recursive: true });
       fs.renameSync(
@@ -616,13 +599,12 @@ describe("ChangeDetector", () => {
       // Snapshot only .gitignore (archive/* never tracked).
       const giStat = fs.statSync(path.join(f.root, ".gitignore"));
       const giSha = await shaOf("archive/\n");
-      f.store.set(".gitignore", {
-        path: ".gitignore",
-        remoteSha: giSha,
+      await f.store.set(".gitignore", {
+        baselineSha: giSha,
         mtime: giStat.mtimeMs,
         size: giStat.size,
       });
-      f.store.setLastCommitMtime(giStat.mtimeMs);
+      await f.hot.update({ lastCommitMtime: giStat.mtimeMs });
 
       fs.mkdirSync(path.join(f.root, "drafts"), { recursive: true });
       fs.renameSync(
@@ -647,13 +629,12 @@ describe("ChangeDetector", () => {
       writeFile(f.root, "archive/note.md", "content");
       const giStat = fs.statSync(path.join(f.root, ".gitignore"));
       const giSha = await shaOf("trash/\narchive/\n");
-      f.store.set(".gitignore", {
-        path: ".gitignore",
-        remoteSha: giSha,
+      await f.store.set(".gitignore", {
+        baselineSha: giSha,
         mtime: giStat.mtimeMs,
         size: giStat.size,
       });
-      f.store.setLastCommitMtime(giStat.mtimeMs);
+      await f.hot.update({ lastCommitMtime: giStat.mtimeMs });
 
       fs.mkdirSync(path.join(f.root, "trash"), { recursive: true });
       fs.renameSync(
@@ -686,7 +667,8 @@ describe("ChangeDetector", () => {
     ): ChangeDetector =>
       new ChangeDetector({
         vault: f.vault as unknown as import("obsidian").Vault,
-        store: f.store,
+        hotMeta: f.hot,
+        baselines: f.store,
         gi: f.gi,
         configDir: CONFIG_DIR,
         selfPluginId: SELF_PLUGIN_ID,
@@ -697,29 +679,29 @@ describe("ChangeDetector", () => {
 
     // Stage a modified candidate: file ahead of watermark, snapshot at a
     // DIFFERENT (stale) sha so it reaches the queue-dedup check.
-    const stageModified = (content: string): void => {
+    const stageModified = async (content: string): Promise<void> => {
       writeFile(f.root, "a.md", content);
       setMtime(f.root, "a.md", AHEAD);
-      f.store.set("a.md", { path: "a.md", remoteSha: "STALE_REMOTE_SHA", mtime: 1, size: 1 });
-      f.store.setLastCommitMtime(WATERMARK);
+      await f.store.set("a.md", { baselineSha: "STALE_REMOTE_SHA", mtime: 1, size: 1 });
+      await f.hot.update({ lastCommitMtime: WATERMARK });
     };
 
     it("modified: current bytes == last commit → NOT re-emitted", async () => {
-      stageModified("current");
+      await stageModified("current");
       const det = detectorWithQueue(async () => await shaOf("current"));
       const out = await det.findChanges();
       expect(out.find((c) => c.path === "a.md")).toBeUndefined();
     });
 
     it("modified: current bytes != last commit → emitted", async () => {
-      stageModified("current");
+      await stageModified("current");
       const det = detectorWithQueue(async () => "A_DIFFERENT_SHA");
       const out = await det.findChanges();
       expect(out.find((c) => c.path === "a.md")?.kind).toBe("modified");
     });
 
     it("revert: current == an OLD version but the last commit is a newer, different version → emitted (preserve-all-commits)", async () => {
-      stageModified("v1"); // disk reverted to v1
+      await stageModified("v1"); // disk reverted to v1
       // The queue's LATEST commit of a.md is v3, not v1.
       const det = detectorWithQueue(async () => await shaOf("v3"));
       const out = await det.findChanges();
@@ -729,7 +711,7 @@ describe("ChangeDetector", () => {
     it("added (no snapshot): current bytes == last commit → NOT re-emitted", async () => {
       writeFile(f.root, "a.md", "current");
       setMtime(f.root, "a.md", AHEAD);
-      f.store.setLastCommitMtime(WATERMARK);
+      await f.hot.update({ lastCommitMtime: WATERMARK });
       const det = detectorWithQueue(async () => await shaOf("current"));
       const out = await det.findChanges();
       expect(out.find((c) => c.path === "a.md")).toBeUndefined();
@@ -738,14 +720,14 @@ describe("ChangeDetector", () => {
     it("added (no snapshot): current bytes != last commit → emitted as added", async () => {
       writeFile(f.root, "a.md", "current");
       setMtime(f.root, "a.md", AHEAD);
-      f.store.setLastCommitMtime(WATERMARK);
+      await f.hot.update({ lastCommitMtime: WATERMARK });
       const det = detectorWithQueue(async () => "A_DIFFERENT_SHA");
       const out = await det.findChanges();
       expect(out.find((c) => c.path === "a.md")?.kind).toBe("added");
     });
 
     it("no queue wired → falls back to snapshot-only (emits the change)", async () => {
-      stageModified("current");
+      await stageModified("current");
       // f.detector has NO queue → no dedup, the change flows through.
       const out = await f.detector.findChanges();
       expect(out.find((c) => c.path === "a.md")?.kind).toBe("modified");
@@ -757,8 +739,8 @@ describe("ChangeDetector", () => {
       // real change and must be emitted even though it matches the remote.
       writeFile(f.root, "a.md", "v1");
       setMtime(f.root, "a.md", AHEAD);
-      f.store.set("a.md", { path: "a.md", remoteSha: await shaOf("v1"), mtime: 1, size: 1 });
-      f.store.setLastCommitMtime(WATERMARK);
+      await f.store.set("a.md", { baselineSha: await shaOf("v1"), mtime: 1, size: 1 });
+      await f.hot.update({ lastCommitMtime: WATERMARK });
       const det = detectorWithQueue(async () => await shaOf("v2")); // last commit = v2
       const out = await det.findChanges();
       expect(out.find((c) => c.path === "a.md")?.kind).toBe("modified");
@@ -767,8 +749,8 @@ describe("ChangeDetector", () => {
     it("matches the last push AND nothing newer is queued → NOT emitted", async () => {
       writeFile(f.root, "a.md", "v1");
       setMtime(f.root, "a.md", AHEAD);
-      f.store.set("a.md", { path: "a.md", remoteSha: await shaOf("v1"), mtime: 1, size: 1 });
-      f.store.setLastCommitMtime(WATERMARK);
+      await f.store.set("a.md", { baselineSha: await shaOf("v1"), mtime: 1, size: 1 });
+      await f.hot.update({ lastCommitMtime: WATERMARK });
       const det = detectorWithQueue(async () => null); // nothing queued for a.md
       const out = await det.findChanges();
       expect(out.find((c) => c.path === "a.md")).toBeUndefined();
@@ -786,7 +768,8 @@ describe("ChangeDetector", () => {
     ): ChangeDetector =>
       new ChangeDetector({
         vault: f.vault as unknown as import("obsidian").Vault,
-        store: f.store,
+        hotMeta: f.hot,
+        baselines: f.store,
         gi: f.gi,
         configDir: CONFIG_DIR,
         selfPluginId: SELF_PLUGIN_ID,
@@ -795,15 +778,15 @@ describe("ChangeDetector", () => {
         conflictBaseSha: resolver,
       });
 
-    const stage = (content: string, remoteSha: string): void => {
+    const stage = async (content: string, remoteSha: string): Promise<void> => {
       writeFile(f.root, "a.md", content);
       setMtime(f.root, "a.md", AHEAD_TS);
-      f.store.set("a.md", { path: "a.md", remoteSha, mtime: 1, size: 1 });
-      f.store.setLastCommitMtime(WM);
+      await f.store.set("a.md", { baselineSha: remoteSha, mtime: 1, size: 1 });
+      await f.hot.update({ lastCommitMtime: WM });
     };
 
     it("UNCHANGED base (disk == branch value) → NOT emitted, even though disk ≠ main", async () => {
-      stage("V1", "MAIN-SHA");
+      await stage("V1", "MAIN-SHA");
       const v1 = await shaOf("V1"); // branch value == disk sha
       const det = detectorWithConflictBase(() => v1);
       const out = await det.findChanges();
@@ -811,7 +794,7 @@ describe("ChangeDetector", () => {
     });
 
     it("EDITED base (disk ≠ branch value) → emitted", async () => {
-      stage("V2", "MAIN-SHA");
+      await stage("V2", "MAIN-SHA");
       const det = detectorWithConflictBase(() => "OLD-BRANCH-SHA"); // ≠ disk
       const out = await det.findChanges();
       expect(out.find((c) => c.path === "a.md")?.kind).toBe("modified");
@@ -821,7 +804,7 @@ describe("ChangeDetector", () => {
       // The essence of §26: matching main does not make a conflict base
       // "unchanged" — only its branch value does.
       const v1 = await shaOf("V1");
-      stage("V1", v1); // snapshot.remoteSha == disk (matches main)
+      await stage("V1", v1); // snapshot.remoteSha == disk (matches main)
       const det = detectorWithConflictBase(() => "DIFFERENT-BRANCH-SHA");
       const out = await det.findChanges();
       expect(out.find((c) => c.path === "a.md")?.kind).toBe("modified");
@@ -829,7 +812,7 @@ describe("ChangeDetector", () => {
 
     it("resolver returns undefined (not a conflict base) → normal §40 behavior (unchanged vs main → skip)", async () => {
       const v1 = await shaOf("V1");
-      stage("V1", v1); // disk == main
+      await stage("V1", v1); // disk == main
       const det = detectorWithConflictBase(() => undefined);
       const out = await det.findChanges();
       expect(out.find((c) => c.path === "a.md")).toBeUndefined();

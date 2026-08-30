@@ -228,7 +228,7 @@ describe.skipIf(!integrationEnabled())(
         await sync2AllAndAssertNoErrors(client);
 
         // Snapshot for notes/draft.md is gone; remote copy still there.
-        expect(client.store.get("notes/draft.md")).toBeUndefined();
+        expect(await client.baselines.get("notes/draft.md")).toBeUndefined();
         expect(await listRemoteFiles(branch)).toContain("notes/draft.md");
       },
       90_000,

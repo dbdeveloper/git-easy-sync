@@ -24,13 +24,32 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 
-// K3 — manifest's lastSync points to a commit that doesn't exist on
-// remote (e.g. force-pushed history that GC'd the commit). The
+// K3 — the hot pair's lastSync points to a commit that doesn't exist
+// on remote (e.g. force-pushed history that GC'd the commit). The
 // compare() call returns 404; pullIfNeeded warns and returns
 // currentHead so the next push reconciles against the live branch
 // head. No crash, no data loss.
 
-const MANIFEST_REL = ".obsidian/git-easy-sync-metadata.json";
+const RUNTIME_REL = ".obsidian/plugins/git-easy-sync/.runtime";
+
+// Read the CURRENT (max valid seq) hot slot: [absPath, parsedJson].
+function readMaxHotSlot(vaultPath: string): [string, Record<string, unknown>] {
+  let best: [string, Record<string, unknown>] | null = null;
+  for (const slot of ["a", "b"]) {
+    const abs = path.join(vaultPath, RUNTIME_REL, `metadata-${slot}.json`);
+    if (!fs.existsSync(abs)) continue;
+    try {
+      const raw = JSON.parse(fs.readFileSync(abs, "utf8"));
+      if (typeof raw.seq !== "number") continue;
+      if (best === null || raw.seq > (best[1].seq as number)) best = [abs, raw];
+    } catch {
+      continue;
+    }
+  }
+  if (best === null) throw new Error("no valid hot slot on disk");
+  return best;
+}
+
 
 describe.skipIf(!integrationEnabled())(
   "sync2 K3 — stale lastSyncCommitSha (unreachable on remote)",
@@ -74,14 +93,14 @@ describe.skipIf(!integrationEnabled())(
         await sync2AllAndAssertNoErrors(first);
         const afterFirst = await countBranchCommits(branch);
 
-        // Rewrite the manifest with a SHA that has the right shape
-        // but doesn't exist in the repo. compare(bogus, head) → 404.
-        const manifestAbs = path.join(vaultPath, MANIFEST_REL);
-        const raw = JSON.parse(fs.readFileSync(manifestAbs, "utf8"));
+        // Rewrite the CURRENT hot slot with a SHA that has the right
+        // shape but doesn't exist in the repo. compare(bogus, head)
+        // → 404.
+        const [slotAbs, raw] = readMaxHotSlot(vaultPath);
         const bogus = "deadbeef".repeat(5); // 40 hex chars, plausible
         raw.lastSyncCommitSha = bogus;
         raw.lastSyncTreeSha = bogus;
-        fs.writeFileSync(manifestAbs, JSON.stringify(raw));
+        fs.writeFileSync(slotAbs, JSON.stringify(raw));
 
         // Re-instantiate. pullIfNeeded should warn & return current
         // head instead of crashing.

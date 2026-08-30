@@ -228,7 +228,7 @@ import {
         const headAfterFirst = await getBranchHead(branch, env);
 
         // Simulated re-enable: fresh manager + store over the same
-        // on-disk vault. SnapshotStore.load() picks up the persisted
+        // on-disk vault. The metadata stores pick up the persisted
         // metadata (lastSyncCommitSha, lastSyncTreeSha, invariantState,
         // per-file snapshots), so the next syncAll should:
         //   - bootstrapIfNeeded → lastSyncCommitSha !== null → bail.

@@ -24,11 +24,11 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 
-// K2 — manifest file deleted. SnapshotStore.load() checks exists()
-// up-front; missing file falls through to fresh metadata. Recovery
-// is the same shape as K1.
+// K2 — all metadata files DELETED (hot pair + the whole baseline
+// bucket dir). Both stores read missing files as fresh/empty; the
+// recovery shape is the same as K1: re-align without a re-push.
 
-const MANIFEST_REL = ".obsidian/git-easy-sync-metadata.json";
+const RUNTIME_REL = ".obsidian/plugins/git-easy-sync/.runtime";
 
 describe.skipIf(!integrationEnabled())(
   "sync2 K2 — manifest file deleted",
@@ -74,12 +74,18 @@ describe.skipIf(!integrationEnabled())(
         await sync2AllAndAssertNoErrors(first);
         const afterFirst = await countBranchCommits(branch);
 
-        // Delete the manifest entirely.
-        const manifestAbs = path.join(vaultPath, MANIFEST_REL);
-        expect(fs.existsSync(manifestAbs)).toBe(true);
-        fs.rmSync(manifestAbs);
+        // Delete every metadata file.
+        const bucketsDir = path.join(vaultPath, RUNTIME_REL, "file-baselines");
+        expect(fs.existsSync(bucketsDir)).toBe(true);
+        fs.rmSync(bucketsDir, { recursive: true, force: true });
+        for (const slot of ["a", "b"]) {
+          fs.rmSync(
+            path.join(vaultPath, RUNTIME_REL, `metadata-${slot}.json`),
+            { force: true },
+          );
+        }
 
-        // Re-instantiate. load() sees no file → fresh metadata.
+        // Re-instantiate. Both stores see nothing → fresh state.
         client = await createSync2Client({
           branch,
           vaultPath,
