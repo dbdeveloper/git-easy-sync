@@ -3321,7 +3321,15 @@ def drain():
                 if error == NETWORK_ERROR:
                     return error
             liveSha = live?.sha ?? DELETED_SHA_HASH
-            trackedSha = tracked.remote.sha ?? DELETED_SHA_HASH
+            trackedSha = tracked.remote.sha ?? tracked.base.sha ?? DELETED_SHA_HASH
+                       # ⚠️ ВИПРАВЛЕНО 2026-08-30 (Фаза 4, знайдено тестом P.28): раніше тут стояло
+                       # `tracked.remote.sha ?? DELETED_SHA_HASH` — але СВІЖО-ЗАСІЯНИЙ запис (seeding
+                       # цього ж циклу ставить remote-половину порожньою) читався б як «віримо, що
+                       # видалено», і КОЖЕН незмінний файл батчу на щасливому шляху породжував би
+                       # хибну «корекцію» — що прямо суперечить P.28 («0 виправлень = зелений
+                       # регресійний вартовий»). null-as-base — та сама конвенція, якою _diff3
+                       # правило 5 уже читає порожню remote-половину: «не змінювався з base»,
+                       # а не «видалений».
             if liveSha != trackedSha:
                 # Шар 1 помилився для цього шляху — ВИПРАВЛЯЄМО пам'ять, і більше нічого. Файл далі
                 # йде ЗВИЧАЙНИМ шляхом (замикання, _diff3, можливо STEP1) — так само, якби Шар 1

@@ -112,7 +112,10 @@ export async function _diff3(
   deps: Diff3Deps,
   tracked: { base: FileInfo; remote: FileInfo } | null,
   localIn: FileInfo | null,
-  headHash: string,
+  // null = empty repo (no branch yet). Legitimate for every sha-only
+  // rule; reaching the rule-7 lazy size fetch with it is a caller bug
+  // and throws LOUDLY (an empty repo cannot hold remote content).
+  headHash: string | null,
 ): Promise<Diff3Result> {
   // Shallow copies — the DELETED-sentinel substitution and lazy
   // size/blob fills below must never mutate the caller's records.
@@ -255,6 +258,15 @@ export async function _diff3(
   // remote.size == null. LAZY fetch — pay the network only for an
   // actual divergence, never per changed remote file.
   if (remote.size === null) {
+    if (headHash === null) {
+      // Unreachable-but-loud (advisor 2026-08-30): an empty repo has
+      // no remote content, so no side can need a live size fetch —
+      // a null ref here means the caller fed inconsistent sides, and
+      // a garbage URL would fail silently where this fails loudly.
+      throw new CompareWrongFilesError(
+        `_diff3: rule-7 size fetch for ${path} with no head ref — caller bug`,
+      );
+    }
     const live = await deps.getContentsMetadataAtRef(path, headHash);
     if (live === null) {
       // Vanished from remote between discovery and now.
