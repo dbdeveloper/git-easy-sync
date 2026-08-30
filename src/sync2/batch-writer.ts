@@ -117,7 +117,10 @@ export default class BatchWriter {
     const meta: BatchMetafile = {
       v: 1,
       id,
-      createdAt: Date.now(),
+      // Same injected clock as the id — createdAt feeds the commit
+      // message timestamp in Phase 4, so it must be deterministic in
+      // tests too.
+      createdAt: this.now().getTime(),
       entries,
     };
     // §12.4: the complete manifest FIRST…

@@ -276,7 +276,7 @@ describe("BatchWriter (Phase 2 group B)", () => {
     expect(claimed!.meta.entries[0].sha).toBe(sha);
   });
 
-  it("crash + vault file changed before recovery → entry dropped (next detection re-emits), batch still claimable", async () => {
+  it("crash: an entry whose blob already LANDED needs no repair — it survives a later vault edit; the unlanded one repairs from the unchanged vault", async () => {
     putVaultFile("volatile.md", "v1\n");
     putVaultFile("stable.md", "s\n");
     const origSave = syncStore.saveBlobToSyncStore.bind(syncStore);
