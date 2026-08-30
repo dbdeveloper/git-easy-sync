@@ -95,11 +95,12 @@ conflict-редакторах, і сьогодні reset їх НЕ чіпає �
 + gitignore-invariants); legacy-шлях за «білим листом» не читається і не прибирається
 (залишковий файл на старому vault синкнеться раз як звичайний файл — санкціоновано).
 
-**O2. ✅ Порядок операцій** — канонічна послідовність у O6 (мітка покриває все до
-`data.json` включно): `стоп scheduler → cancel drain + дочекатись idle (O3) → мітка →
-знос-крім-мітки → ре-ініт памʼяті сторів (hotMeta.load / baselines.clear /
+**O2. ✅ Порядок операцій** — канонічна послідовність у O6: `стоп scheduler →
+cancel drain + дочекатись idle (O3) → мітка .reset-in-progress (top-level, O6) →
+rmdir .runtime/ → ре-ініт памʼяті сторів (hotMeta.load / baselines.clear /
 invariantState.load / conflictStore.load / pendingDeletions.load / counter flush) →
-token-latch clear + UI → settings = DEFAULTS → мітка+тека геть → рестарт scheduler`.
+token-latch clear + UI → settings = DEFAULTS → мітка геть ОСТАННЬОЮ → рестарт
+scheduler`.
 
 **O3. ✅ Рішення власника: НЕ чекати і НЕ блокувати — СКАСОВУВАТИ.** *«Користувач вже
 і так підтвердив зупинку»*: reset викликає `cancelDrain()` і чекає фактичного `idle`
@@ -121,23 +122,27 @@ yet; pending conflicts; unsaved edits in open conflict editors; and the plugin's
 Conflict-copy files in the vault stay in place; if you re-enable the plugin later, it
 will pick them up as conflicts again. This cannot be undone.»
 
-**O6. ✅ Файл-мітка `reset-in-progress` (доповнення власника, 2026-08-30; уточнено
-того ж дня).** Reset ПОЧИНАЄТЬСЯ записом мітки і вона зникає ОСТАННЬОЮ — **після
-очистки `data.json`**, тобто мітка покриває ВЕСЬ reset, включно з settings-половиною.
+**O6. ✅ Файл-мітка `.reset-in-progress` — TOP-LEVEL у теці плагіна, з DOT-префіксом
+(ФІНАЛЬНЕ рішення власника, 2026-08-30, третя ітерація: «саме так, з DOT на початку!
+І це — найправильніше рішення»).**
 
-**Розміщення — всередині `.runtime/`, НЕ top-level у теці плагіна.** Власник
-пропонував і варіант «за межами .runtime, просто в теці плагіна» — відхилено через
-вистражданий факт: top-level runtime-файл у теці плагіна викликав BRAT reload-loop
-(`autosave-store.ts:46`, причина переїзду ВСЬОГО runtime-стану під `.runtime/`
-2026-07-03). Мета власника (покриття до data.json включно) досягається ПОРЯДКОМ
-видалення, не шляхом розміщення.
+Шлях: `<configDir>/plugins/<id>/.reset-in-progress`. Чому це безпечно попри
+BRAT-історію 2026-07-03 (top-level runtime-файл у теці плагіна викликав
+reload-loop — `autosave-store.ts:46`): (а) **DOT-префікс** ховає файл від індексу й
+вотчера Obsidian; (б) **sync його не бачить** — канонічний гітігнор власної теки
+плагіна є allowlist-ом (`*` + `!main.js !manifest.json !styles.css !.gitignore`,
+`gitignore-invariants.ts:79-84`), перевірено 2026-08-30.
 
-**Порядок:** (1) запис мітки → (2) знос усього під `.runtime/` КРІМ мітки
-(рекурсивний rmdir видаляє вміст у невизначеному порядку — тому мітка видаляється
-не ним, а окремо і останньою) → (3) ре-ініт памʼяті сторів → (4) token-latch →
-(5) settings = DEFAULTS → (6) видалити мітку + саму теку → (7) рестарт scheduler.
+Виграш проти внутрішньо-runtime мітки: мітка живе НЕЗАЛЕЖНО від `.runtime/`, тож
+знос спрощується до одного `rmdir(.runtime, true)` — жодної двофазності, і мітка
+природно покриває ВЕСЬ reset до `data.json` включно.
 
-**Onload-доганяння (ДО завантаження сторів):** жива мітка = перерваний reset,
-який користувач УЖЕ ПІДТВЕРДИВ → автоматично повторюється весь хвіст: знос +
-settings = DEFAULTS + token-latch clear. Недочищений reset без мітки неможливий
-за побудовою.
+**Порядок:** (1) запис `.reset-in-progress` → (2) `rmdir .runtime/ recursive` →
+(3) ре-ініт памʼяті сторів → (4) token-latch clear → (5) settings = DEFAULTS →
+(6) видалити мітку ОСТАННЬОЮ → (7) рестарт scheduler.
+
+**Onload-доганяння (ДО завантаження сторів і ДО ініціалізації token-latch):** жива
+мітка = перерваний reset, який користувач УЖЕ ПІДТВЕРДИВ → повторити хвіст: знос
+`.runtime/` + settings = DEFAULTS + видалити мітку. Latch окремо чистити не треба —
+він конструюється пізніше і сідає з уже видаленого дискового маркера. Недочищений
+reset без мітки неможливий за побудовою.
