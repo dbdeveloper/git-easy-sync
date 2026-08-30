@@ -195,6 +195,29 @@ export class StaleStateError extends SyncError {}
 // vault ever hits this.
 export class TreeTruncatedError extends SyncError {}
 
+// ── _diff3 domain errors (NEW-DRAIN §III, Phase 4) ────────────────
+// Per-path skip-class errors: the drain loop catches them for ONE
+// path and continues the batch; they never abort the whole drain the
+// way NetworkError/AuthError do. Names mirror the spec's error codes.
+
+// The three sides handed to _diff3 carry different paths — a caller
+// bug, not a data condition (spec: COMPARE_WRONG_FILES).
+export class CompareWrongFilesError extends SyncError {}
+
+// local.blob absent AND not recoverable from sync_store — the batch
+// references content that no longer exists anywhere locally
+// (spec: LOCAL_FILE_IS_NOT_FOUND_ERROR).
+export class LocalFileNotFoundError extends SyncError {}
+
+// remote blob absent from sync_store AND from GitHub (spec:
+// REMOTE_FILE_IS_NOT_EXIST_IN_REPO_ERROR). Also raised when the path
+// vanished from remote between discovery and the rule-7 size fetch.
+export class RemoteFileNotInRepoError extends SyncError {}
+
+// base blob absent from sync_store AND from GitHub (spec:
+// BASE_FILE_IS_NOT_EXIST_IN_REPO_ERROR).
+export class BaseFileNotInRepoError extends SyncError {}
+
 // ── client construction helper ────────────────────────────────────
 
 // Translates a GitHub HTTP response into the correct typed error.
