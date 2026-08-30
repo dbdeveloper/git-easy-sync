@@ -1636,7 +1636,14 @@ drain-у (`normalization/`, `settings-lifecycle/`, `gitignore/`) → має ли
 формат UUID запису, 1 імпортує `PushQueue`).
 
 **Статуси сьогодні:** юніт + diff2 — прогін `pnpm test` 2026-08-30, всі GREEN
-(123 файли, 1911 passed). Інтеграційні — прогін `pnpm test:integration` 2026-08-30.
+(123 файли, 1911 passed). Інтеграційні — повний прогін `pnpm test:integration`
+2026-08-30: **82 файли / 137 тестів, усі passed, exit 0** (~26 хв; вбудований
+`retry: 1` — жодних стабільних RED, флейків теж не було).
+
+⚠️ **Головна знахідка прогону 0.2:** «усі GREEN» НЕ означає «дефектів нема». G9 —
+діагностика без assert (зелений за побудовою), і його дамп ПІДТВЕРДИВ живий clobber
+(див. рядок G9 нижче). Гейт Фази 0 «G9 підтверджено RED» виконується лише після
+озброєння тесту готовим критерієм з його ж коментаря.
 
 #### 8.1.1 Юніт `tests/sync2/` (26)
 
@@ -1673,32 +1680,32 @@ drain-у (`normalization/`, `settings-lifecycle/`, `gitignore/`) → має ли
 
 | Файл(и) | Клас | Інваріант / поведінка | Сьогодні | Причина / примітка | Ціль | re-green |
 |---|---|---|---|---|---|---|
-| accumulate/L1-sequential-clicks | **K** | accumulate=ON → окремий коміт на кожен sync | ⏳ | користувацьке налаштування | — | Фаза 4 |
-| accumulate/L4-attempted-locks-merge | **M** | збій push → батч заблоковано, наступний sync НЕ зливається в нього (I7) | ⏳ | R3-лок + `mergeIntoLatestPending` → маркери R3b (§II.8) і плоска черга (§2.1) | Фаза 2 | — |
-| adoption/B1-B7 (7) | **K** | перший запуск «vault з даними + repo з даними» (випадок 3, §Фаза 1.5): mtime-вибір боку, text/binary, resume-canonicalize | ⏳ | поведінковий рівень; ⚠️ B3-B6 (mtime-вибір) перетинаються з відкритим §6.4 — якщо політика зміниться, оновити свідомо, не тихо | — | Фаза 4 |
-| api-failures/J1-J4, socket-error-retry (5) | **K** | I3/I6: invalid token / 429 / wrong repo / network drop → стан персистовано, наступний sync відновлює | ⏳ | поведінковий рівень; fault-інжекція на рівні fetch | — | Фаза 4 |
-| bootstrap/sync2-bare-repo{,-configdir-on,-off} (3) | **K** | випадки 1/2 першого запуску (§Фаза 1.5): bare repo → все локальне пушиться + інваріантні gitignore | ⏳ | окремого bootstrap-механізму в новому дизайні НЕМА (§6.6), але поведінка — інваріант | — | Фаза 4 |
-| bootstrap/A6-connection-probe-bare | **K** | probe на порожньому repo: названа/порожня гілка → OK | ⏳ | settings-рівень | — | Фаза 4 |
-| conflicts-misc/E1-reconcile-onload | **K** | правка без живого клієнта → підхоплюється наступним sync | ⏳ | не конфліктний по суті (reconcile), тому Фаза 4, не 5 | — | Фаза 4 |
-| conflicts-misc/E2-E5 (4) | **K** | binary modify-vs-modify без тихого перезапису; §28 semver/mtime/styles-атомарність | ⏳ | сценарний рівень | — | Фаза 5 |
-| conflicts/* (6) | **K** | життєвий цикл конфлікту: branch-lifecycle (create→resolve→merge+deleteRef), case 6, defer→resolve, edit-while-in-conflict, multi-copy, blocks-push (I2) | ⏳ | сценарії — інваріанти UX; прямий виклик `evaluateConflictState` — гарнесна деталь, у Фазі 5 замінюється на `process_conflicts()` | — | Фаза 5 |
-| corruption/zero-byte-restore | **K** | нуль-байтовий guard: відновлення з GitHub, легітимний empty, intentional empty | ⏳ | регресія 2.0.2-beta2 | — | Фаза 4 |
-| drift/H1-H4 (4) | **K** | out-of-band modify/rename, конкурентні syncAll (I4), 503-retry на PATCH | ⏳ | поведінковий рівень | — | Фаза 4 |
-| edges/F-* (2) | **K** | >1 MB round-trip; спецсимволи/санітайз push+pull; stale-deletion preflight (без 422) | ⏳ | запозичені факти про зовнішній світ (§4 п.8) | — | Фаза 4 |
-| empty-progression | **K** | повний лайфцикл add→edit→delete локально і з веба | ⏳ | | — | Фаза 4 |
-| gitignore/gitignore-rename-suite (11 кейсів) | **K** | ignore/rename матриця: локальні/remote зміни ігнорованих, became-ignored/syncable, цикл | ⏳ | не залежить від drain | — | не червоніє |
-| incremental/D1-D5, D7, D8 (7) | **K** | інкрементальний up/down, двобічні видалення, D7 resurrect (modify-wins) | ⏳ | I1/I2 базис | — | Фаза 4 |
-| incremental/D6 (delete-vs-modify конфлікт) | **K** | реєстрація + обидва шляхи розв'язання | ⏳ | конфліктний | — | Фаза 5 |
-| manifest-corruption/K1-K5 (5) | **M** | самозцілення метаданих: garbage/unlink/stale-lastSync/unknown-fields/empty-map → БЕЗ повторного пушу ідентичного | ⏳ | сам маніфест замінюється (METAFILE §2.1/§2.2, recovery = remote-not-rescan); інваріант «зіпсовані метадані ≠ втрата і ≠ re-push» мусить перейти | Фаза 1 | — |
-| multi-device/G1, G2 (2) | **K** | I1/I2 базис: ротація трьох пристроїв, disjoint-правки одного файлу | ⏳ | | — | Фаза 4 |
-| multi-device/G3, G4 (2) | **K** | same-line і binary конфлікт між пристроями (I2) | ⏳ | | — | Фаза 5 |
-| multi-device/**G9**-concurrent-push-mid-drain | **K** | **I2 — головний контракт-тест проєкту** | ⏳ (очікується RED) | RED→GREEN, не «лишається зеленим» | — | Фаза 5 |
-| normalization/{binary-byte-exact, idempotent-double-sync, multi-device-convergence, pull-of-bom, pull-of-crlf, push-of-local-crlf} (6) | **K** | EOL/BOM канонізація, no-thrash, byte-exact binary | ⏳ | не залежить від drain | — | не червоніє |
-| normalization/resume-bootstrap-pull | **M** | kill посеред bootstrap-pull → resume без повторного викачування | ⏳ | старий bootstrap-loop зникає (§6.6); інваріант «resume без re-download» → `sync_store` (§II.9) | Фаза 4 | — |
-| normalization/resume-push-blob | **M** | kill на N-му createBlob → resume з меншою кількістю createBlob | ⏳ | інваріант виживає через `uploadedBlobs` (§II.15) | Фаза 4 | — |
-| normalization/resume-push-with-remote-race | **M** | crash mid-push + remote-зміна в черзі → 3-way merge, без втрат (I1/I2) | ⏳ | `processBatch`-гарнес → NEW-DRAIN §III | Фаза 4 | — |
-| settings-lifecycle/I1-reset-metadata | **M** | reset → наступний sync вирівнюється БЕЗ re-push ідентичного | ⏳ | reset перевизначається RESET-PLUGIN (Фаза 1.6) поверх METAFILE | Фаза 1.6 | — |
-| settings-lifecycle/I2-I6, connection-probe-existing (6) | **K** | syncConfigDir ON/OFF обидва боки, device-label, зміна гілки, probe на непорожньому repo | ⏳ | не залежить від drain | — | не червоніє |
+| accumulate/L1-sequential-clicks | **K** | accumulate=ON → окремий коміт на кожен sync | GREEN | користувацьке налаштування | — | Фаза 4 |
+| accumulate/L4-attempted-locks-merge | **M** | збій push → батч заблоковано, наступний sync НЕ зливається в нього (I7) | GREEN | R3-лок + `mergeIntoLatestPending` → маркери R3b (§II.8) і плоска черга (§2.1) | Фаза 2 | — |
+| adoption/B1-B7 (7) | **K** | перший запуск «vault з даними + repo з даними» (випадок 3, §Фаза 1.5): mtime-вибір боку, text/binary, resume-canonicalize | GREEN | поведінковий рівень; ⚠️ B3-B6 (mtime-вибір) перетинаються з відкритим §6.4 — якщо політика зміниться, оновити свідомо, не тихо | — | Фаза 4 |
+| api-failures/J1-J4, socket-error-retry (5) | **K** | I3/I6: invalid token / 429 / wrong repo / network drop → стан персистовано, наступний sync відновлює | GREEN | поведінковий рівень; fault-інжекція на рівні fetch | — | Фаза 4 |
+| bootstrap/sync2-bare-repo{,-configdir-on,-off} (3) | **K** | випадки 1/2 першого запуску (§Фаза 1.5): bare repo → все локальне пушиться + інваріантні gitignore | GREEN | окремого bootstrap-механізму в новому дизайні НЕМА (§6.6), але поведінка — інваріант | — | Фаза 4 |
+| bootstrap/A6-connection-probe-bare | **K** | probe на порожньому repo: названа/порожня гілка → OK | GREEN | settings-рівень | — | Фаза 4 |
+| conflicts-misc/E1-reconcile-onload | **K** | правка без живого клієнта → підхоплюється наступним sync | GREEN | не конфліктний по суті (reconcile), тому Фаза 4, не 5 | — | Фаза 4 |
+| conflicts-misc/E2-E5 (4) | **K** | binary modify-vs-modify без тихого перезапису; §28 semver/mtime/styles-атомарність | GREEN | сценарний рівень | — | Фаза 5 |
+| conflicts/* (6) | **K** | життєвий цикл конфлікту: branch-lifecycle (create→resolve→merge+deleteRef), case 6, defer→resolve, edit-while-in-conflict, multi-copy, blocks-push (I2) | GREEN | сценарії — інваріанти UX; прямий виклик `evaluateConflictState` — гарнесна деталь, у Фазі 5 замінюється на `process_conflicts()` | — | Фаза 5 |
+| corruption/zero-byte-restore | **K** | нуль-байтовий guard: відновлення з GitHub, легітимний empty, intentional empty | GREEN | регресія 2.0.2-beta2 | — | Фаза 4 |
+| drift/H1-H4 (4) | **K** | out-of-band modify/rename, конкурентні syncAll (I4), 503-retry на PATCH | GREEN | поведінковий рівень | — | Фаза 4 |
+| edges/F-* (2) | **K** | >1 MB round-trip; спецсимволи/санітайз push+pull; stale-deletion preflight (без 422) | GREEN | запозичені факти про зовнішній світ (§4 п.8) | — | Фаза 4 |
+| empty-progression | **K** | повний лайфцикл add→edit→delete локально і з веба | GREEN | | — | Фаза 4 |
+| gitignore/gitignore-rename-suite (11 кейсів) | **K** | ignore/rename матриця: локальні/remote зміни ігнорованих, became-ignored/syncable, цикл | GREEN | не залежить від drain | — | не червоніє |
+| incremental/D1-D5, D7, D8 (7) | **K** | інкрементальний up/down, двобічні видалення, D7 resurrect (modify-wins) | GREEN | I1/I2 базис | — | Фаза 4 |
+| incremental/D6 (delete-vs-modify конфлікт) | **K** | реєстрація + обидва шляхи розв'язання | GREEN | конфліктний | — | Фаза 5 |
+| manifest-corruption/K1-K5 (5) | **M** | самозцілення метаданих: garbage/unlink/stale-lastSync/unknown-fields/empty-map → БЕЗ повторного пушу ідентичного | GREEN | сам маніфест замінюється (METAFILE §2.1/§2.2, recovery = remote-not-rescan); інваріант «зіпсовані метадані ≠ втрата і ≠ re-push» мусить перейти | Фаза 1 | — |
+| multi-device/G1, G2 (2) | **K** | I1/I2 базис: ротація трьох пристроїв, disjoint-правки одного файлу | GREEN | | — | Фаза 4 |
+| multi-device/G3, G4 (2) | **K** | same-line і binary конфлікт між пристроями (I2) | GREEN | | — | Фаза 5 |
+| multi-device/**G9**-concurrent-push-mid-drain | **K** | **I2 — головний контракт-тест проєкту** | ⚠️ **GREEN-порожній**: тест діагностичний, `expect(true).toBe(true)` — RED бути НЕ МОЖЕ. Але **дефект ВІДТВОРЕНО 2026-08-30** дампом (`/tmp/g9-result.txt`): після 3× syncAll `theirs 7-10` затерто на `ours` всюди, конфліктів нуль | критерій уже написаний у коментарі самого тесту (рядки 141-144): note7-10 = конфлікт або merge, ніколи мовчки `ours`; note1-6 = `ours`, ніколи відкат. **Озброїти assert = крок Фази 0** — без цього гейт «G9 підтверджено RED» невиконуваний | — | Фаза 5 (RED→GREEN після озброєння) |
+| normalization/{binary-byte-exact, idempotent-double-sync, multi-device-convergence, pull-of-bom, pull-of-crlf, push-of-local-crlf} (6) | **K** | EOL/BOM канонізація, no-thrash, byte-exact binary | GREEN | не залежить від drain | — | не червоніє |
+| normalization/resume-bootstrap-pull | **M** | kill посеред bootstrap-pull → resume без повторного викачування | GREEN | старий bootstrap-loop зникає (§6.6); інваріант «resume без re-download» → `sync_store` (§II.9) | Фаза 4 | — |
+| normalization/resume-push-blob | **M** | kill на N-му createBlob → resume з меншою кількістю createBlob | GREEN | інваріант виживає через `uploadedBlobs` (§II.15) | Фаза 4 | — |
+| normalization/resume-push-with-remote-race | **M** | crash mid-push + remote-зміна в черзі → 3-way merge, без втрат (I1/I2) | GREEN | `processBatch`-гарнес → NEW-DRAIN §III | Фаза 4 | — |
+| settings-lifecycle/I1-reset-metadata | **M** | reset → наступний sync вирівнюється БЕЗ re-push ідентичного | GREEN | reset перевизначається RESET-PLUGIN (Фаза 1.6) поверх METAFILE | Фаза 1.6 | — |
+| settings-lifecycle/I2-I6, connection-probe-existing (6) | **K** | syncConfigDir ON/OFF обидва боки, device-label, зміна гілки, probe на непорожньому repo | GREEN | не залежить від drain | — | не червоніє |
 
 #### 8.1.3 Точкові `tests/diff2/` (6)
 
@@ -1721,6 +1728,7 @@ drain-у (`normalization/`, `settings-lifecycle/`, `gitignore/`) → має ли
 | T5.3 / T5.4 погана мережа | **N** | I3, I6 | не написано | Фаза 4 | |
 | T6.1-T6.4 конфлікти | **N** | I1, I2 | не написано | — (GREEN одразу) | регресії, мають лишитись GREEN |
 | T3.6 same-line self-conflict | — | I1, I2 | НЕ пишеться у Фазі 0 (§0.3) | Фаза 4 | пишеться проти НОВОГО двигуна (§VIII B); спростування П3/П4 вже зафіксоване §11 |
+| `maxAutoMergeSizeBytes` size-гейт | **N** | I6 + політика «великий файл → мердж пропущено, ours перемагає» | не написано (знахідка 0.3 2026-08-30: setting використовується engine-ом — `sync2-manager.ts:4176`, — тестів нуль) | Фаза 4 | юніт `_diff3`/його обгортки (рішення власника 2026-08-30). Пінити НАСЛІДОК, не лише skip: ours у батчі, файл НЕ губиться (I1), ліміт читається з settings наживо. Коментар `sync2-manager.ts:4158-4175` (diff3-кліф ~4 MB mobile, Capacitor decode-stall) — запозичений факт §4 п.8, переноситься разом із гейтом. ⚠️ Фаза 4 вирішує, чи гейт живе В `_diff3`, чи НАД ним (щоб не тягнути байти) — тест кладеться туди, де рішення |
 | T4.7 / T4.8 crash у cascade | **D** | — | — | — | механізм зникає: SYNC2-FIX §10.4-B; еквівалентне покриття → §VIII D |
 | T4.9 crash-resume base=parent | **D** | — | — | — | стара модель бази; нова матриця — NEW-DRAIN §IV.2 |
 
