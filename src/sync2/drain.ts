@@ -48,8 +48,17 @@
 // Vault-step, and intentionally LEFT on disk — the next drain resumes
 // from it. Epilogue lands with Phase 6.
 
-import { type Vault } from "obsidian";
+import { arrayBufferToBase64, type Vault } from "obsidian";
 import { NewTreeRequestItem } from "../github/client";
+import ConflictStoreV2, {
+  ConflictsState,
+} from "./conflict-store-v2";
+import SiblingTx from "./sibling-tx";
+import { processConflicts } from "./process-conflicts";
+import {
+  readSiblingFileFromVault,
+  saveConflictSiblingFile,
+} from "./conflict-siblings";
 import { NetworkError, AuthError, ValidationError } from "../errors";
 import NetworkRetry from "./retry-network";
 import SyncStore from "./sync-store";
@@ -109,6 +118,25 @@ export interface DrainClient {
     ref: string,
   ): Promise<{ sha: string; size: number } | null>;
   getBlobFromRepo(sha: string): Promise<ArrayBuffer | null>;
+  // ── conflict-branch surface (Phase 5) ───────────────────────────
+  // null = the branch doesn't exist yet (404).
+  getBranchHeadSha(branch: string): Promise<string | null>;
+  // The OLD push shape, deliberately (§II.15 scope boundary): a plain
+  // blob list — units of files, no accumulator, no inline. Throws
+  // ValidationError when `parent` is stale (the 3-attempt loop
+  // re-reads the head — §III "АБСОЛЮТНО НЕМОЖЛИВО, але…").
+  pushCommitToBranch(args: {
+    branch: string;
+    parent: string | null;
+    entries: Array<{ path: string; sha: string }>;
+    message: string;
+  }): Promise<{ sha: string }>;
+  // (device_label, committed_at) of the last commit touching the path
+  // (§III lazy sites; discovery.ts getCommitInfoForPath in prod).
+  getCommitInfoForPath(
+    path: string,
+    atSha: string,
+  ): Promise<{ deviceLabel: string; committedAtMs: number } | null>;
 }
 
 export interface VaultFileReader {
@@ -154,7 +182,14 @@ export interface DrainDeps {
     base: string | null,
     head: string,
   ): Promise<RemoteFileChange[]>;
-  hot: { getLastSyncCommitSha(): string | null };
+  hot: {
+    getLastSyncCommitSha(): string | null;
+    // J.2 fallback: the conflict-branch name survives BETWEEN drains
+    // without a journal via the hot pair.
+    getConflictBranch(): { name: string } | null;
+  };
+  conflictStore: ConflictStoreV2;
+  siblingTx: SiblingTx;
   tokenExpired(): Promise<boolean>;
   vaultFiles: VaultFileReader;
   mergeBlobs: Diff3Deps["mergeBlobs"];
@@ -186,7 +221,10 @@ export type DrainStatus =
   | "ok"
   | "token-expired"
   | "network-error"
-  | "too-many-concurrent-pushes";
+  | "too-many-concurrent-pushes"
+  // 3 straight 422s on the DEVICE-OWNED conflict branch — "абсолютно
+  // неможливо", so when it happens it is a real anomaly to surface.
+  | "conflict-push-failed";
 
 export interface DrainResult {
   status: DrainStatus;
@@ -214,8 +252,11 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     pushedCommits,
   });
 
-  // PHASE5: recoverSiblingTransactionIfNeeded() — the §II.11 mark
-  // transaction recovery runs here, ONCE per drain, before the loop.
+  // §II.11: STEP3 replace-transaction recovery — ONCE per run, first
+  // line, under the caller's running lock. A live mark can only
+  // belong to a PREVIOUS (dead) run: STEP3 executes once, after the
+  // batch loop, so no 422 restart inside THIS run can ever see one.
+  await deps.siblingTx.recoverIfNeeded();
   // PHASE5.5 (cutover): rearangeSyncStore() — the §12.5 sweep runs
   // here and again after the loop.
 
@@ -234,12 +275,27 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   let error422Count = 0;
   let state: DrainState = emptyDrainState();
   let headHash: string | null = null;
+  let conflictHeadHash: string | null = null;
+  // Run-scoped ambient conflicts (§III): null = not loaded yet; an
+  // EMPTY state is a distinct legal value. Survives 422 restarts —
+  // fresh in-memory STEP1 records must not vanish on a restart scan.
+  let conflicts: ConflictsState | null = null;
 
   while (true) {
     if (restartBatch) {
-      // PHASE5: conflicts = process_conflicts() — the FS scan of
-      // sibling files merged with the durable store. In Phase 4 the
-      // only conflict source is the restored journal below.
+      // Step 0 (§III) — BEFORE any repo access: reconcile tracked
+      // conflicts with the CURRENT vault state. Every restart gets
+      // the freshest sibling reality as input — including conflicts
+      // the user resolved manually in the diff-editor between drains.
+      conflicts = await processConflicts(
+        {
+          vault: deps.vault,
+          store: deps.conflictStore,
+          computeSha: deps.computeSha,
+          logger: deps.logger,
+        },
+        conflicts,
+      );
 
       if (await deps.tokenExpired()) return result("token-expired");
 
@@ -252,9 +308,43 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // batch's in-memory mutations are discarded wholesale, which is
       // exactly the "batch is a transaction" rule.
       state = (await deps.journal.load()) ?? emptyDrainState();
-      // PHASE5: RECONCILE — is_manual_conflict paths missing from the
-      // fresh FS scan get the flag reset here (user resolved between
-      // drains).
+      // The authoritative conflicts are the SCAN result (durable ∪
+      // FS, reconciled above) — the journal's bundled copy is
+      // superseded; from here both views share ONE Map, so journal
+      // persists always carry the live conflicts.
+      state.conflicts = conflicts.entries;
+
+      // Seeding (J.3-J.5): every conflict path gets a tracked record
+      // with the flag up — an EMPTY siblings list is still a conflict.
+      // Placeholders are non-null alias-shaped objects ({path,
+      // sha:null,…}) so STEP2 never dereferences null (J.4). Existing
+      // journal progress for the path is NOT overwritten (J.5) — only
+      // the flag is asserted.
+      for (const path of conflicts.entries.keys()) {
+        const existing = state.trackedFiles.get(path);
+        if (existing === undefined) {
+          state.trackedFiles.set(path, {
+            base: { ...emptyFileInfo(), path },
+            remote: { ...emptyFileInfo(), path },
+            isManualConflict: true,
+          });
+        } else {
+          existing.isManualConflict = true;
+        }
+      }
+      // RECONCILE (J.6-J.7): a flagged path ABSENT from the
+      // authoritative scan means the user resolved it externally —
+      // reset the flag loudly. A record with siblings==[] is PRESENT
+      // in the scan (I.7), so an in-flight STEP1 never trips this.
+      for (const [path, t] of state.trackedFiles) {
+        if (t.isManualConflict && !conflicts.entries.has(path)) {
+          t.isManualConflict = false;
+          deps.logger?.warn(
+            "RECONCILE: conflict resolved outside the drain — flag reset",
+            { path },
+          );
+        }
+      }
 
       {
         const r = await deps.retry.run(() => deps.client.getGuardedHead());
@@ -275,10 +365,16 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // did not move, the answer is known without the network call.
 
       if (state.conflictBranchName === null) {
+        // J.2: the hot pair carries the name BETWEEN drains when the
+        // journal is gone (a completed run) — generation is the LAST
+        // resort, not the first.
+        state.conflictBranchName =
+          deps.hot.getConflictBranch()?.name ?? null;
+      }
+      if (state.conflictBranchName === null) {
         // Persist BEFORE any network call that would touch the branch
         // (§II.7) — the name must survive a crash even if this drain
-        // never pushes to it. PHASE5 uses it; recording it now keeps
-        // the §II.7 ordering true from day one.
+        // never pushes to it.
         state.conflictBranchName = buildConflictBranchName(
           deps.deviceLabel(),
           deps.now(),
@@ -286,8 +382,15 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         await deps.journal.persist(state);
       }
 
-      // PHASE5: conflict_head_hash live read — only conflict pushes
-      // consume it, none exist in Phase 4.
+      // conflict_head_hash — always read LIVE, never persisted
+      // (§II.7); null = the branch doesn't exist yet.
+      {
+        const r = await deps.retry.run(() =>
+          deps.client.getBranchHeadSha(state.conflictBranchName!),
+        );
+        if (r.error !== null) return statusFromError(r.error, result);
+        conflictHeadHash = r.result;
+      }
 
       // Pull-folding: remote changes unconditionally refresh the
       // remote half of tracking (§II.2 "всі pull просто ЗАМІЩАЮТЬ").
@@ -300,8 +403,21 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             tracked.remote.mtime = file.mtime;
             tracked.remote.mode = file.deleted ? DELETED : "";
             tracked.remote.blob = null;
-            // PHASE5: lazy getCommitInfoForPath refresh for
-            // is_manual_conflict paths (device_label + mtime).
+            if (tracked.isManualConflict && headHash !== null) {
+              // LAZY device_label+mtime refresh — ONLY for paths
+              // already in conflict (§III pull-folding): each new
+              // pull during a live conflict may come from a different
+              // device, and this remote becomes the next sibling.
+              const info = await deps.retry.run(() =>
+                deps.client.getCommitInfoForPath(file.path, headHash!),
+              );
+              if (info.error !== null) {
+                return statusFromError(info.error, result);
+              }
+              tracked.remote.deviceLabel =
+                info.result?.deviceLabel ?? null;
+              tracked.remote.mtime = info.result?.committedAtMs ?? null;
+            }
           }
         } else {
           const baseline = await deps.baselines.get(file.path);
@@ -350,9 +466,54 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       deps.vault,
       claimed.dir,
     );
-    // PHASE5: conflict_commit — the plain blob-list for the conflict
-    // branch. Nothing collects into it in Phase 4.
+    // conflict_commit — the plain blob-list for the conflict branch
+    // (§II.15 scope boundary: NO inline, NO accumulator here).
+    const conflictCommitEntries: Array<{ path: string; sha: string }> = [];
     const mainPushTracked: TrackedFile[] = [];
+
+    // §II.7: the journal (conflicts) answers without the network on
+    // the happy path; the live per-file check is the crash-safe
+    // fallback (replaces the old bulk-diff). Returns null on an
+    // abort-worthy network failure — the caller returns the result.
+    const shouldPushToConflictBranch = async (
+      path: string,
+      sha: string,
+    ): Promise<{ should: boolean; abort: DrainResult | null }> => {
+      const rec = conflicts!.entries.get(path);
+      if (rec !== undefined && rec.conflictBase.sha === sha) {
+        return { should: false, abort: null }; // journal confirms — no network
+      }
+      if (conflictHeadHash === null) {
+        return { should: true, abort: null }; // branch doesn't exist yet
+      }
+      const r = await deps.retry.run(() =>
+        deps.client.getContentsMetadataAtRef(path, conflictHeadHash!),
+      );
+      if (r.error !== null) {
+        return { should: false, abort: statusFromError(r.error, result) };
+      }
+      const live = r.result;
+      return { should: live === null || live.sha !== sha, abort: null };
+    };
+
+    // Upload one local blob for the conflict branch (saveBlobToGitHub
+    // of §III) and collect it into conflict_commit.
+    const pushLocalToConflictCommit = async (
+      local: FileInfo,
+    ): Promise<DrainResult | null> => {
+      const r = await deps.retry.run(() =>
+        deps.client.createBlob({
+          content: arrayBufferToBase64(local.blob!),
+          encoding: "base64",
+          retry: true,
+        }),
+      );
+      if (r.error !== null) return statusFromError(r.error, result);
+      conflictCommitEntries.push({ path: local.path!, sha: r.result!.sha });
+      // Informational only — never a sibling timestamp (§VII.5).
+      local.mtime = deps.now();
+      return null;
+    };
 
     const total = claimed.meta.entries.length;
     let processed = 0;
@@ -387,9 +548,32 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       }
 
       if (tracked.isManualConflict) {
-        // PHASE5 (STEP2): shouldPushToConflictBranch + conflict-branch
-        // blob push + conflictBase refresh. Phase 4 records the
-        // verdict and keeps the spec's base advance.
+        // STEP2 (§II.6): while in conflict, every local edit goes to
+        // the CONFLICT branch, never to main. The RECONCILE guarantee
+        // makes the record's existence an assert, not a guard.
+        const current = conflicts!.entries.get(entry.path);
+        if (current === undefined) {
+          throw new Error(
+            `STEP2: no conflict record for ${entry.path} — RECONCILE guarantee broken`,
+          );
+        }
+        if (current.conflictBase.sha !== local.sha) {
+          const decision = await shouldPushToConflictBranch(
+            entry.path,
+            local.sha!,
+          );
+          if (decision.abort !== null) return decision.abort;
+          if (decision.should) {
+            const abort = await pushLocalToConflictCommit(local);
+            if (abort !== null) return abort;
+          }
+          // conflictBase-half replacement ONLY — the siblings list is
+          // the Vault half, carried through unchanged (STEP3 owns it).
+          conflicts!.entries.set(entry.path, {
+            conflictBase: { ...local, blob: null },
+            siblings: current.siblings,
+          });
+        }
         conflictVerdicts.push({ path: entry.path, site: "step2-existing" });
         tracked.base = tracked.remote;
         continue;
@@ -461,19 +645,43 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         continue;
       }
       if (verdict.kind === "manual-conflict") {
-        // STEP1 — a NEW manual conflict. PHASE5: conflict-branch push
-        // (shouldPushToConflictBranch + saveBlobToGitHub) + lazy
-        // getCommitInfoForPath(device_label, mtime). Phase 4 keeps the
-        // STATE half exactly per spec: without the flag the next batch
-        // of this path would run rule 4.4 and clobber remote (the
-        // I2/G9 class); Vault-step below needs it too.
-        conflictVerdicts.push({ path: entry.path, site: "step1" });
-        state.conflicts.set(entry.path, {
-          conflictBase: local,
+        // STEP1 (§II.6) — a NEW manual conflict. The same idempotent
+        // push check as STEP2: a crash-restart ("push succeeded, disk
+        // didn't") must not duplicate the branch commit.
+        const decision = await shouldPushToConflictBranch(
+          entry.path,
+          local.sha!,
+        );
+        if (decision.abort !== null) return decision.abort;
+        if (decision.should) {
+          const abort = await pushLocalToConflictCommit(local);
+          if (abort !== null) return abort;
+        }
+        // local IS the conflictBase; siblings start EMPTY — the first
+        // sibling appears only in STEP3 (Vault-step).
+        conflicts!.entries.set(entry.path, {
+          conflictBase: { ...local, blob: null },
           siblings: [],
         });
+        // Without the flag the next batch of this path would run rule
+        // 4.4 and clobber remote (the I2/G9 class).
         tracked.isManualConflict = true;
         tracked.base = tracked.remote;
+        // LAZY device_label+mtime — exactly HERE, at the conflict's
+        // birth (never eagerly per remote file): tracked.remote is
+        // what becomes the first sibling in STEP3, and its name needs
+        // both fields (§VII.4/§VII.5).
+        if (headHash !== null) {
+          const info = await deps.retry.run(() =>
+            deps.client.getCommitInfoForPath(entry.path, headHash!),
+          );
+          if (info.error !== null) {
+            return statusFromError(info.error, result);
+          }
+          tracked.remote.deviceLabel = info.result?.deviceLabel ?? null;
+          tracked.remote.mtime = info.result?.committedAtMs ?? null;
+        }
+        conflictVerdicts.push({ path: entry.path, site: "step1" });
         continue;
       }
 
@@ -590,8 +798,35 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       error422Count = 0;
     }
 
-    // PHASE5: conflict_commit push into the conflict branch (plain
-    // blob list, its own 3-attempt loop) — nothing to push in Phase 4.
+    // Conflict-branch push (plain blob list, §II.15 boundary). A 422
+    // here is "absolutely impossible" (the branch is device-owned) —
+    // 3 re-read-head attempts, then surface the anomaly loudly.
+    if (conflictCommitEntries.length > 0) {
+      let pushed = false;
+      for (let cnt = 0; cnt < 3 && !pushed; cnt++) {
+        const h = await deps.retry.run(() =>
+          deps.client.getBranchHeadSha(state.conflictBranchName!),
+        );
+        if (h.error !== null) return statusFromError(h.error, result);
+        conflictHeadHash = h.result;
+        const p = await deps.retry.run(() =>
+          deps.client.pushCommitToBranch({
+            branch: state.conflictBranchName!,
+            parent: conflictHeadHash,
+            entries: conflictCommitEntries,
+            message: deps.commitMessage(),
+          }),
+        );
+        if (p.error !== null) {
+          if (p.error instanceof ValidationError) continue; // re-read + retry
+          return statusFromError(p.error, result);
+        }
+        conflictHeadHash = p.result!.sha;
+        error422Count = 0; // any success (either branch) resets the CAP
+        pushed = true;
+      }
+      if (!pushed) return result("conflict-push-failed");
+    }
     // FINALIZE deliberately NOT here (per-batch merge would move the
     // main head under the next push) — it lives after the loop.
 
@@ -603,11 +838,197 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // PHASE5: FINALIZE (merge conflict branch → main, tree-of-main,
   // ancestor-check idempotency, 422 = defer).
 
-  // ── Vault-step (non-conflict half; §II.3/II.4/II.5 endings) ──────
+  // Ensure the remote half's bytes are on hand (sync_store first,
+  // network second; save-back on fetch). null result = confirmed
+  // NOT_FOUND; a network failure aborts via the returned DrainResult.
+  const ensureRemoteBlob = async (
+    tracked: TrackedFile,
+  ): Promise<{ abort: DrainResult | null; found: boolean }> => {
+    if (tracked.remote.blob !== null) return { abort: null, found: true };
+    tracked.remote.blob = await deps.syncStore.getBlobFromSyncStore(
+      tracked.remote.sha!,
+      verifiedShas,
+    );
+    if (tracked.remote.blob !== null) return { abort: null, found: true };
+    const r = await deps.retry.run(() =>
+      deps.client.getBlobFromRepo(tracked.remote.sha!),
+    );
+    if (r.error !== null) {
+      return { abort: statusFromError(r.error, result), found: false };
+    }
+    tracked.remote.blob = r.result;
+    if (tracked.remote.blob === null) return { abort: null, found: false };
+    if (!(await deps.syncStore.existInSyncStore(tracked.remote.sha!))) {
+      await deps.syncStore.saveBlobToSyncStore(
+        tracked.remote.sha!,
+        tracked.remote.blob,
+      );
+    }
+    return { abort: null, found: true };
+  };
+
+  // ── Vault-step (§II.3/II.4/II.5 endings + STEP3) ─────────────────
   for (const [path, tracked] of state.trackedFiles) {
     if (tracked.isManualConflict) {
-      // PHASE5 (STEP3): sibling create/replace via the §II.11 mark
-      // transaction. Phase 4 records that the path awaits STEP3.
+      // STEP3 (§II.6): the ONLY place that decides what the sibling
+      // file becomes — conflict content never rides batches/push.
+      const current = conflicts!.entries.get(path);
+      if (current === undefined) {
+        throw new Error(
+          `STEP3: no conflict record for ${path} — RECONCILE guarantee broken`,
+        );
+      }
+      tracked.base = current.conflictBase; // §III: base ← conflict-branch half
+      const previousSibling =
+        current.siblings.length > 0
+          ? current.siblings[current.siblings.length - 1]
+          : null;
+
+      if (previousSibling === null) {
+        // Case 1: no sibling yet. Idle lingering conflict (no fresh
+        // pull, no fresh birth) → nothing to reflect this run (C.11).
+        if (tracked.remote.sha === null) continue;
+        const blob = await ensureRemoteBlob(tracked);
+        if (blob.abort !== null) return blob.abort;
+        if (!blob.found) {
+          // Confirmed NOT_FOUND with ZERO siblings → this was the only
+          // tracked record for the path: cancel the mode explicitly
+          // (direct removal, not the scan) so the next restore can't
+          // resurrect it; the next commit+drain re-detects the file
+          // and likely births a fresh, healthy conflict (C.8).
+          conflicts!.entries.delete(path);
+          tracked.isManualConflict = false;
+          await deps.conflictStore.save(conflicts!);
+          vaultStepErrors.push({
+            path,
+            error:
+              "conflict content vanished from the repo — conflict mode cancelled",
+          });
+          continue;
+        }
+        await saveConflictSiblingFile(deps.vault, {
+          path,
+          mtime: tracked.remote.mtime ?? 0, // remote commit date (§VII.5)
+          deviceLabel: tracked.remote.deviceLabel,
+          blob: tracked.remote.blob,
+        });
+        conflicts!.entries.set(path, {
+          conflictBase: current.conflictBase,
+          siblings: [{ ...tracked.remote, blob: null }],
+        });
+        conflictVerdicts.push({ path, site: "vault-step" });
+        continue;
+      }
+
+      // Case 2: a sibling exists — try to FOLD the fresh remote into
+      // it. The previous sibling's bytes exist ONLY in the vault.
+      if (tracked.remote.sha === null) continue; // idle lingering (C.11)
+      const prevBlob = await readSiblingFileFromVault(deps.vault, {
+        path,
+        mtime: previousSibling.mtime ?? 0,
+        deviceLabel: previousSibling.deviceLabel,
+      });
+      if (prevBlob === null) {
+        // Same class as LOCAL_FILE_NOT_FOUND downstream — the scan at
+        // the next drain start reconciles the missing file.
+        vaultStepErrors.push({
+          path,
+          error: "previous sibling file missing from the vault",
+        });
+        continue;
+      }
+      const prevWithBlob: FileInfo = { ...previousSibling, blob: prevBlob };
+      let foldVerdict;
+      try {
+        foldVerdict = await _diff3(
+          diff3Deps,
+          { base: current.conflictBase, remote: tracked.remote },
+          prevWithBlob,
+          headHash,
+        );
+      } catch (e) {
+        if (e instanceof NetworkError || e instanceof AuthError) {
+          return statusFromError(e, result); // abort — journal stays (§II.6 п.8)
+        }
+        // NOT_FOUND class with siblings ≠ [] → skip only, NO mode
+        // cancellation — the other tracked siblings still stand (C.9).
+        vaultStepErrors.push({ path, error: String(e) });
+        continue;
+      }
+
+      if (foldVerdict.kind === "file") {
+        // diff3 OK → REPLACE the last sibling via the §II.11 mark
+        // transaction (the only branch that destroys evidence).
+        const merged = foldVerdict.file;
+        if (merged.sha === previousSibling.sha) {
+          // No-op fold (the fresh pull equals the sibling — §II.6
+          // "якщо тільки послідовно вони не однакові"): nothing to
+          // replace. Running the transaction here would be worse than
+          // wasteful — old and new derive the SAME file name, so
+          // step 4 would delete the file step 2 just wrote.
+          conflictVerdicts.push({ path, site: "vault-step" });
+          continue;
+        }
+        if (merged.blob === null) {
+          // A sha-only side verdict (e.g. rule 3: sibling unchanged
+          // vs conflictBase → remote wins verbatim) — materialize the
+          // bytes before writing the file.
+          const b = await deps.syncStore.getBlobFromSyncStore(
+            merged.sha!,
+            verifiedShas,
+          );
+          merged.blob =
+            b ??
+            (await (async () => {
+              const r = await deps.retry.run(() =>
+                deps.client.getBlobFromRepo(merged.sha!),
+              );
+              if (r.error !== null) return null;
+              return r.result;
+            })());
+          if (merged.blob === null) {
+            vaultStepErrors.push({
+              path,
+              error: `fold result blob ${merged.sha} unavailable`,
+            });
+            continue;
+          }
+        }
+        // Owner rule (§II.6 п.5): the sibling's name carries the date
+        // and author of the LAST remote commit folded in — _diff3
+        // always returns mtime=null for a fresh merge.
+        merged.mtime = tracked.remote.mtime;
+        merged.deviceLabel = tracked.remote.deviceLabel;
+        await deps.siblingTx.runReplaceTransaction(
+          conflicts!,
+          path,
+          previousSibling,
+          merged,
+        );
+      } else {
+        // MANUAL_CONFLICT (or the plugin seam, impossible here in
+        // practice) → APPEND a new sibling; the old one stays tracked
+        // (§II.6 п.6) — nothing destroyed, no transaction needed.
+        const blob = await ensureRemoteBlob(tracked);
+        if (blob.abort !== null) return blob.abort;
+        if (!blob.found) {
+          vaultStepErrors.push({
+            path,
+            error: "remote content for the new sibling vanished (append skipped)",
+          });
+          continue;
+        }
+        await saveConflictSiblingFile(deps.vault, {
+          path,
+          mtime: tracked.remote.mtime ?? 0,
+          deviceLabel: tracked.remote.deviceLabel,
+          blob: tracked.remote.blob,
+        });
+        conflicts!.entries.set(path, {
+          conflictBase: current.conflictBase,
+          siblings: [...current.siblings, { ...tracked.remote, blob: null }],
+        });
+      }
       conflictVerdicts.push({ path, site: "vault-step" });
       continue;
     }
@@ -687,9 +1108,44 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     }
     if (verdict.kind === "manual-conflict") {
       // A conflict born ON the Vault-step (delete-vs-modify or
-      // edit-vs-modify discovered just now). PHASE5: blob +
-      // getCommitInfoForPath + conflicts.set + sibling file. Phase 4:
-      // verdict recorded, base NOT advanced — the next drain retries.
+      // edit-vs-modify discovered just now) — the THIRD birth site.
+      // Unlike STEP1 it never pushed to the conflict branch, so no
+      // conflictBase existed yet: it is initialized as tracked.remote
+      // (= R_m, the same content the first sibling holds) — the
+      // correct diff3 ancestor for the NEXT drain's STEP2/STEP3.
+      const blob = await ensureRemoteBlob(tracked);
+      if (blob.abort !== null) return blob.abort;
+      if (!blob.found) {
+        // NOT_FOUND before the record exists → simply don't create it
+        // (same effect as "no conflict this drain"); base NOT
+        // advanced, the next drain retries.
+        vaultStepErrors.push({
+          path,
+          error: `remote blob ${tracked.remote.sha} not in repo (conflict not registered)`,
+        });
+        continue;
+      }
+      if (tracked.remote.deviceLabel === null && headHash !== null) {
+        // The third (and last) lazy device_label site.
+        const info = await deps.retry.run(() =>
+          deps.client.getCommitInfoForPath(path, headHash!),
+        );
+        if (info.error !== null) return statusFromError(info.error, result);
+        tracked.remote.deviceLabel = info.result?.deviceLabel ?? null;
+        tracked.remote.mtime =
+          info.result?.committedAtMs ?? tracked.remote.mtime;
+      }
+      await saveConflictSiblingFile(deps.vault, {
+        path,
+        mtime: tracked.remote.mtime ?? 0,
+        deviceLabel: tracked.remote.deviceLabel,
+        blob: tracked.remote.blob,
+      });
+      conflicts!.entries.set(path, {
+        conflictBase: { ...tracked.remote, blob: null },
+        siblings: [{ ...tracked.remote, blob: null }],
+      });
+      tracked.isManualConflict = true;
       conflictVerdicts.push({ path, site: "vault-step" });
       continue;
     }
@@ -730,9 +1186,14 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     tracked.base = tracked.remote;
   }
 
-  // PHASE6: the epilogue (baselines write-back → durable conflicts →
-  // hot anchor → journal clear) is deliberately absent. Persist the
-  // post-Vault-step state so a resumed run sees the advanced bases.
+  // Epilogue STEP 2 pulled FORWARD into Phase 5 (steps 1/3/4/5 stay
+  // Phase 6): without a durable save, conflicts born this run would
+  // exist only in the journal — and the next run's authoritative scan
+  // would demote their sibling files to synthetic, breaking the
+  // FINALIZE gate.
+  await deps.conflictStore.save(conflicts!);
+  // Persist the post-Vault-step state so a resumed run sees the
+  // advanced bases; the journal clear itself is Phase 6.
   await deps.journal.persist(state);
 
   return result("ok");

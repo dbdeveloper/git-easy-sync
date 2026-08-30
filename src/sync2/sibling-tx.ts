@@ -201,8 +201,24 @@ export default class SiblingTx {
     });
     conflicts.lastSiblingTxGuid = guid;
     await this.store.save(conflicts);
-    // 4 — only NOW the old evidence goes away (404-tolerant).
-    await this.removeSiblingFileIfExists(oldNoBlob);
+    // 4 — only NOW the old evidence goes away (404-tolerant). Guard:
+    // when old and new derive the SAME name (same mtime+label —
+    // callers shouldn't get here for a no-op fold, but belt and
+    // braces), deleting "the old" would destroy the file step 2 just
+    // wrote.
+    const oldName = buildSiblingFilePath(
+      oldNoBlob.path ?? "",
+      oldNoBlob.mtime ?? 0,
+      oldNoBlob.deviceLabel,
+    );
+    const newName = buildSiblingFilePath(
+      newNoBlob.path ?? "",
+      newNoBlob.mtime ?? 0,
+      newNoBlob.deviceLabel,
+    );
+    if (oldName !== newName) {
+      await this.removeSiblingFileIfExists(oldNoBlob);
+    }
     // 5 — unmark (404-tolerant).
     await this.deleteMark();
   }

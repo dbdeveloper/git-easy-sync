@@ -10,6 +10,8 @@ import { DEFAULT_SETTINGS } from "../../src/settings/settings";
 import SyncStore from "../../src/sync2/sync-store";
 import DrainJournal from "../../src/sync2/drain-journal";
 import NetworkRetry from "../../src/sync2/retry-network";
+import ConflictStoreV2 from "../../src/sync2/conflict-store-v2";
+import SiblingTx from "../../src/sync2/sibling-tx";
 import FileBaselinesStore from "../../src/sync2/file-baselines";
 import {
   drainOnce,
@@ -97,6 +99,31 @@ function adaptClient(client: GithubClient): DrainClient {
         return null;
       }
     },
+    // Conflict-branch surface: these tests run zero-conflict flows,
+    // but the drain reads the conflict head unconditionally in the
+    // restart block — a real 404-tolerant ref read is required.
+    getBranchHeadSha: async (branch) => {
+      const env = requireEnv();
+      const resp = await fetch(
+        `https://api.github.com/repos/${env.owner}/${env.repo}/git/ref/heads/${encodeURIComponent(branch)}`,
+        {
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${env.token}`,
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+        },
+      );
+      if (resp.status === 404) return null;
+      const json = (await resp.json()) as { object?: { sha?: string } };
+      return json.object?.sha ?? null;
+    },
+    pushCommitToBranch: async () => {
+      throw new Error("no conflict pushes expected in this live test");
+    },
+    getCommitInfoForPath: async () => {
+      throw new Error("no conflict-birth sites expected in this live test");
+    },
   };
 }
 
@@ -156,6 +183,16 @@ describe.skipIf(!integrationEnabled())(
         const journal = new DrainJournal({
           vault: vault as never,
           selfPluginId: PLUGIN_ID,
+        });
+        const conflictStore = new ConflictStoreV2({
+          vault: vault as never,
+          selfPluginId: PLUGIN_ID,
+        });
+        const siblingTx = new SiblingTx({
+          vault: vault as never,
+          selfPluginId: PLUGIN_ID,
+          store: conflictStore,
+          computeSha: calculateGitBlobSHA,
         });
         const baselines = new FileBaselinesStore({
           vault: vault as never,
@@ -240,7 +277,12 @@ describe.skipIf(!integrationEnabled())(
               base,
               head,
             ),
-          hot: { getLastSyncCommitSha: () => seedCommit },
+          hot: {
+            getLastSyncCommitSha: () => seedCommit,
+            getConflictBranch: () => null,
+          },
+          conflictStore,
+          siblingTx,
           tokenExpired: async () => false,
           vaultFiles,
           mergeBlobs: mergeBlobsWithMainThreadDiff3,
@@ -358,6 +400,16 @@ describe.skipIf(!integrationEnabled())(
           vault: vault as never,
           selfPluginId: PLUGIN_ID,
         });
+        const conflictStore = new ConflictStoreV2({
+          vault: vault as never,
+          selfPluginId: PLUGIN_ID,
+        });
+        const siblingTx = new SiblingTx({
+          vault: vault as never,
+          selfPluginId: PLUGIN_ID,
+          store: conflictStore,
+          computeSha: calculateGitBlobSHA,
+        });
         const baselines = new FileBaselinesStore({
           vault: vault as never,
           selfPluginId: PLUGIN_ID,
@@ -425,7 +477,12 @@ describe.skipIf(!integrationEnabled())(
               base,
               head,
             ),
-          hot: { getLastSyncCommitSha: () => seedCommit },
+          hot: {
+            getLastSyncCommitSha: () => seedCommit,
+            getConflictBranch: () => null,
+          },
+          conflictStore,
+          siblingTx,
           tokenExpired: async () => false,
           vaultFiles,
           mergeBlobs: mergeBlobsWithMainThreadDiff3,

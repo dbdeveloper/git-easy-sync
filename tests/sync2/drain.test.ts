@@ -7,6 +7,8 @@ import SyncStore from "../../src/sync2/sync-store";
 import DrainJournal from "../../src/sync2/drain-journal";
 import NetworkRetry from "../../src/sync2/retry-network";
 import { drainOnce, DrainDeps, DrainClient } from "../../src/sync2/drain";
+import ConflictStoreV2 from "../../src/sync2/conflict-store-v2";
+import SiblingTx from "../../src/sync2/sibling-tx";
 import { mergeBlobsWithMainThreadDiff3 } from "../../src/sync2/diff3";
 import { ClaimedBatch } from "../../src/sync2/get-batch";
 import { BatchEntry } from "../../src/sync2/batch-metafile";
@@ -27,176 +29,14 @@ import { calculateGitBlobSHA } from "../../src/utils";
 
 const PLUGIN_ID = "git-easy-sync";
 
-const enc = (s: string): ArrayBuffer =>
-  new TextEncoder().encode(s).buffer as ArrayBuffer;
-const dec = (b: ArrayBuffer): string => new TextDecoder().decode(b);
-const sha = (s: string): Promise<string> => calculateGitBlobSHA(enc(s));
-
-type RepoFiles = Map<string, { sha: string; bytes: ArrayBuffer }>;
-
-class FakeWorld {
-  head: string | null = null;
-  private commitSeq = 0;
-  private treeSeq = 0;
-  readonly commitTrees = new Map<string, string>(); // commit → tree
-  readonly trees = new Map<string, RepoFiles>(); // tree → files
-  readonly blobs = new Map<string, ArrayBuffer>();
-  readonly commits: string[] = [];
-  committedAt = 1_700_000_000_000;
-
-  filesAt(ref: string): RepoFiles {
-    const tree = this.commitTrees.get(ref);
-    if (!tree) throw new Error(`fake world: unknown ref ${ref}`);
-    return this.trees.get(tree)!;
-  }
-
-  headFiles(): RepoFiles {
-    if (this.head === null) return new Map();
-    return this.filesAt(this.head);
-  }
-
-  async commitFiles(
-    changes: Record<string, string | null>,
-  ): Promise<string> {
-    const base: RepoFiles = this.head === null ? new Map() : this.headFiles();
-    const next: RepoFiles = new Map(base);
-    for (const [p, content] of Object.entries(changes)) {
-      if (content === null) {
-        next.delete(p);
-        continue;
-      }
-      const s = await sha(content);
-      next.set(p, { sha: s, bytes: enc(content) });
-      this.blobs.set(s, enc(content));
-    }
-    const treeSha = `tree-${++this.treeSeq}`;
-    this.trees.set(treeSha, next);
-    const commitSha = `commit-${++this.commitSeq}`;
-    this.commitTrees.set(commitSha, treeSha);
-    this.commits.push(commitSha);
-    this.head = commitSha;
-    return commitSha;
-  }
-
-  makeClient(): DrainClient {
-    const applyEntries = (
-      baseTree: string | undefined,
-      entries: Array<{
-        path: string;
-        sha?: string | null;
-        content?: string;
-      }>,
-    ): string => {
-      const base: RepoFiles = baseTree
-        ? new Map(this.trees.get(baseTree)!)
-        : new Map();
-      for (const e of entries) {
-        if (e.sha === null) {
-          base.delete(e.path);
-          continue;
-        }
-        if (typeof e.content === "string") {
-          const bytes = enc(e.content);
-          // GitHub assigns the sha server-side for inline entries.
-          base.set(e.path, { sha: `pending-${e.path}`, bytes });
-          continue;
-        }
-        const blob = this.blobs.get(e.sha!);
-        if (!blob) {
-          throw new ValidationError(
-            `tree references unknown blob ${e.sha} (GC-ed?)`,
-          );
-        }
-        base.set(e.path, { sha: e.sha!, bytes: blob });
-      }
-      const treeSha = `tree-${++this.treeSeq}`;
-      this.trees.set(treeSha, base);
-      return treeSha;
-    };
-
-    return {
-      getGuardedHead: async () => this.head,
-      getCommit: async ({ sha: commitSha }) => ({
-        tree: { sha: this.commitTrees.get(commitSha)! },
-      }),
-      createTree: async ({ tree }) =>
-        applyEntries(tree.base_tree, tree.tree as never),
-      createBlob: async ({ content }) => {
-        const bytes = Buffer.from(content, "base64");
-        const buf = bytes.buffer.slice(
-          bytes.byteOffset,
-          bytes.byteOffset + bytes.byteLength,
-        ) as ArrayBuffer;
-        const s = await calculateGitBlobSHA(buf);
-        this.blobs.set(s, buf);
-        return { sha: s };
-      },
-      pushCommitFromTree: async ({ treeSha, parent }) => {
-        if (parent !== this.head) {
-          throw new ValidationError(
-            `422: head moved (${this.head}), commit built on ${parent}`,
-          );
-        }
-        // Resolve pending inline shas now (the server computed them).
-        const files = this.trees.get(treeSha)!;
-        for (const [p, f] of files) {
-          if (f.sha.startsWith("pending-")) {
-            f.sha = await calculateGitBlobSHA(f.bytes);
-            this.blobs.set(f.sha, f.bytes);
-          }
-          void p;
-        }
-        const commitSha = `commit-${++this.commitSeq}`;
-        this.commitTrees.set(commitSha, treeSha);
-        this.commits.push(commitSha);
-        this.head = commitSha;
-        return { sha: commitSha, committedAt: (this.committedAt += 1000) };
-      },
-      getContentsMetadataAtRef: async (p, ref) => {
-        const f = this.filesAt(ref).get(p);
-        return f ? { sha: f.sha, size: f.bytes.byteLength } : null;
-      },
-      getBlobFromRepo: async (s) => this.blobs.get(s) ?? null,
-    };
-  }
-}
-
-class FakeVaultFiles {
-  readonly files = new Map<string, { content: string; mtime: number }>();
-  reads = 0;
-  writes: string[] = [];
-  removed: string[] = [];
-
-  async stat(p: string): Promise<{ size: number; mtime: number } | null> {
-    const f = this.files.get(p);
-    return f
-      ? { size: new TextEncoder().encode(f.content).byteLength, mtime: f.mtime }
-      : null;
-  }
-
-  async read(p: string) {
-    const f = this.files.get(p);
-    if (!f) return null;
-    this.reads += 1;
-    const bytes = enc(f.content);
-    return {
-      size: bytes.byteLength,
-      mtime: f.mtime,
-      sha: await calculateGitBlobSHA(bytes),
-      blob: bytes,
-    };
-  }
-
-  async write(p: string, bytes: ArrayBuffer): Promise<void> {
-    this.writes.push(p);
-    this.files.set(p, { content: dec(bytes), mtime: 999_999 });
-  }
-
-  async remove(p: string): Promise<void> {
-    this.removed.push(p);
-    this.files.delete(p);
-  }
-}
+import {
+  FakeWorld,
+  FakeVaultFiles,
+  RepoFiles,
+  enc,
+  dec,
+  sha,
+} from "./drain-harness";
 
 describe("drainOnce (§VIII B + P + L + E)", () => {
   let dir: string;
@@ -208,6 +48,8 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
   let baselines: Map<string, { baselineSha: string; mtime: number; size: number }>;
   let batches: Array<{ claimed: ClaimedBatch; removed: boolean }>;
   let removedDirs: string[];
+  let conflictStore: ConflictStoreV2;
+  let siblingTx: SiblingTx;
   let baseCommit: string | null;
   let discoveryOverride:
     | ((base: string | null, head: string) => Promise<RemoteFileChange[]>)
@@ -221,6 +63,17 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     world = new FakeWorld();
     syncStore = new SyncStore({ vault: vault as never, selfPluginId: PLUGIN_ID });
     journal = new DrainJournal({ vault: vault as never, selfPluginId: PLUGIN_ID });
+    conflictStore = new ConflictStoreV2({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+    });
+    siblingTx = new SiblingTx({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+      store: conflictStore,
+      computeSha: calculateGitBlobSHA,
+      generateGuid: () => `guid-${Math.random().toString(36).slice(2)}`,
+    });
     vaultFiles = new FakeVaultFiles();
     baselines = new Map();
     batches = [];
@@ -317,7 +170,12 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     baselines: { get: async (p) => baselines.get(p) },
     discoverChangedFiles: (base, head) =>
       (discoveryOverride ?? honestDiscovery)(base, head),
-    hot: { getLastSyncCommitSha: () => baseCommit },
+    hot: {
+      getLastSyncCommitSha: () => baseCommit,
+      getConflictBranch: () => null,
+    },
+    conflictStore,
+    siblingTx,
     tokenExpired: async () => false,
     vaultFiles,
     mergeBlobs: mergeBlobsWithMainThreadDiff3,
@@ -656,7 +514,23 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
           journal: j,
           vaultFiles: vf,
           baselines: { get: async (p) => bl.get(p) },
-          hot: { getLastSyncCommitSha: () => c0 },
+          hot: {
+            getLastSyncCommitSha: () => c0,
+            getConflictBranch: () => null,
+          },
+          conflictStore: new ConflictStoreV2({
+            vault: vault as never,
+            selfPluginId: `${PLUGIN_ID}-${victim}`,
+          }),
+          siblingTx: new SiblingTx({
+            vault: vault as never,
+            selfPluginId: `${PLUGIN_ID}-${victim}`,
+            store: new ConflictStoreV2({
+              vault: vault as never,
+              selfPluginId: `${PLUGIN_ID}-${victim}`,
+            }),
+            computeSha: calculateGitBlobSHA,
+          }),
           claimBatch: async () =>
             removed
               ? null
