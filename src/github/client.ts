@@ -2,7 +2,7 @@
 // Modified by Claude Code under the attentive guidance of Vladyslav Kozlovskyy <dbdevelop@gmail.com>, 2026.
 // AGPL-3.0 — see LICENSE.
 
-import { requestUrl } from "obsidian";
+import { base64ToArrayBuffer, requestUrl } from "obsidian";
 import Logger from "src/logger";
 import { GitHubSyncSettings } from "src/settings/settings";
 import {
@@ -71,6 +71,24 @@ export type BlobFile = {
 // unchanged; new catch sites use `err instanceof NotFoundError` etc.
 import { makeGithubAPIError } from "src/errors";
 import type WorkerClient from "src/worker/worker-client";
+
+// Case-insensitive response-header lookup. The two transports
+// disagree on key casing (Obsidian's requestUrl lowercases; the
+// network worker passes fetch's Headers entries through as-is), and
+// getContentsMetadataViaHead reads ETag/Content-Length from either.
+function headerValue(
+  headers: Record<string, string> | undefined,
+  name: string,
+): string | null {
+  if (!headers) return null;
+  const direct = headers[name] ?? headers[name.toLowerCase()];
+  if (typeof direct === "string") return direct;
+  const lower = name.toLowerCase();
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() === lower) return v;
+  }
+  return null;
+}
 
 export default class GithubClient {
   // Optional Worker orchestra controller. When provided, every
@@ -696,6 +714,188 @@ export default class GithubClient {
     const sha = response.json.sha as string;
     const size = (response.json.size as number) ?? 0;
     return { sha, size };
+  }
+
+  /**
+   * Full recursive tree at an ARBITRARY commit/tree sha — the data
+   * source of `fullTreeDiffAgainstColdBaseline` (NEW-DRAIN §II.12,
+   * Phase 3). Differs from `getRepoContent` (branch-pinned, ignores
+   * `truncated`) in exactly the two ways the new drain needs:
+   * takes a sha, and READS the `truncated` flag (SPIKE-TREES-LIMIT
+   * §4.2: the response caps at a documented 100k entries OR 7 MB —
+   * ~5.6 MB already at 20k entries — so the flag is load-bearing,
+   * not theoretical). Callers must treat `truncated: true` as a hard
+   * error; this method only reports it. Blob entries only; per-entry
+   * `size` comes in the same response for free.
+   */
+  async getRepoTree({
+    sha,
+    retry = false,
+    maxRetries = 5,
+  }: {
+    sha: string;
+    retry?: boolean;
+    maxRetries?: number;
+  }): Promise<{
+    files: Array<{ path: string; sha: string; size: number | null }>;
+    truncated: boolean;
+  }> {
+    const response = await retryUntil(
+      async () => {
+        return this.timed(
+          {
+            url: `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/git/trees/${sha}?recursive=1`,
+            headers: this.headers(),
+            throw: false,
+          },
+          `tree/${sha.slice(0, 7)}?recursive=1`,
+        );
+      },
+      (res) => !isRetriableStatus(res.status),
+      retry ? maxRetries : 0,
+    );
+    if (response.status < 200 || response.status >= 400) {
+      this.logger.error("Failed to get repo tree", response);
+      throw makeGithubAPIError(
+        response.status,
+        `Failed to get repo tree at ${sha}, status ${response.status}`,
+      );
+    }
+    const files = (response.json.tree as GetTreeResponseItem[])
+      .filter((f) => f.type === "blob")
+      .map((f) => ({
+        path: f.path,
+        sha: f.sha,
+        size: typeof f.size === "number" ? f.size : null,
+      }));
+    return { files, truncated: response.json.truncated === true };
+  }
+
+  /**
+   * Live per-path metadata via HEAD + raw media type — the Layer-2
+   * transport (NEW-DRAIN §II.13, Phase 3). Supersedes
+   * `getContentsMetadataAtRef` at the Phase 4 cutover; the old
+   * GET-based method stays untouched for the old engine until then.
+   *
+   * Why HEAD (measured on the live API, §II.13): `GET /contents`
+   * inlines base64 content for every file up to 1 MB, so the "cheap
+   * check" was downloading the whole batch and throwing it away —
+   * a 990 KB file cost a 1.3 MB body; HEAD costs 0 bytes and is ~3×
+   * faster on big files. The `ETag` of the raw media type IS the
+   * blob sha and `Content-Length` the raw size.
+   *
+   * ⚠️ ETag == blob-SHA is an OBSERVATION, not a GitHub contract
+   * (unlike the 300-cap, which is frozen for our pinned API
+   * version). Three-layer defence: (1) runtime shape check with GET
+   * fallback below; (2) the P.19 integration CANARY asserts literal
+   * EQUALITY against the documented `sha` field; (3) even a wrong
+   * sha fails LOUDLY downstream (sync_store miss → getBlob 404),
+   * never silently.
+   *
+   * The GET fallback receives inline content for files ≤1 MB — the
+   * bytes already travelled, so they go to `blobSink` (the caller's
+   * sync_store) instead of the bin; >1 MB files come with empty
+   * content and `blob` stays null. Returns null when the path does
+   * not exist at the ref (404 — a normal answer, not an error).
+   */
+  async getContentsMetadataViaHead({
+    path: filePath,
+    ref,
+    blobSink,
+    retry = false,
+    maxRetries = 5,
+  }: {
+    path: string;
+    ref: string;
+    blobSink?: {
+      has(sha: string): Promise<boolean>;
+      save(sha: string, bytes: ArrayBuffer): Promise<void>;
+    };
+    retry?: boolean;
+    maxRetries?: number;
+  }): Promise<{ sha: string; size: number; blob: ArrayBuffer | null } | null> {
+    const url = `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/contents/${encodePathForGithub(filePath)}?ref=${ref}`;
+    const headResponse = await retryUntil(
+      async () => {
+        return this.timed(
+          {
+            url,
+            method: "HEAD",
+            headers: {
+              ...this.headers(),
+              Accept: "application/vnd.github.raw+json",
+            },
+            throw: false,
+          },
+          `contents-head/${filePath}@${ref.slice(0, 7)}`,
+        );
+      },
+      (res) => !isRetriableStatus(res.status),
+      retry ? maxRetries : 0,
+    );
+    if (headResponse.status === 404) return null;
+    if (headResponse.status < 200 || headResponse.status >= 400) {
+      this.logger.error("Failed HEAD contents metadata", headResponse);
+      throw makeGithubAPIError(
+        headResponse.status,
+        `Failed HEAD contents metadata, status ${headResponse.status}`,
+      );
+    }
+
+    const rawEtag = headerValue(headResponse.headers, "etag") ?? "";
+    const etag = rawEtag.replace(/^W\//, "").replace(/^"|"$/g, "");
+    if (/^[0-9a-f]{40}$/.test(etag)) {
+      const len = headerValue(headResponse.headers, "content-length");
+      return {
+        sha: etag,
+        size: len === null ? 0 : parseInt(len, 10) || 0,
+        blob: null,
+      };
+    }
+
+    // Fallback — the ETag isn't shaped like a blob sha. Don't guess:
+    // take the DOCUMENTED `sha`/`size` fields from GET+json.
+    this.logger.warn(
+      "getContentsMetadataViaHead: ETag not a blob-SHA — falling back to GET",
+      { path: filePath, etag: rawEtag },
+    );
+    const getResponse = await retryUntil(
+      async () => {
+        return this.timed(
+          {
+            url,
+            headers: this.headers(),
+            throw: false,
+          },
+          `contents-meta-fallback/${filePath}@${ref.slice(0, 7)}`,
+        );
+      },
+      (res) => !isRetriableStatus(res.status),
+      retry ? maxRetries : 0,
+    );
+    if (getResponse.status === 404) return null;
+    if (getResponse.status < 200 || getResponse.status >= 400) {
+      this.logger.error("Failed GET contents metadata fallback", getResponse);
+      throw makeGithubAPIError(
+        getResponse.status,
+        `Failed GET contents metadata fallback, status ${getResponse.status}`,
+      );
+    }
+    const sha = getResponse.json.sha as string;
+    const size = (getResponse.json.size as number) ?? 0;
+    const content = (getResponse.json.content as string | null) ?? "";
+    let blob: ArrayBuffer | null = null;
+    if (content !== "") {
+      // The bytes already came down the wire — a sin to discard
+      // (§II.13): store them so the next getBlobFromSyncStore(sha)
+      // needs no network. Empty content = >1 MB file (documented
+      // Contents-API truncation) → blob simply not taken.
+      blob = base64ToArrayBuffer(content);
+      if (blobSink && !(await blobSink.has(sha))) {
+        await blobSink.save(sha, blob);
+      }
+    }
+    return { sha, size, blob };
   }
 
   /**

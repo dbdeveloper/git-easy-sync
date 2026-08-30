@@ -184,6 +184,17 @@ export class PlatformError extends SyncError {}
 // the log entries with class=StaleStateError are the signal.
 export class StaleStateError extends SyncError {}
 
+// NEW-DRAIN §II.12 / SPIKE-TREES-LIMIT §4.2: the recursive tree GET
+// came back with `truncated: true` — discovery past this point is
+// structurally impossible with this mechanism (the response is capped
+// at a documented 100k entries OR 7 MB, and 20k entries already
+// measure ~5.6 MB). A HARD error, never a silent partial return:
+// continuing with a cut list would be defect-A-class silent loss for
+// every path past the cut. The named (unbuilt) fallback is a
+// non-recursive per-directory walk — an owner decision when a real
+// vault ever hits this.
+export class TreeTruncatedError extends SyncError {}
+
 // ── client construction helper ────────────────────────────────────
 
 // Translates a GitHub HTTP response into the correct typed error.
