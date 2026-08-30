@@ -1630,29 +1630,106 @@ drain-у (`normalization/`, `settings-lifecycle/`, `gitignore/`) → має ли
 **Правило:** щойно K-тест позеленів у своїй фазі — далі він **не сміє червоніти**.
 Гейт кожної наступної фази включає всі K, чия фаза re-green ≤ поточної.
 
-Заповнюється при інвентаризації §0.1. Обсяг: ~92 релевантні файли (`tests/sync2/` 26 +
-`tests/integration/scenarios/sync2/**` ~66) + точково `tests/diff2/` по `conflict-store`.
+Інвентаризація §0.1 проведена **2026-08-30**. Фактичний обсяг — **104 файли**, не ~92:
+`tests/sync2/` **26** + `tests/integration/scenarios/sync2/**` **72** (оцінка «~66»
+занижувала) + `tests/diff2/` **6** (4 імпортують `conflict-store` напряму, 1 пінить
+формат UUID запису, 1 імпортує `PushQueue`).
 
-_(порожньо — ревізія не починалась)_
+**Статуси сьогодні:** юніт + diff2 — прогін `pnpm test` 2026-08-30, всі GREEN
+(123 файли, 1911 passed). Інтеграційні — прогін `pnpm test:integration` 2026-08-30.
 
-#### Наперед відомі рядки (з розбору документів, ще до інвентаризації)
+#### 8.1.1 Юніт `tests/sync2/` (26)
 
-| Тест | Клас | Інваріант | Статус сьогодні | re-green | Примітка |
+| Файл | Клас | Інваріант / поведінка | Сьогодні | Причина / примітка | Ціль | re-green |
+|---|---|---|---|---|---|---|
+| atomic-write-size-gate | **K** | perf-гейт modifyBinary ≤256 KB (мобільна вартість) | GREEN | `atomicWriteFile` — примітив, що виживає (на нього спираються NEW-DRAIN §IV.1 «Vault-step» і DOT-FILES) | — | не червоніє |
+| atomic-write | **M** | tmp/bak-протокол + `AtomicWriteRecovery.sweep` | GREEN | sweep звіряється зі `SnapshotStore` → METAFILE §2.1/§2.2; сам протокол — інваріант, переїздить механічно | Фаза 1 | — |
+| change-detector | **M** | deny-list (маніфест, data.json, `.git/`, `.runtime/`), gitignore, root-dotfiles, watermark | GREEN | ChangeDetector → Discovery (§II.12/§II.13); правила виключень — інваріант, мусить перейти в Шар 1 | Фаза 3 | — |
+| commit-message | **K** | формати Sync/Resolve/Init + `parseDeviceSuffix` round-trip | GREEN | чисті функції; формат — зовнішній контракт (`git log`) | — | не червоніє |
+| conflict-branch | **K** | shape/UTC/sanitize імені conflict-гілки | GREEN | гілка виживає: hot-метадата несе `conflictBranch`, §II.7 `shouldPushToConflictBranch` | — | не червоніє |
+| conflict-classifier | **M** | rows 1-9 класифікації + `evaluateConflictState` | GREEN | `ConflictRecord` v1 → conflicts v2 (§II.6; §7.8.1 — без адаптера) | Фаза 5 | — |
+| conflict-counter | **M** | дебаунс, підрахунок нерозв'язаних | GREEN | споживач №1 у таблиці §7.8.1 — поведінка виживає, API v2 | Фаза 5 | — |
+| conflict-detection | **M** | `classifyConflictKind` + auto-merge + §28 semver-бандл (атомарність групи) | GREEN | правила — інваріант; переписати проти `_diff3` (§II.1, plugin-гілка п.3.a — стаб у Фазі 4) | Фаза 4 | — |
+| conflict-store | **M** | `buildSiblingPath` формат, create/persist | GREEN | store v1 → v2 (§II.6); формат sibling-імені — інваріант (Фаза 2 `buildSiblingFilePath`) | Фаза 5 | — |
+| conflict-watcher | **M** | event-driven листенери, ідемпотентний start/stop | GREEN | поведінка виживає ([[project-conflict-resolution-is-event-driven]]); API v2 | Фаза 5 | — |
+| cross-platform | **K** | санітайзер 12 заборонених ASCII + Obsidian-символів | GREEN | факт про зовнішній світ — §4 п.8 ЗАПОЗИЧУЄМО | — | не червоніє |
+| encode-path | **K** | `encodePathForGithub`: UTF-8/percent-екодинг | GREEN | те саме | — | не червоніє |
+| github-client-large-file | **K** | >1 MB fallback на Blobs API; `getLatestCommitDateForPath` | GREEN | клієнт виживає; §7.8 — запозичений факт | — | не червоніє |
+| github-client-ref-update-retry | **K** | 422 fail-fast, 503 retry, cache-buster на head-GET | GREEN | клієнт виживає; NEW-DRAIN зберігає 422-політику (FINALIZE «відкладаємо, не крутимо») | — | не червоніє |
+| gitignore-invariants | **M** | `spliceInvariantBlock` + enforce + mtime-кеш | GREEN | кеш сидить у `SnapshotStore` → METAFILE; `invariantState` → окремий файл (DOT-FILES §3.1.2) | Фаза 1 | — |
+| interval-scheduler | **K** | cadence/watchdog/gating/startup | GREEN | не залежить від нутрощів drain; виклики fullSync/drain — стабільний шов | — | Фаза 4 |
+| pending-deletions-store | **M** | персист черги видалень, ідемпотентність, crash-tolerant load | GREEN | ⚠️ у нових доках механізм НЕ згадано — за правилом §0.1 це M, не D. Питання власнику в Фазі 4: видалення стають DELETED-сентинелом у метафайлі (§2.1) — чи лишається окремий store? | Фаза 4 | — |
+| plugin-js | **K** | §28 ролі файлів плагіна, semver-порівняння | GREEN | чисті функції, правила §28 виживають | — | не червоніє |
+| plugin-update-bootloader | **K** | маркерний recovery main.js/manifest/styles (кейси A-D) | GREEN | PLUGIN-UPDATE-COMPAT Phase 1; не залежить від drain | — | не червоніє |
+| push-inflight | **K** ⚠️ | маркер write/read/clear, corrupt→null | GREEN | §7.9 — «факт, ЗАПОЗИЧУЄМО» (§4 п.8), АЛЕ §IV.1 «Push у MAIN» закриває ту саму межу ідемпотентним рестартом БЕЗ маркера. **Відкрите питання Фази 4:** маркер лишається чи → D (§IV.1/§IV.2) | — | не червоніє (до рішення) |
+| push-queue | **M** | enqueue/list/FIFO/маркери/merge | GREEN | батч-каталог скасовано → плоска черга (цей план, §2.1); `vault/` і `deleted-paths.txt` зникають | Фаза 2 | — |
+| snapshot-store | **M** | round-trip, lastSync, remoteIdentity, conflictBranch; legacy-міграції | GREEN | METAFILE §2.1/§2.2; legacy-міграційні кейси при переписуванні стануть **D** (cutover §6.1: білий лист, міграційного коду нуль) | Фаза 1 | — |
+| sync2-manager | **M** | syncAll happy-path + no-op | GREEN | `processBatch`/4 випадки → NEW-DRAIN §III | Фаза 4 | — |
+| text-normalize | **K** | BOM/CRLF/trailing-NL нормалізація | GREEN | інваріант нормалізації | — | не червоніє |
+| three-way-merge | **K** | `mergeText`: clean/conflict + EOL-стилі (A.27-A.29) | GREEN | чиста функція; `_diff3` (Фаза 4) реюзає ці правила | — | не червоніє |
+| tree-builder | **M** | inline text / binary blob / deletion `sha:null` / progress hooks / `uploadedBlobs` | GREEN | TreeBuilder-над-батчем → tree-accumulator (§II.15); inline-гейт і `uploadedBlobs` — інваріанти | Фаза 4 | — |
+
+#### 8.1.2 Інтеграційні `tests/integration/scenarios/sync2/**` (72)
+
+| Файл(и) | Клас | Інваріант / поведінка | Сьогодні | Причина / примітка | Ціль | re-green |
+|---|---|---|---|---|---|---|
+| accumulate/L1-sequential-clicks | **K** | accumulate=ON → окремий коміт на кожен sync | ⏳ | користувацьке налаштування | — | Фаза 4 |
+| accumulate/L4-attempted-locks-merge | **M** | збій push → батч заблоковано, наступний sync НЕ зливається в нього (I7) | ⏳ | R3-лок + `mergeIntoLatestPending` → маркери R3b (§II.8) і плоска черга (§2.1) | Фаза 2 | — |
+| adoption/B1-B7 (7) | **K** | перший запуск «vault з даними + repo з даними» (випадок 3, §Фаза 1.5): mtime-вибір боку, text/binary, resume-canonicalize | ⏳ | поведінковий рівень; ⚠️ B3-B6 (mtime-вибір) перетинаються з відкритим §6.4 — якщо політика зміниться, оновити свідомо, не тихо | — | Фаза 4 |
+| api-failures/J1-J4, socket-error-retry (5) | **K** | I3/I6: invalid token / 429 / wrong repo / network drop → стан персистовано, наступний sync відновлює | ⏳ | поведінковий рівень; fault-інжекція на рівні fetch | — | Фаза 4 |
+| bootstrap/sync2-bare-repo{,-configdir-on,-off} (3) | **K** | випадки 1/2 першого запуску (§Фаза 1.5): bare repo → все локальне пушиться + інваріантні gitignore | ⏳ | окремого bootstrap-механізму в новому дизайні НЕМА (§6.6), але поведінка — інваріант | — | Фаза 4 |
+| bootstrap/A6-connection-probe-bare | **K** | probe на порожньому repo: названа/порожня гілка → OK | ⏳ | settings-рівень | — | Фаза 4 |
+| conflicts-misc/E1-reconcile-onload | **K** | правка без живого клієнта → підхоплюється наступним sync | ⏳ | не конфліктний по суті (reconcile), тому Фаза 4, не 5 | — | Фаза 4 |
+| conflicts-misc/E2-E5 (4) | **K** | binary modify-vs-modify без тихого перезапису; §28 semver/mtime/styles-атомарність | ⏳ | сценарний рівень | — | Фаза 5 |
+| conflicts/* (6) | **K** | життєвий цикл конфлікту: branch-lifecycle (create→resolve→merge+deleteRef), case 6, defer→resolve, edit-while-in-conflict, multi-copy, blocks-push (I2) | ⏳ | сценарії — інваріанти UX; прямий виклик `evaluateConflictState` — гарнесна деталь, у Фазі 5 замінюється на `process_conflicts()` | — | Фаза 5 |
+| corruption/zero-byte-restore | **K** | нуль-байтовий guard: відновлення з GitHub, легітимний empty, intentional empty | ⏳ | регресія 2.0.2-beta2 | — | Фаза 4 |
+| drift/H1-H4 (4) | **K** | out-of-band modify/rename, конкурентні syncAll (I4), 503-retry на PATCH | ⏳ | поведінковий рівень | — | Фаза 4 |
+| edges/F-* (2) | **K** | >1 MB round-trip; спецсимволи/санітайз push+pull; stale-deletion preflight (без 422) | ⏳ | запозичені факти про зовнішній світ (§4 п.8) | — | Фаза 4 |
+| empty-progression | **K** | повний лайфцикл add→edit→delete локально і з веба | ⏳ | | — | Фаза 4 |
+| gitignore/gitignore-rename-suite (11 кейсів) | **K** | ignore/rename матриця: локальні/remote зміни ігнорованих, became-ignored/syncable, цикл | ⏳ | не залежить від drain | — | не червоніє |
+| incremental/D1-D5, D7, D8 (7) | **K** | інкрементальний up/down, двобічні видалення, D7 resurrect (modify-wins) | ⏳ | I1/I2 базис | — | Фаза 4 |
+| incremental/D6 (delete-vs-modify конфлікт) | **K** | реєстрація + обидва шляхи розв'язання | ⏳ | конфліктний | — | Фаза 5 |
+| manifest-corruption/K1-K5 (5) | **M** | самозцілення метаданих: garbage/unlink/stale-lastSync/unknown-fields/empty-map → БЕЗ повторного пушу ідентичного | ⏳ | сам маніфест замінюється (METAFILE §2.1/§2.2, recovery = remote-not-rescan); інваріант «зіпсовані метадані ≠ втрата і ≠ re-push» мусить перейти | Фаза 1 | — |
+| multi-device/G1, G2 (2) | **K** | I1/I2 базис: ротація трьох пристроїв, disjoint-правки одного файлу | ⏳ | | — | Фаза 4 |
+| multi-device/G3, G4 (2) | **K** | same-line і binary конфлікт між пристроями (I2) | ⏳ | | — | Фаза 5 |
+| multi-device/**G9**-concurrent-push-mid-drain | **K** | **I2 — головний контракт-тест проєкту** | ⏳ (очікується RED) | RED→GREEN, не «лишається зеленим» | — | Фаза 5 |
+| normalization/{binary-byte-exact, idempotent-double-sync, multi-device-convergence, pull-of-bom, pull-of-crlf, push-of-local-crlf} (6) | **K** | EOL/BOM канонізація, no-thrash, byte-exact binary | ⏳ | не залежить від drain | — | не червоніє |
+| normalization/resume-bootstrap-pull | **M** | kill посеред bootstrap-pull → resume без повторного викачування | ⏳ | старий bootstrap-loop зникає (§6.6); інваріант «resume без re-download» → `sync_store` (§II.9) | Фаза 4 | — |
+| normalization/resume-push-blob | **M** | kill на N-му createBlob → resume з меншою кількістю createBlob | ⏳ | інваріант виживає через `uploadedBlobs` (§II.15) | Фаза 4 | — |
+| normalization/resume-push-with-remote-race | **M** | crash mid-push + remote-зміна в черзі → 3-way merge, без втрат (I1/I2) | ⏳ | `processBatch`-гарнес → NEW-DRAIN §III | Фаза 4 | — |
+| settings-lifecycle/I1-reset-metadata | **M** | reset → наступний sync вирівнюється БЕЗ re-push ідентичного | ⏳ | reset перевизначається RESET-PLUGIN (Фаза 1.6) поверх METAFILE | Фаза 1.6 | — |
+| settings-lifecycle/I2-I6, connection-probe-existing (6) | **K** | syncConfigDir ON/OFF обидва боки, device-label, зміна гілки, probe на непорожньому repo | ⏳ | не залежить від drain | — | не червоніє |
+
+#### 8.1.3 Точкові `tests/diff2/` (6)
+
+| Файл | Клас | Інваріант / поведінка | Сьогодні | Причина / примітка | Ціль | re-green |
+|---|---|---|---|---|---|---|
+| autosave-id | **M** | формат autosave-id обгортає UUID запису | GREEN | форма id прив'язана до `ConflictRecord` v1 → v2 (§6.2/§7.8.1) | Фаза 5 | — |
+| autosave-id-for-entry | **M** | id для конкретного запису store | GREEN | імпортує `conflict-store` v1 | Фаза 5 | — |
+| exit-toctou | **M** | TOCTOU-захист при виході з diff-editor | GREEN | імпортує `conflict-store` v1; сама TOCTOU-логіка — інваріант diff2 | Фаза 5 | — |
+| strip-conflict-suffix | **M** | зняття conflict-суфікса з імені sibling | GREEN | формат імені виживає (Фаза 2 `buildSiblingFilePath`), API — v1 | Фаза 5 | — |
+| synthetic-detector | **M** | розпізнавання синтетичних sibling-ів | GREEN | імпортує `conflict-store` v1 | Фаза 5 | — |
+| history-versions | **M** | History читає версії з черги | GREEN | імпортує `PushQueue` → плоска черга (§2.1); History-спека — HISTORY-DELETED.md | Фаза 2 | — |
+
+#### 8.1.4 Клас N — діри, які пишемо в Фазі 0 (§0.3), і свідомі D
+
+| Тест | Клас | Інваріант | Сьогодні | Ціль (коли GREEN) | Примітка |
 |---|---|---|---|---|---|
-| `integration/.../multi-device/G9-concurrent-push-mid-drain` | **K** | I2 | _(перевірити — має бути RED)_ | Фаза 5 | Головний контракт-тест проєкту; RED→GREEN, не «лишається зеленим» |
-| `integration/.../multi-device/G1`, `G2`, `G4` | **K** | I1, I2 | _(перевірити)_ | Фаза 4 | Multi-device базис |
-| `integration/.../multi-device/G3-same-line-conflict` | **K** | I2 | _(перевірити)_ | Фаза 5 | Конфліктний → після «темного вікна» |
 | T2.1 / T2.2 багатопакетні | **N** | I1, I4, I5 | не написано | Фаза 4 | TODO п.1/п.2 |
-| T3.1-T3.4 конкурентний remote | **N** | I2, I3 | не написано | Фаза 5 | Частина — конфліктні |
-| T5.2 own-data-as-conflict | **N** | I2, I6 | не написано | Фаза 4 | Має бути GREEN одразу — регресія §7.10 |
+| T3.1-T3.4 конкурентний remote | **N** | I2, I3 | не написано | Фаза 5 | частина — конфліктні |
+| T5.2 own-data-as-conflict | **N** | I2, I6 | не написано | — (GREEN одразу) | регресія §7.10; якщо RED сьогодні — це ЗНАХІДКА, не ціль |
 | T5.3 / T5.4 погана мережа | **N** | I3, I6 | не написано | Фаза 4 | |
-| T6.1-T6.4 конфлікти | **N** | I1, I2 | не написано | Фаза 5 | Регресії, мають лишитись GREEN |
-| T3.6 same-line self-conflict | **N** | I1, I2 | не написано | Фаза 4 | Пишеться проти НОВОГО двигуна (§VIII B), не старого |
-| T4.7 / T4.8 crash у cascade | **D** | — | — | — | Механізм зникає: SYNC2-FIX §10.4-B. Покриття → §VIII D |
-| T4.9 crash-resume base=parent | **D** | — | — | — | Стара модель бази; нова — §IV.2 |
-| усе по `snapshot-store` | **M** → Фаза 1 | — | — | Фаза 1 | METAFILE §2.1/§2.2 |
-| усе по `processBatch`/4 випадки | **M** → Фаза 4 | — | — | Фаза 4 | NEW-DRAIN §III |
-| усе по `ConflictRecord` | **M** → Фаза 5 | — | — | Фаза 5 | conflicts v2, §II.6 |
+| T6.1-T6.4 конфлікти | **N** | I1, I2 | не написано | — (GREEN одразу) | регресії, мають лишитись GREEN |
+| T3.6 same-line self-conflict | — | I1, I2 | НЕ пишеться у Фазі 0 (§0.3) | Фаза 4 | пишеться проти НОВОГО двигуна (§VIII B); спростування П3/П4 вже зафіксоване §11 |
+| T4.7 / T4.8 crash у cascade | **D** | — | — | — | механізм зникає: SYNC2-FIX §10.4-B; еквівалентне покриття → §VIII D |
+| T4.9 crash-resume base=parent | **D** | — | — | — | стара модель бази; нова матриця — NEW-DRAIN §IV.2 |
+
+**Підсумок класів (104 наявні файли):** **K = 75** (13 юніт + 62 інтеграційні), **M = 29**
+(13 юніт + 10 інтеграційних + 6 diff2), **D = 0 серед наявних файлів** — жоден існуючий
+тест не пінить приречений механізм у чистому вигляді (навіть `snapshot-store.test.ts` має
+інваріантну частину → M; його legacy-міграційні кейси стануть D лише при переписуванні у
+Фазі 1). D серед запланованих-але-не-написаних: T4.7/T4.8 (SYNC2-FIX §10.4-B),
+T4.9 (NEW-DRAIN §IV.2).
 
 ### 8.2 Журнал фаз 1-7
 
