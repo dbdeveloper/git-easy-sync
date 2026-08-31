@@ -865,11 +865,33 @@ A.1 п.21-25, P.25, L.3, E.3-5.
    422-CAP-виходи персистили брудний state проваленої спроби → отруєний журнал →
    тиха втрата батчу на redo; persist-и видалено, у спеці виправлено власний
    `persistDrainState()`.** Live T3.6/P.13 проти реального GitHub — зелені з епілогом.
-2. **Production-обв'язка**: клієнт-методи, яких бракує (`getBranchHeadSha` за ІМ'ЯМ,
-   `pushCommitToBranch` — композиція blob-list→tree→commit→ref); builder справжніх
-   `DrainDeps` (VaultFileReader на `atomicWriteFile` + worker-SHA; `mergeBlobs` через
-   worker three-way-merge з round-trip-гейтом; NetworkRetry per-drain; прогрес →
-   наявний DrainStatus-канал).
+2. ✅ **Production-обв'язка** (коміти `afa2e4c` 2a / `627a3f5` 2b / `67b8fbb` 2c):
+   - 2a клієнт: `getBranchHeadShaByName` (СИНГУЛЯРНИЙ `/git/ref/` — множинна форма
+     робить prefix-matching і віддає МАСИВ; 404→null; ts-cache-buster) +
+     `pushCommitToBranch` (blob-list→tree→commit→ref; parent null = БЕЗБАТЬКІВСЬКИЙ
+     root-коміт без base_tree + createReference — історії з'єднає FINALIZE-merge;
+     422 з ОБОХ ref-шляхів = ValidationError) + опційний `author` pass-through на
+     обох push-методах (механізм є, НІХТО не передає).
+   - 2b: `vault-file-reader.ts` (stat/readBinary/ensureParentDir+atomicWriteFile/
+     captureForDelete→remove; MOCK_PLATFORM-парні тести) + `makeWorkerMergeBlobs`
+     (ті самі гейти, merge через WorkerClient.mergeText; parity-тести).
+   - 2c: `drain-deps.ts` — `MainHeadGuard` (§7.10 порт, стан НА СЕСІЮ, живлять
+     ОБИДВА рушії main: pushCommitFromTree І updateMainRef/FINALIZE; RED-верифіковано)
+     + `makeDrainClient` (404/409→head null; Layer-2 через viaHead+sync_store-blobSink;
+     getBlobFromRepo 404→null) + `buildDrainDeps` (повна композиція; NetworkRetry
+     per-build; BatchClaimer=claimBatch).
+   - ⚠️ **Два рішення ВІДКЛАДЕНО на крок 4 (THE SWITCH), свідомо:** (а) **git author
+     identity** — ін'єкція `author.date` МІНЯЄ зміст `committedAt` (він парситься з
+     committer.date відповіді і штампується в tracked.remote.mtime §III mtime-інваріантом
+     → з ін'єктованою датою інваріант записує НАШУ дату, не push-час GitHub); (б)
+     **per-batch commit message** — старий двигун штампував кожен коміт createdAt
+     ЙОГО батчу (§4.4 унікальність/greppability), drainOnce поки кличе `commitMessage()`
+     per-drain; носій batch.createdAt через drainOnce вирішується разом з (а).
+   - ⚠️ `ConflictBranchState.head` тепер VESTIGIAL (hot-адаптер пише `""`): §II.7 —
+     conflict head читається ЛИШЕ наживо; поле живе, бо стару схему несе старий двигун;
+     ВМИРАЄ на SWITCH разом з ним.
+   - Прогрес → DrainStatus: `onProgress` прокинуто через builder; підключення до
+     каналу менеджера = частина SWITCH (сам канал живе в sync2-manager).
 3. **Порт diff2 (без адаптера, §5.0/1)**: `ConflictCounter` + `conflict-watcher` +
    джерело даних diff-panel + `synthetic-detector` на v2 + 3 UI-сайти
    `process_conflicts`; History-читачі локальних версій → `sync_store`;
