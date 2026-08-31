@@ -892,11 +892,40 @@ A.1 п.21-25, P.25, L.3, E.3-5.
      ВМИРАЄ на SWITCH разом з ним.
    - Прогрес → DrainStatus: `onProgress` прокинуто через builder; підключення до
      каналу менеджера = частина SWITCH (сам канал живе в sync2-manager).
-3. **Порт diff2 (без адаптера, §5.0/1)**: `ConflictCounter` + `conflict-watcher` +
-   джерело даних diff-panel + `synthetic-detector` на v2 + 3 UI-сайти
-   `process_conflicts`; History-читачі локальних версій → `sync_store`;
-   `confirmResolved` → prune-шов (рішення 3). Тести — real-composition проти
-   drainOnce-виходу.
+3. ✅ **Порт diff2 (без адаптера, §5.0/1)** (коміти `0a4158a` 3a / `d49de30` 3b /
+   `37a11d5` 3c / `30fa42e` 3d):
+   - 3a: ConflictStoreV2 += кешований вигляд + sync-запити (`getCachedState` /
+     `hasBase` / `hasSiblingPath` / `getBySiblingPath`; кеш = ТОЙ САМИЙ об'єкт
+     load/save, sibling-індекс перебудовується на load()/save(); mid-drain
+     staleness свідомо покривається substring-фолбеком watcher-а). Знахідка:
+     ім'я sibling-а скидає мілісекунди → two sub-second-apart mtimes = ОДНЕ ім'я,
+     індекс last-wins = реальність диска.
+   - 3b: synthetic-detector/watcher/counter/panel/editor/gate на v2;
+     `ConflictEntry.record` ПОМЕР; **autosave-id: tracked = та сама детермінована
+     пара (basePath, siblingPath) з префіксом `tracked-`** (v1 UUID помер зі
+     store; DIFF-EDITOR.md §2.4/§2.4.1 оновлено тим же комітом; кут регенерації
+     імені покриває reopen-класифікація); helpers переїхали
+     (buildSiblingFilePath, extensionOf → conflict-siblings); **main.ts =
+     ДВОСХОВИЩНИЙ ІНТЕРИМ** (v2 для UI, v1 живить старий двигун до SWITCH —
+     ⚠️ уточнення: інтеримний UI показує drain-конфлікти як SYNTHETIC-only, НЕ
+     порожньо: reconcile-сайти всиновлюють sibling-и з диска); 3 UI-сайти
+     reconcile (onload/panel-open/editor-close → один reconcileConflictsV2 =
+     processConflicts→save→counter, скіп при running drain). Приймальний
+     real-composition тест (RED-верифікований): справжній drainOnce →
+     conflicts.json → findAllConflicts = tracked, привид = synthetic, гейт
+     tracked-only, свіжий інстанс бачить те саме.
+   - 3c: `batch-history-source.ts` — History-читач локальних версій над НОВИМ
+     форматом (meta.json + sync_store, hash-on-read, read-only: ремонт належить
+     claimer-у). **НЕ підключений** — live-черга до SWITCH стара; підключення
+     їде комітом SWITCH (інакше інтерим втратив би локальну History).
+   - 3d: `confirmResolved` → prune-шов у process_conflicts (спрацьовує РІВНО на
+     transition, best-effort, wired у drain + UI-сайти); старий firing-site
+     свідомо НЕ чіпався — вмирає з manager-ом на SWITCH, подвійний постріл
+     неможливий (різні store-и).
+   - ⚠️ **ДОДАНО У КРОК 4 (advisor):** main.ts AtomicWriteRecovery резолвить
+     `.ges-tmp` staging-файли через v1 `record.theirsBlobSha` SHA-verify — це
+     вмирає з v1: потрібен v2-еквівалент (sibling/conflictBase sha) або явне
+     рішення про зняття.
 4. **THE SWITCH** (+ переозброєння пінів ТИМ ЖЕ комітом — інакше G9/T3.2 стають
    red-by-passing): `commitOnly` → findChanges → скибки ≤100 → BatchWriter/consolidate
    + R3a-«дзвоник» (SYNC2-FIX §6); `findChanges`-дедуп → читання метафайлу (без
