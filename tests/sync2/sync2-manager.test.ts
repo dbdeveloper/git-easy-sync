@@ -250,6 +250,36 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(notices.noChanges).toBe(1);
   });
 
+  it("R3a bell escalation: a FULL-scan trigger during a single-file pass re-loops as a FULL scan, never the runner's file", async () => {
+    put("a.md", "x");
+    put("b.md", "y");
+    let releaseSingle!: () => void;
+    const singleGate = new Promise<void>((r) => (releaseSingle = r));
+    const scans: Array<string | null> = [];
+    deps.detector.findChangeForPath = async (p: string) => {
+      scans.push(p);
+      await singleGate; // hold the single-file pass mid-flight
+      return modified(p);
+    };
+    deps.detector.checkSyncable = async () => true;
+    deps.detector.findChanges = async () => {
+      scans.push(null);
+      return [];
+    };
+
+    const single = manager.commitFile("a.md");
+    // Wait until the single-file pass is genuinely mid-scan…
+    while (scans.length === 0) await new Promise((r) => setTimeout(r, 1));
+    // …then land the FULL-scan trigger — without the escalation the
+    // runner would re-loop "a.md" and the full request would be
+    // silently swallowed (advisor catch).
+    const full = manager.commitOnly();
+    releaseSingle();
+    await Promise.all([single, full]);
+    expect(scans[0]).toBe("a.md"); // the runner's own pass
+    expect(scans).toContain(null); // the escalated FULL re-loop ran
+  });
+
   // ── commit pass mechanics ──────────────────────────────────────────
 
   it("slices >100 changes into ≤100-entry batches (MAX_BATCH_ENTRIES)", async () => {

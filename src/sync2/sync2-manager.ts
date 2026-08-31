@@ -156,8 +156,15 @@ export class Sync2Manager {
   // R3a — commit is a SINGLETON with a coalescing bell (SYNC2-FIX §6):
   // a trigger during a pass rings the bell; the runner loops while it
   // rings. On error: release, surface, NO auto-restart (I6).
+  // The bell carries a TARGET: §6's no-lost-signal proof assumes every
+  // re-loop rescans the caller's scope — a single-file runner re-
+  // looping its own file would swallow a coalesced FULL-scan (or
+  // other-file) request, so any target mismatch escalates the next
+  // loop to a full findChanges (null).
   private commitInProgress = false;
   private restartCommit = false;
+  private currentCommitTarget: string | null = null;
+  private bellTarget: string | null | undefined = undefined;
 
   // findChanges dedup reference over the queue metafiles — rebuilt at
   // the start of every commit pass, lazily on first out-of-pass read.
@@ -318,19 +325,35 @@ export class Sync2Manager {
   private async runCommitPass(target: string | null): Promise<number> {
     if (this.commitInProgress) {
       this.restartCommit = true;
+      // Merge the coalesced target into the bell: identical target →
+      // keep it; ANY mismatch (other file, or full-vs-file in either
+      // direction) → escalate to a full scan.
+      if (this.bellTarget === undefined) {
+        this.bellTarget =
+          target === this.currentCommitTarget ? target : null;
+      } else if (this.bellTarget !== target) {
+        this.bellTarget = null;
+      }
       return 0;
     }
     this.commitInProgress = true;
     let total = 0;
     try {
+      let t: string | null = target;
       do {
         // Reset BEFORE the pass — a bell during the pass is seen by
         // the while (the no-lost-signal proof in §6).
         this.restartCommit = false;
-        total += await this.doOneCommitPass(target);
+        this.bellTarget = undefined;
+        this.currentCommitTarget = t;
+        total += await this.doOneCommitPass(t);
+        if (this.restartCommit && this.bellTarget !== undefined) {
+          t = this.bellTarget; // the escalated scope for the re-loop
+        }
       } while (this.restartCommit);
     } finally {
       this.commitInProgress = false; // ALWAYS release (deadlock guard)
+      this.currentCommitTarget = null;
     }
     return total;
   }
