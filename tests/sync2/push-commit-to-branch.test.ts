@@ -84,10 +84,15 @@ describe("pushCommitToBranch + getBranchHeadShaByName (Phase 5.5 step 2a)", () =
     );
   });
 
-  it("by-name head read: 404 = the branch doesn't exist = null, NOT an error", async () => {
+  it("by-name head read: 404 (no branch) AND 409 (bare repo — no commits at all) both mean null, NOT an error", async () => {
     queue.push({ status: 404, text: "", json: {}, headers: {} });
-    const sha = await makeClient().getBranchHeadShaByName({ branch: "gone" });
-    expect(sha).toBeNull();
+    expect(
+      await makeClient().getBranchHeadShaByName({ branch: "gone" }),
+    ).toBeNull();
+    queue.push({ status: 409, text: "", json: {}, headers: {} });
+    expect(
+      await makeClient().getBranchHeadShaByName({ branch: "any" }),
+    ).toBeNull();
   });
 
   // ── pushCommitToBranch ─────────────────────────────────────────────

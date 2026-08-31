@@ -486,7 +486,11 @@ export default class GithubClient {
       (res) => !isRetriableStatus(res.status),
       retry ? maxRetries : 0,
     );
-    if (response.status === 404) return null;
+    // 404 = no such branch; 409 = the repo has NO commits at all
+    // ("Git Repository is empty") — on a bare repo every ref read
+    // answers 409, and "the conflict branch does not exist" is the
+    // truthful answer either way (gate finding 2026-08-31, bootstrap).
+    if (response.status === 404 || response.status === 409) return null;
     if (response.status < 200 || response.status >= 400) {
       this.logger.error("Failed to get branch head sha by name", response);
       throw makeGithubAPIError(

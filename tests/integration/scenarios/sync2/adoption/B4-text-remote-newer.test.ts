@@ -1,4 +1,17 @@
 import {
+// ⚔️ RE-DERIVED AT THE SWITCH (2026-08-31). This file used to assert
+// the OLD `bootstrapFromRemote` adoption heuristic ("adoption is
+// local-authority-leaning": mtime decides, the winner lands on both
+// sides). That heuristic is GONE — MASTER-PLAN §6.4, owner decision
+// (A): cold start with BOTH sides present and DIFFERENT and NO common
+// base is a MANUAL CONFLICT ("шторм конфліктів тут не вада, а особлива
+// feature"), because a silent mtime winner is data loss. So the
+// re-derived contract is: the vault keeps OURS, main keeps THEIRS, a
+// sibling carrying theirs appears next to the base file, and the
+// conflict is registered in conflicts.json. (In the REAL adoption
+// scenario the vault was already synced by the old plugin, so almost
+// every path takes rule 2.a — zero conflicts, zero pushes. These
+// tests deliberately construct the divergence.)
   describe,
   it,
   beforeAll,
@@ -22,6 +35,7 @@ import {
   createSync2Client,
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
+  trackedSiblingPathsFor,
 } from "../helpers";
 
 // B4 — first sync after install where the SAME text file diverges
@@ -79,15 +93,22 @@ describe.skipIf(!integrationEnabled())(
 
         await sync2AllAndAssertNoErrors(client);
 
-        // Local copy was overwritten with the remote bytes.
+        // Vault keeps OURS (mtime does NOT decide any more — §6.4).
         expect(fs.readFileSync(notesPath, "utf8")).toBe(
-          "remote version of notes\n",
+          "local version of notes\n",
         );
 
-        // Remote unchanged (sync2 didn't pile a "local won" push on top).
+        // Main keeps THEIRS.
         expect(await readRemoteFile(branch, "notes.md")).toBe(
           "remote version of notes\n",
         );
+
+        // Registered conflict + sibling carrying theirs.
+        const siblings = trackedSiblingPathsFor(client, "notes.md");
+        expect(siblings).toHaveLength(1);
+        expect(
+          fs.readFileSync(path.join(client.vaultPath, siblings[0]), "utf8"),
+        ).toBe("remote version of notes\n");
 
         expect(client.hotMeta.getLastSyncCommitSha()).not.toBeNull();
       },

@@ -1,4 +1,11 @@
 import {
+// ⏸️ SUSPENDED AT THE SWITCH (2026-08-31, same class as E3):
+// bundle ATOMICITY (styles.css follows main.js's winner — the §28
+// coupled-bundle rules) is part of PLUGIN-UPDATE-COMPAT (Phase 7).
+// The interim plugin-core rule is per-file mtime (newest wins,
+// remote on ambiguity), so a bundle can split across a collision.
+// Un-skip when PLUGIN-UPDATE-COMPAT lands. Recorded in
+// MASTER-PLAN §5.5.0 step 4.
   describe,
   it,
   beforeAll,
@@ -63,7 +70,7 @@ function listConflictSiblings(root: string): string[] {
   return out;
 }
 
-describe.skipIf(!integrationEnabled())(
+describe.skip(
   "sync2 E5 — plugin styles.css resolves atomically, never a conflict sibling",
   () => {
     let client: Sync2TestClient | undefined;

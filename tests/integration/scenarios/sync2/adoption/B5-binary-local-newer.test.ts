@@ -1,4 +1,10 @@
 import {
+// ⚔️ RE-DERIVED AT THE SWITCH (2026-08-31) — see the B3/B4 note: the
+// old `bootstrapFromRemote` mtime heuristic is gone (MASTER-PLAN §6.4,
+// owner decision A). A cold-start divergence with no common base is a
+// MANUAL CONFLICT: vault keeps OURS, main keeps THEIRS, a sibling
+// carries theirs, the conflict is registered. Binary is no exception —
+// it simply can never auto-merge.
   describe,
   it,
   beforeAll,
@@ -21,6 +27,7 @@ import {
   createSync2Client,
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
+  trackedSiblingPathsFor,
 } from "../helpers";
 
 // B5 — first sync after install where the SAME binary file diverges
@@ -83,7 +90,7 @@ describe.skipIf(!integrationEnabled())(
 
         await sync2AllAndAssertNoErrors(client);
 
-        // Local binary untouched.
+        // Vault keeps OURS.
         const localAfter = fs.readFileSync(imgPath);
         expect(localAfter.equals(localBytes)).toBe(true);
 
@@ -105,7 +112,17 @@ describe.skipIf(!integrationEnabled())(
           retry: true,
         });
         const remoteFinalBytes = Buffer.from(remoteBlob.content, "base64");
-        expect(remoteFinalBytes.equals(localBytes)).toBe(true);
+        // Main keeps THEIRS (no silent binary winner).
+        expect(remoteFinalBytes.equals(remoteBytes)).toBe(true);
+
+        // Registered conflict + sibling carrying theirs.
+        const siblings = trackedSiblingPathsFor(client, "attachments/img.png");
+        expect(siblings).toHaveLength(1);
+        expect(
+          fs.readFileSync(path.join(client.vaultPath, siblings[0])).equals(
+            remoteBytes,
+          ),
+        ).toBe(true);
 
         expect(client.hotMeta.getLastSyncCommitSha()).not.toBeNull();
       },

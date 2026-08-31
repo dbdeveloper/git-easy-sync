@@ -181,6 +181,7 @@ export interface DrainGithubClient {
     parent: string | null;
     message: string;
     author?: { name: string; email: string; date: string };
+    retry?: boolean;
   }): Promise<{ sha: string; committedAt: number }>;
   pushCommitToBranch(args: {
     branch: string;
@@ -188,6 +189,7 @@ export interface DrainGithubClient {
     entries: Array<{ path: string; sha: string | null }>;
     message: string;
     author?: { name: string; email: string; date: string };
+    retry?: boolean;
   }): Promise<{ sha: string }>;
   getContentsMetadataAtRef(args: {
     path: string;
@@ -265,12 +267,18 @@ export function makeDrainClient(deps: MakeDrainClientDeps): DrainClient {
       }
     },
 
-    getCommit: (args) => client.getCommit(args),
-    createTree: (args) => client.createTree(args),
-    createBlob: (args) => client.createBlob(args),
+    // ⚠️ EVERY adapter method forces `retry: true` (gate finding
+    // 2026-08-31, H2): the drain's NetworkRetry wrapper only retries
+    // NetworkError, so a RETRIABLE HTTP status (503/502/429 on a ref
+    // PATCH) must be retried by the client's own retryUntil — exactly
+    // as the old engine did. Without it a transient 503 aborted the
+    // whole drain.
+    getCommit: (args) => client.getCommit({ ...args, retry: true }),
+    createTree: (args) => client.createTree({ ...args, retry: true }),
+    createBlob: (args) => client.createBlob({ ...args, retry: true }),
 
     async pushCommitFromTree(args) {
-      const r = await client.pushCommitFromTree(args);
+      const r = await client.pushCommitFromTree({ ...args, retry: true });
       headGuard.noteConfirmedHead(r.sha); // we MOVED main — feed the guard
       return r;
     },
@@ -299,7 +307,8 @@ export function makeDrainClient(deps: MakeDrainClientDeps): DrainClient {
     getBranchHeadSha: (branch) =>
       client.getBranchHeadShaByName({ branch, retry: true }),
 
-    pushCommitToBranch: (args) => client.pushCommitToBranch(args),
+    pushCommitToBranch: (args) =>
+      client.pushCommitToBranch({ ...args, retry: true }),
 
     getCommitInfoForPath: (path, atSha) =>
       getCommitInfoForPath(client, path, atSha),

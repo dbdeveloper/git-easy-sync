@@ -106,7 +106,8 @@ describe.skipIf(!integrationEnabled())(
 
         // Branch carries ours v1 (first conflict snapshot commit).
         expect(await readRemoteFile(cb!.name, "note.md")).toBe("ours v1\n");
-        const branchHeadAfterRegister = cb!.head;
+        // Live head (the hot record's `head` is vestigial at THE SWITCH).
+        const branchHeadAfterRegister = await getBranchHead(cb!.name);
 
         // User keeps editing the conflicted file.
         fs.writeFileSync(
@@ -126,8 +127,13 @@ describe.skipIf(!integrationEnabled())(
         // conflict-branch — initial registration and
         // edit-while-in-conflict pushes alike — uses the same
         // hardcoded `conflict ({deviceLabel})` message.
+        // ⚔️ RE-DERIVED AT THE SWITCH: the hot record's `head` is
+        // VESTIGIAL ("" — §II.7 reads the conflict head LIVE only),
+        // so the advance is asserted against the real branch head.
         const updatedCb = client!.hotMeta.getConflictBranch();
-        expect(updatedCb!.head).not.toBe(branchHeadAfterRegister);
+        expect(await getBranchHead(updatedCb!.name)).not.toBe(
+          branchHeadAfterRegister,
+        );
         const messages = await getBranchCommitMessages(updatedCb!.name);
         // At least 2 conflict commits now: initial registration +
         // the edit-while-in-conflict push.
