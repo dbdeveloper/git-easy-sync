@@ -926,18 +926,108 @@ A.1 п.21-25, P.25, L.3, E.3-5.
      `.ges-tmp` staging-файли через v1 `record.theirsBlobSha` SHA-verify — це
      вмирає з v1: потрібен v2-еквівалент (sibling/conflictBase sha) або явне
      рішення про зняття.
-4. **THE SWITCH** (+ переозброєння пінів ТИМ ЖЕ комітом — інакше G9/T3.2 стають
-   red-by-passing): `commitOnly` → findChanges → скибки ≤100 → BatchWriter/consolidate
-   + R3a-«дзвоник» (SYNC2-FIX §6); `findChanges`-дедуп → читання метафайлу (без
-   хешування); `syncAll`/interval/watchdog → `drainOnce`. **ВИДАЛЯЄТЬСЯ**:
-   drain-нутрощі `sync2-manager`, `push-queue.ts`, `tree-builder.ts`,
-   `conflict-store.ts` (v1), `conflict-detection.ts`, `conflict-classifier.ts`
-   (обидва споживає лише manager), старий GET-`getContentsMetadataAtRef` (HEAD-метод
-   успадковує ім'я). M-переписи: `push-queue.test` вмирає на користь
-   `batch-writer.test`, `L4-attempted-locks-merge` → writer+claimer,
-   `history-versions` → sync_store (+ реєстр §8.1). T6.1 переоцінюється за фактами
-   прогону (нова STEP1-механіка кладе ours КОЖНОГО шляху в conflict_commit — але
-   тест перевіряє й порядок реєстрації; вирішує прогін, не прогноз).
+4. **THE SWITCH — ДЕТАЛЬНИЙ ПЛАН (підготовка 2026-08-31, інвентаризація повна;
+   очікує «так» власника + відповіді на 3 питання нижче).**
+
+   **Публічна поверхня менеджера, що ЗАЛИШАЄТЬСЯ** (перевірено по споживачах у
+   main.ts/settings/scheduler/reset): `syncAll`, `resumeQueue`, `commitOnly`,
+   `commitFile`, `syncFile`, `hasPendingBatches`, `cancelDrain`, `isDrainRunning`,
+   `getDrainStatus`/`setDrainStatusListener`, `recordDrainError`, `.client`
+   (History-remote). `.queue` (History-local + бейдж глибини) → замінюється на
+   `BatchHistorySource` + новий queue-list хелпер.
+
+   **S1 — адитивні доповнення drainOnce/DrainDeps (окремий unit-green коміт):**
+   - `cancelRequested?: () => boolean` → новий статус `"cancelled"`. ⚠️ D.16-правило
+     ДОСЛІВНО: вихід по cancel НЕ персистить НІЧОГО (невідрізнюваний від крешу перед
+     поточним батчем — інакше отруєння журналу повертається через нові двері);
+     перевірка на межах (top restart-блоку + per-file цикл), FINALIZE/Vault-step не
+     переривається (як стара семантика «наступна межа файлу»).
+   - `commitMessage(batchCreatedAtMs)` — per-batch (рішення 2 нижче); conflict-push
+     і merge лишаються на now().
+   - `DrainResult.vaultStepWrites: string[]` — з нього manager виводить і
+     pulledFiles для onSyncCompleted, і plugin-id-набір для `onPluginsAffected`
+     (мобільний авто-reload 2.0.2-beta2 НЕ МАЄ померти мовчки — старий сигнал жив у
+     pull-шляху manager-а).
+   - `onProgress` розширити шляхом поточного файлу (інакше Settings втрачає
+     `DrainStatus.currentPath` рядок).
+   - `trashHooks.confirmDeleted` (R3.5 layer 1a): на завершенні батчу — шляхи
+     deletion-записів, чий фінальний remote = DELETED (старий сайт
+     manager:3891 вмирає).
+   - Новий peek для findChanges-дедупу над метафайлами нової черги
+     (структурна залежність детектора `queue.peekLatestPathSha` — детектор НЕ
+     чіпаємо). ⚠️ КОНТРАКТ: deletion-запис (sha:null) повертає DELETED-сентинел,
+     ВІДМІННИЙ від «запису нема» — інакше «видалив-і-відтворив-як-baseline»
+     дедупнеться об baselineSha і відтворення мовчки випаде (§40-клас). Тест тим
+     же комітом.
+
+   **S2 — THE SWITCH (сам фліп; піни переозброюються ЦИМ ЖЕ комітом):**
+   - `syncAll` = invariants.enforce → sanitizeForbiddenFilenames (ЛИШАЄТЬСЯ,
+     двигуно-незалежний) → R3a-синглтон commit-пас (SYNC2-FIX §6 «дзвоник»:
+     `commit_in_progress`+`restart_commit`, finally-звільнення, без
+     авто-рестарту на помилці) → findChanges → скибки ≤100 → BatchWriter.writeBatch
+     / consolidateIntoTail (accumulate-налаштування) → `drainOnce(buildDrainDeps(…))`.
+     `resumeQueue` = лише drainOnce. `commitOnly`/`commitFile` = R3a-пас без drain.
+     300ms-хак перед drain ВМИРАЄ (commit↔drain тепер тримає Peterson
+     writer↔claimer R3b). Токен-latch: manager сеттить TokenExpiredFlag на
+     result.status==="token-expired". `sweepOlderThan` (trash layer 2) — після ok.
+   - **ВИДАЛЯЄТЬСЯ** (споживачі перевірені — усі всередині вмираючого):
+     drain-нутрощі `sync2-manager` (~3–4k рядків: drain/processBatch/pullIfNeeded/
+     evaluateConflictState/pushConflictPathsToBranch/getGuardedHead/monotonic-guard/
+     enqueueOrMerge/bootstrapIfNeeded/bootstrapFromRemote/reconcileRemoteIdentity
+     [§6.4: force-push-клас] / recoverPushInflight / §26-хук conflictBaseSha),
+     `push-queue.ts`, `tree-builder.ts`, `conflict-store.ts` (v1),
+     `conflict-detection.ts`, `conflict-classifier.ts`, `push-inflight.ts`,
+     `pending-deletions-store.ts` (рішення 3), клієнтські
+     GET-`getContentsMetadataAtRef` (HEAD-метод успадковує ім'я) і
+     `getLatestCommitDateForPath` (споживачі лише в manager). Hot-схема: викинути
+     `ConflictBranchState.head` (вестигіальний з кроку 2c) і `remoteIdentity`
+     (вмирає з reconcileRemoteIdentity; blank-slate — міграції нема).
+   - main.ts: History → `BatchHistorySource`; бейдж глибини черги → новий list;
+     v1-конструкції геть; AtomicWriteRecovery втрачає conflict-ownership dispatch
+     (перевірено: v2 пише sibling-и через ЗВИЧАЙНИЙ atomicWriteFile — клас
+     «conflict-owned .ges-tmp» більше не виникає; перерваний STEP3 лікує
+     sibling-tx recovery). `onZeroByteRestored` — перевірити чи клас guard-а ще
+     живий під hash-on-read (вирішити по факту, задокументувати).
+   - **Переозброєння пінів — ЧОТИРИ:** G9 (зняти it.fails — ГОЛОВНИЙ контракт),
+     T3.2 (зняти it.fails), T3.4-quiescence (зняти it.fails), T6.1 (пере-вивести за
+     фактами прогону — нова STEP1-механіка кладе ours КОЖНОГО шляху).
+   - M-переписи юнітів (~8.5k рядків вмираючих сюїт): `push-queue.test` вмирає на
+     користь наявного `batch-writer.test`; `tree-builder/conflict-store/
+     conflict-detection/conflict-classifier/pending-deletions.test` вмирають;
+     `sync2-manager.test` (4.1k) → лишаються тести живої оболонки (R3a-синглтон,
+     DrainStatus, композиція syncAll — переписати на fake drainOnce);
+     `change-detector.test` — переписати queue-dedup блок на новий peek.
+   - Очікувані інтеграційні M-ряди (крім §8.1): `L4-attempted-locks-merge` →
+     writer+claimer; `history-versions` → sync_store; **bootstrap A-серія**
+     (стверджує старий Contents-API seed; новий світ = parentless
+     pushCommitFromTree) — пере-вивести; **settings-lifecycle repo-switch**
+     (стверджує wipe reconcileRemoteIdentity; §6.4 свідомо міняє поведінку на
+     force-push-клас) — пере-вивести, не «лагодити».
+
+   **S3 = крок 5 нижче (wiring).** **S4 = гейт** (повний юніт → ПОВНА інтеграція з
+   фікс-циклом → живий cold-start ~/Obsidian-test → ETag device-pass — останній
+   потребує телефон власника).
+
+   **ТРИ ПИТАННЯ ВЛАСНИКУ (блокують S1/S2):**
+   1. **Git author identity.** (а) як у живому двигуні сьогодні: author+committer з
+      date=batch.createdAt — тоді committedAt/mtime-інваріант записує ЛОКАЛЬНИЙ час,
+      не push-час (відхилення від припущення спеки — анотувати); (б)
+      **[РЕКОМЕНДУЮ]** author {name,email} БЕЗ date — авторство в git-log
+      зберігається, дати в git-log стають push-часом (локальний момент і так несе
+      in-message timestamp §4.4), mtime-інваріант лишається як у спеці; безdate-ний
+      author перевіряється об реальний GitHub у гейті; (в) викинути фічу.
+   2. **Per-batch commit message:** main-пуші = formatSyncMessage(deviceLabel,
+      batch.createdAt) — зберігає унікальність/greppability §4.4;
+      conflict-пуші/merge = now(). Ок?
+   3. **pending-deletions + pull-side sanitize заборонених імен.** Старий pull
+      перейменовував remote-файл із забороненим ім'ям і ставив видалення оригіналу
+      в чергу. Новий vault-step такий файл просто НЕ ЗМОЖЕ записати →
+      vaultStepErrors (голосно, per-path, повтор наступним drain-ом). Пропоную
+      (б): ВИДАЛИТИ pending-deletions, прийняти голосну деградацію як відому межу
+      (наші пристрої таких імен не створюють — локальний sanitize лишається;
+      джерело лише чужі git-клієнти), backlog-пункт на порт sanitize у vault-step.
+      Альтернатива (а): портувати sanitize зараз (дорожче, тягне enqueue-делішн
+      із drain-у).
 5. **Wiring**: `recoverStaleCommitClaims()` на onload; sweep §12.5 на старті і в
    кінці drain (живі джерела: черга + журнал + conflicts — 3 з 4; in-flight уже
    несе журнал); `.reset-in-progress`-сумісність; **вердикт TOCTOU mkdir→маркер**
