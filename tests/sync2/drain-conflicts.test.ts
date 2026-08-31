@@ -104,7 +104,12 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
       out.push({
         path: p,
         sha: h?.sha ?? DELETED_SHA_HASH,
-        size: h?.bytes.byteLength ?? null,
+        // ⚠️ HONEST FAKE (gate finding 2026-08-31): the production
+        // compare path returns NO sizes — the old fake filled them
+        // from the bytes and thereby HID a real defect (a sibling
+        // stored with size=null froze the conflict's theirs-side).
+        // Only the tree fallback knows sizes; the fold must cope.
+        size: null,
         mtime: null,
         deleted: h === null,
       });
@@ -324,6 +329,43 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
     // The OLD sibling file is gone (mark transaction step 4).
     expect(vaultHas(remoteSiblingName(firstSibling.mtime!))).toBe(false);
     expect(fs.existsSync(path.join(dir, ".obsidian/plugins", PLUGIN_ID, ".runtime", SIBLING_TX_MARK_FILE))).toBe(false);
+  });
+
+  it("C.20 (gate regression 2026-08-31): a SECOND divergent remote version FOLDS into the sibling — size=null from compare must not freeze the theirs-side", async () => {
+    // EXACT real-test shapes: single-line files.
+    baseCommit = await world.commitFiles({ [NOTE]: "v0 baseline\n" });
+    baselines.set(NOTE, {
+      baselineSha: await sha("v0 baseline\n"),
+      mtime: 50,
+      size: 12,
+    });
+    vaultFiles.files.set(NOTE, { content: "ours v1\n", mtime: 100 });
+    await world.commitFiles({ [NOTE]: "theirs v1\n" });
+    await stageBatch({ [NOTE]: "ours v1\n" });
+    const r1 = await drainOnce(makeDeps());
+    expect(r1.status).toBe("ok");
+    const e1 = conflictStore.getCachedState().entries.get(NOTE)!;
+    expect(e1.siblings).toHaveLength(1);
+    // Sizes are BACKFILLED at birth even though compare gave none —
+    // otherwise the fold below dies on _diff3's rule-6 assert.
+    expect(e1.siblings[0].size).toBeGreaterThan(0);
+
+    // Remote moves AGAIN (theirs v2), local unchanged.
+    baseCommit = world.head;
+    await world.commitFiles({ [NOTE]: "theirs v2\n" });
+    // The commit pass would re-emit the path (local != baseline).
+    await stageBatch({ [NOTE]: "ours v1\n" });
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    const e2 = conflictStore.getCachedState().entries.get(NOTE)!;
+    // The fold RAN: the theirs-side moved on (2 siblings here because
+    // v1-vs-v2 same-line divergence cannot auto-merge → §III STEP3
+    // п.2 ERROR branch appends; a clean fold would have replaced).
+    expect(r2.vaultStepErrors).toEqual([]); // ← the defect surfaced HERE
+    expect(e2.siblings.length).toBeGreaterThan(1);
+    expect(e2.siblings.at(-1)!.sha).not.toBe(e1.siblings[0].sha);
+    // conflictBase (ours) is carried through verbatim.
+    expect(e2.conflictBase.sha).toBe(e1.conflictBase.sha);
   });
 
   it("C.6 + C.12: an UNFOLDABLE new remote APPENDS a sibling — the list grows, both files on disk, order = append = mtime order", async () => {
@@ -723,7 +765,12 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
       out.push({
         path: p,
         sha: h?.sha ?? DELETED_SHA_HASH,
-        size: h?.bytes.byteLength ?? null,
+        // ⚠️ HONEST FAKE (gate finding 2026-08-31): the production
+        // compare path returns NO sizes — the old fake filled them
+        // from the bytes and thereby HID a real defect (a sibling
+        // stored with size=null froze the conflict's theirs-side).
+        // Only the tree fallback knows sizes; the fold must cope.
+        size: null,
         mtime: null,
         deleted: h === null,
       });

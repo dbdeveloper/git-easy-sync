@@ -604,6 +604,16 @@ Vault ------- [] -> зберігаємо base (R_{last})) як conflict-sibling-
    prev_conflict_sibling_file = last(current_conflict.siblings) - НАЙНОВІШИЙ (останній) елемент списку; як і
    для §III (`previous_sibling = last(current_conflict.siblings)`), тут МУСИТЬ бути вже заповнений `.blob`
    (прочитаний зі sibling-файлу на диску) — інакше _diff3() нижче впаде на LOCAL_FILE_IS_NOT_FOUND_ERROR.
+   ⚠️ І `.size` ТЕЖ (ГЕЙТ-ЗНАХІДКА 2026-08-31, регресія C.20): sibling, народжений із
+   COMPARE-discovery, несе `size = null` (compare API розмірів НЕ дає — їх знає лише
+   tree-fallback), а _diff3 правило 6 має assert «звичайний local ЗАВЖДИ має size» і
+   кидає COMPARE_WRONG_FILES → fold пропускався, і theirs-бік конфлікту НАЗАВЖДИ
+   застигав на ПЕРШІЙ remote-версії (гучно у vault_step_errors, але для користувача —
+   стара картина). Розмір відомий безкоштовно: `prevBlob.byteLength`. Додатково
+   `size` тепер backfill-иться при НАРОДЖЕННІ sibling-а (усі три сайти), щоб null не
+   потрапляв у conflicts.json. Урок про тести: фейковий discovery в юніт-сюїтах
+   заповнював size з байтів і тим ХОВАВ цей клас — тепер conflict-сюїта віддає
+   `size: null`, як реальний compare.
 Vault ------- (_diff3(current_conflict.conflictBase, prev_conflict_sibling_file, base) -> D_{conflict}:
                          - OK: 1. видаляємо previous conflict-sibling-file з Vault;
                                2. зберігаємо D_{conflict} як нoвий conflict-sibling-file (timestamp у назві —

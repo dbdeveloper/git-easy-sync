@@ -1259,7 +1259,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         });
         conflicts!.entries.set(path, {
           conflictBase: current.conflictBase,
-          siblings: [{ ...tracked.remote, blob: null }],
+          siblings: [siblingInfoFrom(tracked.remote)],
         });
         conflictVerdicts.push({ path, site: "vault-step" });
         continue;
@@ -1282,7 +1282,19 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         });
         continue;
       }
-      const prevWithBlob: FileInfo = { ...previousSibling, blob: prevBlob };
+      // ⚠️ GATE FINDING 2026-08-31: `size` MUST be filled here. A
+      // sibling born from a COMPARE-based discovery carries size=null
+      // (the compare API returns no sizes — only the tree fallback
+      // does), and _diff3's rule-6 assert ("an ordinary local always
+      // has a size") then threw CompareWrongFilesError, so the fold
+      // was skipped and the conflict's theirs-side froze at the FIRST
+      // remote version forever. The bytes are in hand — the size is
+      // knowable for free.
+      const prevWithBlob: FileInfo = {
+        ...previousSibling,
+        blob: prevBlob,
+        size: previousSibling.size ?? prevBlob.byteLength,
+      };
       let foldVerdict;
       try {
         foldVerdict = await _diff3(
@@ -1371,7 +1383,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         });
         conflicts!.entries.set(path, {
           conflictBase: current.conflictBase,
-          siblings: [...current.siblings, { ...tracked.remote, blob: null }],
+          siblings: [...current.siblings, siblingInfoFrom(tracked.remote)],
         });
       }
       conflictVerdicts.push({ path, site: "vault-step" });
@@ -1500,8 +1512,8 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         blob: tracked.remote.blob,
       });
       conflicts!.entries.set(path, {
-        conflictBase: { ...tracked.remote, blob: null },
-        siblings: [{ ...tracked.remote, blob: null }],
+        conflictBase: siblingInfoFrom(tracked.remote),
+        siblings: [siblingInfoFrom(tracked.remote)],
       });
       tracked.isManualConflict = true;
       conflictVerdicts.push({ path, site: "vault-step" });
@@ -1739,6 +1751,19 @@ async function loadLocalFromBatch(
     { path: entry.path },
   );
   return null;
+}
+
+// Persisted-FileInfo normalizer for conflicts.json: strip the blob
+// (never serialized) and BACKFILL `size` from it while it is still in
+// hand. Discovery's compare path yields size=null, and a null size in
+// a stored sibling later trips _diff3's rule-6 assert on the fold
+// (gate finding 2026-08-31).
+function siblingInfoFrom(info: FileInfo): FileInfo {
+  return {
+    ...info,
+    size: info.size ?? info.blob?.byteLength ?? null,
+    blob: null,
+  };
 }
 
 function statusFromError(
