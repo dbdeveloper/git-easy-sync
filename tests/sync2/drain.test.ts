@@ -385,13 +385,29 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(vaultFiles.writes).toEqual([]);
   });
 
-  it("cold start (base=null) + empty repo (head=null): local batch pushes as the first commit, Layer 2 guarded off", async () => {
+  it("cold start (base=null) + empty repo (head=null): the SEED births the branch; a batch bigger than the seed adds ONE sync commit", async () => {
     // No setupAligned: bare repo, no baselines, fresh vault.
-    await stageBatch({ "hello.md": "first\n" });
+    // ⚠️ RE-DERIVED at THE SWITCH gate (2026-08-31, empirically):
+    // Git Data API answers 409 on a repo with no ref, so the FIRST
+    // commit can only come from the Contents API seed (drain.ts
+    // seedBareRepoWithFile). The seed carries one of our own batch
+    // files; the sync commit follows only if the batch holds more.
+    await stageBatch({ "hello.md": "first\n", "second.md": "two\n" });
     const r = await drainOnce(makeDeps());
     expect(r.status).toBe("ok");
-    expect(r.pushedCommits).toHaveLength(1);
+    expect(world.head).not.toBeNull(); // branch born by the seed
+    expect(r.pushedCommits).toHaveLength(1); // the remainder
     expect(dec(world.headFiles().get("hello.md")!.bytes)).toBe("first\n");
+    expect(dec(world.headFiles().get("second.md")!.bytes)).toBe("two\n");
+  });
+
+  it("cold start with a SINGLE-file batch: the seed carries everything → NO redundant sync commit", async () => {
+    await stageBatch({ "only.md": "solo\n" });
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    expect(r.pushedCommits).toEqual([]); // empty-tree check held
+    expect(dec(world.headFiles().get("only.md")!.bytes)).toBe("solo\n");
+    expect(world.commits).toHaveLength(1); // the seed alone
   });
 
   // ── P: Layer 2 + lying discovery ─────────────────────────────────

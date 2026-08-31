@@ -89,6 +89,15 @@ function adaptClient(client: GithubClient): DrainClient {
     createBlob: (args) => client.createBlob(args),
     pushCommitFromTree: (args) =>
       client.pushCommitFromTree({ ...args, retry: true }),
+    seedBareRepoWithFile: async ({ path, contentBase64, message }) => {
+      const r = await client.createFile({
+        path,
+        content: contentBase64,
+        message,
+        retry: true,
+      });
+      return { commitSha: r.commitSha, treeSha: r.treeSha };
+    },
     getContentsMetadataAtRef: (path, ref) =>
       client.getContentsMetadataAtRef({ path, ref, retry: true }),
     getBlobFromRepo: async (sha) => {

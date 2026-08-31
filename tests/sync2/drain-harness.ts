@@ -159,6 +159,24 @@ export class FakeWorld {
       },
       getBlobFromRepo: async (s) => this.blobs.get(s) ?? null,
       getBranchHeadSha: async (branch) => this.branchHeads.get(branch) ?? null,
+      // Bare-repo seed (Contents API in production): creates the
+      // FIRST commit carrying exactly that file, exactly like
+      // GithubClient.createFile does on an empty repo.
+      seedBareRepoWithFile: async ({ path, contentBase64 }) => {
+        const bytes = Uint8Array.from(
+          Buffer.from(contentBase64, "base64"),
+        ).buffer as ArrayBuffer;
+        const s = await calculateGitBlobSHA(bytes);
+        this.blobs.set(s, bytes);
+        const treeSha = `tree-seed-${++this.commitSeq}`;
+        this.trees.set(treeSha, new Map([[path, { sha: s, bytes }]]));
+        const commitSha = `seed-${this.commitSeq}`;
+        this.commitTrees.set(commitSha, treeSha);
+        this.commitParents.set(commitSha, []);
+        this.commits.push(commitSha);
+        this.head = commitSha;
+        return { commitSha, treeSha };
+      },
       pushCommitToBranch: async ({ branch, parent, entries }) => {
         const cur = this.branchHeads.get(branch) ?? null;
         if (parent !== cur) {

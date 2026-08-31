@@ -53,6 +53,7 @@ import SiblingTx from "./sibling-tx";
 import {
   formatSyncMessage,
   formatConflictMessage,
+  formatInitMessage,
   formatMergeConflictBranchMessage,
 } from "./commit-message";
 import type { TrashHooks } from "./trash-hooks";
@@ -204,6 +205,12 @@ export interface DrainGithubClient {
     sha: string;
     retry?: boolean;
   }): Promise<{ content: string; encoding: string }>;
+  createFile(args: {
+    path: string;
+    content: string;
+    message: string;
+    retry?: boolean;
+  }): Promise<{ blobSha: string; treeSha: string; commitSha: string }>;
   updateReference(args: {
     ref: string;
     sha: string;
@@ -309,6 +316,17 @@ export function makeDrainClient(deps: MakeDrainClientDeps): DrainClient {
 
     pushCommitToBranch: (args) =>
       client.pushCommitToBranch({ ...args, retry: true }),
+
+    async seedBareRepoWithFile({ path, contentBase64, message }) {
+      const r = await client.createFile({
+        path,
+        content: contentBase64,
+        message,
+        retry: true,
+      });
+      headGuard.noteConfirmedHead(r.commitSha); // the seed MOVED main
+      return { commitSha: r.commitSha, treeSha: r.treeSha };
+    },
 
     getCommitInfoForPath: (path, atSha) =>
       getCommitInfoForPath(client, path, atSha),
@@ -522,6 +540,7 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
     commitMessage: (whenMs) => formatSyncMessage(args.deviceLabel(), whenMs),
     conflictMessage: (whenMs) =>
       formatConflictMessage(args.deviceLabel(), whenMs),
+    seedMessage: (whenMs) => formatInitMessage(args.deviceLabel(), whenMs),
     mergeMessage: (whenMs) =>
       formatMergeConflictBranchMessage(args.deviceLabel(), whenMs),
     gitAuthor: args.gitAuthor,

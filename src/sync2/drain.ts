@@ -109,6 +109,18 @@ export interface DrainClient {
     encoding?: "utf-8" | "base64";
     retry?: boolean;
   }): Promise<{ sha: string }>;
+  // BARE-REPO SEED (gate finding 2026-08-31, empirically re-verified):
+  // Git Data API endpoints (blobs/trees/commits) answer 409 "Git
+  // Repository is empty" until at least ONE ref exists, so a
+  // parentless first commit is IMPOSSIBLE — the Contents API is the
+  // only door into an empty repo. One PUT creates the first commit +
+  // the branch; everything after it goes the normal Git Data way.
+  // Returns the seed commit and its tree.
+  seedBareRepoWithFile(args: {
+    path: string;
+    contentBase64: string;
+    message: string;
+  }): Promise<{ commitSha: string; treeSha: string }>;
   // Creates the commit on a READY tree and moves the branch ref.
   // Throws ValidationError on 422 (someone else moved the head).
   pushCommitFromTree(args: {
@@ -268,6 +280,9 @@ export interface DrainDeps {
   // the BATCH's createdAt (formatSyncMessage uniqueness/greppability,
   // SYNC2 §4.4).
   commitMessage(whenMs: number): string;
+  // "Init at … (label)" for the bare-repo seed commit
+  // (formatInitMessage). Optional: fakes fall back to commitMessage.
+  seedMessage?(whenMs: number): string;
   // Conflict-branch pushes keep the OLD "Conflict at … (label)"
   // format (formatConflictMessage) — greppable provenance, pinned by
   // branch-lifecycle. Optional: fakes fall back to commitMessage.
@@ -576,6 +591,41 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
 
     const claimed = await deps.claimBatch();
     if (claimed === null) break;
+
+    // BARE REPO: seed BEFORE any Git Data call (they all 409 while
+    // the repo has no ref — gate finding). The seed content is one of
+    // OUR OWN files from this batch, so nothing is invented and the
+    // rest of the batch lands in the following sync commit. A
+    // deletion-only batch against an empty repo has nothing to
+    // create — deletions there are no-ops, so the seed is skipped and
+    // the batch drops out through the normal empty-tree check.
+    if (headHash === null) {
+      const seedEntry = claimed.meta.entries.find((e) => e.sha !== null);
+      if (seedEntry !== undefined) {
+        const bytes = await deps.syncStore.getBlobFromSyncStore(
+          seedEntry.sha!,
+          verifiedShas,
+        );
+        if (bytes !== null) {
+          const r = await deps.retry.run(() =>
+            deps.client.seedBareRepoWithFile({
+              path: seedEntry.path,
+              contentBase64: arrayBufferToBase64(bytes),
+              message: deps.seedMessage
+                ? deps.seedMessage(deps.now())
+                : deps.commitMessage(claimed.meta.createdAt),
+            }),
+          );
+          if (r.error !== null) return statusFromError(r.error, result);
+          headHash = r.result!.commitSha;
+          knownHeadTreeSha = r.result!.treeSha;
+          deps.logger?.info("bare repo seeded via Contents API", {
+            path: seedEntry.path,
+            commit: headHash,
+          });
+        }
+      }
+    }
 
     // Accumulator init (§II.15): both trees — the moving link and the
     // IMMUTABLE original base. Empty repo → both null, createTree
