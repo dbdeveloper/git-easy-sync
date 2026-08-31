@@ -1020,9 +1020,9 @@ A.1 п.21-25, P.25, L.3, E.3-5.
       Анотовано в NEW-DRAIN §III (mtime-інваріант). Реалізація: buildDrainDeps
       приймає gitAuthor()-thunk; drainOnce передає author у pushCommitFromTree
       (date=batch.createdAt) і pushCommitToBranch (date=now()).
-   2. **Per-batch commit message:** main-пуші = formatSyncMessage(deviceLabel,
+   2. ✅ **ВИРІШЕНО (власник, 2026-08-31):** main-пуші = formatSyncMessage(deviceLabel,
       batch.createdAt) — зберігає унікальність/greppability §4.4;
-      conflict-пуші/merge = now(). Ок?
+      conflict-пуші/merge = now(). «Тут все вірно. так і залишаємо».
    3. **pending-deletions + pull-side sanitize заборонених імен.** Старий pull
       перейменовував remote-файл із забороненим ім'ям і ставив видалення оригіналу
       в чергу. Новий vault-step такий файл просто НЕ ЗМОЖЕ записати →
