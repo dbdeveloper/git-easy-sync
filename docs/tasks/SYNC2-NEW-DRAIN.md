@@ -3758,18 +3758,27 @@ def drain():
                                                         # (§III main-loop, `if tracked.is_manual_conflict:`):
                                                         # якщо ми тут, запис ІСНУЄ.
           assert current_conflict is not null
-          tracked.base = current_conflict.conflictBase   # conflictBase — push у conflict-branch.
-                                                # ⚠️ РЕАЛІЗАЦІЯ ВІДХИЛЯЄТЬСЯ (2026-08-31, Фаза 5,
-                                                # знайдено тестом G.9): це присвоєння НЕ робиться —
-                                                # conflictBase подається у fold-_diff3 НАПРЯМУ
-                                                # (drain.ts STEP3), бо мутація tracked.base ламає
-                                                # інваріант конфлікт-режиму base == remote (§II.11,
-                                                # каскад, п.4), на якому стоять і Vault-step-гейт, і
-                                                # чистий rule-4 push резолюції після RECONCILE.
-                                                # Отруєний журнал з base=conflictBase змушував drain
-                                                # ПЕРЕРОДЖУВАТИ конфлікт одразу після того, як
-                                                # користувач його розв'язав — нерозв'язний цикл,
-                                                # прямо проти передумови §II.14.
+          fold_base = current_conflict.conflictBase   # conflictBase — push у conflict-branch;
+                                                # ЛОКАЛЬНА змінна цього кроку, НЕ tracked.base.
+                                                # ⚠️ ВИПРАВЛЕНО 2026-08-31 (Фаза 5, знайдено
+                                                # наскрізним тестом G.9). Раніше тут стояла МУТАЦІЯ
+                                                # `tracked.base = current_conflict.conflictBase` —
+                                                # і вона суперечила ДВОМ іншим місцям цього ж
+                                                # документа: (а) §II.11 (каскад, п.4) декларує
+                                                # інваріант конфлікт-режиму
+                                                # `tracked.base.sha == tracked.remote.sha`, на якому
+                                                # стоять Vault-step-гейт і чистий rule-4 push
+                                                # резолюції після RECONCILE; (б) сам §II.6 STEP3
+                                                # завжди писав виклик в АРГУМЕНТНІЙ формі:
+                                                # `_diff3(current_conflict.conflictBase,
+                                                # prev_conflict_sibling_file, base)` — без жодної
+                                                # мутації tracked. Наслідок мутації: отруєний журнал
+                                                # (base=conflictBase≠remote) → після того, як
+                                                # користувач РОЗВ'ЯЗАВ конфлікт, наступний drain
+                                                # рахував diff3(base=C_n, RESOLVED, R_m) → знову
+                                                # MANUAL_CONFLICT → конфлікт перероджувався
+                                                # НЕСКІНЧЕННО замість чистого push-у резолюції, на
+                                                # якому стоїть уся передумова FINALIZE (§II.14).
                                                 # ⚠️ ВИРІШЕНО (2026-08-25, власник, SYNC2-FIX.md
                                                 # §12.5.D): поки конфлікт живий, sweep НЕ прибирає
                                                 # цей blob узагалі — durable conflicts store є
@@ -3900,7 +3909,12 @@ def drain():
              # в різних циклах з однаковою назвою раніше зчитувались як суперечність (власник,
              # 2026-08-23) — окремі імена усувають плутанину структурно, без коментаря, який треба
              # пам'ятати читати.
-             (merged_sibling, diff_error) = _diff3(tracked, previous_sibling, head_hash)
+             (merged_sibling, diff_error) = _diff3({base: fold_base, remote: tracked.remote},
+                                                    previous_sibling, head_hash)
+                                                # ⚠️ ВИПРАВЛЕНО 2026-08-31 разом із рядком fold_base
+                                                # вище: раніше сюди передавався `tracked` ЦІЛКОМ
+                                                # (з щойно мутованою base) — тепер пара будується
+                                                # разово, tracked не чіпається (див. G.9-коментар)
              if diff_error == TOKEN_EXPIRED:
                  # Термінально для ВСЬОГО drain (як і скрізь у §III) — токен не відновиться сам між
                  # файлами, продовжувати цикл лише витрачає марні виклики.
