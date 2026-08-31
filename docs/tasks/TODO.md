@@ -660,6 +660,20 @@
     сам батч і файли які в ньому видаляється і це може привести до складних помилок, які потрібно вирішити. А може й ні.
     потрібно це перевірити.
 
+53. For github instances hosted privately this plugin should still work, but github.com is hardcoded in several places 
+    throughout the codebase. If we allow the full repo url to be configured on setup we can support self-hosted github 
+    instances
+
+    This PR adds support for this plugin to communicate with self-hosted github instances. It does this by removing the 
+    hardcoded github.com and prompting the user fill in the full URL of the repo.
+
+    - tested this with a Github enterprise server
+    - tested with github.com for sanity
+    - tested migrating a github.com vault to the new settings - the update is transparent to the user, it assumes 
+      github.com since that was the only thing supported before
+
+54. Виправити README.md під нові реалії (з'явився редактор, інша поведінка при bootstrap дві різні версії файлу remote 
+    vs local -> MANUAL CONFLICT, etc.)
 ---
 
 Оновлюй свої знання про останній статус, і продовжуємо працювати далі. Після останнього push ми виконали три великі дії:

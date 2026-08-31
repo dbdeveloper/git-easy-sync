@@ -1008,14 +1008,18 @@ A.1 п.21-25, P.25, L.3, E.3-5.
    фікс-циклом → живий cold-start ~/Obsidian-test → ETag device-pass — останній
    потребує телефон власника).
 
-   **ТРИ ПИТАННЯ ВЛАСНИКУ (блокують S1/S2):**
-   1. **Git author identity.** (а) як у живому двигуні сьогодні: author+committer з
-      date=batch.createdAt — тоді committedAt/mtime-інваріант записує ЛОКАЛЬНИЙ час,
-      не push-час (відхилення від припущення спеки — анотувати); (б)
-      **[РЕКОМЕНДУЮ]** author {name,email} БЕЗ date — авторство в git-log
-      зберігається, дати в git-log стають push-часом (локальний момент і так несе
-      in-message timestamp §4.4), mtime-інваріант лишається як у спеці; безdate-ний
-      author перевіряється об реальний GitHub у гейті; (в) викинути фічу.
+   **ПИТАННЯ ВЛАСНИКУ (блокують S1/S2):**
+   1. ✅ **ВИРІШЕНО (власник, 2026-08-31): (а)** — author+committer з
+      date=batch.createdAt, як у польовому двигуні. Вирішальний аргумент власника,
+      підтверджений кодом: getCommitInfoForPath читає committer.date → чужі зміни
+      несуть local-edit-момент → mtime-tiebreak .obsidian порівнює
+      РЕДАГУВАННЯ-проти-РЕДАГУВАННЯ (обидва боки enqueue-time-класу); з push-часом
+      пристрій, що редагував раніше, але запушив пізніше, хибно вигравав би.
+      Інваріант «ніколи не локальний годинник» НЕ порушено — ін'єктована дата живе
+      В КОМІТІ, тож push-відповідь і crash-рестартовий re-read дають те саме число.
+      Анотовано в NEW-DRAIN §III (mtime-інваріант). Реалізація: buildDrainDeps
+      приймає gitAuthor()-thunk; drainOnce передає author у pushCommitFromTree
+      (date=batch.createdAt) і pushCommitToBranch (date=now()).
    2. **Per-batch commit message:** main-пуші = formatSyncMessage(deviceLabel,
       batch.createdAt) — зберігає унікальність/greppability §4.4;
       conflict-пуші/merge = now(). Ок?
