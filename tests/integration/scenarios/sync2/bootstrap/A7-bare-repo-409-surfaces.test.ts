@@ -13,6 +13,7 @@ import {
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
 } from "../helpers";
+import { calculateGitBlobSHA } from "../../../../../src/utils";
 
 // A7 — EVERY place a bare repo can answer 409 "Git Repository is
 // empty". Written after the gate audit (2026-08-31), because the
@@ -115,17 +116,26 @@ describe.skipIf(!bootstrapEnabled())(
         client = await createSync2Client({ branch, env });
 
         // Make the engine believe a path used to be synced, then
-        // delete it locally — so the ONLY change is a deletion and the
-        // seed (which needs a content entry) is skipped. Without the
-        // accumulator guard this pushed a deletion entry into a
-        // createTree with no base_tree → 409.
+        // delete it locally, so the batch carries a DELETION entry
+        // against a repo that has nothing. Without the accumulator
+        // guard that entry went into a createTree with no base_tree
+        // (bare repo → 409) or against a tree lacking the path
+        // (→ 422 BadObjectState).
+        //
+        // ⚠️ The fake baseline sha must look like REAL content: 40
+        // zeros IS git's null sha, i.e. DELETED_SHA_HASH, and the
+        // engine then reads the row as "base was already deleted" →
+        // rule 4.6.b → a manual conflict (a test artifact, not a
+        // defect — cost one gate cycle to learn).
+        const ghostBytes = new TextEncoder().encode("was here\n")
+          .buffer as ArrayBuffer;
         await client.vault.adapter.write("ghost.md", "was here\n");
         await client.baselines.setMany([
           {
             path: "ghost.md",
-            baselineSha: "0".repeat(40),
+            baselineSha: await calculateGitBlobSHA(ghostBytes),
             mtime: 1,
-            size: 9,
+            size: ghostBytes.byteLength,
           },
         ]);
         await client.vault.adapter.remove("ghost.md");

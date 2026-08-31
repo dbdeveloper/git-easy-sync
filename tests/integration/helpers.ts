@@ -436,7 +436,11 @@ export async function getBranchHead(
     `${GH}/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branch)}`,
     { token },
   );
-  if (res.status === 404) return null;
+  // 404 = no such branch; 409 = the repo has NO commits at all
+  // ("Git Repository is empty") — a bare repo answers 409 to EVERY ref
+  // read, and "the branch does not exist" is the truthful answer in
+  // both cases (the engine's own readers map them identically).
+  if (res.status === 404 || res.status === 409) return null;
   if (res.status !== 200) {
     throw new Error(`getBranchHead → ${res.status}: ${res.text}`);
   }
