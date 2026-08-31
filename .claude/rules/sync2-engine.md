@@ -16,11 +16,15 @@ targets:
   [`docs/tasks/SYNC2-NEW-DRAIN.md`](../../docs/tasks/SYNC2-NEW-DRAIN.md), with
   [`docs/tasks/SYNC2-MASTER-PLAN.md`](../../docs/tasks/SYNC2-MASTER-PLAN.md) as the routing
   map over all six sync2 docs. **Read these first for anything in the drain path.**
-- **Engine — the PREVIOUS one**: [`docs/SYNC2.md`](../../docs/SYNC2.md). Still the canonical
-  reference for everything the SWITCH did NOT replace (cross-platform contracts, error
-  taxonomy, skip-class, worker orchestra, atomic writes, plugin reload, self-update, and
-  the §7 field-postmortem catalog). Its drain/pull/push-pipeline sections describe DELETED
-  code — treat them as history, not as the contract.
+- **Module-wide academic reference**: [`docs/SYNC2.md`](../../docs/SYNC2.md) — the "how the
+  whole engine works" text for the module, and it stays that. It is **MID-REWRITE, not
+  retired**: everything the SWITCH did NOT replace is authoritative there (cross-platform
+  contracts, error taxonomy, skip-class, worker orchestra, atomic writes, plugin reload,
+  self-update, the §7 field-postmortem catalog), while its drain/pull/push-pipeline
+  sections describe DELETED code and read as history until the rewrite. The rewrite is a
+  planned step scheduled LAST — after DOT-FILES, PLUGIN-UPDATE-COMPAT and Phase 6, because
+  the algorithms are still moving (MASTER-PLAN, post-gate work order). Its own header
+  carries the same status map.
 
 Code comments cross-reference these by section number (`SYNC2 §4.1`, `§8 Scenario E`,
 etc.). The section-number map lives in [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md).

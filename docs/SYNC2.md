@@ -1,5 +1,32 @@
 # SYNC2: A REST-Only Synchronization Engine for Obsidian Vaults
 
+> ⚠️ **STATUS (2026-08-31): this document is MID-REWRITE, not retired.**
+> It remains THE academic reference for the whole sync engine — that is
+> its job and it keeps it. But Phase 5.5 (THE SWITCH) replaced the drain
+> wholesale, so the sections describing the *old* drain, the old pull
+> path and the old push pipeline (its own `drain`/`processBatch`,
+> `push-queue`, `tree-builder`, conflict-store v1 + the Phase A/B
+> classifier, `push-inflight`, `pending-deletions`, `bootstrapFromRemote`,
+> `reconcileRemoteIdentity`) now describe DELETED code and read as
+> history until the rewrite lands.
+>
+> **Until then:** the living specification of the current engine is
+> [`tasks/SYNC2-NEW-DRAIN.md`](./tasks/SYNC2-NEW-DRAIN.md), with
+> [`tasks/SYNC2-MASTER-PLAN.md`](./tasks/SYNC2-MASTER-PLAN.md) as the
+> routing map. Everything the SWITCH did NOT touch is still authoritative
+> here: cross-platform contracts (§3), the error taxonomy (§5),
+> skip-class discipline (§6), the field-postmortem catalog (§7), the
+> worker orchestra (§8), SHA-first reconcile (§9), modify-in-place
+> (§10), plugin reload (§11), the self-update marker (§12).
+>
+> **The rewrite is a PLANNED step, deliberately scheduled LAST** (owner,
+> 2026-08-31): rewriting an academic text against algorithms that are
+> still moving would mean writing it twice. It happens after every
+> remaining engine-changing workstream — the Deleted-trash re-platform,
+> DOT-FILES, the panel's two-branch synthetic search,
+> PLUGIN-UPDATE-COMPAT and Phase 6 — see the work order in
+> MASTER-PLAN ("ПОРЯДОК РОБІТ ПІСЛЯ ГЕЙТА").
+
 ## Abstract
 
 This document specifies the engine layer of the Git Easy Sync
