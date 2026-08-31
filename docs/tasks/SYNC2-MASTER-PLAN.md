@@ -855,10 +855,16 @@ A.1 п.21-25, P.25, L.3, E.3-5.
 
 Пакет кроку (у затвердженому порядку):
 
-1. **Епілог у drainOnce** (кроки 1/3/4 §III): групове перенесення baseline з
-   TrackedFiles у cold-кошики (`setMany`/`removeMany`, §2.2.1; `mtime: 0` —
-   обґрунтування D.15) → hot-якір (`lastSyncCommitSha`/`TreeSha` + promotion
-   `conflictBranchName`) → `journal.clear()`. + Тести D.13-16.
+1. ✅ **Епілог у drainOnce** (кроки 1/3/4 §III, коміт `4ba59f4`): групове перенесення
+   baseline з TrackedFiles у cold-кошики (`setMany`/`removeMany`, §2.2.1; `mtime: 0` —
+   вартовий, тест D.13) → hot-якір (`lastSyncCommitSha`/`TreeSha` ЗАВЖДИ парою — на
+   pull-only drain пару вирівнює один `getCommit`, тест D.15 + анотація в NEW-DRAIN §III
+   — + promotion `conflictBranchName`) → `journal.clear()` (журнал помирає; G-тести
+   переякорено з журналу на записи `hot.update`). + Тести D.13-16 (D.14
+   placeholder-guard і D.16 RED-верифіковані). **Попутний дефект (D.16): усі три
+   422-CAP-виходи персистили брудний state проваленої спроби → отруєний журнал →
+   тиха втрата батчу на redo; persist-и видалено, у спеці виправлено власний
+   `persistDrainState()`.** Live T3.6/P.13 проти реального GitHub — зелені з епілогом.
 2. **Production-обв'язка**: клієнт-методи, яких бракує (`getBranchHeadSha` за ІМ'ЯМ,
    `pushCommitToBranch` — композиція blob-list→tree→commit→ref); builder справжніх
    `DrainDeps` (VaultFileReader на `atomicWriteFile` + worker-SHA; `mergeBlobs` через
