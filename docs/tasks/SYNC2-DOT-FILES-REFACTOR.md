@@ -1457,7 +1457,10 @@ push-candidati + Pass 2); **[int]** інтеграція (реальний GitHu
 
 ### D6a — секрети: два незалежні шари (§3.4.1) — РЕАЛІЗОВАНО 2026-08-31
 Живе у `tests/sync2/secret-leak-guard.test.ts` (L1…L6) + `S1-no-secret-leak.test.ts`.
-- **TD6a.1 [gi]** `<self>/data.json` при ВІДСУТНІХ усіх `.gitignore` → `false` (L1 сам).
+- **TD6a.1 [gi]** `<self>/data.json` при відсутньому root-, configDir- **і** власному
+  `<self>/.gitignore` → `false` (L1 сам, без жодного правила, що покриває цей шлях).
+  ⚠️ L1 — це ТОЧНЕ порівняння шляху, тож `<self>/data.json.bak` чи `<self>/sub/data.json`
+  L1 НЕ покриває: їх тримає лише L3 (див. TD6a.5).
 - **TD6a.2 [gi]** явні `!data.json` / `!.runtime/**` у найглибшому файлі + перемикач ON →
   все одно `false` (deny безумовний).
 - **TD6a.3 [gi]** відомий gap `gi`-vs-git (`tests/gi.test.ts:216`) не дотягується до
