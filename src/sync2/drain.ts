@@ -785,6 +785,17 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // plugin-core collision resolves like the rest of .obsidian —
         // newest wins, remote on ambiguity (3.b.e). Semver + bundle
         // atomicity (§28 class) return with PLUGIN-UPDATE-COMPAT.
+        // Discovery leaves remote.mtime null — fetch it LAZILY (same
+        // rule as the conflict-birth sites) or the tiebreak would
+        // degenerate into "remote always wins" (gate finding, E4).
+        if (tracked.remote.mtime === null && headHash !== null) {
+          const info = await deps.retry.run(() =>
+            deps.client.getCommitInfoForPath(entry.path, headHash!),
+          );
+          if (info.error !== null) return statusFromError(info.error, result);
+          tracked.remote.mtime =
+            info.result?.committedAtMs ?? tracked.remote.mtime;
+        }
         deps.logger?.warn(
           "plugin-core collision resolved by mtime (interim until PLUGIN-UPDATE-COMPAT)",
           { path: entry.path },
@@ -1384,7 +1395,16 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     }
 
     if (verdict.kind === "plugin-dispatch") {
-      // Same INTERIM rule as the batch site (gate decision).
+      // Same INTERIM rule as the batch site (gate decision), incl.
+      // the lazy remote-mtime fetch.
+      if (tracked.remote.mtime === null && headHash !== null) {
+        const info = await deps.retry.run(() =>
+          deps.client.getCommitInfoForPath(path, headHash!),
+        );
+        if (info.error !== null) return statusFromError(info.error, result);
+        tracked.remote.mtime =
+          info.result?.committedAtMs ?? tracked.remote.mtime;
+      }
       deps.logger?.warn(
         "plugin-core collision resolved by mtime in Vault-step (interim)",
         { path },

@@ -1,4 +1,8 @@
 import {
+// ⏸️ SUSPENDED AT THE SWITCH (2026-08-31, recorded in MASTER-PLAN §5.5.0):
+// the interim plugin-core collision rule is pure mtime (newest wins,
+// remote on ambiguity) — SEMVER priority (§28) deliberately returns
+// with PLUGIN-UPDATE-COMPAT (Phase 7). Un-skip when that lands.
   describe,
   it,
   beforeAll,
@@ -50,7 +54,7 @@ const minifiedJs = (n: number): string =>
   // on. Real bundles are megabytes; a short string serves the test.
   `(()=>{"use strict";const VERSION_MARKER=${n};module.exports={VERSION_MARKER};})();`;
 
-describe.skipIf(!integrationEnabled())(
+describe.skip(
   "sync2 E3 — plugin-js conflict resolved by semver",
   () => {
     let client: Sync2TestClient | undefined;

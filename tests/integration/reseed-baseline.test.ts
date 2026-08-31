@@ -48,22 +48,23 @@ describe.skipIf(!integrationEnabled())("baseline seed dump", () => {
     rmSync(dir, { recursive: true, force: true });
     expect(Object.keys(out).length).toBeGreaterThan(0);
 
-    // Refresh the default-branch baseline to the current seeds and
-    // drop the pre-rename relics — same helper surface every
-    // integration test uses.
+    // Refresh the default-branch baseline: ONLY the root .gitignore.
+    // configDir files must NOT live in the shared baseline — the
+    // OFF-mode tests (I2 symmetric gate) assert they never appear,
+    // and ON-mode cold adoption pushes them one-sidedly anyway.
     const branch = await getDefaultBranchName();
-    for (const [p, content] of Object.entries(out)) {
-      await writeRemoteFile(
-        branch,
-        p,
-        content,
-        `reseed baseline: ${p} to current plugin seeds (THE SWITCH gate)`,
-      );
-      console.log("PUT", p);
-    }
+    await writeRemoteFile(
+      branch,
+      ".gitignore",
+      out[".gitignore"],
+      "reseed baseline: root .gitignore to current plugin seed (THE SWITCH gate)",
+    );
+    console.log("PUT .gitignore");
     for (const relic of [
       ".obsidian/github-sync-metadata.json",
       ".obsidian/plugins/github-easy-sync/.gitignore",
+      ".obsidian/.gitignore",
+      ".obsidian/plugins/git-easy-sync/.gitignore",
     ]) {
       const sha = await getRemoteFileSha(branch, relic);
       if (sha) {
