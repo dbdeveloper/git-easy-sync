@@ -849,6 +849,56 @@ per-file multi-tab). Push на «пуш».
 - **Модулі:** `src/diff2/trash-store.ts`, `trash-watcher.ts`, `trash-recovery.ts`,
   `strip-conflict-suffix.ts`, `trash-disk-helpers.ts`, `types.ts`.
 
+### 5.2.1 ⚠️ RE-PLATFORM кошика на sync_store + deleted.json (рішення власника, 2026-08-31; ОКРЕМИЙ крок ПІСЛЯ гейта Фази 5.5)
+
+Дизайн узгоджено під час підготовки THE SWITCH (MASTER-PLAN §5.5.0 п.4, питання 3).
+Цільова архітектура замінює §5.2-копії `.trash/<id>/vault/…` на два наявні механізми
+нового двигуна — контент-адресований `sync_store/` (байти, дедуп) і легкий список
+`deleted.json(l)` (індекс). Deleted-view при цьому ВЗАГАЛІ не сканує ФС.
+
+**Життєвий цикл (сценарії власника 1-4):**
+1. **delete** (monkey-patch hook / pull-delete captureForDelete): байти живої
+   останньої версії → `sync_store/{sha_live}`; append
+   `{path, sha: sha_live, mtime, size, deletedAt}` → deleted.json.
+2. **create нового файлу на тому ж path** → попередній запис стає нерелевантним:
+   прибирається зі списку, блоб пізніше зникає sweep-ом (до нього більше нема як
+   дістатись — прийнято власником).
+3. **commit після delete**: findChanges емітить deletion(path) → BatchWriter пише
+   deletion-запис `{path, sha: null, deletedSha: sha_live}` — **`deletedSha`
+   переходить із deleted.json** (НЕ з baseline: baseline знає лише останню
+   СИНХРОНІЗОВАНУ версію, а кошик зберігає останню ЖИВУ, з незакоміченими
+   правками); запис виходить із deleted.json — захист блоба переїжджає в батч і
+   тримається до завершення обробки батчу. `sha: null` ЛИШАЄТЬСЯ сентинелом
+   «це видалення» (tree API); `deletedSha` — окреме, суто кошикове поле.
+4. **Кілька поколінь одного path** (delete→commit→create→commit→delete→…):
+   кожне закомічене покоління живе у СВОЄМУ батчі зі своїм deletedSha; останнє
+   незакомічене — у deleted.json. Deleted-view = deleted.json ∪ deletion-записи
+   черги — все доступно offline; повний список чужих видалень — лише з GitHub.
+
+**Чому НЕ «deleted.json тримає запис до confirmDeleted» (варіант відхилено
+власником):** `confirmDeleted` — сигнал per-path БЕЗ ідентичності покоління; при
+кількох послідовних deleted одного path у різних батчах підтвердження не каже,
+ЯКЕ покоління закрито. У прийнятій схемі ідентичність їде разом із батчем.
+
+**Sweep (§12.5 NEW-DRAIN):** джерело «черга» читає з метафайлів і `sha`, і
+`deletedSha`; deleted.json = джерело №5 (SyncStore.sweep уже приймає ін'єктований
+масив джерел — конструкція готова). Вікно відновлення закомічених поколінь =
+до завершення батчу (аналог сьогоднішнього sweepOlderThan-вікна).
+
+**Краї (зафіксовано чесно):**
+- Видалення поза hook-ами (зовнішня ФС, сторонні плагіни через adapter,
+  dot-файли) → у deleted.json запису нема → deletion-запис отримує
+  `deletedSha: null`, offline-невідновний. Паритет із сьогоднішнім кошиком
+  (R3.4/R3.12 design boundary), не регресія.
+- Креш-впорядкування: спершу батч, потім прибирання з deleted.json; креш між
+  ними → запис в обох місцях → view дедупить по (path, sha), sweep-у подвійне
+  посилання байдуже.
+- `deletedSha`-поле в meta.json додається ПРИ re-platform-і, не заздалегідь
+  (parseBatchMetafile толерантний до невідомих полів — старі батчі читаються).
+- Розділи §5.2 (копії .trash), R3.5-TTL і trash-recovery при re-platform-і
+  переглядаються: шар 1a `confirmDeleted` для НОВОГО кошика стає непотрібним
+  (роль виконує перехід у батч), для старого — живе до re-platform-у.
+
 ### 5.3 Variant A / B (за live-станом path-у) — R2.4
 Вибір робиться в момент відкриття detail через `getAbstractFileByPath(originalPath)` (без
 збереженого стану):

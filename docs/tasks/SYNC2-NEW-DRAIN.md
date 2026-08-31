@@ -4167,6 +4167,23 @@ def drain():
                   updateFileInVault(vault_result);  # замінити base-file в Vault на vault_result (атомарно,
                                                     # rename або, якщо файл відкритий - перезаписом). Якщо
                                                     # vault_result.mode == DELETED, тоді файл локально видаляється
+                                                    # ⚠️ ДОДАНО 2026-08-31 (рішення власника, THE SWITCH п.3 —
+                                                    # порт pull-side sanitize у нову модель): якщо шлях P несе
+                                                    # заборонені символи (needsSanitization, cross-platform.ts —
+                                                    # польовий кейс: mobile КРЕШИВСЯ на матеріалізації
+                                                    # desktop-легальних імен), запис іде в КАНОНІЧНИЙ шлях P'
+                                                    # (sanitizeFilename); якщо P' вже існує — skip + гучний warn
+                                                    # (дзеркало старої поведінки). БУХГАЛТЕРІЯ НЕ МІНЯЄТЬСЯ:
+                                                    # епілог чесно пише baselines[P]=remote.sha (remote СПРАВДІ
+                                                    # має P — це не фантом), а локальний sanitize-інваріант
+                                                    # гарантує, що P у vault не існує → наступний findChanges
+                                                    # емітить deletion(P) + addition(P') → наступний drain пушить
+                                                    # перейменування. Старий pending-deletions-store НЕ
+                                                    # портується: його роль розчинилась у чесному baseline
+                                                    # (він існував лише через beta4-правило «снапшот тримає
+                                                    # real entries only», яке тут не порушується). Читання/stat
+                                                    # забороненого P безпечні (креш був лише на записі);
+                                                    # vaultStepWrites звітує P'.
               tracked.base = tracked.remote 
           else:
               # tracked.base.sha == tracked.remote.sha (змін в Vault не робимо взагалі). base залишається з tracked.base

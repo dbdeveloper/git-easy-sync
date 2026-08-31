@@ -1023,15 +1023,24 @@ A.1 п.21-25, P.25, L.3, E.3-5.
    2. ✅ **ВИРІШЕНО (власник, 2026-08-31):** main-пуші = formatSyncMessage(deviceLabel,
       batch.createdAt) — зберігає унікальність/greppability §4.4;
       conflict-пуші/merge = now(). «Тут все вірно. так і залишаємо».
-   3. **pending-deletions + pull-side sanitize заборонених імен.** Старий pull
-      перейменовував remote-файл із забороненим ім'ям і ставив видалення оригіналу
-      в чергу. Новий vault-step такий файл просто НЕ ЗМОЖЕ записати →
-      vaultStepErrors (голосно, per-path, повтор наступним drain-ом). Пропоную
-      (б): ВИДАЛИТИ pending-deletions, прийняти голосну деградацію як відому межу
-      (наші пристрої таких імен не створюють — локальний sanitize лишається;
-      джерело лише чужі git-клієнти), backlog-пункт на порт sanitize у vault-step.
-      Альтернатива (а): портувати sanitize зараз (дорожче, тягне enqueue-делішн
-      із drain-у).
+   3. ✅ **ВИРІШЕНО (власник, 2026-08-31; «деградацію не приймаємо — польовий
+      кейс: mobile крешився на матеріалізації desktop-легальних імен»).** Порт =
+      **канонічний запис у vault-step + «чесний baseline»**, БЕЗ жодного store:
+      vault-step перед write(P) з needsSanitization → пише канонічний P'
+      (sanitizeFilename), P'-існує → skip+warn (дзеркало старого); епілог чесно
+      пише baselines[P]=remote.sha (remote справді має P — не фантом); локальний
+      sanitize-інваріант гарантує «P у vault нема» → наступний findChanges емітить
+      deletion(P)+addition(P') → наступний drain пушить перейменування.
+      pending-deletions-store ВМИРАЄ ОСТАТОЧНО: його роль розчинилась у чесному
+      baseline (існував лише через beta4-правило «снапшот тримає real entries
+      only», яке тут не порушено). Анотовано в NEW-DRAIN §III (vault-step).
+      Реалізація — в S1. **+ ПОБІЧНЕ РІШЕННЯ тієї ж дискусії: re-platform
+      Deleted-кошика (TrashStore) на sync_store + deleted.json з переходом
+      deletedSha у deletion-запис батчу — ОКРЕМИЙ КРОК ПІСЛЯ ГЕЙТА Фази 5.5;
+      повна схема (сценарії 1-4, відхилення confirmDeleted-варіанта через
+      per-path-без-покоління, sweep-джерело №5, краї) = DIFF-EDITOR-HISTORY-
+      DELETED.md §5.2.1. deleted-paths.txt підтверджено видаленим коректно —
+      описане стосувалось TrashStore.**
 5. **Wiring**: `recoverStaleCommitClaims()` на onload; sweep §12.5 на старті і в
    кінці drain (живі джерела: черга + журнал + conflicts — 3 з 4; in-flight уже
    несе журнал); `.reset-in-progress`-сумісність; **вердикт TOCTOU mkdir→маркер**
