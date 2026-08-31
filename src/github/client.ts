@@ -527,7 +527,11 @@ export default class GithubClient {
   }: {
     branch: string;
     parent: string | null;
-    entries: Array<{ path: string; sha: string }>;
+    // sha null = tree DELETION entry (drain: ours-side deletion,
+    // 4.6.b conflict). On a PARENTLESS root commit deletion entries
+    // are FILTERED — deleting a path the tree never had is the
+    // documented 422 BadObjectState (SYNC2 §7 postmortems).
+    entries: Array<{ path: string; sha: string | null }>;
     message: string;
     // Same pass-through contract (and the same step-4 wiring note) as
     // pushCommitFromTree.
@@ -544,9 +548,11 @@ export default class GithubClient {
       });
       baseTree = parentCommit.tree.sha;
     }
+    const effective =
+      baseTree === undefined ? entries.filter((e) => e.sha !== null) : entries;
     const treeSha = await this.createTree({
       tree: {
-        tree: entries.map((e) => ({
+        tree: effective.map((e) => ({
           path: e.path,
           mode: "100644" as const,
           type: "blob" as const,

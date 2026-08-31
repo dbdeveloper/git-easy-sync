@@ -328,9 +328,19 @@ describe("buildDrainDeps — hot-anchor schema mapping + message contracts", () 
   it("commit and merge messages keep the trailing '(deviceLabel)' contract parseDeviceSuffix relies on", () => {
     const { deps, dir } = build();
     try {
-      expect(parseDeviceSuffix(deps.commitMessage())).toBe("test-device");
-      expect(parseDeviceSuffix(deps.mergeMessage())).toBe("test-device");
-      expect(deps.mergeMessage()).toContain("Merge conflict-branch");
+      expect(parseDeviceSuffix(deps.commitMessage(1_700_000_000_000))).toBe(
+        "test-device",
+      );
+      expect(parseDeviceSuffix(deps.mergeMessage(1_700_000_000_000))).toBe(
+        "test-device",
+      );
+      expect(deps.mergeMessage(1_700_000_000_000)).toContain(
+        "Merge conflict-branch",
+      );
+      // Per-batch contract (§4.4): different createdAt → different message.
+      expect(deps.commitMessage(1_700_000_000_000)).not.toBe(
+        deps.commitMessage(1_700_000_060_000),
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

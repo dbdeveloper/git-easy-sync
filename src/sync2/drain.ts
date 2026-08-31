@@ -89,6 +89,8 @@ import {
   treeChanged,
 } from "./tree-accumulator";
 import { buildConflictBranchName } from "./conflict-branch";
+import { toGitAuthorDate } from "./commit-message";
+import { needsSanitization, sanitizeFilename } from "./cross-platform";
 
 export interface DrainClient {
   getGuardedHead(): Promise<string | null>;
@@ -111,6 +113,7 @@ export interface DrainClient {
     treeSha: string;
     parent: string | null;
     message: string;
+    author?: { name: string; email: string; date: string };
   }): Promise<{ sha: string; committedAt: number }>;
   // Layer 2 transport (§II.13 — the HEAD method in production).
   getContentsMetadataAtRef(
@@ -128,8 +131,10 @@ export interface DrainClient {
   pushCommitToBranch(args: {
     branch: string;
     parent: string | null;
-    entries: Array<{ path: string; sha: string }>;
+    // sha null = tree DELETION entry (ours-side deletion, 4.6.b).
+    entries: Array<{ path: string; sha: string | null }>;
     message: string;
+    author?: { name: string; email: string; date: string };
   }): Promise<{ sha: string }>;
   // (device_label, committed_at) of the last commit touching the path
   // (§III lazy sites; discovery.ts getCommitInfoForPath in prod).
@@ -143,6 +148,7 @@ export interface DrainClient {
     treeSha: string;
     parents: [string, string]; // [main_head, conflict_head] — POSITIONAL
     message: string;
+    author?: { name: string; email: string; date: string };
   }): Promise<{ sha: string }>;
   // Non-force PATCH of the MAIN ref. Throws ValidationError on 422
   // (another device moved main while the merge commit was built).
@@ -224,25 +230,41 @@ export interface DrainDeps {
     }): Promise<void>;
   };
   // formatMergeConflictBranchMessage in production — keeps the
-  // trailing "(deviceLabel)" contract.
-  mergeMessage(): string;
+  // trailing "(deviceLabel)" contract. Called with now().
+  mergeMessage(whenMs: number): string;
   conflictStore: ConflictStoreV2;
   siblingTx: SiblingTx;
   tokenExpired(): Promise<boolean>;
-  // Optional trash seam, passed through to process_conflicts so the
-  // prune transition fires confirmResolved (R3.5 layer 1b) on
-  // drain-side reconciles too.
+  // S1: cooperative cancellation (Settings [Stop sync], reset O3).
+  // Checked at batch boundaries only — the D.16 rule verbatim: a
+  // cancelled exit persists NOTHING (indistinguishable from a crash
+  // before the current batch), or the journal-poisoning class returns
+  // through a new door. FINALIZE/Vault-step are not interrupted.
+  cancelRequested?: () => boolean;
+  // S1: git author identity (owner decision, THE SWITCH п.1). Main
+  // pushes stamp date=batch.createdAt (the mtime invariant then
+  // records the EDIT moment — §III annotation); conflict pushes and
+  // the FINALIZE merge stamp now(). null/undefined → GitHub identity.
+  gitAuthor?: () => { name: string; email: string } | null;
+  // Optional trash seam: confirmResolved fires on the process_conflicts
+  // prune transition (R3.5 layer 1b); confirmDeleted fires at batch
+  // completion for deletion entries whose final remote state is
+  // DELETED (layer 1a — the old manager:3891 site dies at THE SWITCH).
   trashHooks?: {
     confirmResolved(basePath: string): Promise<void>;
+    confirmDeleted?(paths: string[]): Promise<void>;
   } | null;
   vaultFiles: VaultFileReader;
   mergeBlobs: Diff3Deps["mergeBlobs"];
   computeSha(bytes: ArrayBuffer): Promise<string>;
   maxAutoMergeFileSize(): number;
   deviceLabel(): string;
-  commitMessage(): string;
+  // S1: per-batch (owner decision, THE SWITCH п.2) — main pushes get
+  // the BATCH's createdAt (formatSyncMessage uniqueness/greppability,
+  // SYNC2 §4.4); conflict pushes call it with now().
+  commitMessage(whenMs: number): string;
   now(): number;
-  onProgress?: (processed: number, total: number) => void;
+  onProgress?: (processed: number, total: number, path?: string) => void;
   logger?: {
     info(message: string, data?: unknown): void;
     warn(message: string, data?: unknown): void;
@@ -265,6 +287,9 @@ export type DrainStatus =
   | "ok"
   | "token-expired"
   | "network-error"
+  // S1: cooperative cancel — a clean batch-boundary exit that persists
+  // nothing (see DrainDeps.cancelRequested).
+  | "cancelled"
   | "too-many-concurrent-pushes"
   // 3 straight 422s on the DEVICE-OWNED conflict branch — "абсолютно
   // неможливо", so when it happens it is a real anomaly to surface.
@@ -279,6 +304,13 @@ export interface DrainResult {
   // FINALIZE outcome: the merge commit that closed the conflict
   // branch this run, or null (no finalize / deferred / nothing to do).
   finalizedMergeSha: string | null;
+  // S1: what the Vault-step actually did to the vault — the manager
+  // derives BOTH the pulled-files count (onSyncCompleted) and the
+  // plugin-id set for the mobile auto-reload (onPluginsAffected).
+  // Writes report the path ACTUALLY written (canonical, when the
+  // remote name needed sanitization).
+  vaultStepWrites: string[];
+  vaultStepRemoves: string[];
 }
 
 const ERROR_422_CAP = 5;
@@ -290,6 +322,8 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   const conflictVerdicts: ConflictVerdict[] = [];
   const vaultStepErrors: Array<{ path: string; error: string }> = [];
   const pushedCommits: string[] = [];
+  const vaultStepWrites: string[] = [];
+  const vaultStepRemoves: string[] = [];
   let finalizedMergeSha: string | null = null;
 
   const result = (status: DrainStatus): DrainResult => ({
@@ -299,7 +333,19 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     vaultStepErrors,
     pushedCommits,
     finalizedMergeSha,
+    vaultStepWrites,
+    vaultStepRemoves,
   });
+
+  // S1: git identity per push site (main = batch.createdAt; conflict
+  // branch + merge = now()) — see DrainDeps.gitAuthor.
+  const authorAt = (
+    whenMs: number,
+  ): { name: string; email: string; date: string } | undefined => {
+    const id = deps.gitAuthor?.() ?? null;
+    if (id === null) return undefined;
+    return { name: id.name, email: id.email, date: toGitAuthorDate(whenMs) };
+  };
 
   // §II.11: STEP3 replace-transaction recovery — ONCE per run, first
   // line, under the caller's running lock. A live mark can only
@@ -337,6 +383,9 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   let conflicts: ConflictsState | null = null;
 
   while (true) {
+    // S1 cancel (batch boundary, BEFORE any repo access or the
+    // branch-name mint): persist NOTHING — D.16 rule.
+    if (deps.cancelRequested?.()) return result("cancelled");
     if (restartBatch) {
       // Step 0 (§III) — BEFORE any repo access: reconcile tracked
       // conflicts with the CURRENT vault state. Every restart gets
@@ -525,7 +574,11 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     );
     // conflict_commit — the plain blob-list for the conflict branch
     // (§II.15 scope boundary: NO inline, NO accumulator here).
-    const conflictCommitEntries: Array<{ path: string; sha: string }> = [];
+    // sha:null = ours-side DELETION (4.6.b conflict born from a batch
+    // deletion entry) — lands on the conflict branch as a tree
+    // deletion, never as a blob.
+    const conflictCommitEntries: Array<{ path: string; sha: string | null }> =
+      [];
     const mainPushTracked: TrackedFile[] = [];
 
     // §II.7: the journal (conflicts) answers without the network on
@@ -534,14 +587,18 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     // abort-worthy network failure — the caller returns the result.
     const shouldPushToConflictBranch = async (
       path: string,
-      sha: string,
+      sha: string | null, // null = ours is a DELETION
     ): Promise<{ should: boolean; abort: DrainResult | null }> => {
       const rec = conflicts!.entries.get(path);
       if (rec !== undefined && rec.conflictBase.sha === sha) {
         return { should: false, abort: null }; // journal confirms — no network
       }
       if (conflictHeadHash === null) {
-        return { should: true, abort: null }; // branch doesn't exist yet
+        // Branch doesn't exist yet. A deletion-ours has nothing to
+        // record on a FRESH branch (deleting a path the branch never
+        // had is the §7-known 422 BadObjectState) — skip it; the
+        // conflictBase (sha null) still records the ours-side absence.
+        return { should: sha !== null, abort: null };
       }
       const r = await deps.retry.run(() =>
         deps.client.getContentsMetadataAtRef(path, conflictHeadHash!),
@@ -549,15 +606,23 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       if (r.error !== null) {
         return { should: false, abort: statusFromError(r.error, result) };
       }
-      const live = r.result;
-      return { should: live === null || live.sha !== sha, abort: null };
+      // null-safe equality: live===null ∧ sha===null → already absent →
+      // NO push (a redundant deletion-entry 422s — BadObjectState).
+      return { should: (r.result?.sha ?? null) !== sha, abort: null };
     };
 
     // Upload one local blob for the conflict branch (saveBlobToGitHub
-    // of §III) and collect it into conflict_commit.
+    // of §III) and collect it into conflict_commit. An ours-side
+    // DELETION (blob null, 4.6.b) uploads nothing — it lands as a
+    // tree deletion entry.
     const pushLocalToConflictCommit = async (
       local: FileInfo,
     ): Promise<DrainResult | null> => {
+      if (local.sha === null || local.mode === DELETED) {
+        conflictCommitEntries.push({ path: local.path!, sha: null });
+        local.mtime = deps.now();
+        return null;
+      }
       const r = await deps.retry.run(() =>
         deps.client.createBlob({
           content: arrayBufferToBase64(local.blob!),
@@ -579,10 +644,13 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     let restartFromFlush = false;
 
     for (const entry of claimed.meta.entries) {
+      // S1 cancel (file boundary): the in-memory mutations of this
+      // half-processed batch die with the return — D.16 rule.
+      if (deps.cancelRequested?.()) return result("cancelled");
       // §4.1: progress by file count, numbers already in hand — the
       // progress bar is not worth a single extra request.
       processed += 1;
-      deps.onProgress?.(processed, total);
+      deps.onProgress?.(processed, total, entry.path);
 
       const local = await loadLocalFromBatch(deps, entry);
       if (local === null) continue; // §12.5.B: vanished + changed — next detection re-emits
@@ -617,7 +685,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         if (current.conflictBase.sha !== local.sha) {
           const decision = await shouldPushToConflictBranch(
             entry.path,
-            local.sha!,
+            local.sha,
           );
           if (decision.abort !== null) return decision.abort;
           if (decision.should) {
@@ -707,7 +775,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // didn't") must not duplicate the branch commit.
         const decision = await shouldPushToConflictBranch(
           entry.path,
-          local.sha!,
+          local.sha,
         );
         if (decision.abort !== null) return decision.abort;
         if (decision.should) {
@@ -833,7 +901,8 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         deps.client.pushCommitFromTree({
           treeSha: acc.treeSha!,
           parent: headHash,
-          message: deps.commitMessage(),
+          message: deps.commitMessage(claimed.meta.createdAt),
+          author: authorAt(claimed.meta.createdAt),
         }),
       );
       if (r.error !== null) {
@@ -879,7 +948,8 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             branch: state.conflictBranchName!,
             parent: conflictHeadHash,
             entries: conflictCommitEntries,
-            message: deps.commitMessage(),
+            message: deps.commitMessage(deps.now()),
+            author: authorAt(deps.now()),
           }),
         );
         if (p.error !== null) {
@@ -894,6 +964,34 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     }
     // FINALIZE deliberately NOT here (per-batch merge would move the
     // main head under the next push) — it lives after the loop.
+
+    // S1 — trash R3.5 layer 1a: deletion entries whose FINAL remote
+    // state is DELETED are now published (pushed by us, or dropped as
+    // already-deleted — either way the remote agrees). A deletion that
+    // LOST (remote modified → resurrect/conflict) is excluded: nothing
+    // was published. Best-effort per the TrashHooks contract.
+    if (deps.trashHooks?.confirmDeleted) {
+      const published = claimed.meta.entries
+        .filter((e) => e.sha === null)
+        .map((e) => e.path)
+        .filter((p) => {
+          const t = state.trackedFiles.get(p);
+          return (
+            t !== undefined &&
+            (t.remote.mode === DELETED || t.remote.sha === DELETED_SHA_HASH)
+          );
+        });
+      if (published.length > 0) {
+        try {
+          await deps.trashHooks.confirmDeleted(published);
+        } catch (err) {
+          deps.logger?.warn(
+            "drain: confirmDeleted hook failed (trash is best-effort)",
+            { paths: published, err: `${err}` },
+          );
+        }
+      }
+    }
 
     // BATCH ОБРОБЛЕНО! One ping-pong journal write, then the dir.
     await deps.journal.persist(state);
@@ -953,7 +1051,8 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           deps.client.createMergeCommit({
             treeSha: headCommit.result!.tree.sha, // ⚠️ THE MAIN TREE — this line is what makes the merge safe
             parents: [headHash!, conflictTip], // §4.3 order: main FIRST
-            message: deps.mergeMessage(),
+            message: deps.mergeMessage(deps.now()),
+            author: authorAt(deps.now()),
           }),
         );
         if (merge.error !== null) return statusFromError(merge.error, result);
@@ -1317,7 +1416,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       continue;
     }
     if (v.mode === DELETED || v.sha === DELETED_SHA_HASH) {
-      if (vaultEntry !== null) await deps.vaultFiles.remove(path);
+      if (vaultEntry !== null) {
+        await deps.vaultFiles.remove(path);
+        vaultStepRemoves.push(path);
+      }
       tracked.base = tracked.remote;
       continue;
     }
@@ -1342,7 +1444,41 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         }
       }
     }
-    await deps.vaultFiles.write(path, bytes);
+    // S1 — pull-side sanitize port (owner decision, THE SWITCH п.3;
+    // §III vault-step annotation): a remote path the local platform
+    // can't materialise (mobile CRASHED on desktop-legal names — the
+    // field case) is written under its CANONICAL name instead. The
+    // bookkeeping stays honest: the epilogue records baselines[P] =
+    // remote truth, the vault (by the local-sanitize invariant) never
+    // holds P → the next findChanges emits deletion(P)+addition(P')
+    // and the next drain pushes the rename. No pending-deletions
+    // store — its role dissolved into the honest baseline. Conflicts
+    // cannot be born on P (the local side never exists), so the
+    // sibling-name path never carries forbidden chars from here.
+    let writePath = path;
+    if (needsSanitization(path)) {
+      const canonical = sanitizeFilename(path);
+      if ((await deps.vaultFiles.stat(canonical)) !== null) {
+        // Mirror of the old engine's collision rule: skip LOUDLY and
+        // drop the tracked record — recording baselines[P] here would
+        // make the next commit-pass push a DELETION of remote P whose
+        // content never landed anywhere locally (silent loss). The
+        // absent baseline makes the next drain re-report P instead.
+        deps.logger?.warn(
+          "Vault-step: forbidden-path target exists, sanitize skipped",
+          { remote: path, local_canonical: canonical },
+        );
+        state.trackedFiles.delete(path);
+        continue;
+      }
+      deps.logger?.info("Vault-step: sanitized remote forbidden path", {
+        from: path,
+        to: canonical,
+      });
+      writePath = canonical;
+    }
+    await deps.vaultFiles.write(writePath, bytes);
+    vaultStepWrites.push(writePath);
     tracked.base = tracked.remote;
   }
 

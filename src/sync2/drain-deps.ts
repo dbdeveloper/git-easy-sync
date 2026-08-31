@@ -171,18 +171,21 @@ export interface DrainGithubClient {
     message: string;
     treeSha: string;
     parents?: string[];
+    author?: { name: string; email: string; date: string };
     retry?: boolean;
   }): Promise<string>;
   pushCommitFromTree(args: {
     treeSha: string;
     parent: string | null;
     message: string;
+    author?: { name: string; email: string; date: string };
   }): Promise<{ sha: string; committedAt: number }>;
   pushCommitToBranch(args: {
     branch: string;
     parent: string | null;
-    entries: Array<{ path: string; sha: string }>;
+    entries: Array<{ path: string; sha: string | null }>;
     message: string;
+    author?: { name: string; email: string; date: string };
   }): Promise<{ sha: string }>;
   getContentsMetadataViaHead(args: {
     path: string;
@@ -299,11 +302,12 @@ export function makeDrainClient(deps: MakeDrainClientDeps): DrainClient {
     getCommitInfoForPath: (path, atSha) =>
       getCommitInfoForPath(client, path, atSha),
 
-    async createMergeCommit({ treeSha, parents, message }) {
+    async createMergeCommit({ treeSha, parents, message, author }) {
       const sha = await client.createCommit({
         message,
         treeSha,
         parents: [...parents],
+        author,
         retry: true,
       });
       return { sha };
@@ -388,8 +392,13 @@ export interface BuildDrainDepsArgs {
   isSyncable(path: string): boolean;
   deviceLabel(): string;
   maxAutoMergeFileSize(): number;
+  // S1: git identity thunk (settings gitAuthor) — drainOnce stamps
+  // main pushes with batch.createdAt, conflict/merge with now().
+  gitAuthor?: () => { name: string; email: string } | null;
+  // S1: cooperative cancel (manager's abort flag).
+  cancelRequested?: () => boolean;
   trashHooks?: TrashHooks | null;
-  onProgress?: (processed: number, total: number) => void;
+  onProgress?: (processed: number, total: number, path?: string) => void;
   logger?: Logger;
   now?: () => number;
 }
@@ -481,14 +490,14 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
     computeSha,
     maxAutoMergeFileSize: args.maxAutoMergeFileSize,
     deviceLabel: args.deviceLabel,
-    // ⚠️ Per-drain, not per-batch — the old engine stamped each
-    // commit with ITS batch's createdAt (formatSyncMessage's
-    // uniqueness/greppability contract, SYNC2 §4.4). Carrying
-    // batch.createdAt through drainOnce is a THE-SWITCH decision
-    // together with git author identity; recorded in §5.5.0.
-    commitMessage: () => formatSyncMessage(args.deviceLabel(), now()),
-    mergeMessage: () =>
-      formatMergeConflictBranchMessage(args.deviceLabel(), now()),
+    // Per-batch (owner decision, THE SWITCH п.2): drainOnce passes the
+    // BATCH's createdAt for main pushes, now() for conflict pushes —
+    // formatSyncMessage's uniqueness/greppability contract (§4.4).
+    commitMessage: (whenMs) => formatSyncMessage(args.deviceLabel(), whenMs),
+    mergeMessage: (whenMs) =>
+      formatMergeConflictBranchMessage(args.deviceLabel(), whenMs),
+    gitAuthor: args.gitAuthor,
+    cancelRequested: args.cancelRequested,
     now,
     onProgress: args.onProgress,
     logger: args.logger,

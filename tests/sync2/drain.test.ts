@@ -126,6 +126,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
   const stageBatch = async (
     files: Record<string, string | null>,
     mtime = 100,
+    createdAt = 0,
   ): Promise<void> => {
     const entries: BatchEntry[] = [];
     for (const [p, content] of Object.entries(files)) {
@@ -147,7 +148,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       claimed: {
         id,
         dir: `queue/${id}`,
-        meta: { v: 1, id, createdAt: 0, entries },
+        meta: { v: 1, id, createdAt, entries },
       },
       removed: false,
     });
@@ -842,5 +843,158 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       world.head,
     );
     expect(await journal.load()).toBeNull();
+  });
+
+  // ── S1 (Phase 5.5 step 4 prep): cancel / per-batch identity /
+  //    vault-step reporting / confirmDeleted / forbidden-name port ──
+
+  it("S1 cancel: a batch-boundary cancel exits with 'cancelled' and persists NOTHING (D.16 rule) — the redo lands the batch", async () => {
+    await setupAligned();
+    await stageBatch({ "note.md": "C1\n" });
+    let cancelled = true;
+    const deps = makeDeps({ cancelRequested: () => cancelled });
+
+    const r1 = await drainOnce(deps);
+    expect(r1.status).toBe("cancelled");
+    expect(batches[0].removed).toBe(false); // queue intact
+    expect(await journal.load()).toBeNull(); // nothing persisted
+    expect(hotUpdates).toEqual([]); // no anchor from a cancel
+    expect(baselines.get("note.md")!.mtime).toBe(50); // untouched
+
+    cancelled = false;
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    expect(dec(world.headFiles().get("note.md")!.bytes)).toBe("C1\n");
+  });
+
+  it("S1 message+author: main push carries the BATCH's createdAt (message AND author.date); merge/conflict use now()", async () => {
+    await setupAligned();
+    const CREATED = 1_777_000_123_000;
+    await stageBatch({ "note.md": "C1\n" }, 100, CREATED);
+
+    const messageArgs: number[] = [];
+    const pushedAuthors: Array<unknown> = [];
+    const client = world.makeClient();
+    const origPush = client.pushCommitFromTree.bind(client);
+    client.pushCommitFromTree = async (args) => {
+      pushedAuthors.push((args as { author?: unknown }).author);
+      return origPush(args);
+    };
+    const r = await drainOnce(
+      makeDeps({
+        client,
+        commitMessage: (whenMs: number) => {
+          messageArgs.push(whenMs);
+          return `Sync at ${whenMs} (test-device)`;
+        },
+        gitAuthor: () => ({ name: "Vlad", email: "v@x" }),
+      }),
+    );
+    expect(r.status).toBe("ok");
+    expect(messageArgs).toEqual([CREATED]); // per-batch, not per-drain
+    expect(pushedAuthors).toHaveLength(1);
+    expect(pushedAuthors[0]).toMatchObject({ name: "Vlad", email: "v@x" });
+    // author.date is the git-formatted BATCH moment (local offset
+    // form) — the mtime invariant then records the EDIT moment
+    // (owner decision п.1).
+    expect(Date.parse((pushedAuthors[0] as { date: string }).date)).toBe(
+      CREATED,
+    );
+  });
+
+  it("S1 vault-step reporting: writes and removes are surfaced (pulledFiles + onPluginsAffected feed); progress carries the path", async () => {
+    await setupAligned();
+    // obs.md exists on remote AND locally, aligned; then the remote
+    // edits note.md and deletes obs.md.
+    baseCommit = await world.commitFiles({ "obs.md": "x" });
+    vaultFiles.files.set("obs.md", { content: "x", mtime: 50 });
+    baselines.set("obs.md", { baselineSha: await sha("x"), mtime: 50, size: 1 });
+    await world.commitFiles({ "note.md": "R\n", "obs.md": null });
+    await stageBatch({ "other.md": "O\n" });
+
+    const paths: Array<string | undefined> = [];
+    const r = await drainOnce(
+      makeDeps({ onProgress: (_p, _t, path) => paths.push(path) }),
+    );
+    expect(r.status).toBe("ok");
+    expect(r.vaultStepWrites).toEqual(["note.md"]);
+    expect(r.vaultStepRemoves).toEqual(["obs.md"]);
+    expect(paths).toEqual(["other.md"]); // per-file progress names the file
+  });
+
+  it("S1 confirmDeleted (R3.5 layer 1a): fires with PUBLISHED deletions only; a deletion that lost to a remote edit is excluded", async () => {
+    await setupAligned();
+    baseCommit = await world.commitFiles({ "gone.md": "bye\n" });
+    vaultFiles.files.set("gone.md", { content: "bye\n", mtime: 50 });
+    baselines.set("gone.md", {
+      baselineSha: await sha("bye\n"),
+      mtime: 50,
+      size: 4,
+    });
+    // Batch deletes gone.md (publishes) AND note.md — but remote
+    // EDITED note.md meanwhile → that deletion loses (not published).
+    await world.commitFiles({ "note.md": "REMOTE-EDIT\n" });
+    await stageBatch({ "gone.md": null, "note.md": null });
+    vaultFiles.files.delete("gone.md");
+    vaultFiles.files.delete("note.md");
+
+    const confirmed: string[][] = [];
+    const r = await drainOnce(
+      makeDeps({
+        trashHooks: {
+          confirmResolved: async () => {},
+          confirmDeleted: async (paths) => {
+            confirmed.push(paths);
+          },
+        },
+      }),
+    );
+    expect(r.status).toBe("ok");
+    expect(confirmed).toEqual([["gone.md"]]); // note.md excluded
+    expect(world.headFiles().has("gone.md")).toBe(false);
+  });
+
+  it("S1 forbidden-name port: a remote path the platform can't materialise is written CANONICALLY; the baseline stays the honest remote truth", async () => {
+    await setupAligned();
+    const BAD = 'notes/we"ird?.md'; // " and ? are forbidden (cross-platform.ts)
+    await world.commitFiles({ [BAD]: "remote content\n" });
+
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    // Written under the canonical name, reported as such.
+    expect(r.vaultStepWrites).toHaveLength(1);
+    const canonical = r.vaultStepWrites[0];
+    expect(canonical).not.toBe(BAD);
+    expect(vaultFiles.files.has(canonical)).toBe(true);
+    expect(vaultFiles.files.get(canonical)!.content).toBe("remote content\n");
+    expect(vaultFiles.files.has(BAD)).toBe(false); // never materialised
+    // The epilogue records the HONEST remote truth for the ORIGINAL
+    // path — the next findChanges sees baseline-without-file and emits
+    // the deletion that renames the remote (§III annotation).
+    expect(baselines.get(BAD)!.baselineSha).toBe(await sha("remote content\n"));
+    expect(baselines.has(canonical)).toBe(false); // detector picks it up as new
+  });
+
+  it("S1 forbidden-name collision: canonical target exists → LOUD skip, NO baseline for the original (no silent remote deletion)", async () => {
+    await setupAligned();
+    const BAD = 'we"ird.md';
+    await world.commitFiles({ [BAD]: "remote content\n" });
+    // The canonical name is already occupied by DIFFERENT local content.
+    const { sanitizeFilename } = await import("../../src/sync2/cross-platform");
+    const canonical = sanitizeFilename(BAD);
+    vaultFiles.files.set(canonical, { content: "user content", mtime: 60 });
+
+    const warns: string[] = [];
+    const r = await drainOnce(
+      makeDeps({
+        logger: { info: () => {}, warn: (m) => warns.push(m) },
+      }),
+    );
+    expect(r.status).toBe("ok");
+    expect(vaultFiles.files.get(canonical)!.content).toBe("user content"); // untouched
+    expect(warns.some((w) => w.includes("sanitize skipped"))).toBe(true);
+    // NO baseline for BAD: recording it would make the next commit-pass
+    // DELETE remote content that never landed anywhere locally.
+    expect(baselines.has(BAD)).toBe(false);
   });
 });

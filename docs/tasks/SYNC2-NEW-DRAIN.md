@@ -3603,6 +3603,17 @@ def drain():
                  continue;  # перезапускаємо drain з даного (першого) batch зпочатку
            
         # комітимо в conflict_branch, якщо є що комітити
+        # ⚠️ ДОДАНО 2026-08-31 (S1, знахідка тестом; клас P.25): ours-бік конфлікту може бути
+        # ВИДАЛЕННЯМ — batch-запис sha:null проти remote-редагування дає 4.6.b manual-conflict,
+        # і "заливати ours у гілку" тут означає tree-DELETION-запис (sha:null у conflict_commit),
+        # НЕ блоб (blob немає — старий код крешився на createBlob(null)). Три guard-и:
+        # (1) shouldPushToConflictBranch звіряє null-safe: live==null ∧ ours==null → вже
+        #     відсутній → НЕ пушити (редундантний deletion-запис = відомий 422 BadObjectState §7);
+        # (2) на СВІЖІЙ гілці (parent==null) deletion-запис відфільтровується у клієнті —
+        #     видаляти нема з чого, а 422 той самий;
+        # (3) conflictBase такого запису має sha:null — чесний запис "наш бік = відсутність";
+        #     _diff3 надалі працює з ним null-as-base правилами. Sibling у Vault — theirs
+        #     (Deleted×Conflict UX, HISTORY-DELETED §5.8).
         if len(conflict_commit) > 0:
             cnt = 0
             while cnt<3:
