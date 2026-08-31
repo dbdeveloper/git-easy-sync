@@ -8,6 +8,7 @@ import ConflictStoreV2, {
   emptyConflictsState,
 } from "../../src/sync2/conflict-store-v2";
 import { emptyFileInfo } from "../../src/sync2/diff3";
+import { buildSiblingFilePath } from "../../src/sync2/conflict-siblings";
 
 // Phase 5 step 1 — the durable conflicts home (§II.6/§III shape:
 // Map<path, {conflictBase, siblings[]}> + lastSiblingTxGuid).
@@ -44,8 +45,10 @@ describe("ConflictStoreV2", () => {
         blob: new TextEncoder().encode("never-on-disk").buffer as ArrayBuffer,
       },
       siblings: [
-        { ...emptyFileInfo(), path: "clash.md", sha: "sib-1", mtime: 200 },
-        { ...emptyFileInfo(), path: "clash.md", sha: "sib-2", mtime: 300 },
+        // Distinct SECONDS — the filename timestamp drops milliseconds,
+        // so sub-second mtimes would collide into one derived name.
+        { ...emptyFileInfo(), path: "clash.md", sha: "sib-1", mtime: 200_000 },
+        { ...emptyFileInfo(), path: "clash.md", sha: "sib-2", mtime: 300_000 },
       ],
     });
     return state;
@@ -129,5 +132,73 @@ describe("ConflictStoreV2", () => {
     const loaded = await store.load();
     expect(loaded.entries.size).toBe(0);
     expect(loaded.lastSiblingTxGuid).toBeNull();
+  });
+
+  // ── cached view (Phase 5.5 step 3a — the diff2 port's sync surface) ──
+
+  describe("cached view", () => {
+    it("load() populates the cache: hasBase / hasSiblingPath / getBySiblingPath answer synchronously", async () => {
+      await store.save(sample());
+      const fresh = new ConflictStoreV2({
+        vault: vault as never,
+        selfPluginId: PLUGIN_ID,
+      });
+      // Before any load the cache is EMPTY, not undefined-crashy.
+      expect(fresh.hasBase("clash.md")).toBe(false);
+      await fresh.load();
+      expect(fresh.hasBase("clash.md")).toBe(true);
+      expect(fresh.hasBase("other.md")).toBe(false);
+
+      const name = buildSiblingFilePath("clash.md", 200_000, null); // deviceLabel null → "unknown"
+      expect(fresh.hasSiblingPath(name)).toBe(true);
+      const hit = fresh.getBySiblingPath(name);
+      expect(hit!.basePath).toBe("clash.md");
+      expect(hit!.sibling.sha).toBe("sib-1");
+      expect(fresh.getBySiblingPath("clash.md")).toBeNull(); // a base is not a sibling
+    });
+
+    it("save() is the rebuild point: mutating the state and saving refreshes both indexes", async () => {
+      const state = sample();
+      await store.save(state);
+      state.entries.delete("clash.md");
+      state.entries.set("new.md", {
+        conflictBase: { ...emptyFileInfo(), path: "new.md", sha: "nb" },
+        siblings: [
+          {
+            ...emptyFileInfo(),
+            path: "new.md",
+            sha: "ns",
+            mtime: 500,
+            deviceLabel: "tab",
+          },
+        ],
+      });
+      await store.save(state);
+      expect(store.hasBase("clash.md")).toBe(false);
+      expect(store.hasBase("new.md")).toBe(true);
+      expect(
+        store.hasSiblingPath(buildSiblingFilePath("new.md", 500, "tab")),
+      ).toBe(true);
+      expect(
+        store.hasSiblingPath(buildSiblingFilePath("clash.md", 200_000, null)),
+      ).toBe(false);
+    });
+
+    it("getCachedState() is the SAME object load() returned — in-place drain mutations are visible to hasBase", async () => {
+      await store.save(sample());
+      const state = await store.load();
+      expect(store.getCachedState()).toBe(state);
+      state.entries.delete("clash.md"); // drain-style in-place mutation
+      expect(store.hasBase("clash.md")).toBe(false); // shared Map — no save needed
+    });
+
+    it("empty and corrupt loads RESET the cache — no stale conflicts survive a wipe", async () => {
+      await store.save(sample());
+      expect(store.hasBase("clash.md")).toBe(true);
+      fs.writeFileSync(fileAbs(), "{broken json");
+      await store.load();
+      expect(store.hasBase("clash.md")).toBe(false);
+      expect(store.getCachedState().entries.size).toBe(0);
+    });
   });
 });

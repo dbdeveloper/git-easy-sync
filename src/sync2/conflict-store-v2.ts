@@ -39,6 +39,8 @@ import {
   fileInfoFromJson,
   fileInfoToJson,
 } from "./drain-journal";
+import type { FileInfo } from "./diff3";
+import { buildSiblingFilePath } from "./conflict-siblings";
 
 export const CONFLICTS_FILE = "conflicts.json";
 
@@ -60,6 +62,21 @@ export default class ConflictStoreV2 {
     | { warn(message: string, data?: unknown): void }
     | undefined;
 
+  // ── cached view (Phase 5.5 step 3a — the diff2 port's SYNC read
+  // surface). `cachedState` is the SAME object the last load()
+  // returned / save() received — the drain mutates its Map in place,
+  // so `hasBase` tracks live mutations for free. The derived-name
+  // sibling index, by contrast, is rebuilt only on load()/save(); a
+  // mid-drain staleness window is deliberate and harmless for the one
+  // hot consumer (ConflictWatcher.isRelevant): its
+  // `.conflict-from-` substring fallback catches any sibling path
+  // regardless of store state — do NOT "fix" that fallback away.
+  private cachedState: ConflictsState = emptyConflictsState();
+  private siblingPathIndex = new Map<
+    string,
+    { basePath: string; sibling: FileInfo }
+  >();
+
   constructor(deps: {
     vault: Vault;
     selfPluginId: string;
@@ -68,6 +85,45 @@ export default class ConflictStoreV2 {
     this.vault = deps.vault;
     this.selfPluginId = deps.selfPluginId;
     this.logger = deps.logger;
+  }
+
+  private rebuildCache(state: ConflictsState): void {
+    this.cachedState = state;
+    this.siblingPathIndex = new Map();
+    for (const [basePath, entry] of state.entries) {
+      for (const sibling of entry.siblings) {
+        this.siblingPathIndex.set(
+          buildSiblingFilePath(basePath, sibling.mtime ?? 0, sibling.deviceLabel),
+          { basePath, sibling },
+        );
+      }
+    }
+  }
+
+  // The last loaded/saved state. UI readers (counter default formula,
+  // panel refresh paths) treat it as read-only; all mutations flow
+  // through the drain / process_conflicts, which save().
+  getCachedState(): ConflictsState {
+    return this.cachedState;
+  }
+
+  // O(1): does this base path carry a live conflict entry? (An entry
+  // with siblings==[] is STILL a conflict — I.7.)
+  hasBase(path: string): boolean {
+    return this.cachedState.entries.has(path);
+  }
+
+  // O(1): is this vault path a TRACKED sibling's derived disk name?
+  hasSiblingPath(path: string): boolean {
+    return this.siblingPathIndex.has(path);
+  }
+
+  // Tracked-sibling lookup by disk name — the synthetic-detector's
+  // tracked/synthetic discriminator. null = not tracked (synthetic).
+  getBySiblingPath(
+    siblingPath: string,
+  ): { basePath: string; sibling: FileInfo } | null {
+    return this.siblingPathIndex.get(siblingPath) ?? null;
   }
 
   private filePath(): string {
@@ -79,7 +135,9 @@ export default class ConflictStoreV2 {
   async load(): Promise<ConflictsState> {
     const p = this.filePath();
     if (!(await this.vault.adapter.exists(p))) {
-      return emptyConflictsState();
+      const state = emptyConflictsState();
+      this.rebuildCache(state);
+      return state;
     }
     try {
       const raw = JSON.parse(await this.vault.adapter.read(p)) as Record<
@@ -107,6 +165,7 @@ export default class ConflictStoreV2 {
           });
         }
       }
+      this.rebuildCache(state);
       return state;
     } catch (e) {
       // conflictBase is network-borne and NOT re-derivable from disk —
@@ -116,11 +175,14 @@ export default class ConflictStoreV2 {
           "sibling files on disk will re-enter as synthetic via the scan",
         { error: String(e) },
       );
-      return emptyConflictsState();
+      const state = emptyConflictsState();
+      this.rebuildCache(state);
+      return state;
     }
   }
 
   async save(state: ConflictsState): Promise<void> {
+    this.rebuildCache(state); // save is the in-drain rebuild point
     const conflicts: Record<string, unknown> = {};
     for (const [path, c] of state.entries) {
       conflicts[path] = {
