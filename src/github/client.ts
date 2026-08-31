@@ -75,7 +75,7 @@ import type WorkerClient from "src/worker/worker-client";
 // Case-insensitive response-header lookup. The two transports
 // disagree on key casing (Obsidian's requestUrl lowercases; the
 // network worker passes fetch's Headers entries through as-is), and
-// getContentsMetadataViaHead reads ETag/Content-Length from either.
+// getContentsMetadataAtRef reads ETag/Content-Length from either.
 function headerValue(
   headers: Record<string, string> | undefined,
   name: string,
@@ -721,72 +721,6 @@ export default class GithubClient {
     }));
   }
 
-  /**
-   * The committer date (ms since epoch) of the LATEST commit that
-   * touched `path` at/under `ref`. Used by the plugin-js mtime
-   * tie-break (SYNC2 §7) as the "theirs" timestamp — i.e. when the
-   * remote file was last *changed*, NOT when the branch HEAD last
-   * moved. The list-commits endpoint returns matching commits
-   * newest-first; `per_page=1` gives just the most recent.
-   *
-   * Best-effort: returns null on no matching commit (empty array),
-   * a non-2xx response, a malformed payload, or a network failure.
-   * The caller treats null as "unknown" and falls back to epoch (0),
-   * which makes OURS win the tie — the safe direction (never pull a
-   * remote bundle over the local one on uncertainty). Never throws.
-   *
-   * GET /repos/{o}/{r}/commits?path={path}&sha={ref}&per_page=1.
-   */
-  async getLatestCommitDateForPath({
-    path,
-    ref,
-    retry = false,
-    maxRetries = 5,
-  }: {
-    path: string;
-    ref: string;
-    retry?: boolean;
-    maxRetries?: number;
-  }): Promise<number | null> {
-    try {
-      const query =
-        `path=${encodeURIComponent(path)}` +
-        `&sha=${encodeURIComponent(ref)}&per_page=1`;
-      const response = await retryUntil(
-        async () => {
-          return this.timed(
-            {
-              url: `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/commits?${query}`,
-              headers: this.headers(),
-              throw: false,
-            },
-            "commits-for-path",
-          );
-        },
-        (res) => !isRetriableStatus(res.status),
-        retry ? maxRetries : 0,
-      );
-      if (response.status < 200 || response.status >= 400) {
-        this.logger.warn(
-          `getLatestCommitDateForPath ${path}@${ref}: status ${response.status}`,
-        );
-        return null;
-      }
-      const arr = response.json as Array<{
-        commit?: { committer?: { date?: string }; author?: { date?: string } };
-      }>;
-      const date =
-        arr?.[0]?.commit?.committer?.date ?? arr?.[0]?.commit?.author?.date;
-      if (!date) return null;
-      const ms = Date.parse(date);
-      return Number.isNaN(ms) ? null : ms;
-    } catch (err) {
-      this.logger.warn(
-        `getLatestCommitDateForPath ${path}@${ref} failed: ${String(err)}`,
-      );
-      return null;
-    }
-  }
 
   /**
    * Fetch the base64-encoded blob content at a specific commit ref.
@@ -889,59 +823,6 @@ export default class GithubClient {
     return { content: blob.content, sha };
   }
 
-  /**
-   * Fetches just the metadata (sha + size) for a path at a ref, without
-   * ever downloading the file content. Used by the Stage 5 SHA-first
-   * reconcile path so the engine can decide based on SHAs alone before
-   * paying for blob fetches and base64 decoding.
-   *
-   * Returns `null` when the path doesn't exist at the ref (404).
-   * Throws on unexpected statuses (matches `getContentsAtRef` behavior).
-   *
-   * Implementation note: the Contents API response carries both `sha`
-   * and `size`. For files ≤1 MB it also includes inline content, which
-   * this method intentionally discards — we want the small "is anything
-   * actually different" check to be uniform across all file sizes, and
-   * the caller is responsible for fetching content via getBlob when
-   * the SHA comparison shows it's needed.
-   */
-  async getContentsMetadataAtRef({
-    path: filePath,
-    ref,
-    retry = false,
-    maxRetries = 5,
-  }: {
-    path: string;
-    ref: string;
-    retry?: boolean;
-    maxRetries?: number;
-  }): Promise<{ sha: string; size: number } | null> {
-    const response = await retryUntil(
-      async () => {
-        return this.timed(
-          {
-            url: `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/contents/${encodePathForGithub(filePath)}?ref=${ref}`,
-            headers: this.headers(),
-            throw: false,
-          },
-          `contents-meta/${filePath}@${ref.slice(0, 7)}`,
-        );
-      },
-      (res) => !isRetriableStatus(res.status),
-      retry ? maxRetries : 0,
-    );
-    if (response.status === 404) return null;
-    if (response.status < 200 || response.status >= 400) {
-      this.logger.error("Failed to get contents metadata at ref", response);
-      throw makeGithubAPIError(
-        response.status,
-        `Failed to get contents metadata at ref, status ${response.status}`,
-      );
-    }
-    const sha = response.json.sha as string;
-    const size = (response.json.size as number) ?? 0;
-    return { sha, size };
-  }
 
   /**
    * Full recursive tree at an ARBITRARY commit/tree sha — the data
@@ -1025,7 +906,7 @@ export default class GithubClient {
    * content and `blob` stays null. Returns null when the path does
    * not exist at the ref (404 — a normal answer, not an error).
    */
-  async getContentsMetadataViaHead({
+  async getContentsMetadataAtRef({
     path: filePath,
     ref,
     blobSink,
@@ -1083,7 +964,7 @@ export default class GithubClient {
     // Fallback — the ETag isn't shaped like a blob sha. Don't guess:
     // take the DOCUMENTED `sha`/`size` fields from GET+json.
     this.logger.warn(
-      "getContentsMetadataViaHead: ETag not a blob-SHA — falling back to GET",
+      "getContentsMetadataAtRef: ETag not a blob-SHA — falling back to GET",
       { path: filePath, etag: rawEtag },
     );
     const getResponse = await retryUntil(

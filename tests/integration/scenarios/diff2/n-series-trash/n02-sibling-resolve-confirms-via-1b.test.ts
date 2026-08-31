@@ -23,7 +23,11 @@ import {
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
 } from "../../sync2/helpers";
-import { evaluateConflictState } from "../../../../../src/sync2/conflict-classifier";
+import {
+  reconcileConflictsForTest,
+  trackedSiblingPathsFor,
+  conflictEntryCount,
+} from "../../sync2/helpers";
 
 // n02 — R3.5 layer 1b (confirmResolved) end-to-end.
 //
@@ -89,9 +93,9 @@ describe.skipIf(!integrationEnabled())(
 
         await sync2AllAndAssertNoErrors(client);
 
-        const records = client.conflictStore.getByPath("note.md");
+        const records = trackedSiblingPathsFor(client, "note.md");
         expect(records).toHaveLength(1);
-        const siblingPath = records[0].siblingPath;
+        const siblingPath = records[0];
         const siblingAbs = path.join(client.vaultPath, siblingPath);
         expect(fs.existsSync(siblingAbs)).toBe(true);
 
@@ -106,11 +110,8 @@ describe.skipIf(!integrationEnabled())(
         // in production; the integration fixture's mock vault doesn't
         // emit those events, so drive the classifier manually so Phase A
         // runs on the next drain.
-        await evaluateConflictState(
-          client.conflictStore,
-          client.vault as unknown as import("obsidian").Vault,
-        );
-        expect(client.conflictStore.hasPending("note.md")).toBe(false);
+        await reconcileConflictsForTest(client);
+        expect(client.conflictStore.hasBase("note.md")).toBe(false);
 
         // Pre-sync state: trash has exactly the sibling entry.
         const beforeSync = await client.trashStore.list();

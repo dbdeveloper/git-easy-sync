@@ -9,7 +9,7 @@ import SyncStore from "../../src/sync2/sync-store";
 import { calculateGitBlobSHA } from "../../src/utils";
 
 // §VIII P.14-18 — the Layer-2 HEAD transport
-// (GithubClient.getContentsMetadataViaHead, NEW-DRAIN §II.13). Unit,
+// (GithubClient.getContentsMetadataAtRef, NEW-DRAIN §II.13). Unit,
 // fake network worker; P.19 (the ETag==sha EQUALITY canary) is the
 // integration half in tests/integration/discovery-layer1.test.ts.
 
@@ -38,7 +38,7 @@ const explodingJson = new Proxy(
   },
 );
 
-describe("getContentsMetadataViaHead (§VIII P.14-18)", () => {
+describe("getContentsMetadataAtRef (§VIII P.14-18)", () => {
   let dir: string;
   let vault: Vault;
   let seen: SeenRequest[];
@@ -90,7 +90,7 @@ describe("getContentsMetadataViaHead (§VIII P.14-18)", () => {
       json: explodingJson,
       headers: { etag: `"${SHA40}"`, "content-length": "31043" },
     });
-    const meta = await makeClient().getContentsMetadataViaHead({
+    const meta = await makeClient().getContentsMetadataAtRef({
       path: "note.md",
       ref: "headsha",
     });
@@ -107,7 +107,7 @@ describe("getContentsMetadataViaHead (§VIII P.14-18)", () => {
       json: explodingJson,
       headers: { ETag: `W/"${SHA40}"`, "Content-Length": "7" },
     });
-    const weak = await makeClient().getContentsMetadataViaHead({
+    const weak = await makeClient().getContentsMetadataAtRef({
       path: "a.md",
       ref: "s",
     });
@@ -119,7 +119,7 @@ describe("getContentsMetadataViaHead (§VIII P.14-18)", () => {
       json: explodingJson,
       headers: { etag: `"${SHA40}"`, "content-length": "7" },
     });
-    const plain = await makeClient().getContentsMetadataViaHead({
+    const plain = await makeClient().getContentsMetadataAtRef({
       path: "a.md",
       ref: "s",
     });
@@ -139,7 +139,7 @@ describe("getContentsMetadataViaHead (§VIII P.14-18)", () => {
       json: { sha: SHA40, size: 999, content: "" },
       headers: {},
     });
-    const meta = await makeClient().getContentsMetadataViaHead({
+    const meta = await makeClient().getContentsMetadataAtRef({
       path: "note.md",
       ref: "headsha",
     });
@@ -176,7 +176,7 @@ describe("getContentsMetadataViaHead (§VIII P.14-18)", () => {
       vault: vault as never,
       selfPluginId: PLUGIN_ID,
     });
-    const meta = await makeClient().getContentsMetadataViaHead({
+    const meta = await makeClient().getContentsMetadataAtRef({
       path: "note.md",
       ref: "headsha",
       blobSink: {
@@ -210,7 +210,7 @@ describe("getContentsMetadataViaHead (§VIII P.14-18)", () => {
       headers: {},
     });
     let saved = 0;
-    const meta = await makeClient().getContentsMetadataViaHead({
+    const meta = await makeClient().getContentsMetadataAtRef({
       path: "big.bin",
       ref: "headsha",
       blobSink: {
@@ -227,7 +227,7 @@ describe("getContentsMetadataViaHead (§VIII P.14-18)", () => {
   it("404 → null: an absent path at the ref is a normal answer, not an error", async () => {
     queue.push({ status: 404, text: "", json: explodingJson, headers: {} });
     expect(
-      await makeClient().getContentsMetadataViaHead({
+      await makeClient().getContentsMetadataAtRef({
         path: "ghost.md",
         ref: "headsha",
       }),

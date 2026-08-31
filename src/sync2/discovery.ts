@@ -1,7 +1,7 @@
 // Hybrid discovery, Layer 1 (NEW-DRAIN §II.12) + getCommitInfoForPath
 // (§III, P.23-26). Phase 3 primitives; the new drain (Phase 4) is the
 // caller. Layer 2 (§II.13) lives in the client as
-// getContentsMetadataViaHead — it is a per-path transport, not a
+// getContentsMetadataAtRef — it is a per-path transport, not a
 // discovery pass.
 //
 // ONE function serves BOTH degraded triggers: compare() truncating at
@@ -81,7 +81,8 @@ export interface DiscoveryDeps {
     allPaths(): Promise<string[]>;
     getMany(paths: string[]): Promise<Map<string, { baselineSha: string }>>;
   };
-  isSyncable: (path: string) => boolean;
+  // May be async in production (gitignore walks read files).
+  isSyncable: (path: string) => boolean | Promise<boolean>;
   logger?: DiscoveryLogger;
 }
 
@@ -134,7 +135,7 @@ export async function getChangedFilesFromGitHubRepo(
   // used).
   const out: RemoteFileChange[] = [];
   for (const f of files) {
-    if (!deps.isSyncable(f.filename)) continue;
+    if (!(await deps.isSyncable(f.filename))) continue;
     if (f.status === "removed") {
       out.push(deletedChange(f.filename));
       continue;
@@ -142,7 +143,7 @@ export async function getChangedFilesFromGitHubRepo(
     if (
       f.status === "renamed" &&
       typeof f.previous_filename === "string" &&
-      deps.isSyncable(f.previous_filename)
+      (await deps.isSyncable(f.previous_filename))
     ) {
       out.push(deletedChange(f.previous_filename));
     }
@@ -180,14 +181,15 @@ export async function fullTreeDiffAgainstColdBaseline(
 
   const treePaths = new Map<string, { sha: string; size: number | null }>();
   for (const f of tree.files) {
-    if (deps.isSyncable(f.path)) {
+    if (await deps.isSyncable(f.path)) {
       treePaths.set(f.path, { sha: f.sha, size: f.size });
     }
   }
 
-  const knownPaths = (await deps.baselines.allPaths()).filter(
-    deps.isSyncable,
-  );
+  const knownPaths: string[] = [];
+  for (const p of await deps.baselines.allPaths()) {
+    if (await deps.isSyncable(p)) knownPaths.push(p);
+  }
   const baselines = await deps.baselines.getMany(knownPaths);
 
   // Union: everything WE know + everything the server has now.

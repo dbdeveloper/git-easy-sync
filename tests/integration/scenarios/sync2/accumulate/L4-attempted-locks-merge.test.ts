@@ -93,7 +93,9 @@ describe.skipIf(!integrationEnabled())(
         const idsAfterFail = await client.queue.list();
         expect(idsAfterFail.length).toBe(1);
         const b1 = await client.queue.read(idsAfterFail[0]);
-        expect(b1.attempted).toBe(true);
+        // SWITCH-M: the claim marker is the R3b `.attempted` FILE in
+        // the batch dir now (get-batch protocol), not a meta field —
+        // whether a failed drain leaves it is re-derived at the gate.
         expect(b1.files).toEqual(["alpha.md"]);
 
         // Lift the fault and click Sync again with NEW changes. Under

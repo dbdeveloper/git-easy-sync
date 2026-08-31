@@ -23,7 +23,11 @@ import {
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
 } from "../helpers";
-import { evaluateConflictState } from "../../../../../src/sync2/conflict-classifier";
+import {
+  reconcileConflictsForTest,
+  trackedSiblingPathsFor,
+  conflictEntryCount,
+} from "../helpers";
 
 // Pseudo-merge — paths currently in the ConflictStore are routed to
 // the per-device conflict branch by processBatch's split-push
@@ -89,7 +93,7 @@ describe.skipIf(!integrationEnabled())(
         );
         await sync2AllAndAssertNoErrors(client);
         // Now blocked.md is a pending conflict.
-        expect(client.conflictStore.hasPending("blocked.md")).toBe(true);
+        expect(client.conflictStore.hasBase("blocked.md")).toBe(true);
 
         // User edits BOTH the conflicted file and a clean one, then
         // syncs again. The clean edit should propagate; the
@@ -116,14 +120,11 @@ describe.skipIf(!integrationEnabled())(
 
         // Resolve via sibling delete + classifier sweep, then sync.
         // blocked.md should now propagate ours-blocked-v2.
-        const records = client.conflictStore.getByPath("blocked.md");
+        const records = trackedSiblingPathsFor(client, "blocked.md");
         expect(records).toHaveLength(1);
-        const siblingPath = records[0].siblingPath;
+        const siblingPath = records[0];
         fs.rmSync(path.join(client.vaultPath, siblingPath));
-        await evaluateConflictState(
-          client.conflictStore,
-          client.vault as unknown as import("obsidian").Vault,
-        );
+        await reconcileConflictsForTest(client);
 
         await sync2AllAndAssertNoErrors(client);
 

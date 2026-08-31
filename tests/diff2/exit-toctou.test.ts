@@ -20,7 +20,7 @@ import {
   commitToAlt,
   commitUnchangedSide,
 } from "../../src/diff2/exit-commit";
-import { buildSiblingPath } from "../../src/sync2/conflict-store";
+import { buildSiblingFilePath } from "../../src/sync2/conflict-siblings";
 
 const enc = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
 const dec = (b: ArrayBuffer) => new TextDecoder().decode(b);
@@ -139,12 +139,7 @@ describe("commitToAlt — §5.0.e both-changed save-to-alt", () => {
       ts,
     );
 
-    const expectedSibling = buildSiblingPath(
-      "Notes/resolved.md",
-      "Phone",
-      ts,
-      "modify-vs-modify",
-    );
+    const expectedSibling = buildSiblingFilePath("Notes/resolved.md", ts, "Phone");
     expect(res.basePath).toBe("Notes/resolved.md");
     expect(res.siblingPath).toBe(expectedSibling);
     expect(dec(await vault.adapter.readBinary("Notes/resolved.md"))).toBe(

@@ -1,4 +1,8 @@
 import {
+// ⚔️ PIN RE-ARMED AT THE SWITCH (Phase 5.5 step 4): the new drain's
+// rolling base + Layer 2 FIX the clobber — G9 RED→GREEN is THE main
+// contract of the whole redesign. it.fails removed in the same commit
+// that flipped syncAll to drainOnce.
   describe,
   it,
   beforeAll,
@@ -71,7 +75,7 @@ describe.skipIf(!integrationEnabled())(
       await deleteBranchIfExists(branch);
     });
 
-    it.fails(
+    it(
       "injects remote changes to note7..note10 before the 6th push; theirs must survive as conflict or merge (I2)",
       async () => {
         client = await createSync2Client({ branch });
@@ -131,7 +135,7 @@ describe.skipIf(!integrationEnabled())(
             const vault = fs.existsSync(p) ? JSON.stringify(fs.readFileSync(p, "utf8")) : "(missing)";
             out.push(`  ${file(i)}: remote=${remote} vault=${vault}`);
           }
-          out.push(`  conflicts: ${JSON.stringify(client!.conflictStore.getAll().map((r) => r.vaultPath))}`);
+          out.push(`  conflicts: ${JSON.stringify([...client!.conflictStore.getCachedState().entries.keys()])}`);
         };
 
         // 4. Drain #1 (the one with mid-drain injection).
@@ -156,9 +160,7 @@ describe.skipIf(!integrationEnabled())(
         // SOMEWHERE — as a registered conflict for the path, or merged
         // into the remote/vault content. "ours everywhere + zero
         // conflicts" is the silent clobber this test exists to catch.
-        const conflictPaths = client.conflictStore
-          .getAll()
-          .map((r) => r.vaultPath);
+        const conflictPaths = [...client.conflictStore.getCachedState().entries.keys()];
         for (let i = 7; i <= N; i++) {
           const remote = await readRemoteFile(branch, file(i));
           const p = path.join(client.vaultPath, file(i));

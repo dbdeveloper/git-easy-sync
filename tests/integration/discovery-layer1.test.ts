@@ -174,7 +174,7 @@ describe.skipIf(!integrationEnabled())(
       const target = tree.files[0];
       expect(target).toBeDefined();
 
-      const viaHead = await client.getContentsMetadataViaHead({
+      const viaHead = await client.getContentsMetadataAtRef({
         path: target.path,
         ref: mainHead,
         retry: true,

@@ -22,23 +22,24 @@ import {
 import { GitHubSyncSettings, DEFAULT_SETTINGS } from "./settings/settings";
 import GitHubSyncSettingsTab from "./settings/tab";
 import Logger from "./logger";
-import { describeError } from "./utils";
+import { describeError, calculateGitBlobSHA } from "./utils";
 import GithubClient from "./github/client";
 import GI from "./gi";
 import HotMetadataStore from "./sync2/hot-metadata";
 import FileBaselinesStore from "./sync2/file-baselines";
 import { AtomicWriteRecovery } from "./sync2/atomic-write";
 import ChangeDetector from "./sync2/change-detector";
-import PushQueue from "./sync2/push-queue";
-import TreeBuilder from "./sync2/tree-builder";
 import GitignoreInvariants from "./sync2/gitignore-invariants";
 import InvariantStateStore from "./sync2/invariant-state";
 import { Sync2Manager } from "./sync2/sync2-manager";
 import { IntervalScheduler } from "./sync2/interval-scheduler";
-import ConflictStore from "./sync2/conflict-store";
 import ConflictStoreV2 from "./sync2/conflict-store-v2";
+import BatchWriter from "./sync2/batch-writer";
+import SyncStore from "./sync2/sync-store";
+import DrainJournal from "./sync2/drain-journal";
+import SiblingTx from "./sync2/sibling-tx";
+import BatchHistorySource from "./sync2/batch-history-source";
 import { processConflicts } from "./sync2/process-conflicts";
-import PendingDeletionsStore from "./sync2/pending-deletions-store";
 import { ConflictCounter } from "./sync2/conflict-counter";
 import { ConflictWatcher } from "./sync2/conflict-watcher";
 import {
@@ -186,14 +187,14 @@ export default class GitHubSyncPlugin extends Plugin {
   // and live for the plugin's lifetime. No more nullable engine
   // pointers — the runtime is single-engine.
   sync2Manager!: Sync2Manager;
-  conflictStore!: ConflictStore;
-  // Phase 5.5 step 3b — the v2 store the ported UI reads. The old
-  // engine keeps writing v1 until THE SWITCH; between the port and
-  // the switch the UI therefore lists drain-born conflicts as
-  // SYNTHETIC only (adopted from disk by the reconcile sites) — the
-  // approved interim state, not a defect. v1 dies with the old drain.
+  // THE SWITCH: v2 (conflicts.json) is the ONLY conflict store now —
+  // the drain writes it, the UI reads it.
   conflictStoreV2!: ConflictStoreV2;
-  pendingDeletions!: PendingDeletionsStore;
+  // History's local-versions reader over the queue (meta.json +
+  // sync_store).
+  batchHistorySource!: BatchHistorySource;
+  syncStore!: SyncStore;
+  githubClient: GithubClient | null = null;
   conflictWatcher!: ConflictWatcher;
   conflictCounter!: ConflictCounter;
   // diff2 trash subsystem (see docs/DIFF2_IMPLEMENTATION_PLAN.md §R3).
@@ -842,8 +843,9 @@ export default class GitHubSyncPlugin extends Plugin {
         await this.hotMeta?.load();
         await this.baselines?.clear();
         await this.invariantState?.load();
-        await this.conflictStore?.load();
-        await this.pendingDeletions?.load();
+        // THE SWITCH: conflicts.json cache must also re-read the now-
+        // empty disk, or the UI would resurrect pre-reset conflicts.
+        await this.conflictStoreV2?.load();
         this.conflictCounter?.markDirty();
         await this.conflictCounter?.flush();
       },
@@ -895,6 +897,7 @@ export default class GitHubSyncPlugin extends Plugin {
       this.logger,
       this.workerClient,
     );
+    this.githubClient = client;
     const hotMeta = new HotMetadataStore({
       vault: this.app.vault,
       selfPluginId: manifest.id,
@@ -914,12 +917,30 @@ export default class GitHubSyncPlugin extends Plugin {
     // files owned by conflict records via record.theirsBlobSha
     // SHA-verify, not just snapshot-based reasoning.
     const gi = new GI(vaultRoot);
-    const queue = new PushQueue({
+    // THE SWITCH: the new engine's stores. sync_store is the
+    // content-addressed blob home (batch content, History local
+    // versions, conflict bases); the journal is the drain's crash
+    // story; SiblingTx guards STEP3 replace transactions.
+    const syncStore = new SyncStore({
       vault: this.app.vault,
-      configDir: this.app.vault.configDir,
       selfPluginId: manifest.id,
+    });
+    this.syncStore = syncStore;
+    const journal = new DrainJournal({
+      vault: this.app.vault,
+      selfPluginId: manifest.id,
+    });
+    const batchWriter = new BatchWriter({
+      vault: this.app.vault,
+      selfPluginId: manifest.id,
+      syncStore,
       autoCanonicalize: () => this.settings.autoCanonicalizeTextFiles ?? false,
-      workerClient: this.workerClient,
+      logger: this.logger,
+    });
+    this.batchHistorySource = new BatchHistorySource({
+      vault: this.app.vault,
+      selfPluginId: manifest.id,
+      syncStore,
     });
     const detector = new ChangeDetector({
       vault: this.app.vault,
@@ -930,19 +951,20 @@ export default class GitHubSyncPlugin extends Plugin {
       selfPluginId: manifest.id,
       vaultRoot,
       syncConfigDir: () => this.settings.syncConfigDir ?? true,
-      queue,
-      // TODO §26 — lazy: conflictStore is constructed just below this, and
-      // the resolver only runs at findChanges time (long after onload). A
-      // path with a pending tracked conflict compares against its conflict-
-      // branch value, not main. undefined → not a conflict base.
-      conflictBaseSha: (path) => this.conflictStore?.latestPendingBranchBaseSha(path),
-    });
-    const builder = new TreeBuilder({
-      vault: this.app.vault,
-      queue,
-      client,
-      configDir: this.app.vault.configDir,
-      selfPluginId: manifest.id,
+      // THE SWITCH: the dedup reference is the manager's per-pass
+      // queue-sha index over the new metafiles (deletion entries
+      // answer the DELETED sentinel — §40 revert class). Lazy thunk:
+      // the manager is constructed later in this method; findChanges
+      // only runs long after onload.
+      queue: {
+        peekLatestPathSha: async (p: string) =>
+          (await this.sync2Manager?.peekLatestPathSha(p)) ?? null,
+      },
+      // (TODO §26's conflictBaseSha resolver died with the old
+      // engine: in the new drain, conflict bases are routed to the
+      // conflict branch by the DRAIN's shouldPushToConflictBranch
+      // dedup, not filtered at commit time — an extra enqueue is the
+      // accepted §6.3 churn.)
     });
     const invariantState = new InvariantStateStore({
       vault: this.app.vault,
@@ -965,14 +987,6 @@ export default class GitHubSyncPlugin extends Plugin {
     } catch {
       this.pushPluginsDataJsonCached = false;
     }
-    const deviceLabel = this.settings.deviceLabel ?? "Obsidian";
-    const conflictStore = new ConflictStore({
-      vault: this.app.vault,
-      configDir: this.app.vault.configDir,
-      selfPluginId: manifest.id,
-    });
-    await conflictStore.load();
-    this.conflictStore = conflictStore;
     const conflictStoreV2 = new ConflictStoreV2({
       vault: this.app.vault,
       selfPluginId: manifest.id,
@@ -980,19 +994,17 @@ export default class GitHubSyncPlugin extends Plugin {
     });
     await conflictStoreV2.load(); // seeds the cached view for the sync UI reads
     this.conflictStoreV2 = conflictStoreV2;
-
-    // Pending-deletions queue (SYNC2 §4.2). Replaces
-    // the 2.0.1-beta2 phantom-snapshot trick: pull-side sanitize
-    // records "delete this forbidden GitHub path on next push"
-    // intent in this queue rather than as a phantom baseline
-    // entry.
-    const pendingDeletions = new PendingDeletionsStore({
+    const siblingTx = new SiblingTx({
       vault: this.app.vault,
-      configDir: this.app.vault.configDir,
       selfPluginId: manifest.id,
+      store: conflictStoreV2,
+      computeSha: calculateGitBlobSHA,
+      generateGuid: () => crypto.randomUUID(),
     });
-    await pendingDeletions.load();
-    this.pendingDeletions = pendingDeletions;
+
+    // (Pending-deletions died at THE SWITCH: the vault-step writes
+    // canonical names and the honest baseline completes the remote
+    // rename — MASTER-PLAN §5.5.0 п.4 рішення 3.)
     // (The 2.0.1-beta phantom-snapshot migration lived here; deleted
     // with the blank-slate cutover — the new baseline store can never
     // contain monolith-era phantom rows.)
@@ -1047,11 +1059,7 @@ export default class GitHubSyncPlugin extends Plugin {
     // previous crash is reconciled against the snapshot + conflict
     // stores before findChanges or drain sees them.
     try {
-      const recovery = new AtomicWriteRecovery(
-        this.app.vault,
-        baselines,
-        conflictStore,
-      );
+      const recovery = new AtomicWriteRecovery(this.app.vault, baselines);
       const result = await recovery.sweep();
       this.logger.info("initSync2: AtomicWriteRecovery sweep", result);
       // 2.0.2-beta2: if the sweep forward-completed any write that
@@ -1111,28 +1119,36 @@ export default class GitHubSyncPlugin extends Plugin {
 
     this.sync2Manager = new Sync2Manager({
       vault: this.app.vault,
+      selfPluginId: manifest.id,
+      configDir: this.app.vault.configDir,
+      client,
+      worker: {
+        computeGitBlobSHA: (b) => this.workerClient.computeGitBlobSHA(b),
+        decodeBase64: (b64) => this.workerClient.decodeBase64(b64),
+        mergeText: (o, base, t) => this.workerClient.mergeText(o, base, t),
+      },
       hotMeta,
       baselines,
       detector,
-      queue,
-      builder,
-      client,
+      batchWriter,
+      syncStore,
+      journal,
+      conflictStore: conflictStoreV2,
+      siblingTx,
       logger: this.logger,
       invariants: this.invariants,
-      configDir: this.app.vault.configDir,
-      selfPluginId: manifest.id,
-      workerClient: this.workerClient,
+      // Discovery's remote-path filter — the SAME predicate findChanges
+      // uses locally (hardcoded blocklist + per-device configDir gate +
+      // gitignore), so push and pull agree on scope (SYNC2 §3.3).
+      isSyncable: (p) => detector.checkSyncable(p),
+      mainBranch: () => this.settings.githubBranch || "main",
       // Label read live from settings so the user can change it in
-      // the settings tab and the next sync picks up the new value —
-      // no plugin reload needed. Commit messages themselves are
-      // hardcoded in src/sync2/commit-message.ts.
+      // the settings tab and the next sync picks up the new value.
       deviceLabel: () => this.settings.deviceLabel ?? "Obsidian",
-      // Optional git author identity (SYNC2.md §4.4). Live getter.
-      // The NAME defaults to the GitHub Owner when the dedicated
-      // field is empty (the Owner is almost always the committing
-      // user), so enabling the author stamp usually only needs the
-      // email. Returns null — no override — only when no usable name
-      // OR no email is available.
+      // Optional git author identity (SYNC2.md §4.4 + THE SWITCH п.1:
+      // main pushes stamp date=batch.createdAt — the mtime invariant
+      // records the EDIT moment). Live getter; NAME defaults to the
+      // GitHub Owner when the dedicated field is empty.
       gitAuthor: () => {
         const name =
           this.settings.gitAuthorName?.trim() ||
@@ -1140,64 +1156,26 @@ export default class GitHubSyncPlugin extends Plugin {
         const email = this.settings.gitAuthorEmail?.trim();
         return name && email ? { name, email } : null;
       },
-      // Remote identity read live so the manager catches a mid-session
-      // settings change (user edits the repo coords in the settings
-      // tab between two Sync clicks).
-      remoteIdentity: () => ({
-        owner: this.settings.githubOwner,
-        repo: this.settings.githubRepo,
-        branch: this.settings.githubBranch,
-      }),
-      conflictStore,
-      conflictWatcher,
-      conflictCounter,
-      pendingDeletions,
-      // diff2 trash hooks (R3.4 + R3.5). sync2 fires captureForDelete
-      // before pull-side adapter.remove, confirmDeleted/confirmResolved
-      // after push success, sweepOlderThan at drain end on full success.
-      trashHooks: trashStore.asHooks(),
-      consolidateCommits: this.settings.consolidateCommits ?? false,
-      autoCanonicalize: () => this.settings.autoCanonicalizeTextFiles ?? false,
-      maxAutoMergeSizeBytes: () =>
+      maxAutoMergeFileSize: () =>
         this.settings.maxAutoMergeSizeBytes ?? 1_000_000,
-      // Hooked to Obsidian's link-aware rename so the pre-sync
-      // filename-sanitizer rewrites containing wiki-links automatically.
-      // `getAbstractFileByPath` returns null when the path vanished
-      // between the scanner's read and this callback's call (e.g. a
-      // concurrent external delete) — the manager logs and continues.
+      accumulateOfflineSyncs: () => this.settings.consolidateCommits ?? false,
+      tokenExpired: async () => this.tokenExpiredFlag?.isExpiredCached() ?? false,
+      // §35 latch: a drain that ends token-expired ALSO throws an
+      // AuthError which the sync() catch note()s — this direct hook
+      // covers callers that swallow the throw.
+      onTokenExpired: (status) =>
+        this.tokenExpiredFlag?.set(status === 403 ? "scope" : "invalid"),
+      // diff2 trash hooks (R3.4 + R3.5): captureForDelete inside the
+      // vault-step remove, confirmDeleted at batch completion,
+      // confirmResolved on the process_conflicts prune, sweepOlderThan
+      // at drain end on success.
+      trashHooks: trashStore.asHooks(),
+      // Obsidian link-aware rename for the pre-sync filename sanitizer.
       renameFile: async (oldPath: string, newPath: string): Promise<void> => {
         const file = this.app.vault.getAbstractFileByPath(oldPath);
         if (!file) return;
         await this.app.fileManager.renameFile(file, newPath);
       },
-      onProgress: (initial: string) => {
-        // Long-lived notice during the network phase — stays visible
-        // until processQueue calls handle.hide(). The text is the
-        // "Syncing with GitHub…" / "Syncing commit N/M …" string the
-        // manager passes in.
-        const notice = new Notice(initial, 0);
-        return {
-          update: (msg: string) => notice.setMessage(msg),
-          hide: () => notice.hide(),
-        };
-      },
-      // Local-commit ack — fires once `enqueueOrMerge` materialises
-      // the batch on disk. We deliberately do NOT pop a separate
-      // Notice here, and the same logic applies to onNoLocalChanges
-      // below. Both used to surface their own brief toast, but the
-      // user reported seeing them stack ON TOP OF the long-lived
-      // "Syncing with GitHub…" progress notice ("Syncing with
-      // GitHub…" + "Commit 2 files" side-by-side). The progress
-      // notice's NEXT phase update ("Uploading N/M files…") already
-      // implies the local commit happened and the manager is
-      // talking to the network. Single-notice UX: only the progress
-      // notice during the sync, and a single brief summary at the
-      // end via onSyncCompleted.
-      //
-      // Click-time local-commit ack: brief flash right after the
-      // batch is materialised on disk, before drain starts. Independent
-      // notice (separate handle from the drain-level Pull/Push notice,
-      // so users see them stacked naturally when both fire).
       onLocalCommitted: (count: number) => {
         new Notice(
           count === 1 ? "Commit 1 file" : `Commit ${count} files`,
@@ -1207,39 +1185,15 @@ export default class GitHubSyncPlugin extends Plugin {
       onNoLocalChanges: () => {
         new Notice("Nothing to commit", BRIEF_NOTICE_MS);
       },
-      // Observability hook only. The three user-visible notices in
-      // sync2's new UX contract are handled elsewhere:
-      //   - "Commit N files" via onLocalCommitted (click-time ack)
-      //   - "Nothing to commit" via onNoLocalChanges (click on idle vault)
-      //   - "Sync done" via the drain's own progress handle (replaces
-      //     the Pull/Push notice on heavy syncs; brief flash on light
-      //     syncs that did real work).
-      // Left as a no-op so tests + future wiring can still depend on
-      // the callback existing in the deps surface.
       onSyncCompleted: () => {},
-      // SYNC2 §4.3: push-queue depth changes drive the ribbon
-      // sync-icon's badge. Fired by Sync2Manager after every
-      // persistent .push-queue/ mutation (enqueueOrMerge add,
-      // processBatch delete, etc).
       onQueueDepthChanged: (depth: number) => {
         this.refreshRibbonPendingBatchesBadge(depth);
       },
-      // 2.0.2-beta2 BRAT-style auto-reload. Fires at end of a
-      // successful drain with the IDs of plugins whose top-level
-      // files (main.js / manifest.json / styles.css / data.json)
-      // were just written. For each enabled affected plugin, call
-      // reloadPlugin(id) via setTimeout (500ms unwind for the
-      // in-flight drain stack frame) so the NEW code takes effect
-      // immediately instead of waiting for the user to disable +
-      // re-enable by hand.
+      // 2.0.2-beta2 BRAT-style auto-reload — now fed by the drain's
+      // vaultStepWrites/Removes (S1).
       onPluginsAffected: (ids: string[]) => {
         this.handlePluginsAffectedReload(ids);
       },
-      // 2.0.2-beta2 zero-byte restore guard (SYNC2 §2.9). The engine
-      // restored an accidentally-emptied file from its last good
-      // version instead of pushing the 0-byte copy. Surface it so the
-      // recovery is never silent — the user should know their vault
-      // changed and why.
       onZeroByteRestored: (path: string) => {
         new Notice(
           `Restored "${path}" — the local copy was empty (likely ` +
@@ -1249,6 +1203,7 @@ export default class GitHubSyncPlugin extends Plugin {
         this.logger?.info("Zero-byte file restored by guard", { path });
       },
     });
+
 
     // 2.0.2-beta2: drive the ribbon "syncing" look from drain status.
     // The icon (refresh-cw) spins + tints accent while a drain runs.
@@ -1271,9 +1226,6 @@ export default class GitHubSyncPlugin extends Plugin {
     //   • Watchdog tick (5 min, fires only when queue is non-empty)
     //     → backgroundDrain → drain picks them up.
     // Neither path startles the user on enable.
-    // (Pre-stage-5 deviceLabel was used here; preserved for symmetry
-    // with the later stage-9 widget pass.)
-    void deviceLabel;
 
     // diff2 TrashWatcher — monkey-patches vault.delete/trash so
     // user-driven UI deletes route through TrashStore.intercept.
@@ -1848,10 +1800,9 @@ export default class GitHubSyncPlugin extends Plugin {
   // StatusBarItem}; refreshRibbonPendingBatchesBadge repaints both surfaces.
   private async seedPendingBatchesDepth(): Promise<void> {
     try {
-      const queue = (this.sync2Manager as unknown as { queue: PushQueue })
-        .queue;
-      const ids = await queue.list();
-      this.refreshRibbonPendingBatchesBadge(ids.length);
+      this.refreshRibbonPendingBatchesBadge(
+        await this.sync2Manager.queueDepth(),
+      );
     } catch {
       // ignored — startup race, the next sync click refreshes anyway
     }
@@ -2255,13 +2206,9 @@ export default class GitHubSyncPlugin extends Plugin {
     // deps-thunk idiom: opening the view while unconfigured then configuring must
     // start working without reopening, and survives a reset/reconfigure that
     // reconstructs sync2Manager.
-    const mgr = () =>
-      this.sync2Manager as unknown as
-        | { client: GithubClient; queue: PushQueue }
-        | undefined;
     return {
-      queue: () => mgr()?.queue ?? null,
-      client: () => mgr()?.client ?? null,
+      queue: () => this.batchHistorySource ?? null,
+      client: () => this.githubClient ?? null,
       branch: () => this.settings.githubBranch,
       localDeviceLabel: () => this.settings.deviceLabel ?? "Obsidian",
       logger: this.logger,
@@ -2429,14 +2376,13 @@ export default class GitHubSyncPlugin extends Plugin {
     path: string,
     version: HistoryVersion,
   ): Promise<ArrayBuffer> {
-    const mgr = this.sync2Manager as unknown as
-      | { client: GithubClient; queue: PushQueue }
-      | undefined;
-    if (!mgr) throw new Error("GitHub sync is not configured");
-    if (version.local) {
-      return await mgr.queue.readFile(version.id, path);
+    if (!this.githubClient || !this.batchHistorySource) {
+      throw new Error("GitHub sync is not configured");
     }
-    const contents = await mgr.client.getContentsAtRef({
+    if (version.local) {
+      return await this.batchHistorySource.readFileBytes(version.id, path);
+    }
+    const contents = await this.githubClient.getContentsAtRef({
       path,
       ref: version.id,
       retry: true,

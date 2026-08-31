@@ -25,7 +25,11 @@ import {
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
 } from "../helpers";
-import { evaluateConflictState } from "../../../../../src/sync2/conflict-classifier";
+import {
+  reconcileConflictsForTest,
+  trackedSiblingPathsFor,
+  conflictEntryCount,
+} from "../helpers";
 
 // Pseudo-merge stage 7b — conflict-branch lifecycle.
 //
@@ -98,7 +102,7 @@ describe.skipIf(!integrationEnabled())(
         await sync2AllAndAssertNoErrors(client);
 
         // Conflict registered + branch created on GitHub.
-        const records = client.conflictStore.getByPath("note.md");
+        const records = trackedSiblingPathsFor(client, "note.md");
         expect(records).toHaveLength(1);
         const cb = client!.hotMeta.getConflictBranch();
         expect(cb).not.toBeNull();
@@ -126,13 +130,10 @@ describe.skipIf(!integrationEnabled())(
         );
 
         // Resolve via sibling delete (case 1: accept ours).
-        const siblingAbs = path.join(client.vaultPath, records[0].siblingPath);
+        const siblingAbs = path.join(client.vaultPath, records[0]);
         fs.rmSync(siblingAbs);
-        await evaluateConflictState(
-          client.conflictStore,
-          client.vault as unknown as import("obsidian").Vault,
-        );
-        expect(client.conflictStore.hasPending("note.md")).toBe(false);
+        await reconcileConflictsForTest(client);
+        expect(client.conflictStore.hasBase("note.md")).toBe(false);
 
         // Next sync drains the queue (carries ours), then finalize
         // hook merges the branch back into main + deletes the branch.

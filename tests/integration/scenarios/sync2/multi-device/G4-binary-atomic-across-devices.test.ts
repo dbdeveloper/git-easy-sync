@@ -21,7 +21,11 @@ import {
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
 } from "../helpers";
-import { evaluateConflictState } from "../../../../../src/sync2/conflict-classifier";
+import {
+  reconcileConflictsForTest,
+  trackedSiblingPathsFor,
+  conflictEntryCount,
+} from "../helpers";
 
 // G4 (pseudo-merge rewrite) — binary conflict across two real
 // sync2 devices. Pseudo-merge mode removes silent atomic-mtime
@@ -108,10 +112,9 @@ describe.skipIf(!integrationEnabled())(
         // binary path: pseudo-merge registers modify-vs-modify.
         await sync2AllAndAssertNoErrors(deviceB);
 
-        const records = deviceB.conflictStore.getByPath("img.png");
+        const records = trackedSiblingPathsFor(deviceB, "img.png");
         expect(records).toHaveLength(1);
-        expect(records[0].kind).toBe("modify-vs-modify");
-        const siblingPath = records[0].siblingPath;
+        const siblingPath = records[0];
         const siblingAbs = path.join(deviceB.vaultPath, siblingPath);
         expect(fs.existsSync(siblingAbs)).toBe(true);
         expect(bytesEqual(fs.readFileSync(siblingAbs), aBytes)).toBe(true);
@@ -134,11 +137,8 @@ describe.skipIf(!integrationEnabled())(
         // User on B picks "ours" by deleting the sibling. Classifier
         // case 1 → drop record. Next sync pushes B's bytes.
         fs.rmSync(siblingAbs);
-        await evaluateConflictState(
-          deviceB.conflictStore,
-          deviceB.vault as unknown as import("obsidian").Vault,
-        );
-        expect(deviceB.conflictStore.hasPending("img.png")).toBe(false);
+        await reconcileConflictsForTest(deviceB);
+        expect(deviceB.conflictStore.hasBase("img.png")).toBe(false);
 
         await sync2AllAndAssertNoErrors(deviceB);
 

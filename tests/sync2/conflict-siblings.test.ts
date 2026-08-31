@@ -13,7 +13,6 @@ import {
   formatTimestampForFilename,
   UNKNOWN_DEVICE_LABEL,
 } from "../../src/sync2/conflict-siblings";
-import { buildSiblingPath } from "../../src/sync2/conflict-store";
 
 // Phase 2 sibling helpers (NEW-DRAIN §III допоміжні; §VIII C.7-family).
 // The disk-name format is a pre-existing invariant — the strongest
@@ -34,17 +33,18 @@ describe("buildSiblingFilePath (pure)", () => {
     );
   });
 
-  it("is byte-identical to conflict-store v1's buildSiblingPath for the same inputs (format invariant)", () => {
-    for (const p of [
-      "Notes/idea.md",
-      "root.md",
-      "README",
-      "a/b/c.tar.gz",
-      ".hidden",
-    ]) {
-      expect(buildSiblingFilePath(p, TS, "My (Old) Phone")).toBe(
-        buildSiblingPath(p, "My (Old) Phone", TS, "modify-vs-modify"),
-      );
+  it("format invariant (was: byte-parity with v1's buildSiblingPath, which died at THE SWITCH) — the literal shapes are pinned", () => {
+    const expected: Record<string, string> = {
+      "Notes/idea.md":
+        "Notes/idea.conflict-from-My [Old] Phone-2026-05-08T15-30-00Z.md",
+      "root.md": "root.conflict-from-My [Old] Phone-2026-05-08T15-30-00Z.md",
+      README: "README.conflict-from-My [Old] Phone-2026-05-08T15-30-00Z",
+      "a/b/c.tar.gz":
+        "a/b/c.tar.conflict-from-My [Old] Phone-2026-05-08T15-30-00Z.gz",
+      ".hidden": ".hidden.conflict-from-My [Old] Phone-2026-05-08T15-30-00Z",
+    };
+    for (const [p, want] of Object.entries(expected)) {
+      expect(buildSiblingFilePath(p, TS, "My (Old) Phone")).toBe(want);
     }
   });
 

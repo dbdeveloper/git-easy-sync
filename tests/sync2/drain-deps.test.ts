@@ -160,7 +160,7 @@ describe("makeDrainClient — adapter semantics", () => {
   it("getContentsMetadataAtRef: passes the blobSink through and strips the blob field", async () => {
     let sunkSink: unknown = null;
     const client = make({
-      getContentsMetadataViaHead: async (args) => {
+      getContentsMetadataAtRef: async (args) => {
         sunkSink = args.blobSink;
         return { sha: "s1", size: 7, blob: new ArrayBuffer(3) };
       },
@@ -171,7 +171,7 @@ describe("makeDrainClient — adapter semantics", () => {
     });
     expect(sunkSink).not.toBeNull(); // §II.13 — inline bytes go to sync_store
 
-    const missing = make({ getContentsMetadataViaHead: async () => null });
+    const missing = make({ getContentsMetadataAtRef: async () => null });
     expect(await missing.getContentsMetadataAtRef("a.md", "r")).toBeNull();
   });
 

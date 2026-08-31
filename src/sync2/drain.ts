@@ -311,6 +311,9 @@ export interface DrainResult {
   // remote name needed sanitization).
   vaultStepWrites: string[];
   vaultStepRemoves: string[];
+  // Set when status === "token-expired": the original 401/403 — the
+  // manager's latch needs the class (invalid vs scope, §35).
+  authErrorStatus?: 401 | 403;
 }
 
 const ERROR_422_CAP = 5;
@@ -1624,9 +1627,11 @@ function statusFromError(
   result: (s: DrainStatus) => DrainResult,
 ): DrainResult {
   if (error instanceof AuthError) {
-    // PHASE5.5 (cutover): saveTokenExpiredMark() — the live token
-    // latch belongs to the manager; the module reports the status.
-    return result("token-expired");
+    // The live token latch belongs to the manager; the module reports
+    // the status + the 401/403 class (§35 invalid-vs-scope).
+    const r = result("token-expired");
+    r.authErrorStatus = error.status === 403 ? 403 : 401;
+    return r;
   }
   if (error instanceof NetworkError) {
     return result("network-error");

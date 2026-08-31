@@ -3,7 +3,9 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
-import PushQueue from "../../src/sync2/push-queue";
+import BatchWriter from "../../src/sync2/batch-writer";
+import BatchHistorySource from "../../src/sync2/batch-history-source";
+import SyncStore from "../../src/sync2/sync-store";
 import { Vault } from "../../mock-obsidian";
 import { FileChange } from "../../src/sync2/types";
 import {
@@ -128,10 +130,11 @@ describe("parseLocalTimestamp", () => {
 });
 
 // ---------------------------------------------------------------------------
-// enumeratePushQueueVersions — call-site test against a REAL PushQueue on a
-// mock (fs-backed) Vault. Local unpushed version = { local:true, id:batchId,
-// date:createdAt, deviceLabel }. Only batches whose `files` include the path
-// contribute a version.
+// enumeratePushQueueVersions — call-site test against a REAL
+// BatchWriter + BatchHistorySource (THE SWITCH: the new queue format,
+// meta.json + sync_store). Local unpushed version = { local:true,
+// id:batchId, date:createdAt, deviceLabel }. Only batches whose
+// content entries include the path contribute a version.
 // ---------------------------------------------------------------------------
 describe("enumeratePushQueueVersions", () => {
   const CONFIG_DIR = ".obsidian";
@@ -139,7 +142,8 @@ describe("enumeratePushQueueVersions", () => {
 
   let root: string;
   let vault: Vault;
-  let queue: PushQueue;
+  let writer: BatchWriter;
+  let queue: BatchHistorySource;
   let current: number;
 
   const ADD = (p: string): FileChange => ({
@@ -163,15 +167,26 @@ describe("enumeratePushQueueVersions", () => {
     fs.mkdirSync(path.join(root, CONFIG_DIR), { recursive: true });
     vault = new Vault(root);
     current = Date.parse("2026-07-01T10:00:00Z");
-    queue = new PushQueue({
+    const syncStore = new SyncStore({
       vault: vault as unknown as import("obsidian").Vault,
-      configDir: CONFIG_DIR,
       selfPluginId: SELF_PLUGIN_ID,
+    });
+    writer = new BatchWriter({
+      vault: vault as unknown as import("obsidian").Vault,
+      selfPluginId: SELF_PLUGIN_ID,
+      syncStore,
+      autoCanonicalize: () => false,
+      logger: { info: () => {}, warn: () => {} },
       now: () => {
         const d = new Date(current);
         current += 1000;
         return d;
       },
+    });
+    queue = new BatchHistorySource({
+      vault: vault as unknown as import("obsidian").Vault,
+      selfPluginId: SELF_PLUGIN_ID,
+      syncStore,
     });
   });
 
@@ -181,13 +196,9 @@ describe("enumeratePushQueueVersions", () => {
 
   it("lists one version per batch touching the path, with batchId + createdAt + deviceLabel", async () => {
     writeVaultFile("Notes/x.md", "v1\n");
-    const id1 = await queue.enqueue([ADD("Notes/x.md")], {
-      parentCommitSha: "p", parentTreeSha: "t",
-    });
+    const id1 = await writer.writeBatch([ADD("Notes/x.md")]);
     writeVaultFile("Notes/x.md", "v2\n");
-    const id2 = await queue.enqueue([ADD("Notes/x.md")], {
-      parentCommitSha: "p", parentTreeSha: "t",
-    });
+    const id2 = await writer.writeBatch([ADD("Notes/x.md")]);
 
     const out = await enumeratePushQueueVersions(queue, "Notes/x.md", "phone");
     expect(out.every((v) => v.local === true)).toBe(true);
@@ -198,13 +209,9 @@ describe("enumeratePushQueueVersions", () => {
 
   it("excludes batches that do not touch the path", async () => {
     writeVaultFile("Notes/x.md", "x\n");
-    await queue.enqueue([ADD("Notes/x.md")], {
-      parentCommitSha: "p", parentTreeSha: "t",
-    });
+    await writer.writeBatch([ADD("Notes/x.md")]);
     writeVaultFile("Notes/other.md", "o\n");
-    await queue.enqueue([ADD("Notes/other.md")], {
-      parentCommitSha: "p", parentTreeSha: "t",
-    });
+    await writer.writeBatch([ADD("Notes/other.md")]);
 
     const out = await enumeratePushQueueVersions(queue, "Notes/x.md", "phone");
     expect(out).toHaveLength(1);
@@ -214,9 +221,7 @@ describe("enumeratePushQueueVersions", () => {
   describe("loadHistoryVersions", () => {
     it("merges local + github when both succeed (githubError:false)", async () => {
       writeVaultFile("Notes/x.md", "v1\n");
-      const id = await queue.enqueue([ADD("Notes/x.md")], {
-        parentCommitSha: "p", parentTreeSha: "t",
-      });
+      const id = await writer.writeBatch([ADD("Notes/x.md")]);
       const client = {
         listCommitsForPath: async (): Promise<GithubCommit[]> => [
           { sha: "c1", date: "2000-01-01T00:00:00Z", message: "old" },
@@ -233,9 +238,7 @@ describe("enumeratePushQueueVersions", () => {
 
     it("GitHub throws → local versions STILL returned, githubError:true", async () => {
       writeVaultFile("Notes/x.md", "v1\n");
-      const id = await queue.enqueue([ADD("Notes/x.md")], {
-        parentCommitSha: "p", parentTreeSha: "t",
-      });
+      const id = await writer.writeBatch([ADD("Notes/x.md")]);
       const client = {
         listCommitsForPath: async (): Promise<GithubCommit[]> => {
           throw new Error("offline");
@@ -251,9 +254,7 @@ describe("enumeratePushQueueVersions", () => {
 
     it("§35 latched marker → skips GitHub entirely, tokenExpired:true, local returned", async () => {
       writeVaultFile("Notes/x.md", "v1\n");
-      const id = await queue.enqueue([ADD("Notes/x.md")], {
-        parentCommitSha: "p", parentTreeSha: "t",
-      });
+      const id = await writer.writeBatch([ADD("Notes/x.md")]);
       let called = false;
       const client = {
         listCommitsForPath: async (): Promise<GithubCommit[]> => {
@@ -273,9 +274,7 @@ describe("enumeratePushQueueVersions", () => {
 
     it("§35 first-time 401 (AuthError) → tokenExpired:true + latches via noteAuthError", async () => {
       writeVaultFile("Notes/x.md", "v1\n");
-      await queue.enqueue([ADD("Notes/x.md")], {
-        parentCommitSha: "p", parentTreeSha: "t",
-      });
+      await writer.writeBatch([ADD("Notes/x.md")]);
       const client = {
         listCommitsForPath: async (): Promise<GithubCommit[]> => {
           throw new AuthError("Bad credentials", 401);

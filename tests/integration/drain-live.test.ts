@@ -90,7 +90,7 @@ function adaptClient(client: GithubClient): DrainClient {
     pushCommitFromTree: (args) =>
       client.pushCommitFromTree({ ...args, retry: true }),
     getContentsMetadataAtRef: (path, ref) =>
-      client.getContentsMetadataViaHead({ path, ref, retry: true }),
+      client.getContentsMetadataAtRef({ path, ref, retry: true }),
     getBlobFromRepo: async (sha) => {
       try {
         const blob = await client.getBlob({ sha, retry: true });
@@ -322,7 +322,7 @@ describe.skipIf(!integrationEnabled())(
         expect(r.layer2Corrections).toEqual([]);
 
         // The branch tip holds the LAST edit — nothing lost mid-chain.
-        const live = await client.getContentsMetadataViaHead({
+        const live = await client.getContentsMetadataAtRef({
           path: filePath,
           ref: r.pushedCommits[2],
           retry: true,

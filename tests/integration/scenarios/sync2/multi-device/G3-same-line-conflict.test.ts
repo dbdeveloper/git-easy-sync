@@ -22,7 +22,11 @@ import {
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
 } from "../helpers";
-import { evaluateConflictState } from "../../../../../src/sync2/conflict-classifier";
+import {
+  reconcileConflictsForTest,
+  trackedSiblingPathsFor,
+  conflictEntryCount,
+} from "../helpers";
 
 // G3 — two devices edit the SAME line of the same file. 3-way merge
 // cannot resolve, so the device that syncs second registers a
@@ -90,10 +94,9 @@ describe.skipIf(!integrationEnabled())(
 
         // Conflict surfaced on B: sibling with A's version sits next
         // to note.md.
-        const records = deviceB.conflictStore.getByPath("note.md");
+        const records = trackedSiblingPathsFor(deviceB, "note.md");
         expect(records).toHaveLength(1);
-        expect(records[0].kind).toBe("modify-vs-modify");
-        const siblingPath = records[0].siblingPath;
+        const siblingPath = records[0];
         expect(
           fs.readFileSync(path.join(deviceB.vaultPath, siblingPath), "utf8"),
         ).toBe("line by A\nline 2\n");
@@ -109,11 +112,8 @@ describe.skipIf(!integrationEnabled())(
         // User on B picks "ours" by deleting the sibling. Classifier
         // case 1 → drop record. Next sync pushes ours to remote.
         fs.rmSync(path.join(deviceB.vaultPath, siblingPath));
-        await evaluateConflictState(
-          deviceB.conflictStore,
-          deviceB.vault as unknown as import("obsidian").Vault,
-        );
-        expect(deviceB.conflictStore.hasPending("note.md")).toBe(false);
+        await reconcileConflictsForTest(deviceB);
+        expect(deviceB.conflictStore.hasBase("note.md")).toBe(false);
 
         await sync2AllAndAssertNoErrors(deviceB);
 

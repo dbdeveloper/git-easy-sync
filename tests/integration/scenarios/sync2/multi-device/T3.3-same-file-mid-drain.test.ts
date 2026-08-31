@@ -117,9 +117,7 @@ describe.skipIf(!integrationEnabled())(
         }
 
         // note2 — I2: theirs survives as a conflict or merged content.
-        const conflictPaths = client.conflictStore
-          .getAll()
-          .map((r) => r.vaultPath);
+        const conflictPaths = [...client.conflictStore.getCachedState().entries.keys()];
         const remote = await readRemoteFile(branch, file(2));
         const p = path.join(client.vaultPath, file(2));
         const vault = fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "";

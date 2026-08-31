@@ -23,7 +23,11 @@ import {
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
 } from "../helpers";
-import { evaluateConflictState } from "../../../../../src/sync2/conflict-classifier";
+import {
+  reconcileConflictsForTest,
+  trackedSiblingPathsFor,
+  conflictEntryCount,
+} from "../helpers";
 
 // Pseudo-merge multi-sibling resolution. Two consecutive
 // register-conflict events on the same path produce two sibling
@@ -81,7 +85,7 @@ describe.skipIf(!integrationEnabled())(
           "[web] divergent v1",
         );
         await sync2AllAndAssertNoErrors(client);
-        expect(client.conflictStore.getByPath("shared.md")).toHaveLength(1);
+        expect(trackedSiblingPathsFor(client, "shared.md")).toHaveLength(1);
 
         // Second conflict: theirs changes again on remote; ours
         // stays locked at v1 because the path is filtered out of
@@ -96,19 +100,16 @@ describe.skipIf(!integrationEnabled())(
         // are random; this is defensive).
         await new Promise((r) => setTimeout(r, 5));
         await sync2AllAndAssertNoErrors(client);
-        const records = client.conflictStore.getByPath("shared.md");
+        const records = trackedSiblingPathsFor(client, "shared.md");
         expect(records).toHaveLength(2);
 
         // Resolve sibling 1 (older). Classifier case 1 → drop that
         // record; path stays pending because sibling 2 is still
         // there.
-        fs.rmSync(path.join(client.vaultPath, records[0].siblingPath));
-        await evaluateConflictState(
-          client.conflictStore,
-          client.vault as unknown as import("obsidian").Vault,
-        );
-        expect(client.conflictStore.hasPending("shared.md")).toBe(true);
-        expect(client.conflictStore.getByPath("shared.md")).toHaveLength(1);
+        fs.rmSync(path.join(client.vaultPath, records[0]));
+        await reconcileConflictsForTest(client);
+        expect(client.conflictStore.hasBase("shared.md")).toBe(true);
+        expect(trackedSiblingPathsFor(client, "shared.md")).toHaveLength(1);
 
         // Sync after first resolve — path still blocked, remote
         // unchanged.
@@ -118,12 +119,9 @@ describe.skipIf(!integrationEnabled())(
         );
 
         // Resolve sibling 2 — path closes.
-        fs.rmSync(path.join(client.vaultPath, records[1].siblingPath));
-        await evaluateConflictState(
-          client.conflictStore,
-          client.vault as unknown as import("obsidian").Vault,
-        );
-        expect(client.conflictStore.hasPending("shared.md")).toBe(false);
+        fs.rmSync(path.join(client.vaultPath, records[1]));
+        await reconcileConflictsForTest(client);
+        expect(client.conflictStore.hasBase("shared.md")).toBe(false);
 
         // Now sync pushes ours.
         await sync2AllAndAssertNoErrors(client);

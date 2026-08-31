@@ -20,7 +20,7 @@
 //   mergeBlobs         ← makeWorkerMergeBlobs (step 2b)
 //   discovery          ← discovery.ts Layer 1 + getCommitInfoForPath
 //   claimBatch         ← BatchClaimer (R3b), one instance per build
-//   Layer-2 transport  ← getContentsMetadataViaHead with the
+//   Layer-2 transport  ← getContentsMetadataAtRef with the
 //                        sync_store as blobSink (§II.13)
 //
 // ⚠️ Deliberately NOT decided here (step-4 items, recorded in
@@ -187,7 +187,7 @@ export interface DrainGithubClient {
     message: string;
     author?: { name: string; email: string; date: string };
   }): Promise<{ sha: string }>;
-  getContentsMetadataViaHead(args: {
+  getContentsMetadataAtRef(args: {
     path: string;
     ref: string;
     blobSink?: {
@@ -274,7 +274,7 @@ export function makeDrainClient(deps: MakeDrainClientDeps): DrainClient {
     },
 
     async getContentsMetadataAtRef(path, ref) {
-      const r = await client.getContentsMetadataViaHead({
+      const r = await client.getContentsMetadataAtRef({
         path,
         ref,
         blobSink: deps.blobSink,

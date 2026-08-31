@@ -1,4 +1,8 @@
 import {
+// ⚔️ RE-DERIVED AT THE SWITCH (Phase 5.5 step 4): the new STEP1
+// mechanics put EVERY conflicting path's ours into conflict_commit —
+// per-path registration order asserts are re-evaluated against the
+// GATE run's facts, not predicted (MASTER-PLAN §5.5.0/4).
   describe,
   it,
   beforeAll,
@@ -24,7 +28,11 @@ import {
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
 } from "../helpers";
-import { evaluateConflictState } from "../../../../../src/sync2/conflict-classifier";
+import {
+  reconcileConflictsForTest,
+  trackedSiblingPathsFor,
+  conflictEntryCount,
+} from "../helpers";
 
 // T6.1 (SYNC2-FIX §7, Scenario E shape) — three conflicts in one
 // session. branch-lifecycle pins the single-conflict lifecycle;
@@ -105,7 +113,7 @@ describe.skipIf(!integrationEnabled())(
 
       for (let i = 1; i <= N; i++) {
         expect(
-          client.conflictStore.hasPending(file(i)),
+          client.conflictStore.hasBase(file(i)),
           `${file(i)} must be pending`,
         ).toBe(true);
       }
@@ -118,14 +126,11 @@ describe.skipIf(!integrationEnabled())(
     // Resolve one path via sibling-delete (case 1: accept ours) and
     // re-run the classifier, as the vault event listener would.
     const resolveViaSiblingDelete = async (p: string): Promise<void> => {
-      const records = client!.conflictStore.getByPath(p);
+      const records = trackedSiblingPathsFor(client!, p);
       expect(records.length).toBeGreaterThan(0);
-      fs.rmSync(path.join(client!.vaultPath, records[0].siblingPath));
-      await evaluateConflictState(
-        client!.conflictStore,
-        client!.vault as unknown as import("obsidian").Vault,
-      );
-      expect(client!.conflictStore.hasPending(p)).toBe(false);
+      fs.rmSync(path.join(client!.vaultPath, records[0]));
+      await reconcileConflictsForTest(client!);
+      expect(client!.conflictStore.hasBase(p)).toBe(false);
     };
 
     it.fails(
@@ -201,7 +206,7 @@ describe.skipIf(!integrationEnabled())(
             `${file(i)}: accept-ours resolution never reached main`,
           ).toBe(`ours ${i}\n`);
         }
-        expect(client!.conflictStore.getAll()).toEqual([]);
+        expect(conflictEntryCount(client!)).toBe(0);
       },
       600_000,
     );

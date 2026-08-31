@@ -21,6 +21,7 @@ import {
   createSync2Client,
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
+  trackedSiblingPathsFor,
 } from "../helpers";
 
 // E2 (pseudo-merge rewrite) — binary conflict: both sides modified
@@ -96,15 +97,14 @@ describe.skipIf(!integrationEnabled())(
 
         // Pseudo-merge contract: conflict registered, no silent
         // overwrite. Local stays at ours; remote stays at theirs.
-        const records = client.conflictStore.getByPath("img.png");
+        const records = trackedSiblingPathsFor(client, "img.png");
         expect(records).toHaveLength(1);
-        expect(records[0].kind).toBe("modify-vs-modify");
 
         const localAfter = fs.readFileSync(path.join(client.vaultPath, "img.png"));
         expect(localAfter.equals(localBytes)).toBe(true);
 
         // Sibling file has theirs bytes.
-        const siblingAbs = path.join(client.vaultPath, records[0].siblingPath);
+        const siblingAbs = path.join(client.vaultPath, records[0]);
         expect(fs.existsSync(siblingAbs)).toBe(true);
         const siblingBytes = fs.readFileSync(siblingAbs);
         expect(siblingBytes.equals(remoteBytes)).toBe(true);

@@ -1,4 +1,6 @@
 import {
+// ⚔️ PIN RE-ARMED AT THE SWITCH (Phase 5.5 step 4): it.fails removed
+// in the flip commit — quiescence must now hold.
   describe,
   it,
   beforeAll,
@@ -85,9 +87,7 @@ describe.skipIf(!integrationEnabled())(
       }
       parts.push(
         `conflicts=${JSON.stringify(
-          c.conflictStore
-            .getAll()
-            .map((r) => r.vaultPath)
+          [...c.conflictStore.getCachedState().entries.keys()]
             .sort(),
         )}`,
       );

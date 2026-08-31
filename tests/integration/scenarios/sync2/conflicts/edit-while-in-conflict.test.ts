@@ -25,7 +25,11 @@ import {
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
 } from "../helpers";
-import { evaluateConflictState } from "../../../../../src/sync2/conflict-classifier";
+import {
+  reconcileConflictsForTest,
+  trackedSiblingPathsFor,
+  conflictEntryCount,
+} from "../helpers";
 
 // Pseudo-merge stage 7c — edit-while-in-conflict routes to the
 // conflict branch, not main.
@@ -94,7 +98,7 @@ describe.skipIf(!integrationEnabled())(
         );
         await sync2AllAndAssertNoErrors(client);
 
-        const records = client.conflictStore.getByPath("note.md");
+        const records = trackedSiblingPathsFor(client, "note.md");
         expect(records).toHaveLength(1);
         const cb = client!.hotMeta.getConflictBranch();
         expect(cb).not.toBeNull();
@@ -134,21 +138,18 @@ describe.skipIf(!integrationEnabled())(
 
         // ConflictStore still has one active record (resolution
         // hasn't fired). Sibling file is still in the vault.
-        expect(client.conflictStore.hasPending("note.md")).toBe(true);
+        expect(client.conflictStore.hasBase("note.md")).toBe(true);
         expect(
           fs.existsSync(
-            path.join(client.vaultPath, records[0].siblingPath),
+            path.join(client.vaultPath, records[0]),
           ),
         ).toBe(true);
 
         // Resolve via sibling delete. Next sync pushes ours v2 to
         // main and finalizes the branch.
-        fs.rmSync(path.join(client.vaultPath, records[0].siblingPath));
-        await evaluateConflictState(
-          client.conflictStore,
-          client.vault as unknown as import("obsidian").Vault,
-        );
-        expect(client.conflictStore.hasPending("note.md")).toBe(false);
+        fs.rmSync(path.join(client.vaultPath, records[0]));
+        await reconcileConflictsForTest(client);
+        expect(client.conflictStore.hasBase("note.md")).toBe(false);
 
         await sync2AllAndAssertNoErrors(client);
 

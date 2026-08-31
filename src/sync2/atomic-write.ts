@@ -476,15 +476,19 @@ async function renameStrategyWrite(
 // Structural view of the ConflictStore dependency used by sweep.
 // Sidesteps the conflict-store.ts ↔ atomic-write.ts circular import
 // (conflict-store imports `stagingPathFor` from this file).
-interface ConflictStoreLike {
-  getBySibling(siblingPath: string): { theirsBlobSha: string } | undefined;
-}
-
-// Crash-recovery sweep for `atomicWriteFile` AND for ConflictStore's
-// vault-level `.ges-tmp` sibling staging. Runs on plugin onload
-// BEFORE the engine starts touching the vault — walks the tree for
-// any `.ges-tmp` / `.ges-bak` leftovers and reconciles them
-// against the snapshot + conflict stores.
+// Crash-recovery sweep for `atomicWriteFile` staging artifacts. Runs
+// on plugin onload BEFORE the engine starts touching the vault —
+// walks the tree for any `.ges-tmp` / `.ges-bak` leftovers and
+// reconciles them against the baseline store.
+//
+// ⚠️ THE SWITCH (Phase 5.5 step 4): the v1 conflict-ownership
+// dispatch (`conflictStore.getBySibling` + theirsBlobSha SHA-verify
+// resume) is GONE — the write pattern it recovered no longer exists.
+// v2 writes sibling files through the STANDARD atomicWriteFile
+// protocol (saveConflictSiblingFile), and an interrupted STEP3
+// replace transaction is sibling-tx recovery's job (§II.11), not
+// this sweep's. Every unmarked `.ges-tmp` is therefore a Path A
+// transient: always safe to drop — the next sync repeats the write.
 //
 // Each suffix has ONE consistent meaning (see
 // docs/PSEUDO-MERGE-MODE.md §9 for the full rationale):
@@ -522,7 +526,6 @@ export class AtomicWriteRecovery {
   constructor(
     private readonly vault: Vault,
     private readonly baselines: FileBaselinesStore,
-    private readonly conflictStore?: ConflictStoreLike,
   ) {}
 
   async sweep(): Promise<{
@@ -564,38 +567,8 @@ export class AtomicWriteRecovery {
         continue;
       }
       try {
-        const conflictRecord = this.conflictStore?.getBySibling(originalPath);
-        if (conflictRecord !== undefined) {
-          const fileExists = await this.vault.adapter.exists(originalPath);
-          if (fileExists) {
-            // Step 3 completed at some point; the staging is stale.
-            await this.vault.adapter.remove(tmpPath);
-            cleaned++;
-            continue;
-          }
-          const bytes = await this.vault.adapter.readBinary(tmpPath);
-          const sha = await calculateGitBlobSHA(bytes);
-          if (sha === conflictRecord.theirsBlobSha) {
-            // Resume the interrupted Step 3.
-            await this.vault.adapter.rename(tmpPath, originalPath);
-            restored++;
-            // 2.0.2-beta2: NEW bytes appeared at originalPath
-            // (the conflict sibling file). Surface for reload
-            // trigger — though sibling paths are usually conflict
-            // files, not plugin files, the caller filters.
-            appliedPaths.push(originalPath);
-          } else {
-            // SHA mismatch — disk corruption or a stale staging from
-            // some unrelated path that happens to collide. Drop it;
-            // the next drain Phase B drops the record on the missing
-            // sibling.
-            await this.vault.adapter.remove(tmpPath);
-            cleaned++;
-          }
-          continue;
-        }
-        // No ConflictStore record → Path A transient. Always safe to
-        // drop; next sync repeats the operation if still needed.
+        // Path A transient (THE SWITCH: the only remaining class).
+        // Always safe to drop; the next sync repeats the operation.
         await this.vault.adapter.remove(tmpPath);
         cleaned++;
       } catch {

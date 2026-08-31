@@ -24,6 +24,7 @@ import {
   createSync2Client,
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
+  conflictEntryCount,
 } from "../helpers";
 
 // T5.4 (SYNC2-FIX §7) — rate-limit EXHAUSTION. J2 pins the happy
@@ -113,7 +114,7 @@ describe.skipIf(!integrationEnabled())(
         await sync2AllAndAssertNoErrors(client);
         expect(await readRemoteFile(branch, "a.md")).toBe("ours a\n");
         expect(await client.queue.list()).toEqual([]);
-        expect(client.conflictStore.getAll()).toEqual([]);
+        expect(conflictEntryCount(client)).toBe(0);
         expect(client.hotMeta.getLastSyncCommitSha()).toBe(
           await getBranchHead(branch),
         );

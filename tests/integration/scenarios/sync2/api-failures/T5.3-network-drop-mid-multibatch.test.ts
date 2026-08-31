@@ -24,6 +24,7 @@ import {
   createSync2Client,
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
+  conflictEntryCount,
 } from "../helpers";
 
 // T5.3 (SYNC2-FIX §7) — transient network death MID multi-batch drain
@@ -120,7 +121,7 @@ describe.skipIf(!integrationEnabled())(
           expect(await readRemoteFile(branch, file(i))).toBe(`ours ${i}\n`);
         }
         expect(await client.queue.list()).toEqual([]);
-        expect(client.conflictStore.getAll()).toEqual([]);
+        expect(conflictEntryCount(client)).toBe(0);
         expect(client.hotMeta.getLastSyncCommitSha()).toBe(
           await getBranchHead(branch),
         );

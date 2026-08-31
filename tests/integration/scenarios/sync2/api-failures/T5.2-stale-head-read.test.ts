@@ -23,6 +23,7 @@ import {
   createSync2Client,
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
+  conflictEntryCount,
 } from "../helpers";
 
 // T5.2 (SYNC2-FIX §7) — eventually-consistent head READ (the §7.10
@@ -126,7 +127,7 @@ describe.skipIf(!integrationEnabled())(
 
         // I2 — no "own data as conflict": the guard re-read instead of
         // reconciling our own push as a foreign change.
-        expect(client.conflictStore.getAll()).toEqual([]);
+        expect(conflictEntryCount(client)).toBe(0);
 
         // I6/I5 — clean exit with consistent state.
         expect(await client.queue.list()).toEqual([]);

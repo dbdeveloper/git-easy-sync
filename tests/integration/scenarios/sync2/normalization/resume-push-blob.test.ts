@@ -6,6 +6,8 @@ import {
   afterEach,
   expect,
 } from "vitest";
+import * as fs from "fs";
+import * as path from "path";
 import {
   createBranchFromHead,
   deleteBranchIfExists,
@@ -143,13 +145,26 @@ describe.skipIf(!integrationEnabled())(
           /network drop mid-push/i,
         );
 
-        // The queued batch must still be on disk with uploadedBlobs
-        // populated. We inspect via the test client's queue, which
-        // shares the same disk state the manager will see on retry.
+        // The queued batch must still be on disk with the resume
+        // cache populated. SWITCH-M: the cache is uploaded-blobs.json
+        // in the batch dir now (tree-accumulator.ts — a SEPARATE data
+        // file, repairDir-safe), not a meta.json field.
         const queueIds = await client.queue.list();
         expect(queueIds.length).toBe(1);
-        const queuedBatch = await client.queue.read(queueIds[0]);
-        const cachedPaths = Object.keys(queuedBatch.uploadedBlobs);
+        const ublobsRaw = fs.readFileSync(
+          path.join(
+            client.vaultPath,
+            ".obsidian",
+            "plugins",
+            "git-easy-sync",
+            ".runtime",
+            "push-queue",
+            queueIds[0],
+            "uploaded-blobs.json",
+          ),
+          "utf8",
+        );
+        const cachedPaths = Object.keys(JSON.parse(ublobsRaw));
         expect(cachedPaths.length).toBeGreaterThan(0);
         expect(cachedPaths.length).toBeLessThan(paths.length);
         for (const cached of cachedPaths) {

@@ -24,7 +24,11 @@ import {
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
 } from "../helpers";
-import { evaluateConflictState } from "../../../../../src/sync2/conflict-classifier";
+import {
+  reconcileConflictsForTest,
+  trackedSiblingPathsFor,
+  conflictEntryCount,
+} from "../helpers";
 
 // D6 — same file: local-delete vs remote-modify.
 //
@@ -82,13 +86,12 @@ describe.skipIf(!integrationEnabled())(
       "registers delete-vs-modify on detection",
       async () => {
         client = await setupConflict();
-        expect(client.conflictStore.hasPending("x.md")).toBe(true);
-        const records = client.conflictStore.getByPath("x.md");
+        expect(client.conflictStore.hasBase("x.md")).toBe(true);
+        const records = trackedSiblingPathsFor(client, "x.md");
         expect(records).toHaveLength(1);
-        expect(records[0].kind).toBe("delete-vs-modify");
 
         // Sibling file in vault with theirs content.
-        const siblingPath = records[0].siblingPath;
+        const siblingPath = records[0];
         expect(fs.existsSync(path.join(client.vaultPath, siblingPath))).toBe(true);
         expect(
           fs.readFileSync(path.join(client.vaultPath, siblingPath), "utf8"),
@@ -109,16 +112,13 @@ describe.skipIf(!integrationEnabled())(
       "user deletes the sibling → classifier accept-ours → next sync removes x on remote",
       async () => {
         client = await setupConflict();
-        const records = client.conflictStore.getByPath("x.md");
-        const siblingAbs = path.join(client.vaultPath, records[0].siblingPath);
+        const records = trackedSiblingPathsFor(client, "x.md");
+        const siblingAbs = path.join(client.vaultPath, records[0]);
 
         fs.rmSync(siblingAbs);
-        await evaluateConflictState(
-          client.conflictStore,
-          client.vault as unknown as import("obsidian").Vault,
-        );
+        await reconcileConflictsForTest(client);
 
-        expect(client.conflictStore.hasPending("x.md")).toBe(false);
+        expect(client.conflictStore.hasBase("x.md")).toBe(false);
 
         await sync2AllAndAssertNoErrors(client);
 
@@ -133,20 +133,17 @@ describe.skipIf(!integrationEnabled())(
       "user copies sibling onto base path → case 6 → x restored locally, remote unchanged",
       async () => {
         client = await setupConflict();
-        const records = client.conflictStore.getByPath("x.md");
-        const siblingPath = records[0].siblingPath;
+        const records = trackedSiblingPathsFor(client, "x.md");
+        const siblingPath = records[0];
 
         // User accepts theirs by copying sibling content over to
         // base. baseSha now equals siblingSha → classifier fires
         // case 6 (accept-theirs) → record + sibling dropped.
         const theirsBytes = await client.vault.adapter.readBinary(siblingPath);
         await client.vault.adapter.writeBinary("x.md", theirsBytes);
-        await evaluateConflictState(
-          client.conflictStore,
-          client.vault as unknown as import("obsidian").Vault,
-        );
+        await reconcileConflictsForTest(client);
 
-        expect(client.conflictStore.hasPending("x.md")).toBe(false);
+        expect(client.conflictStore.hasBase("x.md")).toBe(false);
         expect(
           fs.readFileSync(path.join(client.vaultPath, "x.md"), "utf8"),
         ).toBe("x v2 from other device\n");

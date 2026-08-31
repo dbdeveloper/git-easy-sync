@@ -23,7 +23,11 @@ import {
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
 } from "../helpers";
-import { evaluateConflictState } from "../../../../../src/sync2/conflict-classifier";
+import {
+  reconcileConflictsForTest,
+  trackedSiblingPathsFor,
+  conflictEntryCount,
+} from "../helpers";
 
 // Classifier row 6 — siblingSha == baseSha → accept-theirs.
 //
@@ -88,10 +92,9 @@ describe.skipIf(!integrationEnabled())(
         await sync2AllAndAssertNoErrors(client);
 
         // Conflict registered: base unchanged, sibling holds remote.
-        const records = client.conflictStore.getByPath("note.md");
+        const records = trackedSiblingPathsFor(client, "note.md");
         expect(records).toHaveLength(1);
-        expect(records[0].kind).toBe("modify-vs-modify");
-        const siblingPath = records[0].siblingPath;
+        const siblingPath = records[0];
         const siblingAbs = path.join(client.vaultPath, siblingPath);
         expect(fs.readFileSync(siblingAbs, "utf8")).toBe("remote edit\n");
 
@@ -107,15 +110,12 @@ describe.skipIf(!integrationEnabled())(
 
         // Drive the classifier (production has ConflictWatcher; mock
         // vault doesn't auto-fire events on fs writes).
-        await evaluateConflictState(
-          client.conflictStore,
-          client.vault as unknown as import("obsidian").Vault,
-        );
+        await reconcileConflictsForTest(client);
 
         // Record dropped, sibling removed by the classifier (case 6
         // sweeps the now-redundant sibling), base stays at remote
         // content.
-        expect(client.conflictStore.hasPending("note.md")).toBe(false);
+        expect(client.conflictStore.hasBase("note.md")).toBe(false);
         expect(fs.existsSync(siblingAbs)).toBe(false);
         expect(
           fs.readFileSync(

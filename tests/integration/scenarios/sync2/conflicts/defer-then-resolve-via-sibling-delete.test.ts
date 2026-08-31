@@ -24,7 +24,11 @@ import {
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
 } from "../helpers";
-import { evaluateConflictState } from "../../../../../src/sync2/conflict-classifier";
+import {
+  reconcileConflictsForTest,
+  trackedSiblingPathsFor,
+  conflictEntryCount,
+} from "../helpers";
 
 // Pseudo-merge stage 5c: register-conflict + classifier resolution
 // via sibling-delete, end to end against real GitHub.
@@ -99,10 +103,9 @@ describe.skipIf(!integrationEnabled())(
 
         // Conflict registered. Sibling file in the vault carrying
         // theirs content; ours stays in the base file.
-        const records = client.conflictStore.getByPath("note.md");
+        const records = trackedSiblingPathsFor(client, "note.md");
         expect(records).toHaveLength(1);
-        expect(records[0].kind).toBe("modify-vs-modify");
-        const siblingPath = records[0].siblingPath;
+        const siblingPath = records[0];
         const siblingAbs = path.join(client.vaultPath, siblingPath);
         expect(fs.existsSync(siblingAbs)).toBe(true);
         expect(fs.readFileSync(siblingAbs, "utf8")).toBe(
@@ -129,11 +132,8 @@ describe.skipIf(!integrationEnabled())(
         // would auto-fire here; pre-wire, we drive the classifier
         // manually.
         fs.rmSync(siblingAbs);
-        await evaluateConflictState(
-          client.conflictStore,
-          client.vault as unknown as import("obsidian").Vault,
-        );
-        expect(client.conflictStore.hasPending("note.md")).toBe(false);
+        await reconcileConflictsForTest(client);
+        expect(client.conflictStore.hasBase("note.md")).toBe(false);
 
         await sync2AllAndAssertNoErrors(client);
 

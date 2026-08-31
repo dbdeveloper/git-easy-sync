@@ -26,11 +26,17 @@ import FileBaselinesStore from "../../../../src/sync2/file-baselines";
 import ChangeDetector from "../../../../src/sync2/change-detector";
 import GitignoreInvariants from "../../../../src/sync2/gitignore-invariants";
 import InvariantStateStore from "../../../../src/sync2/invariant-state";
-import PushQueue from "../../../../src/sync2/push-queue";
-import TreeBuilder from "../../../../src/sync2/tree-builder";
-import ConflictStore from "../../../../src/sync2/conflict-store";
 import ConflictStoreV2 from "../../../../src/sync2/conflict-store-v2";
-import PendingDeletionsStore from "../../../../src/sync2/pending-deletions-store";
+import BatchWriter from "../../../../src/sync2/batch-writer";
+import BatchHistorySource from "../../../../src/sync2/batch-history-source";
+import SyncStore from "../../../../src/sync2/sync-store";
+import DrainJournal from "../../../../src/sync2/drain-journal";
+import SiblingTx from "../../../../src/sync2/sibling-tx";
+import { calculateGitBlobSHA } from "../../../../src/utils";
+import { mergeText } from "../../../../src/sync2/three-way-merge";
+import { processConflicts } from "../../../../src/sync2/process-conflicts";
+import { buildSiblingFilePath } from "../../../../src/sync2/conflict-siblings";
+import * as crypto from "crypto";
 import { ConflictWatcher } from "../../../../src/sync2/conflict-watcher";
 import { ConflictCounter } from "../../../../src/sync2/conflict-counter";
 import { TrashStore } from "../../../../src/diff2/trash-store";
@@ -76,14 +82,24 @@ export interface Sync2TestClient {
   hotMeta: HotMetadataStore;
   baselines: FileBaselinesStore;
   detector: ChangeDetector;
-  queue: PushQueue;
-  builder: TreeBuilder;
+  // THE SWITCH: the new-format queue surfaces.
+  batchWriter: BatchWriter;
+  batchHistorySource: BatchHistorySource;
+  // Read-only queue view (list/read over the new metafiles) — the
+  // shape most scenario assertions need; a thin alias of
+  // batchHistorySource so old `c.queue.list()` asserts keep working.
+  queue: {
+    list(): Promise<string[]>;
+    read(
+      id: string,
+    ): Promise<{ id: string; createdAt: number; files: string[] }>;
+  };
+  syncStore: SyncStore;
+  journal: DrainJournal;
   client: GithubClient;
   logger: Logger;
-  // Always present in the integration fixture so tests don't have
-  // to wire it up themselves. conflict-resolution tests use
-  // it directly to assert on pending records / sibling files.
-  conflictStore: ConflictStore;
+  // v2 conflicts.json — the drain writes it, the UI reads it.
+  conflictStore: ConflictStoreV2;
   conflictWatcher: ConflictWatcher;
   // Always present in the integration fixture; n-series tests inspect
   // .trash state directly. Wired into Sync2Manager via trashHooks so
@@ -138,11 +154,23 @@ export async function createSync2Client(
     selfPluginId: SELF_PLUGIN_ID,
   });
   const gi = new GI(vaultPath);
-  const queue = new PushQueue({
+  const syncStore = new SyncStore({ vault, selfPluginId: SELF_PLUGIN_ID });
+  const journal = new DrainJournal({ vault, selfPluginId: SELF_PLUGIN_ID });
+  const batchWriter = new BatchWriter({
     vault,
-    configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
+    syncStore,
+    autoCanonicalize: () => opts.autoCanonicalize ?? true,
+    logger,
   });
+  const batchHistorySource = new BatchHistorySource({
+    vault,
+    selfPluginId: SELF_PLUGIN_ID,
+    syncStore,
+  });
+  // Detector's queue-dedup reads the manager's per-pass index —
+  // same lazy-thunk wiring as production main.ts.
+  let managerRef: Sync2Manager | null = null;
   const detector = new ChangeDetector({
     vault,
     hotMeta,
@@ -152,14 +180,10 @@ export async function createSync2Client(
     selfPluginId: SELF_PLUGIN_ID,
     vaultRoot: vaultPath,
     syncConfigDir: () => settings.syncConfigDir ?? true,
-    queue,
-  });
-  const builder = new TreeBuilder({
-    vault,
-    queue,
-    client,
-    configDir: CONFIG_DIR,
-    selfPluginId: SELF_PLUGIN_ID,
+    queue: {
+      peekLatestPathSha: async (p: string) =>
+        (await managerRef?.peekLatestPathSha(p)) ?? null,
+    },
   });
   const invariantState = new InvariantStateStore({
     vault,
@@ -173,18 +197,6 @@ export async function createSync2Client(
     selfPluginId: SELF_PLUGIN_ID,
   });
 
-  const conflictStore = new ConflictStore({
-    vault,
-    configDir: CONFIG_DIR,
-    selfPluginId: SELF_PLUGIN_ID,
-  });
-  await conflictStore.load();
-  const pendingDeletions = new PendingDeletionsStore({
-    vault,
-    configDir: CONFIG_DIR,
-    selfPluginId: SELF_PLUGIN_ID,
-  });
-  await pendingDeletions.load();
   // TrashStore — always wired into the integration fixture so trash
   // hooks fire end-to-end in any test that pull-deletes or pushes
   // batches. Tests that don't care about trash get an empty .trash/
@@ -207,6 +219,13 @@ export async function createSync2Client(
     selfPluginId: SELF_PLUGIN_ID,
   });
   await conflictStoreV2.load();
+  const siblingTx = new SiblingTx({
+    vault,
+    selfPluginId: SELF_PLUGIN_ID,
+    store: conflictStoreV2,
+    computeSha: calculateGitBlobSHA,
+    generateGuid: () => crypto.randomUUID(),
+  });
   const conflictCounter = new ConflictCounter({
     vault,
     store: conflictStoreV2,
@@ -220,37 +239,40 @@ export async function createSync2Client(
 
   const manager = new Sync2Manager({
     vault,
+    selfPluginId: SELF_PLUGIN_ID,
+    configDir: CONFIG_DIR,
+    client,
+    // Main-thread implementations — the integration harness has no
+    // Web Worker runtime; these are byte-identical to the worker ops.
+    worker: {
+      computeGitBlobSHA: calculateGitBlobSHA,
+      decodeBase64: async (b64: string) =>
+        Uint8Array.from(Buffer.from(b64, "base64")).buffer as ArrayBuffer,
+      mergeText: async (o, b, t) => mergeText(o, b, t),
+    },
     hotMeta,
     baselines,
     detector,
-    queue,
-    builder,
-    client,
+    batchWriter,
+    syncStore,
+    journal,
+    conflictStore: conflictStoreV2,
+    siblingTx,
     logger,
     invariants,
-    configDir: CONFIG_DIR,
-    selfPluginId: SELF_PLUGIN_ID,
+    isSyncable: (p) => detector.checkSyncable(p),
+    mainBranch: () => settings.githubBranch,
     // Pass through live getter so I-series tests can mutate
     // `settings.deviceLabel` between syncs and the next push picks
-    // up the new value. (No commitMessage template; see
-    // src/sync2/commit-message.ts.)
+    // up the new value.
     deviceLabel: () => settings.deviceLabel ?? "sync2-int-test",
-    remoteIdentity: () => ({
-      owner: settings.githubOwner,
-      repo: settings.githubRepo,
-      branch: settings.githubBranch,
-    }),
-    conflictStore,
-    conflictWatcher,
-    conflictCounter,
-    pendingDeletions,
+    maxAutoMergeFileSize: () => settings.maxAutoMergeSizeBytes ?? 1_000_000,
+    accumulateOfflineSyncs: () => opts.consolidateCommits ?? false,
+    tokenExpired: async () => false,
     trashHooks: trashStore.asHooks(),
-    consolidateCommits: opts.consolidateCommits ?? false,
-    autoCanonicalize: () => opts.autoCanonicalize ?? true,
     // POSIX-flavoured rename via mock-obsidian's adapter — no wiki-link
     // updates (no real `app.fileManager`), but adequate for integration
-    // tests that just need the file to move. Production wiring lives
-    // in main.ts and uses `app.fileManager.renameFile` for link maintenance.
+    // tests that just need the file to move.
     renameFile: async (oldPath: string, newPath: string): Promise<void> => {
       if (await vault.adapter.exists(newPath)) {
         await vault.adapter.remove(newPath);
@@ -258,6 +280,7 @@ export async function createSync2Client(
       await vault.adapter.rename(oldPath, newPath);
     },
   });
+  managerRef = manager;
 
   return {
     vault,
@@ -266,11 +289,17 @@ export async function createSync2Client(
     hotMeta,
     baselines,
     detector,
-    queue,
-    builder,
+    batchWriter,
+    batchHistorySource,
+    queue: {
+      list: () => batchHistorySource.list(),
+      read: (id: string) => batchHistorySource.read(id),
+    },
+    syncStore,
+    journal,
     client,
     logger,
-    conflictStore,
+    conflictStore: conflictStoreV2,
     conflictWatcher,
     trashStore,
     branch: opts.branch,
@@ -310,4 +339,44 @@ export async function sync2FileAndAssertNoErrors(
   if (errors.length > 0) {
     throw new Error(`syncFile errors: ${errors.join("; ")}`);
   }
+}
+
+// ── v2 conflict-test helpers (THE SWITCH M-pass) ─────────────────────
+
+// The v1 classifier's evaluateConflictState analog: reconcile
+// conflicts.json with the live vault (dedup, content-equal
+// auto-resolve, prune) and persist. Production runs this at the drain
+// restarts + the three UI sites; the mock vault fires no events, so
+// tests drive it explicitly, exactly like they drove the classifier.
+export async function reconcileConflictsForTest(
+  c: Sync2TestClient,
+): Promise<void> {
+  const state = await processConflicts(
+    {
+      vault: c.vault,
+      store: c.conflictStore,
+      computeSha: calculateGitBlobSHA,
+    },
+    null,
+  );
+  await c.conflictStore.save(state);
+}
+
+// Derived on-disk sibling names for a base path's tracked siblings
+// (v2 keeps FileInfo rows; the disk name is derived, not stored).
+export function trackedSiblingPathsFor(
+  c: Sync2TestClient,
+  basePath: string,
+): string[] {
+  const entry = c.conflictStore.getCachedState().entries.get(basePath);
+  if (!entry) return [];
+  return entry.siblings.map((s) =>
+    buildSiblingFilePath(basePath, s.mtime ?? 0, s.deviceLabel),
+  );
+}
+
+// "How many conflict entries live in the store" — the v1 getAll()
+// length analog for no-conflicts asserts.
+export function conflictEntryCount(c: Sync2TestClient): number {
+  return c.conflictStore.getCachedState().entries.size;
 }

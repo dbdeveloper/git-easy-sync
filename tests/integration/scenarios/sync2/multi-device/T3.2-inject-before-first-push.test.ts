@@ -1,4 +1,6 @@
 import {
+// ⚔️ PIN RE-ARMED AT THE SWITCH (Phase 5.5 step 4): defect A died
+// with the old drain — it.fails removed in the flip commit.
   describe,
   it,
   beforeAll,
@@ -73,7 +75,7 @@ describe.skipIf(!integrationEnabled())(
       await deleteBranchIfExists(branch);
     });
 
-    it.fails(
+    it(
       "inject theirs to note3/note4 before push #1 → theirs survives, note1/note2 land as ours",
       async () => {
         client = await createSync2Client({ branch });
@@ -133,9 +135,7 @@ describe.skipIf(!integrationEnabled())(
 
         // note3/note4 — I2: theirs survives as a conflict or merged
         // content, never a silent clobber to plain ours.
-        const conflictPaths = client.conflictStore
-          .getAll()
-          .map((r) => r.vaultPath);
+        const conflictPaths = [...client.conflictStore.getCachedState().entries.keys()];
         for (let i = 3; i <= N; i++) {
           const remote = await readRemoteFile(branch, file(i));
           const p = path.join(client.vaultPath, file(i));

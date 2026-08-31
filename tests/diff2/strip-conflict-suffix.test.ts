@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { formatConflictTimestamp, stripConflictSuffix } from "src/diff2/strip-conflict-suffix";
-import { buildSiblingPath } from "src/sync2/conflict-store";
+import { buildSiblingFilePath } from "src/sync2/conflict-siblings";
 
 // Behavior contract for stripConflictSuffix: reverse the naming produced
 // by conflict-store.ts::buildSiblingPath. Tests are organized by the
@@ -186,7 +186,7 @@ describe("stripConflictSuffix", () => {
 
     for (const { vault, device, label } of cases) {
       it(`round-trips for ${label}`, () => {
-        const sibling = buildSiblingPath(vault, device, ts, "modify-vs-modify");
+        const sibling = buildSiblingFilePath(vault, ts, device);
         expect(stripConflictSuffix(sibling)).toBe(vault);
       });
     }
