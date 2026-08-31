@@ -926,8 +926,14 @@ A.1 п.21-25, P.25, L.3, E.3-5.
      `.ges-tmp` staging-файли через v1 `record.theirsBlobSha` SHA-verify — це
      вмирає з v1: потрібен v2-еквівалент (sibling/conflictBase sha) або явне
      рішення про зняття.
-4. **THE SWITCH — ДЕТАЛЬНИЙ ПЛАН (підготовка 2026-08-31, інвентаризація повна;
-   очікує «так» власника + відповіді на 3 питання нижче).**
+4. **THE SWITCH — ✅ ВИКОНАНО 2026-08-31** (усі 3 питання вирішені власником; коміти:
+   `ce9330d` S1-драйв + `af63354` S1-peek + `195527f` **САМ SWITCH
+   (+1317/−15861 рядків)** + `1ceff84` S3-wiring). Гейт S4 — у прогоні.
+   Знахідка S1 (P.25-клас, RED-verified): batch-видалення проти remote-редагування
+   → 4.6.b conflict → СТАРИЙ STEP1 крешився на createBlob(null); тепер
+   ours-видалення = tree-deletion-запис у conflict-гілці з двома
+   BadObjectState-guard-ами (null-safe shouldPush; root-commit фільтрує
+   deletion-записи). Нижче — детальний план, як він був підготований:
 
    **Публічна поверхня менеджера, що ЗАЛИШАЄТЬСЯ** (перевірено по споживачах у
    main.ts/settings/scheduler/reset): `syncAll`, `resumeQueue`, `commitOnly`,
