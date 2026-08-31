@@ -1451,6 +1451,10 @@ export default class GitHubSyncPlugin extends Plugin {
           vault: this.app.vault,
           store: this.conflictStoreV2,
           computeSha: (bytes) => this.workerClient.computeGitBlobSHA(bytes),
+          // R3.5 layer 1b (v2): "conflict closed" IS the prune this
+          // reconcile makes — the trash keeps its one-drain-cycle
+          // recovery window for resolved conflicts.
+          trashHooks: this.trashStore?.asHooks() ?? null,
           logger: this.logger,
         },
         null,

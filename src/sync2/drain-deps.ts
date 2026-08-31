@@ -470,6 +470,7 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
     conflictStore: args.conflictStore,
     siblingTx: args.siblingTx,
     tokenExpired: args.tokenExpired,
+    trashHooks: args.trashHooks,
     vaultFiles: makeVaultFileReader({
       vault: args.vault,
       computeSha,

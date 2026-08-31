@@ -229,6 +229,12 @@ export interface DrainDeps {
   conflictStore: ConflictStoreV2;
   siblingTx: SiblingTx;
   tokenExpired(): Promise<boolean>;
+  // Optional trash seam, passed through to process_conflicts so the
+  // prune transition fires confirmResolved (R3.5 layer 1b) on
+  // drain-side reconciles too.
+  trashHooks?: {
+    confirmResolved(basePath: string): Promise<void>;
+  } | null;
   vaultFiles: VaultFileReader;
   mergeBlobs: Diff3Deps["mergeBlobs"];
   computeSha(bytes: ArrayBuffer): Promise<string>;
@@ -341,6 +347,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           vault: deps.vault,
           store: deps.conflictStore,
           computeSha: deps.computeSha,
+          trashHooks: deps.trashHooks,
           logger: deps.logger,
         },
         conflicts,
@@ -1392,6 +1399,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       vault: deps.vault,
       store: deps.conflictStore,
       computeSha: deps.computeSha,
+      trashHooks: deps.trashHooks,
       logger: deps.logger,
     },
     conflicts,

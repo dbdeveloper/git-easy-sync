@@ -255,4 +255,74 @@ describe("process_conflicts (§VIII I)", () => {
     const result = await processConflicts(deps(), state);
     expect(result.entries.get("note.md")!.conflictBase).toBe(originalBase);
   });
+
+  // ── confirmResolved prune seam (Phase 5.5 step 3d, R3.5 layer 1b) ──
+
+  it("I.10: confirmResolved fires EXACTLY once, on the non-empty→empty prune transition, with the base path", async () => {
+    const resolved: string[] = [];
+    const hookDeps = () => ({
+      ...deps(),
+      trashHooks: {
+        confirmResolved: async (p: string) => {
+          resolved.push(p);
+        },
+      },
+    });
+    const state = emptyConflictsState();
+    putFile("note.md", "same\n");
+    // Sibling content == base content → auto-resolve → prune.
+    entry(state, "note.md", [await tracked("note.md", "same\n", 100)]);
+    // A second, still-live conflict must NOT fire.
+    putFile("live.md", "base\n");
+    entry(state, "live.md", [await tracked("live.md", "other\n", 200)]);
+
+    const r1 = await processConflicts(hookDeps(), state);
+    expect(resolved).toEqual(["note.md"]); // once, prune only
+    expect(r1.entries.has("live.md")).toBe(true);
+
+    // Second pass over the SAME state: the entry is gone — no re-fire.
+    await processConflicts(hookDeps(), r1);
+    expect(resolved).toEqual(["note.md"]);
+  });
+
+  it("I.11: a THROWING confirmResolved hook warns and never blocks — the prune still happens", async () => {
+    const warns: string[] = [];
+    const state = emptyConflictsState();
+    putFile("note.md", "same\n");
+    entry(state, "note.md", [await tracked("note.md", "same\n", 100)]);
+
+    const r = await processConflicts(
+      {
+        ...deps(),
+        trashHooks: {
+          confirmResolved: async () => {
+            throw new Error("trash exploded");
+          },
+        },
+        logger: { info: () => {}, warn: (m: string) => warns.push(m) },
+      },
+      state,
+    );
+    expect(r.entries.has("note.md")).toBe(false); // pruned anyway
+    expect(warns.some((w) => w.includes("confirmResolved"))).toBe(true);
+  });
+
+  it("I.12: an EMPTY-on-entry siblings list prunes NOTHING and fires NOTHING (I.7 transient stays a transient)", async () => {
+    const resolved: string[] = [];
+    const state = emptyConflictsState();
+    entry(state, "fresh.md", []); // STEP1 ran, STEP3 hasn't
+    const r = await processConflicts(
+      {
+        ...deps(),
+        trashHooks: {
+          confirmResolved: async (p: string) => {
+            resolved.push(p);
+          },
+        },
+      },
+      state,
+    );
+    expect(r.entries.has("fresh.md")).toBe(true);
+    expect(resolved).toEqual([]);
+  });
 });
