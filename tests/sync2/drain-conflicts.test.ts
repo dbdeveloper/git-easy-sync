@@ -164,11 +164,26 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
         const b = batches.find((x) => x.claimed.dir === d);
         if (b) b.removed = true;
       },
-      baselines: { get: async (p) => baselines.get(p) },
+      baselines: {
+      get: async (p) => baselines.get(p),
+      setMany: async (entries) => {
+        for (const e of entries) {
+          baselines.set(e.path, {
+            baselineSha: e.baselineSha,
+            mtime: e.mtime,
+            size: e.size,
+          });
+        }
+      },
+      removeMany: async (paths) => {
+        for (const p of paths) baselines.delete(p);
+      },
+    },
       discoverChangedFiles: honestDiscovery,
       hot: {
         getLastSyncCommitSha: () => baseCommit,
         getConflictBranch: () => null,
+        update: async () => {},
       },
       conflictStore,
       siblingTx,
@@ -661,6 +676,11 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
   let batches: Array<{ claimed: ClaimedBatch; removed: boolean }>;
   let baseCommit: string | null;
   let seq: number;
+  let hotUpdates: Array<{
+    lastSyncCommitSha: string | null;
+    lastSyncTreeSha: string | null;
+    conflictBranchName: string | null;
+  }>;
 
   const NOTE2 = "note.md";
   const V0b = "one\ntwo\nthree\n";
@@ -685,6 +705,7 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     batches = [];
     baseCommit = null;
     seq = 0;
+    hotUpdates = [];
   });
 
   afterEach(() => {
@@ -744,9 +765,29 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
       const b = batches.find((x) => x.claimed.dir === d);
       if (b) b.removed = true;
     },
-    baselines: { get: async (p) => baselines.get(p) },
+    baselines: {
+      get: async (p) => baselines.get(p),
+      setMany: async (entries) => {
+        for (const e of entries) {
+          baselines.set(e.path, {
+            baselineSha: e.baselineSha,
+            mtime: e.mtime,
+            size: e.size,
+          });
+        }
+      },
+      removeMany: async (paths) => {
+        for (const p of paths) baselines.delete(p);
+      },
+    },
     discoverChangedFiles: honest,
-    hot: { getLastSyncCommitSha: () => baseCommit, getConflictBranch: () => null },
+    hot: {
+      getLastSyncCommitSha: () => baseCommit,
+      getConflictBranch: () => null,
+      update: async (f) => {
+        hotUpdates.push(f);
+      },
+    },
     conflictStore,
     siblingTx,
     tokenExpired: async () => false,
@@ -835,10 +876,14 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     for (const [p, f] of mergeFiles) {
       expect(f.sha).toBe(pre.get(p)!.sha);
     }
-    // Branch gone; name cleared in the journal.
+    // Branch gone; the promoted hot anchor carries a NULL name and
+    // the merge commit as lastSync; the journal is CLEARED by the
+    // epilogue (step 4 — its absence means 'drain finished').
     expect(world.branchHeads.has(branch)).toBe(false);
-    const journalState = await journal.load();
-    expect(journalState!.conflictBranchName).toBeNull();
+    const lastHot = hotUpdates[hotUpdates.length - 1];
+    expect(lastHot.conflictBranchName).toBeNull();
+    expect(lastHot.lastSyncCommitSha).toBe(r.finalizedMergeSha);
+    expect(await journal.load()).toBeNull();
     void preMergeMainFiles;
   });
 
@@ -859,9 +904,9 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     // name — the exact post-merge/pre-delete window.
     const oldTip = r1.finalizedMergeSha!;
     world.branchHeads.set(branch, oldTip); // tip == merge sha → identical/ahead
-    const js = (await journal.load())!;
+    const js = (await import("../../src/sync2/drain-journal")).emptyDrainState();
     js.conflictBranchName = branch;
-    await journal.persist(js);
+    await journal.persist(js); // the crash left a journal with the name
     baseCommit = world.head;
 
     let merges = 0;
@@ -877,12 +922,12 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     expect(world.branchHeads.has(branch)).toBe(false);
 
     // 404 variant: name set, branch gone → field cleanup only.
-    const js2 = (await journal.load())!;
+    const js2 = (await import("../../src/sync2/drain-journal")).emptyDrainState();
     js2.conflictBranchName = "ghost-branch";
     await journal.persist(js2);
     const r3 = await drainOnce(deps());
     expect(r3.status).toBe("ok");
-    expect((await journal.load())!.conflictBranchName).toBeNull();
+    expect(hotUpdates[hotUpdates.length - 1].conflictBranchName).toBeNull();
   });
 
   it("G.13: 422 on the main-ref move → FINALIZE DEFERS (branch + name kept, drain ok); the next drain merges", async () => {
@@ -910,7 +955,9 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     expect(r1.status).toBe("ok"); // deferral is NOT an error
     expect(r1.finalizedMergeSha).toBeNull();
     expect(world.branchHeads.has(branch)).toBe(true); // kept
-    expect((await journal.load())!.conflictBranchName).toBe(branch); // kept
+    // The hot anchor carries the KEPT name forward between drains —
+    // 'no conflicts right now' is NOT 'the branch was merged'.
+    expect(hotUpdates[hotUpdates.length - 1].conflictBranchName).toBe(branch);
 
     baseCommit = world.head;
     const r2 = await drainOnce(deps());
@@ -950,6 +997,9 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
       hot: {
         getLastSyncCommitSha: () => baseCommit,
         getConflictBranch: () => ({ name: "hot-carried-branch" }),
+        update: async (f) => {
+          hotUpdates.push(f);
+        },
       },
     });
     const origHead = d.client.getBranchHeadSha.bind(d.client);
@@ -960,7 +1010,7 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     const r = await drainOnce(d);
     expect(r.status).toBe("ok");
     expect(heads).toContain("hot-carried-branch"); // NOT a regenerated name
-    expect((await journal.load())!.conflictBranchName).toBe(
+    expect(hotUpdates[hotUpdates.length - 1].conflictBranchName).toBe(
       "hot-carried-branch",
     );
   });

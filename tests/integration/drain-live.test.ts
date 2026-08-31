@@ -274,7 +274,11 @@ describe.skipIf(!integrationEnabled())(
           removeBatchDir: async () => {
             cursor += 1;
           },
-          baselines: { get: async (p) => baselines.get(p) },
+          baselines: {
+            get: async (p) => baselines.get(p),
+            setMany: (entries) => baselines.setMany(entries),
+            removeMany: (paths) => baselines.removeMany(paths),
+          },
           discoverChangedFiles: (base, head) =>
             getChangedFilesFromGitHubRepo(
               {
@@ -292,6 +296,7 @@ describe.skipIf(!integrationEnabled())(
           hot: {
             getLastSyncCommitSha: () => seedCommit,
             getConflictBranch: () => null,
+            update: async () => {},
           },
           conflictStore,
           siblingTx,
@@ -475,7 +480,11 @@ describe.skipIf(!integrationEnabled())(
           removeBatchDir: async () => {
             removed = true;
           },
-          baselines: { get: async (p) => baselines.get(p) },
+          baselines: {
+            get: async (p) => baselines.get(p),
+            setMany: (entries) => baselines.setMany(entries),
+            removeMany: (paths) => baselines.removeMany(paths),
+          },
           discoverChangedFiles: (base, head) =>
             getChangedFilesFromGitHubRepo(
               {
@@ -493,6 +502,7 @@ describe.skipIf(!integrationEnabled())(
           hot: {
             getLastSyncCommitSha: () => seedCommit,
             getConflictBranch: () => null,
+            update: async () => {},
           },
           conflictStore,
           siblingTx,

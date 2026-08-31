@@ -187,11 +187,22 @@ export interface DrainDeps {
   retry: NetworkRetry;
   claimBatch(): Promise<ClaimedBatch | null>;
   removeBatchDir(dir: string): Promise<void>;
-  // metadata.files (Phase 1 cold buckets) — the diff3 base source.
+  // metadata.files (Phase 1 cold buckets) — the diff3 base source
+  // (get) and the epilogue's transfer target (group ops, §2.2.1:
+  // N paths in K buckets = K writes, never N).
   baselines: {
     get(
       path: string,
     ): Promise<{ baselineSha: string; mtime: number; size: number } | undefined>;
+    setMany(
+      entries: Array<{
+        path: string;
+        baselineSha: string;
+        mtime: number;
+        size: number;
+      }>,
+    ): Promise<void>;
+    removeMany(paths: string[]): Promise<void>;
   };
   // Discovery Layer 1 (§II.12) — wired to discovery.ts in production,
   // a two-eyed fake in tests (P.8-13, truth vs discoveryAnswer).
@@ -204,6 +215,13 @@ export interface DrainDeps {
     // J.2 fallback: the conflict-branch name survives BETWEEN drains
     // without a journal via the hot pair.
     getConflictBranch(): { name: string } | null;
+    // Epilogue step 3 — the CONFIRMED anchor, written exactly once
+    // per fully-completed drain (§1.C METAFILE), one ping-pong blob.
+    update(fields: {
+      lastSyncCommitSha: string | null;
+      lastSyncTreeSha: string | null;
+      conflictBranchName: string | null;
+    }): Promise<void>;
   };
   // formatMergeConflictBranchMessage in production — keeps the
   // trailing "(deviceLabel)" contract.
@@ -300,6 +318,12 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   let error422Count = 0;
   let state: DrainState = emptyDrainState();
   let headHash: string | null = null;
+  // The tree of headHash, when this run happens to KNOW it without a
+  // request (a push's own accumulator tree; the FINALIZE merge tree).
+  // Invalidated whenever headHash is re-read live. The epilogue needs
+  // the pair (commit, tree) written together — a skew points the
+  // anchor at the wrong tree (METAFILE §2.1.2).
+  let knownHeadTreeSha: string | null = null;
   let conflictHeadHash: string | null = null;
   // Run-scoped ambient conflicts (§III): null = not loaded yet; an
   // EMPTY state is a distinct legal value. Survives 422 restarts —
@@ -375,6 +399,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         const r = await deps.retry.run(() => deps.client.getGuardedHead());
         if (r.error !== null) return statusFromError(r.error, result);
         headHash = r.result;
+        knownHeadTreeSha = null; // live read — the tree is unknown again
       }
 
       let remoteFiles: RemoteFileChange[] = [];
@@ -765,7 +790,12 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       restartBatch = true;
       error422Count += 1;
       if (error422Count >= ERROR_422_CAP) {
-        await deps.journal.persist(state);
+        // NO persist here (D.16): `state` carries the FAILED attempt's
+        // rolled base/remote — writing it would make the next drain
+        // short-circuit the batch as already-pushed and silently lose
+        // it. The disk journal already holds the last COMPLETED
+        // batch's state; a CAP exit must look exactly like a crash
+        // right before the failed batch.
         return result("too-many-concurrent-pushes");
       }
       continue;
@@ -781,7 +811,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         restartBatch = true;
         error422Count += 1;
         if (error422Count >= ERROR_422_CAP) {
-          await deps.journal.persist(state);
+          // NO persist — dirty state, see the restartFromFlush CAP.
           return result("too-many-concurrent-pushes");
         }
         continue;
@@ -802,11 +832,13 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       if (r.error !== null) {
         if (r.error instanceof ValidationError) {
           // 422: someone pushed while we were building. 422-CAP (I6):
-          // give up cleanly after 5 in a row without a success —
-          // journal already holds the last completed batch's state.
+          // give up cleanly after 5 in a row without a success — the
+          // disk journal already holds the last completed batch's
+          // state, and persisting the in-memory `state` here would
+          // poison it with the FAILED attempt's rolled base/remote
+          // (D.16: silent batch loss on the redo).
           error422Count += 1;
           if (error422Count >= ERROR_422_CAP) {
-            await deps.journal.persist(state);
             return result("too-many-concurrent-pushes");
           }
           restartBatch = true;
@@ -816,6 +848,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       }
       const { sha, committedAt } = r.result!;
       headHash = sha; // MANDATORY: the next batch pushes against THIS head
+      knownHeadTreeSha = acc.treeSha; // we BUILT this tree — no request needed later
       pushedCommits.push(sha);
       // mtime invariant: one authoritative GitHub date per batch,
       // stamped only after the CONFIRMED push.
@@ -872,6 +905,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       const r = await deps.retry.run(() => deps.client.getGuardedHead());
       if (r.error !== null) return statusFromError(r.error, result);
       headHash = r.result; // fresh, not the last batch-push value
+      knownHeadTreeSha = null;
     }
     const ch = await deps.retry.run(() =>
       deps.client.getBranchHeadSha(state.conflictBranchName!),
@@ -937,6 +971,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           // MANDATORY (§II.14): the anchor must be honest — without
           // this the epilogue would record the PRE-merge commit.
           headHash = merge.result!.sha;
+          knownHeadTreeSha = headCommit.result!.tree.sha; // tree-of-main by construction
           finalizedMergeSha = merge.result!.sha;
           const del = await deps.retry.run(() =>
             deps.client.deleteBranch(state.conflictBranchName!),
@@ -1304,15 +1339,94 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     tracked.base = tracked.remote;
   }
 
-  // Epilogue STEP 2 pulled FORWARD into Phase 5 (steps 1/3/4/5 stay
-  // Phase 6): without a durable save, conflicts born this run would
-  // exist only in the journal — and the next run's authoritative scan
-  // would demote their sibling files to synthetic, breaking the
-  // FINALIZE gate.
-  await deps.conflictStore.save(conflicts!);
-  // Persist the post-Vault-step state so a resumed run sees the
-  // advanced bases; the journal clear itself is Phase 6.
-  await deps.journal.persist(state);
+  // ── EPILOGUE (§III steps 1-4; step 5 = the sync_store sweep, wired
+  // in the Phase 5.5 wiring commit). Runs ONLY on the fully-completed
+  // path — every abort above returns BEFORE it, leaving the journal
+  // alive so the next run redoes the Vault-step + epilogue (§IV.2).
+  // Order: step 2 MUST precede step 4 (after the journal dies, the
+  // durable store is the only conflicts carrier); 1/3 are
+  // interchangeable under the same redo umbrella.
+
+  // Step 1 — baseline transfer: each tracked path's final remote
+  // becomes the durable per-file baseline. GROUP ops (§2.2.1) — K
+  // bucket writes, never N path writes. `mtime: 0` on purpose:
+  // precision here is harmful (a user edit DURING the drain with an
+  // equal size would short-circuit invisibly forever — D.15); the
+  // detector self-heals with exactly one re-hash (D.14). A
+  // placeholder record (remote.sha null — idle lingering conflict)
+  // transfers NOTHING: writing nulls would erase the path's real
+  // previous baseline. Deleted paths LEAVE metadata.files.
+  {
+    const writes: Array<{
+      path: string;
+      baselineSha: string;
+      mtime: number;
+      size: number;
+    }> = [];
+    const removals: string[] = [];
+    for (const [path, tracked] of state.trackedFiles) {
+      if (tracked.remote.sha === null) continue; // placeholder guard
+      if (
+        tracked.remote.mode === DELETED ||
+        tracked.remote.sha === DELETED_SHA_HASH
+      ) {
+        removals.push(path);
+        continue;
+      }
+      writes.push({
+        path,
+        baselineSha: tracked.remote.sha,
+        mtime: 0,
+        size: tracked.remote.size ?? 0,
+      });
+    }
+    if (writes.length > 0) await deps.baselines.setMany(writes);
+    if (removals.length > 0) await deps.baselines.removeMany(removals);
+  }
+
+  // Step 2 — one more reconcile pass (the Vault-step may have created
+  // sibling duplicates) + the durable conflicts save. MUST land
+  // before step 4.
+  conflicts = await processConflicts(
+    {
+      vault: deps.vault,
+      store: deps.conflictStore,
+      computeSha: deps.computeSha,
+      logger: deps.logger,
+    },
+    conflicts,
+  );
+  await deps.conflictStore.save(conflicts);
+
+  // Step 3 — the CONFIRMED hot anchor, exactly once per completed
+  // drain (§1.C). The (commit, tree) pair goes TOGETHER; when this
+  // run never learned the head's tree (pull-only drain — no push, no
+  // merge), one getCommit aligns the pair honestly. ⚠️ Deliberate
+  // deviation from the spec's 'значення НЕ змінюється' note for that
+  // case: leaving the OLD tree beside the NEW commit is exactly the
+  // skew METAFILE §2.1.2 forbids — one request per pull-only drain is
+  // the price of an honest anchor.
+  if (headHash !== null && knownHeadTreeSha === null) {
+    const r = await deps.retry.run(() =>
+      deps.client.getCommit({ sha: headHash!, retry: true }),
+    );
+    if (r.error !== null) return statusFromError(r.error, result);
+    knownHeadTreeSha = r.result!.tree.sha;
+  }
+  await deps.hot.update({
+    lastSyncCommitSha: headHash,
+    lastSyncTreeSha: knownHeadTreeSha,
+    // Nulled ONLY by a confirmed FINALIZE (merge+delete or 404) —
+    // 'no conflicts right now' is NOT 'the branch was merged'.
+    conflictBranchName: state.conflictBranchName,
+  });
+
+  // Step 4 — the journal dies; its absence tells the next run
+  // 'previous drain finished'. Both slots, 404-tolerant.
+  await deps.journal.clear();
+
+  // Step 5 — rearangeSyncStore() (the §12.5 sweep): PHASE5.5 wiring
+  // commit, together with the drain-start sweep.
 
   return result("ok");
 }

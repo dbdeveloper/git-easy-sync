@@ -56,6 +56,11 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     | null;
   let progressLog: Array<[number, number]>;
   let batchSeq: number;
+  let hotUpdates: Array<{
+    lastSyncCommitSha: string | null;
+    lastSyncTreeSha: string | null;
+    conflictBranchName: string | null;
+  }>;
 
   beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), "drain-test-"));
@@ -82,6 +87,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     discoveryOverride = null;
     progressLog = [];
     batchSeq = 0;
+    hotUpdates = [];
   });
 
   afterEach(() => {
@@ -167,12 +173,29 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       const b = batches.find((x) => x.claimed.dir === d);
       if (b) b.removed = true;
     },
-    baselines: { get: async (p) => baselines.get(p) },
+    baselines: {
+      get: async (p) => baselines.get(p),
+      setMany: async (entries) => {
+        for (const e of entries) {
+          baselines.set(e.path, {
+            baselineSha: e.baselineSha,
+            mtime: e.mtime,
+            size: e.size,
+          });
+        }
+      },
+      removeMany: async (paths) => {
+        for (const p of paths) baselines.delete(p);
+      },
+    },
     discoverChangedFiles: (base, head) =>
       (discoveryOverride ?? honestDiscovery)(base, head),
     hot: {
       getLastSyncCommitSha: () => baseCommit,
       getConflictBranch: () => null,
+      update: async (f) => {
+        hotUpdates.push(f);
+      },
     },
     conflictStore,
     siblingTx,
@@ -514,10 +537,25 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
           syncStore: store,
           journal: j,
           vaultFiles: vf,
-          baselines: { get: async (p) => bl.get(p) },
+          baselines: {
+            get: async (p) => bl.get(p),
+            setMany: async (entries) => {
+              for (const e of entries) {
+                bl.set(e.path, {
+                  baselineSha: e.baselineSha,
+                  mtime: e.mtime,
+                  size: e.size,
+                });
+              }
+            },
+            removeMany: async (paths) => {
+              for (const p of paths) bl.delete(p);
+            },
+          },
           hot: {
             getLastSyncCommitSha: () => c0,
             getConflictBranch: () => null,
+            update: async () => {},
           },
           conflictStore: new ConflictStoreV2({
             vault: vault as never,
@@ -693,5 +731,116 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     const r = await drainOnce(makeDeps({ client }));
     expect(r.status).toBe("too-many-concurrent-pushes");
     expect(batches[0].removed).toBe(false); // the batch survives for the next run
+  });
+
+  // ── D: the epilogue (§III steps 1-4) ─────────────────────────────
+
+  it("D.13: baseline transfer — final remote sha with the mtime:0 sentinel; deleted paths LEAVE the baselines; journal dies", async () => {
+    await setupAligned();
+    // Real mtimes in the batch — they must NOT leak into the baseline.
+    await stageBatch({ "new.md": "N\n", "note.md": null }, 1234);
+
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    // mtime:0 on purpose: a user edit DURING the drain with an equal
+    // size must not short-circuit invisibly forever; the detector
+    // self-heals with exactly one re-hash.
+    expect(baselines.get("new.md")).toEqual({
+      baselineSha: await sha("N\n"),
+      mtime: 0,
+      size: enc("N\n").byteLength,
+    });
+    expect(baselines.has("note.md")).toBe(false); // pushed deletion → removed
+    // The journal's absence is the 'previous drain finished' signal.
+    expect(await journal.load()).toBeNull();
+  });
+
+  it("D.14: placeholder guard — an idle lingering conflict (remote.sha null) transfers NOTHING; the real previous baseline survives", async () => {
+    await setupAligned();
+    const lockedSha = await sha("L\n");
+    const durable = await conflictStore.load();
+    durable.entries.set("locked.md", {
+      conflictBase: {
+        path: "locked.md",
+        sha: lockedSha,
+        size: 2,
+        mtime: 10,
+        blob: null,
+        mode: "" as const,
+        deviceLabel: "other-device",
+      },
+      siblings: [], // I.7: an empty siblings list is still a conflict
+    });
+    await conflictStore.save(durable);
+    baselines.set("locked.md", { baselineSha: lockedSha, mtime: 10, size: 2 });
+    await stageBatch({ "other.md": "O\n" }); // unrelated work
+
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    // The conflict path was seeded as a placeholder tracked record
+    // ({sha:null}); writing its nulls would ERASE the real baseline.
+    expect(baselines.get("locked.md")).toEqual({
+      baselineSha: lockedSha,
+      mtime: 10,
+      size: 2,
+    });
+  });
+
+  it("D.15: pull-only drain → the hot anchor (commit, tree) pair is aligned via one getCommit, never a stale-tree skew", async () => {
+    await setupAligned();
+    const c1 = await world.commitFiles({ "note.md": "R\n" }); // remote-only
+
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    expect(r.pushedCommits).toHaveLength(0); // nothing pushed → tree unknown in-run
+    const last = hotUpdates[hotUpdates.length - 1];
+    expect(last.lastSyncCommitSha).toBe(c1);
+    expect(last.lastSyncTreeSha).toBe(world.commitTrees.get(c1)!);
+    expect(last.conflictBranchName).toBeNull();
+    expect(await journal.load()).toBeNull();
+  });
+
+  it("D.16: a CAP exit runs NO epilogue and never persists the failed attempt's state; the redo lands the batch", async () => {
+    await setupAligned();
+    await stageBatch({ "note.md": "C1\n" });
+    const client = world.makeClient();
+    const origPush = client.pushCommitFromTree.bind(client);
+    let sabotage = true;
+    client.pushCommitFromTree = async (args) => {
+      if (sabotage) {
+        await world.commitFiles({ "other.md": `x${world.commits.length}\n` });
+        throw new ValidationError("422: head moved");
+      }
+      return origPush(args);
+    };
+
+    const r1 = await drainOnce(makeDeps({ client }));
+    expect(r1.status).toBe("too-many-concurrent-pushes");
+    // The CAP exit must look exactly like a crash BEFORE the failed
+    // batch: no persist of the dirty in-memory state. Here nothing
+    // completed, so no journal exists at all. (RED without the fix:
+    // the poisoned journal claims base==remote==C1 → the redo
+    // short-circuits the batch and C1 is silently lost.)
+    const j1 = await journal.load();
+    expect(
+      j1?.trackedFiles.get("note.md")?.remote.sha ?? null,
+    ).not.toBe(await sha("C1\n"));
+    expect(hotUpdates).toEqual([]); // no CONFIRMED anchor from an abort
+    expect(baselines.get("note.md")!.mtime).toBe(50); // untouched
+
+    sabotage = false;
+    const r2 = await drainOnce(makeDeps({ client }));
+    expect(r2.status).toBe("ok");
+    expect(r2.pushedCommits).toHaveLength(1); // the redo actually lands C1
+    expect(dec(world.headFiles().get("note.md")!.bytes)).toBe("C1\n");
+    expect(baselines.get("note.md")).toEqual({
+      baselineSha: await sha("C1\n"),
+      mtime: 0,
+      size: enc("C1\n").byteLength,
+    });
+    expect(hotUpdates[hotUpdates.length - 1].lastSyncCommitSha).toBe(
+      world.head,
+    );
+    expect(await journal.load()).toBeNull();
   });
 });

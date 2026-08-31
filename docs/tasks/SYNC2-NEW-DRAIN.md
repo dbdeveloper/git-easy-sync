@@ -3549,7 +3549,15 @@ def drain():
                     if error422_count >= 5:
                         # Чистий вихід (I6): TrackedFiles/журнал УЖЕ персистовані з попереднього
                         # успішного batch (§IV recovery matrix) — нічого не втрачено, черга ціла.
-                        persistDrainState()  # journal + push_queue лишаються як є
+                        # ⚠️ ВИПРАВЛЕНО 2026-08-31 (тест D.16, RED→GREEN): раніше тут стояв
+                        # persistDrainState() — а це ОТРУЄННЯ журналу: state у пам'яті на цей
+                        # момент несе rolled base/remote ПРОВАЛЕНОЇ спроби (tracked.remote=D
+                        # виставляється ще ДО push-у). Наступний drain прочитав би
+                        # base==remote==C1, short-circuit з'їв би batch без push-у, а Layer 2
+                        # "виправив" би remote назад — тиха втрата C1. CAP-вихід мусить бути
+                        # НЕвідрізнюваним від крешу ПЕРЕД проваленим batch-ем: НІЧОГО не
+                        # персистимо, диск уже тримає стан останнього УСПІШНОГО batch-а
+                        # (або мінт-persist імені гілки на чистому state, або взагалі нічого).
                         return TOO_MANY_CONCURRENT_PUSHES  # UI: "Дуже інтенсивна активність з інших
                                                            # пристроїв (або тимчасовий збій GitHub).
                                                            # Спробуйте синхронізувати пізніше."
@@ -4295,6 +4303,16 @@ def drain():
                                         # `headCommit.tree.sha` за побудовою (§II.14,
                                         # tree-of-main); якщо цього drain-у не було ані
                                         # push-ів, ані merge — значення НЕ змінюється.
+                                        # ⚠️ УТОЧНЕНО 2026-08-31 (реалізація, тест D.15):
+                                        # "не змінюється" безпечне лише коли НЕ міняється і
+                                        # lastSyncCommitSha. Pull-only drain просуває commit
+                                        # (head_hash прочитано наживо), і лишити СТАРЕ дерево
+                                        # поруч із НОВИМ комітом — рівно той skew, який
+                                        # METAFILE §2.1.2 забороняє. Тому: якщо head_hash
+                                        # відомий, а дерево цього run-у не будувалось — один
+                                        # getCommit(head_hash) вирівнює пару. Ціна — один
+                                        # запит на pull-only drain; пара (commit, tree)
+                                        # пишеться ЗАВЖДИ разом.
         conflictBranch: conflictBranchName,
                                         # ⚠️ ВИПРАВЛЕНО (2026-08-25, разом з advisor): раніше було
                                         # `(len(conflicts) > 0) ? conflictBranchName : null` — хибно
