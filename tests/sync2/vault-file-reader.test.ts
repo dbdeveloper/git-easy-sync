@@ -94,6 +94,41 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
       );
     });
 
+    it("write: pull-side canonicalize (toggle ON) strips BOM + CRLF; OFF writes verbatim; invalid UTF-8 passes UNTOUCHED", async () => {
+      const withToggle = (on: boolean) =>
+        makeVaultFileReader({
+          vault: vault as never,
+          autoCanonicalize: () => on,
+          computeSha: calculateGitBlobSHA,
+        });
+      const crlfBom = new Uint8Array([
+        0xef, 0xbb, 0xbf, // BOM
+        ...new TextEncoder().encode("a\r\nb"),
+      ]).buffer as ArrayBuffer;
+
+      await withToggle(true).write("doc.md", crlfBom);
+      expect(dec(await vault.adapter.readBinary("doc.md"))).toBe("a\nb\n");
+
+      await withToggle(false).write("raw.md", crlfBom);
+      const raw = new Uint8Array(await vault.adapter.readBinary("raw.md"));
+      expect(raw[0]).toBe(0xef); // verbatim
+
+      // Invalid UTF-8 under a TEXT extension: the round-trip proof
+      // must keep the bytes byte-identical (no lossy decode).
+      const cp1251 = new Uint8Array([0xc0, 0xc1, 0x0d, 0x0a]).buffer;
+      await withToggle(true).write("data.csv", cp1251);
+      expect(new Uint8Array(await vault.adapter.readBinary("data.csv"))).toEqual(
+        new Uint8Array(cp1251),
+      );
+
+      // configDir paths are NOT canonicalized (shouldCanonicalize).
+      await withToggle(true).write(".obsidian/app.json", crlfBom);
+      const cfg = new Uint8Array(
+        await vault.adapter.readBinary(".obsidian/app.json"),
+      );
+      expect(cfg[0]).toBe(0xef);
+    });
+
     it("remove: trash capture fires BEFORE removal; already-gone is success; a FAILING capture never blocks the removal", async () => {
       await vault.adapter.write("del.md", "x");
       const r = reader();

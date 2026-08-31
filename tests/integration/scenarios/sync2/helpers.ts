@@ -268,6 +268,7 @@ export async function createSync2Client(
     deviceLabel: () => settings.deviceLabel ?? "sync2-int-test",
     maxAutoMergeFileSize: () => settings.maxAutoMergeSizeBytes ?? 1_000_000,
     accumulateOfflineSyncs: () => opts.consolidateCommits ?? false,
+    autoCanonicalize: () => opts.autoCanonicalize ?? true,
     tokenExpired: async () => false,
     trashHooks: trashStore.asHooks(),
     // POSIX-flavoured rename via mock-obsidian's adapter — no wiki-link

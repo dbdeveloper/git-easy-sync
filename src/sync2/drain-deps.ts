@@ -409,6 +409,9 @@ export interface BuildDrainDepsArgs {
   // S1: cooperative cancel (manager's abort flag).
   cancelRequested?: () => boolean;
   trashHooks?: TrashHooks | null;
+  // Pull-side canonicalize toggle (autoCanonicalizeTextFiles) — the
+  // third of text-normalize.ts's three must-agree sites.
+  autoCanonicalize?: () => boolean;
   onProgress?: (processed: number, total: number, path?: string) => void;
   logger?: Logger;
   now?: () => number;
@@ -495,6 +498,7 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
     trashHooks: args.trashHooks,
     vaultFiles: makeVaultFileReader({
       vault: args.vault,
+      autoCanonicalize: args.autoCanonicalize,
       computeSha,
       trashHooks: args.trashHooks,
       logger: args.logger,

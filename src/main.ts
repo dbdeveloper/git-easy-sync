@@ -1175,6 +1175,8 @@ export default class GitHubSyncPlugin extends Plugin {
       maxAutoMergeFileSize: () =>
         this.settings.maxAutoMergeSizeBytes ?? 1_000_000,
       accumulateOfflineSyncs: () => this.settings.consolidateCommits ?? false,
+      autoCanonicalize: () =>
+        this.settings.autoCanonicalizeTextFiles ?? false,
       tokenExpired: async () => this.tokenExpiredFlag?.isExpiredCached() ?? false,
       // §35 latch: a drain that ends token-expired ALSO throws an
       // AuthError which the sync() catch note()s — this direct hook

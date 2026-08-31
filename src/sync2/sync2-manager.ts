@@ -120,6 +120,9 @@ export interface Sync2ManagerDeps {
   maxAutoMergeFileSize(): number;
   // true → a commit folds into the queue tail (offline-accumulate).
   accumulateOfflineSyncs(): boolean;
+  // autoCanonicalizeTextFiles — the pull-side half (the commit side
+  // lives in BatchWriter); both must read the SAME setting.
+  autoCanonicalize?: () => boolean;
   tokenExpired(): Promise<boolean>;
   // §35 latch setter — fired when a drain ends "token-expired".
   onTokenExpired?(status: 401 | 403): void;
@@ -514,6 +517,7 @@ export class Sync2Manager {
       deviceLabel: this.deps.deviceLabel,
       maxAutoMergeFileSize: this.deps.maxAutoMergeFileSize,
       gitAuthor: this.deps.gitAuthor,
+      autoCanonicalize: this.deps.autoCanonicalize,
       cancelRequested: () => this.abortRequested,
       trashHooks: this.deps.trashHooks,
       onProgress: (processed, totalFiles, path) =>

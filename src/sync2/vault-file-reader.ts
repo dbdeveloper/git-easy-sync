@@ -11,17 +11,36 @@
 //            (worker-routed in production).
 //   write  — ensureParentDir + atomicWriteFile (crash-safe, preserves
 //            an open editor's cursor via the modify-in-place fast
-//            path).
+//            path) + the PULL-SIDE CANONICALIZE (text-normalize.ts
+//            names three sites that MUST agree — push enqueue, push
+//            merge, and this one; a file normalized on one side and
+//            passed raw on the other "would re-sync forever").
+//            Restored at THE SWITCH gate: the new drain writes remote
+//            bytes verbatim, so a CRLF/BOM file authored on the web
+//            landed raw and never converged (integration
+//            pull-of-{crlf,bom}-from-web). Convergence is the
+//            documented one-round-trip shape: the vault holds the
+//            canonical bytes while the baseline holds the remote sha
+//            → the next findChanges emits the path → the next drain
+//            pushes the clean version.
 //   remove — best-effort trash capture (R3.4 pull-delete window),
 //            then adapter.remove; already-gone = success.
 
 import { normalizePath, type Vault } from "obsidian";
 import { atomicWriteFile } from "./atomic-write";
+import {
+  normalizeText,
+  shouldCanonicalize,
+  utf8RoundTripKeepBom,
+} from "./text-normalize";
 import type { TrashHooks } from "./trash-hooks";
 import type { VaultFileReader } from "./drain";
 
 export interface VaultFileReaderDeps {
   vault: Vault;
+  // Live settings getter (autoCanonicalizeTextFiles). Production
+  // default is OFF; when ON, pull-side writes land canonical.
+  autoCanonicalize?: () => boolean;
   // Worker-routed in production (WorkerClient.computeSha); the
   // threshold routing lives there, not here.
   computeSha(bytes: ArrayBuffer): Promise<string>;
@@ -75,7 +94,28 @@ export function makeVaultFileReader(
     async write(path, bytes) {
       const normalized = normalizePath(path);
       await ensureParentDir(deps.vault, normalized);
-      await atomicWriteFile(deps.vault, normalized, bytes);
+      let out = bytes;
+      if (
+        deps.autoCanonicalize?.() === true &&
+        shouldCanonicalize(normalized, deps.vault.configDir)
+      ) {
+        // Round-trip PROOF before touching bytes (the §II.15 rule):
+        // invalid UTF-8 under a text extension must pass through
+        // untouched, never through a lossy decode. BOM-preserving
+        // variant — normalizeText must SEE the BOM to strip it.
+        const text = utf8RoundTripKeepBom(bytes);
+        if (text !== null) {
+          const { content, changed } = normalizeText(text);
+          if (changed) {
+            const enc = new TextEncoder().encode(content);
+            out = enc.buffer.slice(
+              enc.byteOffset,
+              enc.byteOffset + enc.byteLength,
+            ) as ArrayBuffer;
+          }
+        }
+      }
+      await atomicWriteFile(deps.vault, normalized, out);
     },
 
     async remove(path) {

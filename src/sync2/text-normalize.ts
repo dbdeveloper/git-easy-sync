@@ -54,6 +54,24 @@ export function utf8RoundTrip(bytes: ArrayBuffer): string | null {
   return text;
 }
 
+// Round-trip proof for the CANONICALIZE sites, which must SEE a
+// leading BOM (normalizeText strips it deliberately). Plain
+// utf8RoundTrip can't serve them: TextDecoder eats the BOM as an
+// encoding signature, so encode(decode(bytes)) is 3 bytes short and
+// the proof fails on every BOM file (gate finding 2026-08-31 —
+// pull-of-bom-from-web). `ignoreBOM: true` keeps it as U+FEFF, which
+// is exactly what the text-mode `adapter.read` on the push side
+// yields, so both sides of the "three sites must agree" rule see the
+// same string.
+export function utf8RoundTripKeepBom(bytes: ArrayBuffer): string | null {
+  const text = new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
+  const back = new TextEncoder().encode(text);
+  if (back.byteLength !== bytes.byteLength) return null;
+  const a = new Uint8Array(bytes);
+  for (let i = 0; i < a.length; i++) if (a[i] !== back[i]) return null;
+  return text;
+}
+
 export function normalizeText(input: string): NormalizeResult {
   let s = input;
   if (s.length > 0 && s.charCodeAt(0) === BOM_CODEPOINT) {
