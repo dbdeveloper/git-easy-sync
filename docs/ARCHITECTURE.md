@@ -25,7 +25,7 @@ it) — it is not source.
 - **Per-release notes — RELEASES ONLY** (Keep-a-Changelog format): [`CHANGELOG.md`](../CHANGELOG.md). Per-shipped-version notes, NOT day-to-day development progress. README links here for "What's new"; do NOT add per-release notes back into README. New release → add a section to `CHANGELOG.md` and bump the version in `package.json` + `manifest.json` + `manifest-beta.json` + `versions.json`.
 - **Development-path log** (living, compact milestone summary of the diff2 build): [`docs/BUILDLOG.md`](./BUILDLOG.md). One distilled entry per milestone — the *why*/shape that's hard to get from `git log`. The detailed path IS the commit messages (CLAUDE.md §7); BUILDLOG is their narrative. The live "where are we now" pointer is instead memory `project-diff2-resume-point` + `docs/tasks/DIFF-EDITOR-V2.md`.
 - **Canonical spec for the conflict-resolution ALGORITHM** — the abstract pseudo-merge model: sibling files, per-device conflict branches, the three kinds of conflict, auto-merge strategies, editing-while-in-conflict, full scenario walk-throughs (A–E), and what the algorithm deliberately does NOT promise: [`docs/PSEUDO-MERGE-MODE.md`](./PSEUDO-MERGE-MODE.md). Read this to understand *what* pseudo-merge does and *why*, independent of implementation. Section numbers: §1–4 (problem + git model + core idea), §5 (three kinds of conflict), §6 (auto-merge strategies), §7 (editing while in conflict), §8 (scenarios A–E), §9 (non-promises), §10 (glossary).
-- **Canonical spec for the sync ENGINE** — how the algorithm is realised on top of the GitHub REST API: architecture layers, crash-recovery protocols (three-step / five-step atomic writes, recovery sweep, tail re-check), cross-platform contracts, push pipeline (pre-flight validation, pending-deletions queue, push-queue depth signal), typed error hierarchy, skip-class discipline, Worker orchestra, SHA-first reconcile, modify-in-place, plugin reload, self-update marker protocol: [`docs/SYNC2.md`](./SYNC2.md). **Read this first** when working on anything under `src/sync2/`, `src/errors.ts`, `src/worker/`, the GitHub client (`src/github/client.ts`), or any test that exercises the engine. Code comments cross-reference its section numbers (`SYNC2 §1` architecture, `§2.4`/`§2.5` staging + recovery, `§2.8` tail re-check, `§3` cross-platform, `§4.1` pre-flight, `§4.2` pending-deletions, `§5` error taxonomy, `§6` skip-class, `§7` field postmortems (incl. `§7.8` plugin-js/adoption HEAD-vs-file-change-date tie-break → `client.getLatestCommitDateForPath`, `§7.9` push→record crash marker, `§7.10` eventually-consistent head-read → chaining + monotonic-head guard + 422 reconcile-retry), `§8` worker orchestra, `§9` SHA-first, `§10` modify-in-place, `§11` plugin reload, `§12` self-update marker). When a SYNC2 mechanism realises an algorithmic guarantee, SYNC2.md cites PSEUDO-MERGE-MODE.md back.
+- **Canonical spec for the sync ENGINE** — how the algorithm is realised on top of the GitHub REST API: architecture layers, crash-recovery protocols (three-step / five-step atomic writes, recovery sweep, tail re-check), cross-platform contracts, push pipeline (pre-flight validation, pending-deletions queue, push-queue depth signal — ⚠️ the first two DIED at Phase 5.5 THE SWITCH; Layer 2 subsumes pre-flight, and the vault-step's canonical write plus an honest baseline replace pending-deletions), typed error hierarchy, skip-class discipline, Worker orchestra, SHA-first reconcile, modify-in-place, plugin reload, self-update marker protocol: [`docs/SYNC2.md`](./SYNC2.md). **Read this first** when working on anything under `src/sync2/`, `src/errors.ts`, `src/worker/`, the GitHub client (`src/github/client.ts`), or any test that exercises the engine. Code comments cross-reference its section numbers (`SYNC2 §1` architecture, `§2.4`/`§2.5` staging + recovery, `§2.8` tail re-check, `§3` cross-platform, `§4.1` pre-flight, `§4.2` pending-deletions, `§5` error taxonomy, `§6` skip-class, `§7` field postmortems (incl. `§7.8` plugin-js/adoption HEAD-vs-file-change-date tie-break (⚠️ `getLatestCommitDateForPath` deleted at THE SWITCH; the drain reads dates via `getCommitInfoForPath`), `§7.9` push→record crash marker, `§7.10` eventually-consistent head-read → chaining + monotonic-head guard + 422 reconcile-retry), `§8` worker orchestra, `§9` SHA-first, `§10` modify-in-place, `§11` plugin reload, `§12` self-update marker). When a SYNC2 mechanism realises an algorithmic guarantee, SYNC2.md cites PSEUDO-MERGE-MODE.md back.
 - **Diff2 widget design** (the conflict-resolution UI/UX on top of pseudo-merge mode; `src/diff2/`). The canonical specs:
   - [`docs/tasks/DIFF-EDITOR-V2.md`](./tasks/DIFF-EDITOR-V2.md) — **the diff-edit MODEL + interaction**. The model is a CM6 document with a protected terminal `\n` per ver-block (an empty ver is a real `"\n"`, rendered `height:0` off-focus) + an Inclusive RangeSet `{ver,group}` (`diff-structure.ts`). It is a **"text + Ranges"** model: a live `transactionFilter` computes the resolve / merge / auto-resolve cascade ONCE and records `(change, structure, caret)`, so undo/redo + replay just re-APPLY the recorded change and never re-run the diff (this is what keeps undo/redo balanced and replay deterministic).
   - [`docs/tasks/DIFF-EDITOR.md`](./tasks/DIFF-EDITOR.md) — **the representation-independent commit / recovery / autosave layer**: append-log REDO autosave (`history.jsonl` + snapshots + `cursor.json` + `meta.json`), the **7-step pair-atomic `[←]` `commit7Step`** (a `done.json` barrier hashing the staged bytes + the A–K recovery matrix), and the keyboard hotkeys + byte-match rule the model relies on.
@@ -72,37 +72,71 @@ src/
 │   ├── network-worker.ts            # Single dedicated thread; native fetch executor for every GitHub HTTP call
 │   └── worker-client.ts             # Main-thread controller; pool dispatch, request-id multiplex, terminate, fallback
 └── sync2/
-    ├── sync2-manager.ts             # Orchestrator: syncAll, syncFile, drain, processBatch,
-    │                                #  validateDeletionsAgainstHead (pre-flight, SYNC2 §4.1),
-    │                                #  finalizeConflictBranchIfReady, synthesizeResolutionSideBatches,
-    │                                #  registerConflictAndDropPath, pushConflictPathsToBranch
+    │  ⚠️ THE ENGINE WAS REPLACED WHOLESALE at Phase 5.5 THE SWITCH
+    │  (2026-08-31, +1317/−15861): the manager's own drain, push-queue,
+    │  tree-builder, conflict-store v1, conflict-classifier,
+    │  conflict-detection, push-inflight and pending-deletions-store are
+    │  DELETED. The live path is: sync2-manager (thin shell) → drainOnce
+    │  → buildDrainDeps. Canonical spec: docs/tasks/SYNC2-NEW-DRAIN.md
+    │  (+ SYNC2-MASTER-PLAN.md as the routing map over all six docs).
+    │
+    ├── sync2-manager.ts             # THIN SHELL (~650 lines): syncAll/syncFile/commitOnly/
+    │                                #  commitFile/resumeQueue, the R3a commit singleton with its
+    │                                #  coalescing bell (SYNC2-FIX §6), the H3 drain-collapse flag,
+    │                                #  DrainStatus channel, cancelDrain, MainHeadGuard (§7.10),
+    │                                #  zero-byte restore guard, drain-result → UI mapping
+    ├── drain.ts                     # THE ENGINE: drainOnce() — rolling base, batch loop, Layer 2,
+    │                                #  STEP1/2/3 conflicts, FINALIZE, Vault-step, the epilogue
+    │                                #  (baselines/hot anchor/journal.clear), §12.5 sweep at both
+    │                                #  boundaries, bare-repo Contents-API seed
+    ├── drain-deps.ts                # Production composition: makeDrainClient (GithubClient →
+    │                                #  DrainClient; 404/409 → bare-repo null; every method forces
+    │                                #  retry), MainHeadGuard, buildDrainDeps
+    ├── drain-journal.ts             # §V ping-pong tracked-files-{a,b}.json (crash story of one drain)
+    ├── diff3.ts                     # _diff3: §II.1 rules 2-4 + rule 7 size gate; verdicts
+    │                                #  file / manual-conflict / plugin-dispatch
+    ├── discovery.ts                 # §II.12 Layer 1: compare-first + full-tree fallback,
+    │                                #  DELETED_SHA_HASH, getCommitInfoForPath
+    ├── tree-accumulator.ts          # §II.15: inline content behind a round-trip PROOF, base_tree
+    │                                #  chaining, UploadedBlobs resume, deletion-entry guard
+    ├── sync-store.ts                # .runtime/sync_store/{sha} content-addressed blobs;
+    │                                #  hash-on-load, sizeOf (stat-only), §12.5 sweep
+    ├── batch-writer.ts              # §12.4 batch birth: meta.json BEFORE blobs, .attempted-commit
+    ├── get-batch.ts                 # R3b Peterson claim protocol + crash repair + stale-claim sweep
+    ├── batch-metafile.ts            # meta.json codec; sha:null IS the deletion sentinel
+    ├── queue-sha-index.ts           # findChanges dedup reference over the queue (DELETED sentinel)
+    ├── batch-history-source.ts      # History's local versions over the new queue format
+    ├── conflict-store-v2.ts         # .runtime/conflicts.json: Map<path,{conflictBase,siblings[]}>
+    │                                #  + cached view (hasBase / getBySiblingPath) for the sync UI
+    ├── process-conflicts.ts         # §III reconciler: tracked>synthetic dedup, transition-only
+    │                                #  prune, confirmResolved seam
+    ├── sibling-tx.ts                # §II.11 crash-safe sibling replace (mark transaction)
+    ├── conflict-siblings.ts         # buildSiblingFilePath / scan / extensionOf (the ONE naming truth)
+    ├── vault-file-reader.ts         # The drain's live vault surface: stat/readBinary/atomicWriteFile
+    │                                #  (+ pull-side canonicalize) / trash-capturing remove
+    ├── retry-network.ts             # §II.10 bounded backoff + the .sync_network_error mark
+    ├── reset.ts                     # RESET-PLUGIN core: drain guard → marker → rmdir .runtime
+    ├── hot-metadata.ts              # 2-slot ping-pong metadata-{a,b}.json (monotonic seq)
+    ├── file-baselines.ts            # 64 FNV-1a cold buckets + MRU; group ops are the PRIMARY API
+    ├── invariant-state.ts           # gitignore-invariants.json freshness marks
     ├── interval-scheduler.ts        # Periodic tick + onload startup (testable in isolation)
-    ├── change-detector.ts           # Vault walk + findChanges + queue bridge
-    ├── push-queue.ts                # .push-queue/ persistence + markers + meta serdes + enqueueSynthetic
-    ├── tree-builder.ts              # Batch → tree entries (with uploadedBlobs skip)
-    ├── snapshot-store.ts            # git-easy-sync-metadata.json (file name is historic)
-    ├── push-inflight.ts             # SYNC2 §7.9 push→record crash marker (MANDATORY;
-    │                                #  recoverPushInflight heals a landed-but-unrecorded push)
-    ├── pending-deletions-store.ts   # .pending-deletions/<id>/meta.json — pull-sanitize delete-intents
-    │                                #  (SYNC2 §4.2)
-    ├── cross-platform.ts            # Centralized contracts: sanitizeFilename (12 forbidden ASCII →
-    │                                #  Unicode), encodePathForGithub, safeRename. SYNC2 §3.
+    ├── change-detector.ts           # Vault walk + findChanges + the queue-dedup bridge
+    ├── cross-platform.ts            # sanitizeFilename (12 forbidden ASCII → Unicode),
+    │                                #  encodePathForGithub, safeRename. SYNC2 §3.
     ├── gitignore-invariants.ts      # Invariant .gitignore blocks; always-write enforce
-    ├── commit-message.ts            # Hardcoded format* helpers; commitMessageForBatch
-    ├── atomic-write.ts              # 5-step atomicWriteFile + stagingPathFor + AtomicWriteRecovery.sweep;
-    │                                #  fast-path uses vault.modifyBinary for open TFiles (preserves editor cursor/scroll)
-    │                                #  via a .sync-tmp + .<basename>.sync-tmp. marker forward-recovery protocol
-    ├── conflict-store.ts            # ConflictRecord + 3-step create + renameVaultSiblingsToUnresolved
-    ├── conflict-classifier.ts       # Pure classify() + evaluateConflictState (Phase A + Phase B)
+    ├── commit-message.ts            # Hardcoded format* helpers (Sync/Conflict/Merge/Init at …)
+    ├── atomic-write.ts              # 5-step atomicWriteFile + stagingPathFor + AtomicWriteRecovery
+    │                                #  (modify-in-place fast path preserves editor cursor/scroll)
     ├── conflict-watcher.ts          # vault.on listener; READ-ONLY counter.markDirty()
     ├── conflict-counter.ts          # UI count formula + debounced recompute + subscribe
     ├── conflict-branch.ts           # buildConflictBranchName + CONFLICT_BRANCH_PREFIX
-    ├── conflict-detection.ts        # attemptAutoMerge dispatch + classifyConflictKind
     ├── plugin-js.ts                 # isAtomicPluginFile, compareSemver, readPluginVersion
-    ├── three-way-merge.ts           # mergeText (diff3-style)
-    ├── text-normalize.ts            # CRLF→LF, BOM strip, trailing-NL; shouldCanonicalize
-    │                                #  (excludes <configDir>/** — vault content only)
-    ├── types.ts                     # QueueBatch, FileChange, EnqueueMeta
+    ├── three-way-merge.ts           # mergeText (diff3-style, restores local's own EOL)
+    ├── text-normalize.ts            # CRLF→LF, BOM strip, trailing-NL; shouldCanonicalize;
+    │                                #  utf8RoundTrip + utf8RoundTripKeepBom (canonicalize sites)
+    ├── timestamp-id.ts              # 17-digit sortable ids for queue + trash dirs
+    ├── trash-hooks.ts               # sync2-owned interface diff2's TrashStore implements
+    ├── types.ts                     # FileChange + shared shapes
     └── views/
         ├── pre-sync-conflict-modal.ts     # Pre-Sync confirmation modal
         └── token-expired-modal.ts         # 401/403 recovery dialog (Stage 7/§35): class-aware intro + shorter mobile layout
