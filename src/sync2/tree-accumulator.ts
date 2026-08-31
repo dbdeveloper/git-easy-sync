@@ -162,6 +162,17 @@ export async function addFileToTree(
   f: TreeFile,
 ): Promise<void> {
   if (f.mode === DELETED) {
+    // ⚠️ NO BASE TREE ⇒ NO DELETION (gate audit 2026-08-31). A
+    // deletion entry only makes sense against a tree that could
+    // contain the path. With acc.treeSha === null (bare repo whose
+    // seed was skipped — a deletion-only batch) GitHub answers 409
+    // "Git Repository is empty" for createTree, and even on a
+    // non-bare repo a deletion for a path the base tree lacks is the
+    // documented 422 GitRPC::BadObjectState. Dropping it here is not
+    // a loss: the remote genuinely does not have the file, which is
+    // exactly the state the deletion asked for, and the epilogue
+    // removes the path from the baselines either way.
+    if (acc.treeSha === null) return;
     acc.entries.push({ path: f.path, mode: "100644", type: "blob", sha: null });
     return;
   }

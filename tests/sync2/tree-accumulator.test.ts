@@ -120,6 +120,36 @@ describe("tree accumulator (§VIII Q)", () => {
     expect(acc.entries[0].content).toBeUndefined();
   });
 
+  it("Q.1b (409/422 guard): a DELETION entry with NO base tree is DROPPED — nothing to delete, and GitHub would 409/422", async () => {
+    // Bare repo whose seed was skipped (a deletion-only batch):
+    // acc.treeSha === null. createTree without base_tree carrying a
+    // deletion entry answers 409 "Git Repository is empty"; on a
+    // non-bare tree lacking the path it is the documented 422
+    // GitRPC::BadObjectState.
+    const acc = newTreeAccumulator(null);
+    await addFileToTree(acc, client, await loadBlobs(), {
+      path: "gone.md",
+      sha: null,
+      blob: null,
+      mode: DELETED,
+    });
+    expect(acc.entries).toEqual([]); // dropped, not queued
+    await flushTreeAccumulator(acc, client);
+    expect(treeCalls).toEqual([]); // → and NO createTree call at all
+
+    // With a base tree the same entry IS queued (the normal case).
+    const acc2 = newTreeAccumulator("parent-tree");
+    await addFileToTree(acc2, client, await loadBlobs(), {
+      path: "gone.md",
+      sha: null,
+      blob: null,
+      mode: DELETED,
+    });
+    expect(acc2.entries).toEqual([
+      { path: "gone.md", mode: "100644", type: "blob", sha: null },
+    ]);
+  });
+
   it("Q.2: clean UTF-8 .md → inline content in the tree, ZERO createBlob calls", async () => {
     const acc = newTreeAccumulator("parent-tree");
     await addFileToTree(acc, client, await loadBlobs(), textFile("n.md", "привіт\n"));
