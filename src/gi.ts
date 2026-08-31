@@ -97,17 +97,49 @@ export default class GI {
       dirs.push(parts.slice(0, i + 1).join("/"));
     }
 
+    const nodes: Node[] = [];
     let node = this.root;
-    let state = false;
     for (const dir of dirs) {
       node = this.ensureNode(node, dir);
       this.ensureLoaded(node);
-      if (node.ig) {
-        const sub = dir === "" ? rel : rel.slice(dir.length + 1);
-        const r = node.ig.test(sub);
-        if (r.unignored) state = false;
-        else if (r.ignored) state = true;
-      }
+      nodes.push(node);
+    }
+
+    // git's no-descent rule, and the reason this loop exists at all:
+    // an excluded DIRECTORY is never entered, so nothing beneath it can
+    // be re-included — not by a `!` in a deeper .gitignore, not by any
+    // rule at a lower level. ("It is not possible to re-include a file
+    // if a parent directory of that file is excluded.")
+    //
+    // Each ancestor is judged by the levels ABOVE it only: a
+    // directory's own .gitignore cannot re-admit that directory, since
+    // git would have to enter the directory to read it. Directories are
+    // probed with a trailing slash because that is the only form a
+    // dir-only pattern (`foo/`, `.*/`) matches — measured, and the
+    // trap that would silently disable this whole rule.
+    for (let i = 1; i < dirs.length; i++) {
+      if (this.verdict(nodes, dirs, i, `${dirs[i]}/`)) return true;
+    }
+    return this.verdict(nodes, dirs, dirs.length, rel);
+  }
+
+  // Last-match-wins across the first `levels` .gitignore nodes, each
+  // asked about `target` rewritten relative to that node's own dir.
+  private verdict(
+    nodes: Node[],
+    dirs: string[],
+    levels: number,
+    target: string,
+  ): boolean {
+    let state = false;
+    for (let i = 0; i < levels; i++) {
+      const ig = nodes[i].ig;
+      if (!ig) continue;
+      const dir = dirs[i];
+      const sub = dir === "" ? target : target.slice(dir.length + 1);
+      const r = ig.test(sub);
+      if (r.unignored) state = false;
+      else if (r.ignored) state = true;
     }
     return state;
   }

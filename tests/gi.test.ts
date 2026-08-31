@@ -213,11 +213,59 @@ describe("GI", () => {
     expect(gi.ignored("a/keep.log")).toBe(true);
   });
 
-  it("docs known gap: deeper !-rule resurrects file under ignored folder (git would NOT)", () => {
+  it("no-descent: a deeper !-rule CANNOT resurrect a file under an ignored folder (git parity)", () => {
+    // Was pinned for months as "docs known gap: git would NOT" — the
+    // divergence §3.4 named and DOT-FILES §3.1 could not live with,
+    // since the dot-hide block excludes `.obsidian` and then re-admits
+    // it. Closed 2026-09-01: an excluded directory is never entered, so
+    // nothing inside it can be re-included.
     w(".gitignore", "node_modules/\n");
     w("node_modules/.gitignore", "!keep.js\n");
     const gi = new GI(root);
-    expect(gi.ignored("node_modules/keep.js")).toBe(false);
+    expect(gi.ignored("node_modules/keep.js")).toBe(true);
+  });
+
+  it("no-descent: re-including the DIRECTORY first is what lets deeper rules speak", () => {
+    // The other half of the rule, and the shape DOT-FILES §3.1 relies
+    // on: `.*` hides the dot-dir, `!<configDir>/` re-admits it, and only
+    // then does the configDir's own .gitignore get a vote.
+    w(".gitignore", ".*\n.*/\n!.obsidian/\n");
+    w(".obsidian/.gitignore", "!.gitignore\nworkspace.json\n");
+    const gi = new GI(root);
+    expect(gi.ignored(".obsidian/app.json")).toBe(false);
+    expect(gi.ignored(".obsidian/.gitignore")).toBe(false);
+    expect(gi.ignored(".obsidian/workspace.json")).toBe(true);
+    // …while a dot-dir that was NOT re-admitted stays shut, deeper
+    // negations notwithstanding.
+    w(".other/.gitignore", "!keep.md\n");
+    expect(gi.ignored(".other/keep.md")).toBe(true);
+  });
+
+  it("no-descent: a file-level ! cannot reach into an excluded directory", () => {
+    // Probe 5 case D — the natural "I will just allow the one file I
+    // need" attempt, which yields nothing in real git.
+    w(".gitignore", ".*\n.*/\n!.obsidian/.gitignore\n");
+    w(".obsidian/.gitignore", "!.gitignore\n");
+    const gi = new GI(root);
+    expect(gi.ignored(".obsidian/.gitignore")).toBe(true);
+  });
+
+  it("no-descent: an intermediate directory blocks everything below it", () => {
+    w(".gitignore", "build/\n");
+    w("build/sub/.gitignore", "!*.js\n");
+    const gi = new GI(root);
+    expect(gi.ignored("build/sub/app.js")).toBe(true);
+    expect(gi.ignored("build/sub/deep/app.js")).toBe(true);
+    expect(gi.ignored("src/app.js")).toBe(false);
+  });
+
+  it("no-descent: a directory's OWN .gitignore cannot re-admit that directory", () => {
+    // git has to enter the directory to read the file, and it never
+    // enters — so the rule can only ever apply to its contents.
+    w(".gitignore", "secret/\n");
+    w("secret/.gitignore", "!/\n!*\n");
+    const gi = new GI(root);
+    expect(gi.ignored("secret/x.md")).toBe(true);
   });
 
   it("** double-star matches across directories", () => {

@@ -153,6 +153,32 @@ describe.skipIf(!enabled)(`live cold-start [${SHAPE}]`, () => {
       });
       client.settings.deviceLabel = "Macbook";
 
+      // Orphan sibling files already on disk BEFORE we touch anything.
+      // Their base paths are the conflicts the engine is allowed to
+      // adopt without that counting as "the sync made a conflict".
+      const preexistingSiblingBases = new Set<string>();
+      {
+        const walk = (dir: string, rel = ""): void => {
+          for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+            const r = rel ? `${rel}/${e.name}` : e.name;
+            if (e.isDirectory()) {
+              walk(path.join(dir, e.name), r);
+            } else {
+              const m = r.match(
+                /^(.*?)\.conflict-from-[A-Za-z0-9_ -]+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(\.[^./]+)?$/,
+              );
+              if (m) preexistingSiblingBases.add(m[1] + (m[2] ?? ""));
+            }
+          }
+        };
+        walk(LIVE_VAULT);
+        line(
+          `pre-existing orphan siblings for: ${
+            [...preexistingSiblingBases].join(", ") || "—"
+          }`,
+        );
+      }
+
       try {
         const localFiles = (await client.vault.adapter.list("")).files.length;
         line(`local root entries=${localFiles}`);
@@ -233,8 +259,28 @@ describe.skipIf(!enabled)(`live cold-start [${SHAPE}]`, () => {
           expect(changed, "gate: no remote changes").toEqual([]);
           expect(removed, "gate: no remote removals").toEqual([]);
           expect(after.head, "gate: no commit").toBe(before.head);
-          const conflicts = client.conflictStore.getCachedState();
-          expect(conflicts.entries.size, "gate: zero conflicts").toBe(0);
+          // "Zero conflicts" in the gate means zero conflicts BORN of
+          // this sync. A vault can arrive carrying orphan sibling files
+          // from an earlier tool — ~/Obsidian-test still holds two the
+          // OLD plugin left behind — and adopting those as synthetic
+          // conflicts is documented behaviour, not a gate failure. So
+          // the demand is: every conflict must be explained by a sibling
+          // file that already existed on disk before we started.
+          const conflicts = [
+            ...client.conflictStore.getCachedState().entries.keys(),
+          ];
+          const unexplainedConflicts = conflicts.filter(
+            (p) => !preexistingSiblingBases.has(p),
+          );
+          line(
+            `conflicts(${conflicts.length}) adopted-from-disk; unexplained: ${
+              unexplainedConflicts.join(", ") || "—"
+            }`,
+          );
+          expect(
+            unexplainedConflicts,
+            "gate: no conflict may be created by the sync itself",
+          ).toEqual([]);
           // Metadata must be populated, not empty.
           const baselinePaths = await client.baselines.allPaths();
           line(`baseline rows=${baselinePaths.length}`);
