@@ -43,11 +43,15 @@ import {
 //    conflict branch tip (I1 — the branch's whole purpose is "the
 //    pre-conflict local state is preserved on GitHub").
 //    EMPIRICAL 2026-08-30 (Phase 0 triage): stable RED — with three
-//    conflicts registered in one sync the branch tip carries
+//    conflicts registered in one sync the branch tip carried
 //    theirs 1 / theirs 2 / ours 3: only the LAST registered path's
-//    ours survives on the tip; ours 1/2 exist nowhere on GitHub.
-//    (SYNC2-FIX §7 expected this "регресія GREEN" — refuted, like
-//    T3.2.) Lives under it.fails per the G9 precedent.
+//    ours survived; ours 1/2 existed nowhere on GitHub.
+//    ⚔️ PIN RE-ARMED AT THE SWITCH (2026-08-31): FIXED — the new
+//    STEP1 puts EVERY conflicting path's ours into the ONE
+//    conflict_commit of that drain, so the tip carries all three.
+//    Verified GREEN against real GitHub in gate run v4 (the it.fails
+//    wrapper itself failed with "Expect test to fail", which is how
+//    a healed defect announces itself).
 //
 // 2. The FINALIZE GATE: resolving one-by-one, the conflict branch is
 //    never merged+deleted while the store still holds pending
@@ -133,8 +137,8 @@ describe.skipIf(!integrationEnabled())(
       expect(client!.conflictStore.hasBase(p)).toBe(false);
     };
 
-    it.fails(
-      "registration preserves every path's ours on the branch tip (I1) — today only the LAST survives",
+    it(
+      "registration preserves every path's ours on the branch tip (I1)",
       async () => {
         const cb = await registerThreeConflicts();
         for (let i = 1; i <= N; i++) {
