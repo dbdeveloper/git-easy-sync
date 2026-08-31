@@ -976,6 +976,44 @@ MUST-FIX §4.1.
 (tracked + synthetic) → природно оновлюється async разом зі списком. Його лишаємо
 synthetic-inclusive (це його призначення); async-затримка там очікувана.
 
+#### §4.3.1 Механіка списку панелі — ДВІ гілки пошуку (уточнення власника, 2026-08-31)
+
+Зафіксовано під час Фази 5.5 (порт diff2 на conflict store v2 уже виконано —
+`ConflictStore` вище читати як `ConflictStoreV2`/conflicts.json). Чотири вимоги,
+що конкретизують абзаци вище:
+
+1. **Дві гілки пошуку synthetic.**
+   - **Швидка (синхронна):** прохід по `vault.getFiles()` — це in-memory індекс
+     Obsidian, без дискового I/O; покриває весь НЕ-dot-простір миттєво, при кожному
+     оновленні списку (сьогоднішній `findAllConflicts` — це саме вона).
+   - **Повільна (фонова) dot-гілка:** `walkDotDir` по дозволених `!`-префіксах
+     (§4.1/§4.2) з матчингом на `*.conflict-from-*`; результати ДОЛИВАЮТЬСЯ до
+     списку з запізненням. UX-наслідок прийнято власником явно: користувач може
+     відкрити панель, побачити 10 файлів, а за мить — 11 («доїхали» dot-знахідки).
+
+2. **tracked — ЗІ STORE, не зі скану (ІНВЕРСІЯ сьогоднішнього потоку).** Сьогодні
+   `findAllConflicts` виводить І tracked зі скану `vault.getFiles()` (скан знаходить
+   файл → store лише класифікує) — тому tracked-конфлікт із dot-простору невидимий
+   панелі НАВІТЬ маючи запис у conflicts.json. Має бути навпаки: tracked-список
+   перелічується З conflicts.json (кешований вигляд v2, `getCachedState()`,
+   синхронний) + дешевий `adapter.exists` на derived-ім'я кожного sibling-а. Цей
+   exists-чек зберігає чинну гарантію «розв'язаний конфлікт із завислим записом НЕ
+   показується» (та сама перевірка, що її вже робить дефолтна формула
+   `ConflictCounter` v2); prune запису робить process_conflicts на reconcile-сайтах.
+
+3. **synthetic — ТІЛЬКИ В ПАМ'ЯТІ, ніколи в conflicts.json.** Узгоджено з контрактом
+   process_conflicts: store тримає лише те, що народив двигун; сканові знахідки —
+   view-стан панелі. (Це вже і є чинна поведінка — фіксуємо як інваріант, щоб
+   майбутня dot-гілка не спокусилась «кешувати на диск».)
+
+4. **Зникнення зі списку — тривіальне, без повторного walk:** existence-прохід по
+   ВЖЕ складеному memory-списку (`adapter.exists` по кожному елементу) — швидка
+   операція, виконується при тих самих тригерах (open/refresh).
+
+Додаткова причина, чому dot-гілка МУСИТЬ бути тригерною (open/refresh), а не
+подієвою: `vault.on`-події для dot-простору НЕ стріляють — `ConflictWatcher` там
+сліпий за платформою, реактивності немає звідки взятись.
+
 ---
 
 ## 5. Плаский `.gitignore` (whitelist) і таймінг
@@ -1278,13 +1316,16 @@ D: user-літерал !./.gitignore → .gitignore ЛИШИВСЯ ignored → '
     симетрія push/pull (3.3). Код посилатиметься на нього за номером секції (як решта SYNC2.md).
   - **CHANGELOG.md** — міграція + ризик приватності (§8).
   - ✅ Model-B/depth із SYNC2-METAFILE-REFACTOR уже прибрано (там тепер §2 — hot/cold сховище).
-- **Крок C — synthetic-конфлікти над dot-простором (diff2-шар, §4.3).** `findAllConflicts`
-  (`synthetic-detector.ts`) розширити на дозволений dot-простір (той самий
-  `readRootGitignore`+`walkDotDir`); **sync-бейдж → store-only** (прибрати synthetic-override
-  `ConflictCounter` у `main.ts:~1027` — закриває TODO #7); **додати команду refresh
-  (Ctrl+R)** у diff-panel; скан async/eventual (open + refresh). Дотримати `sync2 ↛ diff2`
-  (лічильник у sync2 керується ін'єкцією з diff2). Тести: badge=tracked-only; synthetic у
-  dot-теці спливає в списку; gate лишається tracked-only (§24, без регресії).
+- **Крок C — synthetic-конфлікти над dot-простором (diff2-шар, §4.3 + механіка §4.3.1).**
+  `findAllConflicts` (`synthetic-detector.ts`) перебудувати за §4.3.1: tracked — зі
+  store (+exists-чек), synthetic — дві гілки (швидка `vault.getFiles()` + фонова
+  `readRootGitignore`+`walkDotDir`), memory-only, existence-прохід на зникнення;
+  **sync-бейдж → store-only** (прибрати synthetic-override `ConflictCounter` —
+  закриває TODO #7); **додати команду refresh (Ctrl+R)** у diff-panel; скан
+  async/eventual (open + refresh). Дотримати `sync2 ↛ diff2` (лічильник у sync2
+  керується ін'єкцією з diff2). Тести: badge=tracked-only; TRACKED dot-конфлікт
+  видимий у списку (пін інверсії §4.3.1 п.2); synthetic у dot-теці спливає в списку
+  з запізненням; gate лишається tracked-only (§24, без регресії).
 - **Крок E — auto-міграція вкладених `.gitignore` (§8.1) — ОКРЕМО, НЕ блокер.** Власний
   дизайн-пас (трансляція + верифікація еквівалентності + руйнівне видалення local+remote
   + маркер). Робиться ПІСЛЯ ядра (A–D); до того міграція ручна (§8).
