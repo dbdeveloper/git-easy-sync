@@ -64,18 +64,23 @@ describe.skipIf(!integrationEnabled())(
 
         client = await createSync2Client({ branch });
 
-        // First sync: pulls + auto-republishes. Branch HEAD must
-        // advance (the auto-republish commits a new tree).
+        // ⚔️ RE-DERIVED AT THE SWITCH (R2 "call me again", SYNC2-FIX
+        // §6): convergence takes TWO syncs now — sync #1 pulls and
+        // canonicalizes the vault (the drain's Vault-step runs after
+        // this sync's findChanges), sync #2 republishes. What this
+        // test actually guards is unchanged and is the point: the
+        // loop must TERMINATE.
         const headBefore = await getBranchHead(branch);
         await sync2AllAndAssertNoErrors(client);
-        const headAfterFirst = await getBranchHead(branch);
-        expect(headAfterFirst).not.toBe(headBefore);
-
-        // Second sync: nothing changed locally, nothing on remote.
-        // HEAD must stay put — no extra commits, no thrashing.
         await sync2AllAndAssertNoErrors(client);
-        const headAfterSecond = await getBranchHead(branch);
-        expect(headAfterSecond).toBe(headAfterFirst);
+        const headAfterConverge = await getBranchHead(branch);
+        expect(headAfterConverge).not.toBe(headBefore); // the republish landed
+
+        // Every later sync is a no-op — no thrashing loop.
+        await sync2AllAndAssertNoErrors(client);
+        expect(await getBranchHead(branch)).toBe(headAfterConverge);
+        await sync2AllAndAssertNoErrors(client);
+        expect(await getBranchHead(branch)).toBe(headAfterConverge);
       },
       180_000,
     );

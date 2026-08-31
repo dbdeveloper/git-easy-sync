@@ -79,7 +79,11 @@ describe.skipIf(!integrationEnabled())(
         expect(local.charCodeAt(0)).toBe("#".charCodeAt(0));
         expect(local).toBe("# header\n\nbody.\n");
 
-        // Auto-republish stripped it on the server too.
+        // ⚔️ RE-DERIVED AT THE SWITCH (R2 "call me again"): the
+        // republish lands on the NEXT sync — the pull happens in the
+        // drain's Vault-step, after this sync's findChanges. See the
+        // CRLF sibling test for the full rationale.
+        await sync2AllAndAssertNoErrors(client);
         const remoteAfter = await readRemoteFile(branch, "doc.md");
         expect(remoteAfter.charCodeAt(0)).toBe("#".charCodeAt(0));
         expect(remoteAfter).toBe("# header\n\nbody.\n");
