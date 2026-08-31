@@ -1444,7 +1444,10 @@ export default class GitHubSyncPlugin extends Plugin {
   // just last-wins-clobber each other.
   private async reconcileConflictsV2(): Promise<void> {
     if (!this.conflictStoreV2) return;
-    if (this.sync2Manager?.getDrainStatus().state !== "idle") return;
+    // "No manager yet" (the onload site runs BEFORE Sync2Manager is
+    // constructed) counts as idle — only a RUNNING drain skips.
+    const drainState = this.sync2Manager?.getDrainStatus().state;
+    if (drainState !== undefined && drainState !== "idle") return;
     try {
       const state = await processConflicts(
         {
