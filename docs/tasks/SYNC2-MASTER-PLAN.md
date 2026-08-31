@@ -829,31 +829,77 @@ A.1 п.21-25, P.25, L.3, E.3-5.
 ### Фаза 5.5 — CUTOVER (єдиний момент перемикання живого шляху)
 
 Існує рівно ОДИН момент перемикання (уточнення §2.2 п.3): коли новий двигун
-функціонально повний (після Фази 5). Пакет кроку:
+функціонально повний (після Фази 5).
 
-1. `commitOnly` → BatchWriter (+ R3a commit-синглтон «дзвоник на рецепції», SYNC2-FIX §6);
-   `findChanges`-дедуп → читання метафайлу (`peekLatestPathSha`-еквівалент без хешування).
-2. `syncAll`/interval/watchdog → новий `drain()`; старий drain-шлях, старий
-   `PushQueue`, старий `getContentsMetadataAtRef` (GET) — ВИДАЛЯЮТЬСЯ (новий
-   HEAD-метод успадковує ім'я зі спеки).
-3. Wiring: sweep §12.5 (початок і кінець drain) + `recoverStaleCommitClaims()` на
-   onload + `.reset-in-progress`-сумісність перевірити.
-4. M-переписи тестів: `push-queue.test` / `L4-attempted-locks-merge` /
-   `history-versions` (+ оновити цілі в реєстрі §8.1); History/diff2 читачі → sync_store.
-5. Device-pass нотатка Фази 3 (ETag під Capacitor CORS) — перевірити, який шлях
+#### 5.5.0 ✅ Затверджений план фази (2026-08-31, «так» власника; ~6000 рядків старого коду видаляється)
+
+**Три рішення власника на старті:**
+1. **Епілог (кроки 1/3/4 §III) переїжджає СЮДИ з Фази 6** (уточнення того ж класу, що
+   й два попередні): гейт цієї фази вимагає «метадані заповнені, findChanges порожній»
+   — без епілогу baseline (крок 1) і якір `lastSyncCommitSha` (крок 3) ніколи не
+   просуваються, живий двигун не функціонує. Тести D.13-16 (mtime:0-вартовий) їдуть
+   разом із ним; Фаза 6 залишає решту D + K + M.
+2. **Порядок: епілог → обв'язка → порт diff2 → SWITCH** — двигун добудовується першим,
+   щоб тести порту були real-composition (справжній drainOnce → справжній
+   conflicts.json → портований UI), а не на синтетичних фікстурах (урок §40:
+   стаб-фікстура кодує здогадку). Змістовне рішення «порт без адаптера» (§5.0/1) —
+   без змін, міняється лише позиція коміту всередині фази.
+3. **Шов `confirmResolved` (trash R3.5, layer 1b):** сьогодні стріляє після push-у
+   синтетичного резолюційного батчу — механізму, скасованого §12. У v2 стріляє
+   **на prune запису в `process_conflicts`** (перехід непорожній→порожній = усі
+   sibling-и зникли = конфлікт закрито).
+
+⚠️ **Дисципліна проміжних станів (уперше потрібна):** кожен коміт фази юніт-зелений,
+але збірка **НЕ деплоїться** до проходження повного гейта; перший деплой —
+`~/Obsidian-test`. Між портом diff2 і SWITCH збірка показувала б порожній конфлікт-UI.
+
+Пакет кроку (у затвердженому порядку):
+
+1. **Епілог у drainOnce** (кроки 1/3/4 §III): групове перенесення baseline з
+   TrackedFiles у cold-кошики (`setMany`/`removeMany`, §2.2.1; `mtime: 0` —
+   обґрунтування D.15) → hot-якір (`lastSyncCommitSha`/`TreeSha` + promotion
+   `conflictBranchName`) → `journal.clear()`. + Тести D.13-16.
+2. **Production-обв'язка**: клієнт-методи, яких бракує (`getBranchHeadSha` за ІМ'ЯМ,
+   `pushCommitToBranch` — композиція blob-list→tree→commit→ref); builder справжніх
+   `DrainDeps` (VaultFileReader на `atomicWriteFile` + worker-SHA; `mergeBlobs` через
+   worker three-way-merge з round-trip-гейтом; NetworkRetry per-drain; прогрес →
+   наявний DrainStatus-канал).
+3. **Порт diff2 (без адаптера, §5.0/1)**: `ConflictCounter` + `conflict-watcher` +
+   джерело даних diff-panel + `synthetic-detector` на v2 + 3 UI-сайти
+   `process_conflicts`; History-читачі локальних версій → `sync_store`;
+   `confirmResolved` → prune-шов (рішення 3). Тести — real-composition проти
+   drainOnce-виходу.
+4. **THE SWITCH** (+ переозброєння пінів ТИМ ЖЕ комітом — інакше G9/T3.2 стають
+   red-by-passing): `commitOnly` → findChanges → скибки ≤100 → BatchWriter/consolidate
+   + R3a-«дзвоник» (SYNC2-FIX §6); `findChanges`-дедуп → читання метафайлу (без
+   хешування); `syncAll`/interval/watchdog → `drainOnce`. **ВИДАЛЯЄТЬСЯ**:
+   drain-нутрощі `sync2-manager`, `push-queue.ts`, `tree-builder.ts`,
+   `conflict-store.ts` (v1), `conflict-detection.ts`, `conflict-classifier.ts`
+   (обидва споживає лише manager), старий GET-`getContentsMetadataAtRef` (HEAD-метод
+   успадковує ім'я). M-переписи: `push-queue.test` вмирає на користь
+   `batch-writer.test`, `L4-attempted-locks-merge` → writer+claimer,
+   `history-versions` → sync_store (+ реєстр §8.1). T6.1 переоцінюється за фактами
+   прогону (нова STEP1-механіка кладе ours КОЖНОГО шляху в conflict_commit — але
+   тест перевіряє й порядок реєстрації; вирішує прогін, не прогноз).
+5. **Wiring**: `recoverStaleCommitClaims()` на onload; sweep §12.5 на старті і в
+   кінці drain (живі джерела: черга + журнал + conflicts — 3 з 4; in-flight уже
+   несе журнал); `.reset-in-progress`-сумісність; **вердикт TOCTOU mkdir→маркер**
+   (полагодити або явно прийняти — абзац у §8.2).
+6. Device-pass нотатка Фази 3 (ETag під Capacitor CORS) — перевірити, який шлях
    реально працює на мобільному.
 
-**Гейт:** живий гейт холодного старту на `~/Obsidian-test` (`reset` → `syncAll` на
-відповідному vault → нуль конфліктів/пушів, метадані заповнені, `findChanges`
-порожній) + ПОВНИЙ інтеграційний прогін (критерій Фази 0: 145 + рівно 3 expected
-fail — G9/T3.2/T6.1 на цей момент уже мають ПОГРЕЕНІТИ, тож критерій
-переформульовується за фактами Фаз 4-5) + повний юніт.
+**Гейт:** повний юніт → ПОВНИЙ інтеграційний прогін (з переозброєними пінами:
+**G9 RED→GREEN — головний контракт усього редизайну**) → живий гейт холодного старту
+на `~/Obsidian-test` (`reset` → `syncAll` на відповідному vault → нуль
+конфліктів/пушів, метадані заповнені, `findChanges` порожній) → ETag device-pass.
 
-### Фаза 6 — Епілог, матриця краху, наскрізне
+### Фаза 6 — Матриця краху, наскрізне (епілог ↗ переїхав у Фазу 5.5, рішення 2026-08-31)
 
-1. Епілог (кроки 1-5, включно з `mtime: 0` у baseline і його обґрунтуванням).
+1. ~~Епілог (кроки 1-5)~~ → **Фаза 5.5 крок 1** (кроки 1/3/4; крок 2 витягнуто ще у
+   Фазі 5). Тут лишається довершення: `vault_step_errors`-звітність у UI, якщо
+   виявиться потрібною.
 2. Vault-step для не-конфліктних шляхів + `vault_step_errors`.
-3. **§VIII D** — 12+2+6 точок краху, кожна з §IV.2, з ін'єкцією краху.
+3. **§VIII D** — точки краху з §IV.2, з ін'єкцією краху (D.13-16 ↗ у Фазі 5.5).
 4. **§VIII K** — наскрізні, integration-рівень.
 5. **§VIII M** — регресії відомих дефектів.
 
