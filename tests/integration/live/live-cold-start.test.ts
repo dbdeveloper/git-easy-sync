@@ -153,30 +153,36 @@ describe.skipIf(!enabled)(`live cold-start [${SHAPE}]`, () => {
       });
       client.settings.deviceLabel = "Macbook";
 
-      // Orphan sibling files already on disk BEFORE we touch anything.
-      // Their base paths are the conflicts the engine is allowed to
-      // adopt without that counting as "the sync made a conflict".
-      const preexistingSiblingBases = new Set<string>();
+      // Orphan sibling files already on disk, reported with their age
+      // so a human can see WHO made them.
+      //
+      // ⚠️ Do not turn this snapshot into the gate's pass condition. A
+      // sibling "already on disk" at the start of run N may simply be
+      // one that run N-1 created, and then the gate passes by tautology
+      // — which is exactly the mistake this comment replaces (I read a
+      // sibling named `...conflict-from-Macbook-2026-08-18T18-09-17Z`
+      // as an old artefact, when the date in a sibling FILENAME is the
+      // base file's mtime, not the moment the sibling was written; that
+      // one was minutes old and mine). The gate condition is the
+      // explicit allow-list below instead: the human states which
+      // conflicts this vault is already known to carry, and anything
+      // else is a conflict the sync manufactured.
       {
         const walk = (dir: string, rel = ""): void => {
           for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
             const r = rel ? `${rel}/${e.name}` : e.name;
             if (e.isDirectory()) {
               walk(path.join(dir, e.name), r);
-            } else {
-              const m = r.match(
-                /^(.*?)\.conflict-from-[A-Za-z0-9_ -]+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(\.[^./]+)?$/,
-              );
-              if (m) preexistingSiblingBases.add(m[1] + (m[2] ?? ""));
+            } else if (r.includes(".conflict-from-")) {
+              const ageMin = (
+                (Date.now() - fs.statSync(path.join(dir, e.name)).mtimeMs) /
+                60_000
+              ).toFixed(0);
+              line(`sibling on disk (${ageMin} min old): ${r}`);
             }
           }
         };
         walk(LIVE_VAULT);
-        line(
-          `pre-existing orphan siblings for: ${
-            [...preexistingSiblingBases].join(", ") || "—"
-          }`,
-        );
       }
 
       try {
@@ -259,21 +265,31 @@ describe.skipIf(!enabled)(`live cold-start [${SHAPE}]`, () => {
           expect(changed, "gate: no remote changes").toEqual([]);
           expect(removed, "gate: no remote removals").toEqual([]);
           expect(after.head, "gate: no commit").toBe(before.head);
-          // "Zero conflicts" in the gate means zero conflicts BORN of
-          // this sync. A vault can arrive carrying orphan sibling files
-          // from an earlier tool — ~/Obsidian-test still holds two the
-          // OLD plugin left behind — and adopting those as synthetic
-          // conflicts is documented behaviour, not a gate failure. So
-          // the demand is: every conflict must be explained by a sibling
-          // file that already existed on disk before we started.
+          // "Zero conflicts" in the gate means zero conflicts the sync
+          // manufactured. A vault may legitimately arrive carrying an
+          // orphan sibling from an earlier tool (~/Obsidian-test has one
+          // in `.test/`, from a phone, dated June — and `.test/` being a
+          // dot-directory is why nobody sees it in Obsidian), and
+          // adopting that as a synthetic conflict is documented
+          // behaviour. Those go in LIVE_EXPECTED_CONFLICTS, stated by
+          // the human up front. Everything else is a defect.
+          const expected = new Set(
+            (process.env.LIVE_EXPECTED_CONFLICTS ?? "")
+              .split(",")
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0),
+          );
           const conflicts = [
             ...client.conflictStore.getCachedState().entries.keys(),
           ];
           const unexplainedConflicts = conflicts.filter(
-            (p) => !preexistingSiblingBases.has(p),
+            (p) => !expected.has(p),
           );
           line(
-            `conflicts(${conflicts.length}) adopted-from-disk; unexplained: ${
+            `conflicts(${conflicts.length}): ${conflicts.join(", ") || "—"}`,
+          );
+          line(
+            `NOT in LIVE_EXPECTED_CONFLICTS: ${
               unexplainedConflicts.join(", ") || "—"
             }`,
           );
