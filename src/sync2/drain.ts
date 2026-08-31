@@ -193,6 +193,9 @@ export interface DrainDeps {
   retry: NetworkRetry;
   claimBatch(): Promise<ClaimedBatch | null>;
   removeBatchDir(dir: string): Promise<void>;
+  // §12.5 sweep source №1 (queue metafile shas). Optional — when
+  // absent (fake-world unit suites) the sweep is skipped entirely.
+  queueReferencedShas?: () => Promise<Set<string>>;
   // metadata.files (Phase 1 cold buckets) — the diff3 base source
   // (get) and the epilogue's transfer target (group ops, §2.2.1:
   // N paths in K buckets = K writes, never N).
@@ -355,6 +358,15 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // belong to a PREVIOUS (dead) run: STEP3 executes once, after the
   // batch loop, so no 422 restart inside THIS run can ever see one.
   await deps.siblingTx.recoverIfNeeded();
+
+  // §12.5 sweep, drain-START edition: reap sync_store blobs orphaned
+  // by a previous crash BEFORE this run starts writing. Safe by
+  // construction against concurrent writers (the store snapshots its
+  // candidates before collecting references). Live sources: queue
+  // metafiles + the (possibly surviving) journal + conflicts.json —
+  // in-flight refs ride the journal. Optional: fake-world suites
+  // don't wire a queue reader.
+  await sweepSyncStore(deps);
   // PHASE5.5 (cutover): rearangeSyncStore() — the §12.5 sweep runs
   // here and again after the loop.
 
@@ -1572,8 +1584,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // 'previous drain finished'. Both slots, 404-tolerant.
   await deps.journal.clear();
 
-  // Step 5 — rearangeSyncStore() (the §12.5 sweep): PHASE5.5 wiring
-  // commit, together with the drain-start sweep.
+  // Step 5 — the §12.5 sweep, drain-END edition: the journal died in
+  // step 4, so everything a completed drain no longer references is
+  // reaped now (batch dirs are gone, resolved conflicts pruned).
+  await sweepSyncStore(deps);
 
   return result("ok");
 }
@@ -1583,6 +1597,27 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
 // 0 = owner's ambiguity-loses-to-remote fallback), bytes from
 // sync_store with the live-vault repair fallback (§12.5.B: changed or
 // gone → skip, next detection re-emits).
+// §12.5 rearangeSyncStore — both drain boundaries call this. A sweep
+// failure never aborts a drain (it is hygiene, not correctness): warn
+// and continue.
+async function sweepSyncStore(deps: DrainDeps): Promise<void> {
+  if (!deps.queueReferencedShas) return;
+  try {
+    const r = await deps.syncStore.sweep([
+      deps.queueReferencedShas,
+      () => deps.journal.collectReferencedShas(),
+      () => deps.conflictStore.collectReferencedShas(),
+    ]);
+    if (r.removed > 0) {
+      deps.logger?.info("sync_store sweep", r);
+    }
+  } catch (err) {
+    deps.logger?.warn("sync_store sweep failed (hygiene only)", {
+      err: `${err}`,
+    });
+  }
+}
+
 async function loadLocalFromBatch(
   deps: DrainDeps,
   entry: BatchEntry,

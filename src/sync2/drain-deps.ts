@@ -44,6 +44,7 @@ import {
 import { makeWorkerMergeBlobs } from "./diff3";
 import { makeVaultFileReader } from "./vault-file-reader";
 import BatchClaimer from "./get-batch";
+import { collectQueueReferencedShas } from "./queue-sha-index";
 import NetworkRetry from "./retry-network";
 import SyncStore from "./sync-store";
 import DrainJournal from "./drain-journal";
@@ -437,6 +438,8 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
     }),
     claimBatch: () => claimer.getBatch(),
     removeBatchDir: (dir) => args.vault.adapter.rmdir(dir, true),
+    queueReferencedShas: () =>
+      collectQueueReferencedShas(args.vault, args.selfPluginId),
     baselines: {
       get: (p) => args.baselines.get(p),
       setMany: (entries) => args.baselines.setMany(entries),

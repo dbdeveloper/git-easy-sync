@@ -1041,10 +1041,22 @@ A.1 п.21-25, P.25, L.3, E.3-5.
       per-path-без-покоління, sweep-джерело №5, краї) = DIFF-EDITOR-HISTORY-
       DELETED.md §5.2.1. deleted-paths.txt підтверджено видаленим коректно —
       описане стосувалось TrashStore.**
-5. **Wiring**: `recoverStaleCommitClaims()` на onload; sweep §12.5 на старті і в
-   кінці drain (живі джерела: черга + журнал + conflicts — 3 з 4; in-flight уже
-   несе журнал); `.reset-in-progress`-сумісність; **вердикт TOCTOU mkdir→маркер**
-   (полагодити або явно прийняти — абзац у §8.2).
+5. ✅ **Wiring** (їде комітом S3 разом зі SWITCH): `recoverStaleCommitClaims()`
+   на onload (main.ts, ПЕРЕД першим drain/resume-пульсом); sweep §12.5 на старті
+   і в кінці drainOnce (`sweepSyncStore`: джерела = черга-метафайли
+   [collectQueueReferencedShas] + журнал + conflicts.json; помилка sweep-у — warn,
+   ніколи не абортить drain; тест: orphan реапається, referenced живе,
+   blob завершеного батчу реапається кінцевим sweep-ом);
+   `.reset-in-progress`-сумісність ПІДТВЕРДЖЕНА (всі нові сховища під `.runtime/`,
+   reinitStores перечитує conflicts.json). **ВЕРДИКТ TOCTOU mkdir→маркер:
+   ПРИЙНЯТО, не лагодиться.** Обґрунтування: вікно = один await між mkdir
+   каталогу батчу і записом `.attempted-commit`; колізія вимагає конкурентного
+   getBatch на ПОРОЖНІЙ черзі рівно в цьому вікні; наслідок — LOUD discard
+   ембріона (CRASH_RECOVERY «incomplete metafile»), вміст лишається у vault і
+   ре-емітується наступним findChanges (§12.6-еквівалентність) — деградація
+   гучна, обмежена, без втрати даних; фікс вимагав би маркера ПОЗА каталогом
+   (двофайловий протокол) заради вікна, яке R3a-синглтон уже робить
+   недосяжним зсередини плагіна (лишається лише гіпотетичний зовнішній процес).
 6. Device-pass нотатка Фази 3 (ETag під Capacitor CORS) — перевірити, який шлях
    реально працює на мобільному.
 

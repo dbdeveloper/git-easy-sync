@@ -35,6 +35,7 @@ import { Sync2Manager } from "./sync2/sync2-manager";
 import { IntervalScheduler } from "./sync2/interval-scheduler";
 import ConflictStoreV2 from "./sync2/conflict-store-v2";
 import BatchWriter from "./sync2/batch-writer";
+import BatchClaimer from "./sync2/get-batch";
 import SyncStore from "./sync2/sync-store";
 import DrainJournal from "./sync2/drain-journal";
 import SiblingTx from "./sync2/sibling-tx";
@@ -942,6 +943,21 @@ export default class GitHubSyncPlugin extends Plugin {
       selfPluginId: manifest.id,
       syncStore,
     });
+    // R3b onload recovery: a commit that crashed mid-write left an
+    // .attempted-commit claim on its batch dir — without this sweep a
+    // whole metafile-complete batch would block the queue forever
+    // (the claimer waits on foreign claims). Runs BEFORE the first
+    // drain/resume pulse.
+    try {
+      await new BatchClaimer({
+        vault: this.app.vault,
+        selfPluginId: manifest.id,
+        syncStore,
+        logger: this.logger,
+      }).recoverStaleCommitClaims();
+    } catch (err) {
+      this.logger.warn("recoverStaleCommitClaims failed", { err: `${err}` });
+    }
     const detector = new ChangeDetector({
       vault: this.app.vault,
       hotMeta,

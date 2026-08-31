@@ -975,6 +975,37 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(baselines.has(canonical)).toBe(false); // detector picks it up as new
   });
 
+  it("S3 §12.5 sweep: an orphan sync_store blob is reaped at the drain boundaries; queue/journal/conflict-referenced blobs survive", async () => {
+    await setupAligned();
+    // An orphan from some previous crash…
+    const orphan = await sha("orphan bytes\n");
+    await syncStore.saveBlobToSyncStore(orphan, enc("orphan bytes\n"));
+    // …and a batch whose blob IS referenced while queued.
+    await stageBatch({ "note.md": "C1\n" });
+    const batchBlob = await sha("C1\n");
+
+    const deps = makeDeps({
+      queueReferencedShas: async () => {
+        const out = new Set<string>();
+        for (const b of batches) {
+          if (b.removed) continue;
+          for (const e of b.claimed.meta.entries) {
+            if (e.sha !== null) out.add(e.sha);
+          }
+        }
+        return out;
+      },
+    });
+    const r = await drainOnce(deps);
+    expect(r.status).toBe("ok");
+    // The orphan died (start sweep); the batch blob died TOO — the
+    // batch completed and nothing references it anymore (end sweep).
+    expect(await syncStore.existInSyncStore(orphan)).toBe(false);
+    expect(await syncStore.existInSyncStore(batchBlob)).toBe(false);
+    // But the push landed — hygiene never touched correctness.
+    expect(dec(world.headFiles().get("note.md")!.bytes)).toBe("C1\n");
+  });
+
   it("S1 forbidden-name collision: canonical target exists → LOUD skip, NO baseline for the original (no silent remote deletion)", async () => {
     await setupAligned();
     const BAD = 'we"ird.md';

@@ -67,3 +67,35 @@ export async function buildQueueShaIndex(
     peekLatestPathSha: async (path) => latest.get(path) ?? null,
   };
 }
+
+// Sweep source №1 (§12.5.A): every content sha any queued batch still
+// references — while a batch lives, its blobs must never be reaped.
+// (The trash re-platform adds deletedSha values here — DIFF-EDITOR-
+// HISTORY-DELETED §5.2.1.) Torn metafiles contribute nothing; their
+// repair (and the LOUD discard of their dirs) is the claimer's job.
+export async function collectQueueReferencedShas(
+  vault: Vault,
+  selfPluginId: string,
+): Promise<Set<string>> {
+  const root = normalizePath(
+    `${vault.configDir}/plugins/${selfPluginId}/${QUEUE_DIRNAME}`,
+  );
+  const out = new Set<string>();
+  if (!(await vault.adapter.exists(root))) return out;
+  const listing = await vault.adapter.list(root);
+  for (const folder of listing.folders) {
+    const p = normalizePath(`${folder}/${BATCH_META_FILE}`);
+    if (!(await vault.adapter.exists(p))) continue;
+    let meta;
+    try {
+      meta = parseBatchMetafile(await vault.adapter.read(p));
+    } catch {
+      continue;
+    }
+    if (meta === null) continue;
+    for (const e of meta.entries) {
+      if (e.sha !== null) out.add(e.sha);
+    }
+  }
+  return out;
+}
