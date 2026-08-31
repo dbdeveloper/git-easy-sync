@@ -164,14 +164,21 @@ export class FakeWorld {
         if (parent !== cur) {
           throw new ValidationError("422: conflict branch head moved");
         }
-        const baseTree = cur === null ? undefined : this.commitTrees.get(cur);
+        // Fresh branch is ROOTED AT MAIN HEAD (SWITCH gate finding:
+        // unrelated histories 404 GitHub's compare) — same as prod.
+        const effParent = cur ?? this.head;
+        const baseTree =
+          effParent === null ? undefined : this.commitTrees.get(effParent);
         const treeSha = applyEntries(
           baseTree,
           entries.map((e) => ({ path: e.path, sha: e.sha })),
         );
         const commitSha = `cbranch-${++this.commitSeq}`;
         this.commitTrees.set(commitSha, treeSha);
-        this.commitParents.set(commitSha, cur === null ? [] : [cur]);
+        this.commitParents.set(
+          commitSha,
+          effParent === null ? [] : [effParent],
+        );
         this.branchHeads.set(branch, commitSha);
         return { sha: commitSha };
       },

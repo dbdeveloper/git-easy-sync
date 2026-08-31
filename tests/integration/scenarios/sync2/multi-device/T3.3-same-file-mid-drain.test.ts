@@ -79,16 +79,22 @@ describe.skipIf(!integrationEnabled())(
         // Inject at the SECOND updateBranchHead call — batch #2's own
         // push. Call 1 (batch #1, note1) runs clean, so the count is
         // deterministic up to the injection point.
+        // THE SWITCH re-derivation: the new engine moves the main ref
+        // via updateReference (pushCommitFromTree), never the old
+        // updateBranchHead. Count ONLY main-ref PATCHes — the
+        // conflict branch PATCHes a different ref.
         const gh = client.client as unknown as {
-          updateBranchHead: (a: {
+          updateReference: (a: {
+            ref: string;
             sha: string;
             retry?: boolean;
           }) => Promise<void>;
         };
-        const orig = gh.updateBranchHead.bind(gh);
+        const orig = gh.updateReference.bind(gh);
         let calls = 0;
         let injected = false;
-        gh.updateBranchHead = async (a) => {
+        gh.updateReference = async (a) => {
+          if (a.ref !== `heads/${branch}`) return orig(a);
           calls += 1;
           if (!injected && calls === 2) {
             injected = true;

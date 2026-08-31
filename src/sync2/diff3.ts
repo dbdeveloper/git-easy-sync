@@ -156,9 +156,21 @@ export async function _diff3(
 
   // ── §II.1 п.3 — the .obsidian/ special branch ───────────────────
   if (path.startsWith(".obsidian/")) {
-    if (PLUGIN_CORE_FILE.test(path)) {
+    if (
+      PLUGIN_CORE_FILE.test(path) &&
+      local.sha !== null &&
+      remote.sha !== null
+    ) {
       // 3.a — plugin core files route to their own rules
-      // (SYNC2-PLUGIN-UPDATE-COMPAT); Phase 4 exposes only the seam.
+      // (SYNC2-PLUGIN-UPDATE-COMPAT). ⚠️ NARROWED at THE SWITCH gate
+      // (2026-08-31, gate finding): the seam fires ONLY on a genuine
+      // two-sided collision (both exist, differ — equality returned
+      // at 2.a). One-sided cases (new plugin file, deletion, plain
+      // pull/push) are ordinary 3.b traffic — the old wide seam made
+      // drainOnce skip them, so plugin files never synced AT ALL
+      // (integration I2). Semver/bundle-atomicity (§28 class) returns
+      // with PLUGIN-UPDATE-COMPAT; until then the drain resolves the
+      // dispatch by pickNewestForObsidian below.
       return { kind: "plugin-dispatch" };
     }
     // 3.b — MANUAL_CONFLICT never happens here; every collision
@@ -188,11 +200,7 @@ export async function _diff3(
     // land in the remote branch — hence the explicit null guard: a
     // bare `>` would coerce null to 0 in JS and hand `5 > null` to
     // local, silently inverting the owner's fallback rule.
-    const localWins =
-      remote.mtime !== null &&
-      local.mtime !== null &&
-      local.mtime > remote.mtime;
-    return { kind: "file", file: localWins ? local : remote };
+    return { kind: "file", file: pickNewestForObsidian(local, remote) };
   }
 
   // ── §II.1 п.4 — standard resolution ─────────────────────────────
@@ -358,6 +366,21 @@ export async function _diff3(
     await deps.syncStore.saveBlobToSyncStore(mergedSha, merged);
   }
   return { kind: "file", file: mergedFile };
+}
+
+// §II.1 п.3.b.e — the ONE place mtimes are compared. Shared by the
+// 3.b fallback above and the drain's INTERIM plugin-dispatch
+// resolution (gate decision 2026-08-31): newest wins, ambiguity
+// (either mtime null/0-legacy) → remote — with the explicit null
+// guard, because a bare `>` would coerce `5 > null` to local and
+// silently invert the owner's fallback rule.
+export function pickNewestForObsidian(
+  local: FileInfo,
+  remote: FileInfo,
+): FileInfo {
+  const localWins =
+    remote.mtime !== null && local.mtime !== null && local.mtime > remote.mtime;
+  return localWins ? local : remote;
 }
 
 // Default main-thread merge seam — the REAL mergeText (with its

@@ -52,6 +52,7 @@ import ConflictStoreV2 from "./conflict-store-v2";
 import SiblingTx from "./sibling-tx";
 import {
   formatSyncMessage,
+  formatConflictMessage,
   formatMergeConflictBranchMessage,
 } from "./commit-message";
 import type { TrashHooks } from "./trash-hooks";
@@ -324,8 +325,17 @@ export function makeDrainClient(deps: MakeDrainClientDeps): DrainClient {
     },
 
     async compareStatus(base, head) {
-      const r = await client.compare({ base, head, retry: true });
-      return r.status;
+      try {
+        const r = await client.compare({ base, head, retry: true });
+        return r.status;
+      } catch (err) {
+        // GitHub answers 404 for UNRELATED histories (and for a GC'd
+        // sha). Either way the base is certainly NOT an ancestor of
+        // head — exactly what FINALIZE's idempotence check wants to
+        // know (gate finding, G3/G4).
+        if (err instanceof NotFoundError) return "diverged";
+        throw err;
+      }
     },
 
     async deleteBranch(branch) {
@@ -497,6 +507,8 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
     // BATCH's createdAt for main pushes, now() for conflict pushes —
     // formatSyncMessage's uniqueness/greppability contract (§4.4).
     commitMessage: (whenMs) => formatSyncMessage(args.deviceLabel(), whenMs),
+    conflictMessage: (whenMs) =>
+      formatConflictMessage(args.deviceLabel(), whenMs),
     mergeMessage: (whenMs) =>
       formatMergeConflictBranchMessage(args.deviceLabel(), whenMs),
     gitAuthor: args.gitAuthor,

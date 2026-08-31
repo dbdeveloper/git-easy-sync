@@ -110,16 +110,22 @@ describe.skipIf(!integrationEnabled())(
         }
 
         // Inject theirs 7..10 at the 6th push (the G9 injection).
+        // THE SWITCH re-derivation: the new engine moves the main ref
+        // via updateReference (pushCommitFromTree), never the old
+        // updateBranchHead. Count ONLY main-ref PATCHes — the
+        // conflict branch PATCHes a different ref.
         const gh = client.client as unknown as {
-          updateBranchHead: (a: {
+          updateReference: (a: {
+            ref: string;
             sha: string;
             retry?: boolean;
           }) => Promise<void>;
         };
-        const orig = gh.updateBranchHead.bind(gh);
+        const orig = gh.updateReference.bind(gh);
         let calls = 0;
         let injected = false;
-        gh.updateBranchHead = async (a) => {
+        gh.updateReference = async (a) => {
+          if (a.ref !== `heads/${branch}`) return orig(a);
           calls += 1;
           if (!injected && calls === 6) {
             injected = true;

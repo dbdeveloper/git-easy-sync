@@ -109,9 +109,11 @@ describe.skipIf(!integrationEnabled())(
         conflictBranchToCleanup = cb!.name;
         expect(cb!.name).toMatch(/^git-easy-sync-conflicts-/);
 
-        // Branch exists on GitHub at the recorded head SHA.
+        // Branch exists on GitHub. (THE SWITCH: the hot record's
+        // `head` is VESTIGIAL "" — §II.7 reads the conflict head live
+        // only; the name is the carried state.)
         const remoteBranchHead = await getBranchHead(cb!.name);
-        expect(remoteBranchHead).toBe(cb!.head);
+        expect(remoteBranchHead).not.toBeNull();
 
         // Branch carries the ours version of note.md (the
         // pre-conflict local state preserved as history).

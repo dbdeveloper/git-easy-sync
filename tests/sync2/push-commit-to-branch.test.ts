@@ -92,7 +92,9 @@ describe("pushCommitToBranch + getBranchHeadShaByName (Phase 5.5 step 2a)", () =
 
   // ── pushCommitToBranch ─────────────────────────────────────────────
 
-  it("parent=null: NO getCommit, tree WITHOUT base_tree, parentless commit, createReference — the root-commit birth of the branch", async () => {
+  it("parent=null: the fresh branch is ROOTED AT MAIN HEAD (unrelated histories 404 GitHub's compare — gate finding), then createReference", async () => {
+    queue.push(ok({ object: { sha: "mainhead" } })); // getBranchHeadSha (main)
+    queue.push(ok({ tree: { sha: "maintree" }, committer: { date: "" } })); // getCommit(mainhead)
     queue.push(created({ sha: "tree1" })); // createTree
     queue.push(created({ sha: "commit1" })); // createCommit
     queue.push(created({})); // createReference
@@ -103,15 +105,15 @@ describe("pushCommitToBranch + getBranchHeadShaByName (Phase 5.5 step 2a)", () =
       message: "Sync at test (dev)",
     });
     expect(r).toEqual({ sha: "commit1" });
-    expect(seen.map((s) => s.method)).toEqual(["POST", "POST", "POST"]);
-    expect(seen[0].url).toMatch(/\/git\/trees$/);
-    expect(body(0)).toEqual({
+    expect(seen[0].url).toMatch(/\/git\/refs\/heads\/main\?ts=\d+$/); // main head read
+    expect(seen[1].url).toMatch(/\/git\/commits\/mainhead$/);
+    expect(body(2)).toEqual({
       tree: [{ path: "note.md", mode: "100644", type: "blob", sha: "blob1" }],
-    }); // no base_tree key at all
-    expect(seen[1].url).toMatch(/\/git\/commits$/);
-    expect(body(1).parents).toEqual([]);
-    expect(seen[2].url).toMatch(/\/git\/refs$/);
-    expect(body(2)).toEqual({ ref: "refs/heads/cb", sha: "commit1" });
+      base_tree: "maintree", // ON TOP of main's tree
+    });
+    expect(body(3).parents).toEqual(["mainhead"]); // related history
+    expect(seen[4].url).toMatch(/\/git\/refs$/);
+    expect(body(4)).toEqual({ ref: "refs/heads/cb", sha: "commit1" });
   });
 
   it("parent set: getCommit for base_tree, commit chained on parent, non-force PATCH of the branch ref", async () => {
@@ -154,6 +156,8 @@ describe("pushCommitToBranch + getBranchHeadShaByName (Phase 5.5 step 2a)", () =
   });
 
   it("parent=null raced by another creator → createReference 422 'already exists' is ALSO ValidationError", async () => {
+    queue.push(ok({ object: { sha: "mainhead" } }));
+    queue.push(ok({ tree: { sha: "maintree" }, committer: { date: "" } }));
     queue.push(created({ sha: "t" }));
     queue.push(created({ sha: "c" }));
     queue.push({ status: 422, text: "", json: {}, headers: {} });

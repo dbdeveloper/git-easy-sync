@@ -590,6 +590,30 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
     }
   });
 
+  it("gate fix 2026-08-31: a ONE-SIDED plugin-core change is ordinary 3.b traffic, NOT a dispatch (the wide seam made plugin files never sync — I2)", async () => {
+    const p = ".obsidian/plugins/some-plugin/main.js";
+    // New local plugin file, remote absent → local wins (3.b.1.a).
+    const push = await _diff3(
+      makeDeps(),
+      null,
+      side(p, "L", { mtime: 100 }),
+      HEAD,
+    );
+    expect(push.kind).toBe("file");
+    expect((push as { file: FileInfo }).file.sha).toBe(
+      side(p, "L", {}).sha,
+    );
+    // Remote-only plugin update, local absent → remote wins (3.b.1.b).
+    const pull = await _diff3(
+      makeDeps(),
+      t(side(p, "A"), side(p, "R", { mtime: 200 })),
+      null,
+      HEAD,
+    );
+    expect(pull.kind).toBe("file");
+    expect((pull as { file: FileInfo }).file.sha).toBe(side(p, "R", {}).sha);
+  });
+
   it("A1.19: plugins/<id>/data.json → NOT the plugin branch; resolves via mtime-tiebreak (3.b)", async () => {
     const p = ".obsidian/plugins/some-plugin/data.json";
     const newerRemote = side(p, "R", { mtime: 2000 });

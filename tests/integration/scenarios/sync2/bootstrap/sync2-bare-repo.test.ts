@@ -25,7 +25,10 @@ import {
 //   1. invariants.enforce() (run by syncAll) writes <vault>/.gitignore,
 //      <configDir>/.gitignore, <configDir>/plugins/<self>/.gitignore
 //      with their canonical content.
-//   2. seedBareRepo() PUTs <vault>/.gitignore via the Contents API —
+//   2. (THE SWITCH re-derivation) the bare repo is born by ONE
+//      PARENTLESS pushCommitFromTree commit — the old Contents-API
+//      seed ("Init at …") died with the old engine. Where the old
+//      counts said "seed + sync = 2", the new world lands 1. —
 //      the only endpoint that works without a pre-existing ref — and
 //      records the resulting commit as the batch's parent.
 //   3. The rest of processBatch builds a normal createTree+createCommit
@@ -58,11 +61,10 @@ import {
 
         await sync2AllAndAssertNoErrors(client);
 
-        // Branch is now born. Two commits land: the seed ("Init at …"
-        // with just <vault>/.gitignore) and the follow-up sync ("Sync
-        // at …" with the two configDir gitignores enforce() created).
+        // Branch is now born by ONE parentless sync commit carrying
+        // everything (THE SWITCH: no Contents-API seed).
         expect(await getBranchHead(branch, env)).not.toBeNull();
-        expect(await countBranchCommits(branch, env)).toBe(2);
+        expect(await countBranchCommits(branch, env)).toBe(1);
 
         const files = await listRemoteFiles(branch, env);
         expect(files).toContain(".gitignore");
@@ -86,7 +88,7 @@ import {
 
         await sync2AllAndAssertNoErrors(client);
 
-        expect(await countBranchCommits(branch, env)).toBe(2);
+        expect(await countBranchCommits(branch, env)).toBe(1);
 
         const files = await listRemoteFiles(branch, env);
         expect(files).toContain("note.md");
@@ -120,7 +122,7 @@ import {
 
         // Still two commits: seed + one combined sync commit. We don't
         // emit a commit per file — the whole batch lands together.
-        expect(await countBranchCommits(branch, env)).toBe(2);
+        expect(await countBranchCommits(branch, env)).toBe(1);
 
         const files = await listRemoteFiles(branch, env);
         expect(files).toContain("a.md");
@@ -149,7 +151,7 @@ import {
         await client.vault.adapter.write("b.md", "fresh");
         await sync2AllAndAssertNoErrors(client);
 
-        expect(await countBranchCommits(branch, env)).toBe(3);
+        expect(await countBranchCommits(branch, env)).toBe(2);
 
         expect(await readRemoteFile(branch, "a.md", env)).toBe("v2\n");
         expect(await readRemoteFile(branch, "b.md", env)).toBe("fresh\n");
@@ -184,13 +186,13 @@ import {
 
         await client.vault.adapter.write("a.md", "v1");
         await sync2AllAndAssertNoErrors(client);
-        expect(await countBranchCommits(branch, env)).toBe(2);
+        expect(await countBranchCommits(branch, env)).toBe(1);
 
         await client.vault.adapter.write("a.md", "v2");
         await client.vault.adapter.write("b.md", "fresh");
         await sync2AllAndAssertNoErrors(client);
 
-        expect(await countBranchCommits(branch, env)).toBe(3);
+        expect(await countBranchCommits(branch, env)).toBe(2);
         expect(await readRemoteFile(branch, "a.md", env)).toBe("v2\n");
         expect(await readRemoteFile(branch, "b.md", env)).toBe("fresh\n");
       },
@@ -244,7 +246,7 @@ import {
         });
         await sync2AllAndAssertNoErrors(client);
 
-        expect(await countBranchCommits(branch, env)).toBe(2);
+        expect(await countBranchCommits(branch, env)).toBe(1);
         expect(await getBranchHead(branch, env)).toBe(headAfterFirst);
       },
       210_000,

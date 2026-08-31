@@ -632,8 +632,8 @@ async function listAllBranches(env: RepoEnv): Promise<string[]> {
   return (res.json as Array<{ name: string }>).map((b) => b.name);
 }
 
-async function getDefaultBranchName(env: RepoEnv): Promise<string> {
-  const { token, owner, repo } = env;
+export async function getDefaultBranchName(env?: RepoEnv): Promise<string> {
+  const { token, owner, repo } = env ?? requireEnv();
   const res = await ghFetch(`${GH}/repos/${owner}/${repo}`, { token });
   if (res.status !== 200) {
     throw new Error(`getDefaultBranchName → ${res.status}: ${res.text}`);

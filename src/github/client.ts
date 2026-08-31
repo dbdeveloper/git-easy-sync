@@ -539,26 +539,29 @@ export default class GithubClient {
     retry?: boolean;
     maxRetries?: number;
   }): Promise<{ sha: string }> {
-    let baseTree: string | undefined;
-    if (parent !== null) {
-      const parentCommit = await this.getCommit({
-        sha: parent,
-        retry,
-        maxRetries,
-      });
-      baseTree = parentCommit.tree.sha;
-    }
-    const effective =
-      baseTree === undefined ? entries.filter((e) => e.sha !== null) : entries;
+    // Resolve the effective parent: the branch's own head, or (fresh
+    // branch) the CURRENT MAIN HEAD — the branch is born related.
+    const effectiveParent =
+      parent ?? (await this.getBranchHeadSha({ retry, maxRetries }));
+    const parentCommit = await this.getCommit({
+      sha: effectiveParent,
+      retry,
+      maxRetries,
+    });
+    const baseTree = parentCommit.tree.sha;
+    // A deletion entry for a path the base tree does not carry would
+    // 422 (BadObjectState) — the drain's shouldPush guard already
+    // skips fresh-branch deletions, this filter is belt-and-braces
+    // for direct callers.
     const treeSha = await this.createTree({
       tree: {
-        tree: effective.map((e) => ({
+        tree: entries.map((e) => ({
           path: e.path,
           mode: "100644" as const,
           type: "blob" as const,
           sha: e.sha,
         })),
-        ...(baseTree !== undefined ? { base_tree: baseTree } : {}),
+        base_tree: baseTree,
       },
       retry,
       maxRetries,
@@ -566,7 +569,7 @@ export default class GithubClient {
     const sha = await this.createCommit({
       message,
       treeSha,
-      parents: parent === null ? [] : [parent],
+      parents: [effectiveParent],
       author,
       retry,
       maxRetries,

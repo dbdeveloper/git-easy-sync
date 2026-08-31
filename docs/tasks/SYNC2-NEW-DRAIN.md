@@ -3609,8 +3609,15 @@ def drain():
         # НЕ блоб (blob немає — старий код крешився на createBlob(null)). Три guard-и:
         # (1) shouldPushToConflictBranch звіряє null-safe: live==null ∧ ours==null → вже
         #     відсутній → НЕ пушити (редундантний deletion-запис = відомий 422 BadObjectState §7);
-        # (2) на СВІЖІЙ гілці (parent==null) deletion-запис відфільтровується у клієнті —
-        #     видаляти нема з чого, а 422 той самий;
+        # (2) на СВІЖІЙ гілці (parent==null) deletion-push скіпається guard-ом (1) —
+        #     conflictBase з sha:null і так фіксує «наш бік = відсутність»;
+        # (2b) ⚠️ ГЕЙТ-ЗНАХІДКА 2026-08-31 (G3/G4): свіжа гілка ВКОРІНЮЄТЬСЯ В ПОТОЧНИЙ
+        #     MAIN HEAD (перший коміт = entries поверх дерева main, parent=main head) —
+        #     ЯК У СТАРОМУ ДВИГУНІ. Безбатьківський root-коміт робив історію гілки
+        #     НЕЗВ'ЯЗАНОЮ з main, а compare API GitHub відповідає 404 для незв'язаних
+        #     історій — це валило FINALIZE-перевірку ancestor-ідемпотентності. Адаптер
+        #     compareStatus додатково трактує 404 як "diverged" (незв'язана або GC'd
+        #     база точно НЕ предок) — стійкість до гілок, народжених старим кодом;
         # (3) conflictBase такого запису має sha:null — чесний запис "наш бік = відсутність";
         #     _diff3 надалі працює з ним null-as-base правилами. Sibling у Vault — theirs
         #     (Deleted×Conflict UX, HISTORY-DELETED §5.8).

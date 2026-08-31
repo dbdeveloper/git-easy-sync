@@ -69,7 +69,9 @@ import DrainJournal, {
 } from "./drain-journal";
 import {
   DELETED,
+  pickNewestForObsidian,
   Diff3Deps,
+  Diff3Result,
   FileInfo,
   _diff3,
   emptyFileInfo,
@@ -264,8 +266,12 @@ export interface DrainDeps {
   deviceLabel(): string;
   // S1: per-batch (owner decision, THE SWITCH п.2) — main pushes get
   // the BATCH's createdAt (formatSyncMessage uniqueness/greppability,
-  // SYNC2 §4.4); conflict pushes call it with now().
+  // SYNC2 §4.4).
   commitMessage(whenMs: number): string;
+  // Conflict-branch pushes keep the OLD "Conflict at … (label)"
+  // format (formatConflictMessage) — greppable provenance, pinned by
+  // branch-lifecycle. Optional: fakes fall back to commitMessage.
+  conflictMessage?(whenMs: number): string;
   now(): number;
   onProgress?: (processed: number, total: number, path?: string) => void;
   logger?: {
@@ -773,16 +779,20 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         continue;
       }
 
-      const verdict = await _diff3(diff3Deps, tracked, local, headHash);
+      let verdict = await _diff3(diff3Deps, tracked, local, headHash);
       if (verdict.kind === "plugin-dispatch") {
-        // PHASE7 seam (§II.1 п.3.a): plugin core files get their own
-        // rules with PLUGIN-UPDATE-COMPAT. Until then: skip the path
-        // loudly, advance nothing.
+        // INTERIM (gate decision 2026-08-31): a genuine two-sided
+        // plugin-core collision resolves like the rest of .obsidian —
+        // newest wins, remote on ambiguity (3.b.e). Semver + bundle
+        // atomicity (§28 class) return with PLUGIN-UPDATE-COMPAT.
         deps.logger?.warn(
-          "plugin-dispatch path skipped (rules arrive in Phase 7)",
+          "plugin-core collision resolved by mtime (interim until PLUGIN-UPDATE-COMPAT)",
           { path: entry.path },
         );
-        continue;
+        verdict = {
+          kind: "file",
+          file: pickNewestForObsidian(local, tracked.remote),
+        };
       }
       if (verdict.kind === "manual-conflict") {
         // STEP1 (§II.6) — a NEW manual conflict. The same idempotent
@@ -963,7 +973,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             branch: state.conflictBranchName!,
             parent: conflictHeadHash,
             entries: conflictCommitEntries,
-            message: deps.commitMessage(deps.now()),
+            message: (deps.conflictMessage ?? deps.commitMessage)(deps.now()),
             author: authorAt(deps.now()),
           }),
         );
@@ -1358,7 +1368,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             blob: vaultEntry.blob,
           };
 
-    let verdict;
+    let verdict: Diff3Result;
     try {
       verdict = await _diff3(diff3Deps, tracked, local, headHash);
     } catch (e) {
@@ -1374,11 +1384,15 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     }
 
     if (verdict.kind === "plugin-dispatch") {
+      // Same INTERIM rule as the batch site (gate decision).
       deps.logger?.warn(
-        "plugin-dispatch path skipped in Vault-step (Phase 7)",
+        "plugin-core collision resolved by mtime in Vault-step (interim)",
         { path },
       );
-      continue;
+      verdict = {
+        kind: "file",
+        file: pickNewestForObsidian(local, tracked.remote),
+      };
     }
     if (verdict.kind === "manual-conflict") {
       // A conflict born ON the Vault-step (delete-vs-modify or

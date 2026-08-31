@@ -95,20 +95,24 @@ describe.skipIf(!integrationEnabled())(
         const queued = await client.queue.list();
         console.error("QUEUED BATCHES:", queued.length);
 
-        // 3. Wrap updateBranchHead: inject at the 6th call (= C6's push).
-        //    This IS deterministically C6: pushes 1..5 (C1..C5) run before
-        //    any injection, so nothing can 422/retry to shift the count
-        //     before we reach call 6. We log every target sha (callLog) so
-        //    the injection point is auditable post-hoc, and only the
-        //    RETRY/convergence after injection varies the later counts.
+        // 3. Wrap the MAIN-ref mover: inject at the 6th call (= C6's
+        //    push). THE SWITCH re-derivation: the new engine PATCHes
+        //    the ref via updateReference (pushCommitFromTree) — count
+        //    only heads/<branch> PATCHes (the conflict branch PATCHes
+        //    a different ref). This IS deterministically C6: pushes
+        //    1..5 run clean before the injection.
         const gh = client.client as unknown as {
-          updateBranchHead: (a: { sha: string; retry?: boolean }) => Promise<void>;
-          getCommit?: (sha: string) => Promise<unknown>;
+          updateReference: (a: {
+            ref: string;
+            sha: string;
+            retry?: boolean;
+          }) => Promise<void>;
         };
-        const orig = gh.updateBranchHead.bind(gh);
+        const orig = gh.updateReference.bind(gh);
         const callLog: string[] = [];
         let injected = false;
-        gh.updateBranchHead = async (a) => {
+        gh.updateReference = async (a) => {
+          if (a.ref !== `heads/${branch}`) return orig(a);
           callLog.push(a.sha.slice(0, 8));
           // Inject exactly once, at the 6th distinct push target.
           if (!injected && callLog.length === 6) {
