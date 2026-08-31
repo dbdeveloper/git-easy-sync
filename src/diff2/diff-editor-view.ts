@@ -351,6 +351,12 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     }
     this.escScope = null;
     this.controller?.dispose();
+    // UI reconcile site 3 of 3 (§III "ЗАУВАЖЕННЯ"): leaving the editor
+    // is where resolutions land on disk (base rewritten, sibling
+    // deleted) — reconcile conflicts.json with that reality so the
+    // resolved entry prunes (and, via the prune seam, trash's
+    // confirmResolved fires) without waiting for the next drain.
+    void this.deps.reconcileConflicts?.();
   }
 
   // S4 open-guard — this editor's descriptor for `openGuard` (the autosaveId

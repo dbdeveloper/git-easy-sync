@@ -26,20 +26,25 @@
 //     unsubscribe function. Used by status bar + ribbon for
 //     reactive UI.
 //
-// Recompute formula:
+// Default recompute formula (v2 port — production overrides it with
+// the injected findAllConflicts count, TODO #7, so panel and badge
+// can never diverge):
 //   count = 0
-//   for record in store.records:
-//     if !exists(record.siblingPath): continue   // dropped on next drain
-//     if !exists(record.vaultPath):    count++   // base gone, sibling alone
-//     if record.siblingSha != record.baseSha: count++  // SHA mismatch
-//     // siblingSha == baseSha: not counted (drain Phase A auto-cleans)
+//   for (basePath, entry) in store.getCachedState().entries:
+//     for sibling in entry.siblings:
+//       if exists(derived sibling disk name): count++
+//   // v1 additionally skipped SHA-equal (auto-cleaning) siblings using
+//   // the record's cached base/sibling shas; v2 entries carry no local
+//   // base sha, and hashing here would put a read+SHA on a UI counter.
+//   // The next process_conflicts prunes those entries anyway.
 
 import { Vault } from "obsidian";
-import ConflictStore from "./conflict-store";
+import ConflictStoreV2 from "./conflict-store-v2";
+import { buildSiblingFilePath } from "./conflict-siblings";
 
 export interface ConflictCounterDeps {
   vault: Vault;
-  store: ConflictStore;
+  store: ConflictStoreV2;
   // Override clock for deterministic tests.
   now?: () => number;
   // Override microtask scheduler for deterministic tests (default
@@ -58,7 +63,7 @@ export type CountChangeCallback = (count: number) => void;
 
 export class ConflictCounter {
   private readonly vault: Vault;
-  private readonly store: ConflictStore;
+  private readonly store: ConflictStoreV2;
   private readonly scheduleMicrotask: (fn: () => void) => void;
   private readonly countConflicts?: () => number;
 
@@ -193,26 +198,17 @@ export class ConflictCounter {
     // bar / menu can't undercount. The store-only walk below is the default.
     if (this.countConflicts) return this.countConflicts();
     let count = 0;
-    for (const record of this.store.getAll()) {
-      const siblingExists = await this.vault.adapter.exists(
-        record.siblingPath,
-      );
-      if (!siblingExists) {
-        // Will be dropped on the next drain Phase B — not counted.
-        continue;
+    for (const [basePath, entry] of this.store.getCachedState().entries) {
+      for (const sibling of entry.siblings) {
+        const name = buildSiblingFilePath(
+          basePath,
+          sibling.mtime ?? 0,
+          sibling.deviceLabel,
+        );
+        // A tracked sibling whose file is gone is resolved-pending-prune
+        // (the next process_conflicts drops it) — not counted.
+        if (await this.vault.adapter.exists(name)) count++;
       }
-      const baseExists = await this.vault.adapter.exists(record.vaultPath);
-      if (!baseExists) {
-        // Base gone, sibling alone — counted as a conflict.
-        count++;
-        continue;
-      }
-      if (record.siblingSha !== record.baseSha) {
-        // SHA mismatch — real unresolved divergence.
-        count++;
-      }
-      // siblingSha === baseSha: Phase A auto-cleans on next drain.
-      // Not counted.
     }
     return count;
   }

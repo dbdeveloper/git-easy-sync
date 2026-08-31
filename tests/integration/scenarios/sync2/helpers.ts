@@ -29,6 +29,7 @@ import InvariantStateStore from "../../../../src/sync2/invariant-state";
 import PushQueue from "../../../../src/sync2/push-queue";
 import TreeBuilder from "../../../../src/sync2/tree-builder";
 import ConflictStore from "../../../../src/sync2/conflict-store";
+import ConflictStoreV2 from "../../../../src/sync2/conflict-store-v2";
 import PendingDeletionsStore from "../../../../src/sync2/pending-deletions-store";
 import { ConflictWatcher } from "../../../../src/sync2/conflict-watcher";
 import { ConflictCounter } from "../../../../src/sync2/conflict-counter";
@@ -197,13 +198,22 @@ export async function createSync2Client(
   // ConflictCounter + counter-only ConflictWatcher. The watcher's
   // only side effect is `counter.markDirty()` on relevant vault
   // events. Production main.ts wires identically.
+  // Phase 5.5 step 3b: counter + watcher read the V2 store (same as
+  // production main.ts). The old engine keeps writing v1 until THE
+  // SWITCH, so during the interim these surfaces see drain-born
+  // conflicts as synthetic-only — mirrored deliberately.
+  const conflictStoreV2 = new ConflictStoreV2({
+    vault,
+    selfPluginId: SELF_PLUGIN_ID,
+  });
+  await conflictStoreV2.load();
   const conflictCounter = new ConflictCounter({
     vault,
-    store: conflictStore,
+    store: conflictStoreV2,
   });
   const conflictWatcher = new ConflictWatcher({
     vault,
-    store: conflictStore,
+    store: conflictStoreV2,
     counter: conflictCounter,
   });
   conflictWatcher.start();

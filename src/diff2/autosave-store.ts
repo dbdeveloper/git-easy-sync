@@ -95,25 +95,26 @@ export function fnv1a64(input: string): string {
   return hex(h3) + hex(h2) + hex(h1) + hex(h0);
 }
 
-// §2.4.1 — deterministic, ORDER-INDEPENDENT id for non-tracked sessions.
+// §2.4/§2.4.1 — deterministic, ORDER-INDEPENDENT id for a session.
 // Sort canonicalises (a,b)==(b,a); the `\0` delimiter prevents path-boundary
 // collisions ("foo"+"bar" vs "foob"+"ar"). Pure: no Date.now / mtime / random.
+//
+// v2 port (Phase 5.5 step 3b): "tracked" joined the kinds — the v1
+// ConflictStore record UUID is gone with the store, and the sibling disk
+// name is deterministic, so the path pair IS a tracked conflict's stable
+// identity. The kind prefix keeps a tracked and a synthetic session for
+// the same pair distinct. (trackedAutosaveId(recordId) died here.)
 export function deriveAutosaveId(
-  // 7a.1 — "history" joins the non-tracked kinds. For History path1=currentFile,
+  // 7a.1 — "history" is a non-conflict kind. For History path1=currentFile,
   // path2=versionSha: the paths are EQUAL (base is a version of the same file), so
   // the version-sha is the sole discriminator (two versions → two ids), and the
   // kind-prefix keeps a History id distinct from a same-file synthetic conflict.
-  kind: "synthetic" | "compare" | "history",
+  kind: "tracked" | "synthetic" | "compare" | "history",
   path1: string,
   path2: string,
 ): string {
   const [first, second] = [path1, path2].sort();
   return `${kind}-${fnv1a64(`${first}\0${second}`)}`;
-}
-
-// §2.4 — a tracked conflict reuses the ConflictStore record's opaque UUID.
-export function trackedAutosaveId(recordId: string): string {
-  return `tracked-${recordId}`;
 }
 
 // ── paths ────────────────────────────────────────────────────────────

@@ -6,11 +6,7 @@
 import { describe, it, expect } from "vitest";
 import type { ConflictEntry } from "../../src/diff2/synthetic-detector";
 import { autosaveIdForEntry } from "../../src/diff2/synthetic-detector";
-import {
-  deriveAutosaveId,
-  trackedAutosaveId,
-} from "../../src/diff2/autosave-store";
-import type { ConflictRecord } from "../../src/sync2/conflict-store";
+import { deriveAutosaveId } from "../../src/diff2/autosave-store";
 
 function entry(over: Partial<ConflictEntry>): ConflictEntry {
   return {
@@ -24,13 +20,12 @@ function entry(over: Partial<ConflictEntry>): ConflictEntry {
 }
 
 describe("autosaveIdForEntry", () => {
-  it("tracked entry keys off its ConflictStore record id", () => {
-    const e = entry({
-      kind: "tracked",
-      record: { id: "rec-123" } as ConflictRecord,
-    });
-    expect(autosaveIdForEntry(e)).toBe(trackedAutosaveId("rec-123"));
-    expect(autosaveIdForEntry(e)).toBe("tracked-rec-123");
+  it("tracked entry keys off the kind-prefixed (sorted) path pair — the v2 identity (record UUID is gone)", () => {
+    const e = entry({ kind: "tracked" });
+    expect(autosaveIdForEntry(e)).toBe(
+      deriveAutosaveId("tracked", e.basePath, e.siblingPath),
+    );
+    expect(autosaveIdForEntry(e).startsWith("tracked-")).toBe(true);
   });
 
   it("synthetic entry keys off the (sorted) base+sibling path pair", () => {
@@ -40,12 +35,10 @@ describe("autosaveIdForEntry", () => {
     );
   });
 
-  it("tracked WITHOUT a record falls back to the synthetic derivation", () => {
-    // Defensive: kind says tracked but record is absent → don't crash, use paths.
-    const e = entry({ kind: "tracked", record: undefined });
-    expect(autosaveIdForEntry(e)).toBe(
-      deriveAutosaveId("synthetic", e.basePath, e.siblingPath),
-    );
+  it("a tracked and a synthetic session for the SAME pair never collide (kind prefix)", () => {
+    const t = entry({ kind: "tracked" });
+    const s2 = entry({ kind: "synthetic" });
+    expect(autosaveIdForEntry(t)).not.toBe(autosaveIdForEntry(s2));
   });
 
   it("is deterministic — same entry yields the same id", () => {

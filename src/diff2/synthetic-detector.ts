@@ -3,19 +3,20 @@
 // Walks the vault for `*.conflict-from-*` sibling files and
 // categorises each as tracked vs synthetic per R2.2 / R3.3:
 //
-//   - Tracked   — sibling that is registered in the ConflictStore
-//     (matching record found via getBySibling). These siblings arose
-//     normally during a drain's Phase A/B conflict registration.
-//   - Synthetic — sibling whose ConflictStore record is missing,
-//     usually because the user moved the (base, sibling) pair into a
-//     new folder. Phase A's "drop record if sibling missing" rule
-//     fires on the old path, leaving a vault-level pair without any
-//     record at the new path (R3.3 rule 3).
+//   - Tracked   — sibling registered in conflicts.json (v2 store:
+//     getBySiblingPath resolves the derived disk name back to its
+//     entry). These siblings arose during a drain's STEP1/STEP3
+//     conflict registration.
+//   - Synthetic — sibling with no conflicts.json entry, usually
+//     because the user moved the (base, sibling) pair into a new
+//     folder: process_conflicts drops the tracked sibling at the old
+//     path, leaving a vault-level pair without a record at the new
+//     one (R3.3 rule 3).
 //
-// Orphan siblings (no base file in vault) are NOT returned — there's
-// nothing to diff against. The R3.3 "edge cases" closing bullet is
-// explicit about this; existing ConflictStore orphan cleanup handles
-// the case from a different angle.
+// Ported to conflict store v2 in Phase 5.5 step 3b — honest port, no
+// adapter (§5.0 owner decision): the v1 ConflictRecord shape (and its
+// opaque record UUID) is gone; tracked identity is now the
+// deterministic (basePath, siblingPath) pair, same as synthetic.
 //
 // Canonical specs:
 //   - docs/DIFF2_IMPLEMENTATION_PLAN.md §R2.2 (conflicts list)
@@ -23,14 +24,13 @@
 //   - docs/DIFF2_IMPLEMENTATION_PLAN.md §R9.1 Phase 1 acceptance
 //
 // Pure module — no side effects. Inputs: vault (for getFiles +
-// exists checks), conflictStore (for record lookup). Outputs:
+// exists checks), conflictStore (for the cached-view lookup). Outputs:
 // categorised list of conflict entries.
 
 import type { Vault } from "obsidian";
-import type ConflictStore from "../sync2/conflict-store";
-import type { ConflictRecord } from "../sync2/conflict-store";
+import type ConflictStoreV2 from "../sync2/conflict-store-v2";
 import { parseSiblingFilename } from "./strip-conflict-suffix";
-import { deriveAutosaveId, trackedAutosaveId } from "./autosave-store";
+import { deriveAutosaveId } from "./autosave-store";
 
 export type ConflictEntryKind = "tracked" | "synthetic";
 
@@ -48,10 +48,8 @@ export interface ConflictEntry {
   // ("YYYY-MM-DDTHH-MM-SSZ"). Display-only string; convert to Date
   // separately if needed.
   isoTimestamp: string;
-  // Whether this sibling has a matching ConflictStore record.
+  // Whether this sibling has a matching conflicts.json entry.
   kind: ConflictEntryKind;
-  // Present only when kind === "tracked".
-  record?: ConflictRecord;
   // 7a.3 (History) — the version's identity (commit-sha or push-queue batchId).
   // Present ONLY for a history entry (base===sibling===currentFile); it is the
   // discriminator that gives each VERSION of one file its own autosave dir (two
@@ -62,11 +60,15 @@ export interface ConflictEntry {
 // The autosave id for a conflict entry — the key for its
 // `.diff2-autosave/<id>/` session dir. MUST be derived identically at mount
 // (startSession) and at reopen (classifyReopen), so it is a pure, ordered,
-// side-effect-free function of the entry: tracked conflicts key off their
-// stable ConflictStore record id; synthetic conflicts off the (sorted)
-// base+sibling path pair. The reopen path keys off the on-disk dir name (not
-// this), but a view that re-derives the id for the SAME entry must land on the
-// same dir. DIFF-EDITOR.md §2.4 / §2.4.1.
+// side-effect-free function of the entry: BOTH kinds key off the (sorted)
+// base+sibling path pair, with the kind as prefix so a tracked and a
+// synthetic session for the same pair can never collide. (v2 port: the v1
+// record UUID is gone; the sibling disk name is deterministic, so the path
+// pair IS the stable identity. The same-name-regeneration corner — a new
+// conflict deriving an old sibling name → same id — is covered by reopen
+// classification validating content SHAs.) The reopen path keys off the
+// on-disk dir name (not this), but a view that re-derives the id for the
+// SAME entry must land on the same dir. DIFF-EDITOR.md §2.4 / §2.4.1.
 export function autosaveIdForEntry(entry: ConflictEntry): string {
   // §4.5.2 (A1) — a History session is keyed PER-FILE, NOT per-version: one session
   // per currentFile, so opening a different version of the same file lands on the
@@ -78,9 +80,7 @@ export function autosaveIdForEntry(entry: ConflictEntry): string {
   if (entry.historyVersionSha !== undefined) {
     return deriveAutosaveId("history", entry.basePath, entry.basePath);
   }
-  return entry.kind === "tracked" && entry.record
-    ? trackedAutosaveId(entry.record.id)
-    : deriveAutosaveId("synthetic", entry.basePath, entry.siblingPath);
+  return deriveAutosaveId(entry.kind, entry.basePath, entry.siblingPath);
 }
 
 // Reconstruct a single `ConflictEntry` from a sibling path — the loop body of
@@ -90,19 +90,17 @@ export function autosaveIdForEntry(entry: ConflictEntry): string {
 // path is not a `*.conflict-from-*` sibling. An ABSENT base is NOT rejected (it
 // is a delete-vs-modify conflict — see the NOTE in `findAllConflicts`).
 export function entryFromSibling(
-  conflictStore: ConflictStore,
+  conflictStore: ConflictStoreV2,
   siblingPath: string,
 ): ConflictEntry | null {
   const parsed = parseSiblingFilename(siblingPath);
   if (!parsed) return null;
-  const record = conflictStore.getBySibling(siblingPath);
   return {
     basePath: parsed.basePath,
     siblingPath,
     deviceLabel: parsed.deviceLabel,
     isoTimestamp: parsed.isoTimestamp,
-    kind: record ? "tracked" : "synthetic",
-    record,
+    kind: conflictStore.getBySiblingPath(siblingPath) ? "tracked" : "synthetic",
   };
 }
 
@@ -118,7 +116,7 @@ export interface DetectionResult {
 // it. Empty result is a valid outcome (vault has no conflicts).
 export function findAllConflicts(
   vault: Vault,
-  conflictStore: ConflictStore,
+  conflictStore: ConflictStoreV2,
 ): DetectionResult {
   const entries: ConflictEntry[] = [];
   const files = vault.getFiles();
@@ -185,7 +183,7 @@ export function findAllConflicts(
 // count is not consulted there.
 export function pendingConflictSummary(
   vault: Vault,
-  conflictStore: ConflictStore,
+  conflictStore: ConflictStoreV2,
 ): { trackedPaths: string[]; trackedConflictCount: number } | null {
   const { byBasePath } = findAllConflicts(vault, conflictStore);
   const trackedPaths: string[] = [];

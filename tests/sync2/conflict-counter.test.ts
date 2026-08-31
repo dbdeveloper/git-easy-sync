@@ -14,9 +14,12 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
-import ConflictStore, {
-  type CreateArgs,
-} from "../../src/sync2/conflict-store";
+import ConflictStoreV2, {
+  emptyConflictsState,
+  type ConflictsState,
+} from "../../src/sync2/conflict-store-v2";
+import { buildSiblingFilePath } from "../../src/sync2/conflict-siblings";
+import { emptyFileInfo } from "../../src/sync2/diff3";
 import { ConflictCounter } from "../../src/sync2/conflict-counter";
 import { Vault } from "../../mock-obsidian";
 
@@ -43,10 +46,6 @@ function makeScheduler() {
   };
 }
 
-function arr(text: string): ArrayBuffer {
-  return new TextEncoder().encode(text).buffer.slice(0) as ArrayBuffer;
-}
-
 function fixture() {
   const root = path.join(
     os.tmpdir(),
@@ -54,14 +53,9 @@ function fixture() {
   );
   fs.mkdirSync(path.join(root, CONFIG_DIR), { recursive: true });
   const vault = new Vault(root);
-  let idCounter = 0;
-  const store = new ConflictStore({
+  const store = new ConflictStoreV2({
     vault: vault as unknown as import("obsidian").Vault,
-    configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
-    now: () => Date.now(),
-    idFactory: () =>
-      `00000000-0000-0000-0000-${String(++idCounter).padStart(12, "0")}`,
   });
   const scheduler = makeScheduler();
   const counter = new ConflictCounter({
@@ -69,7 +63,8 @@ function fixture() {
     store,
     scheduleMicrotask: scheduler.schedule,
   });
-  return { root, vault, store, counter, scheduler };
+  const state: ConflictsState = emptyConflictsState();
+  return { root, vault, store, counter, scheduler, state };
 }
 
 function writeVaultFile(root: string, rel: string, content: string): void {
@@ -78,19 +73,32 @@ function writeVaultFile(root: string, rel: string, content: string): void {
   fs.writeFileSync(abs, content);
 }
 
-function baseArgs(over: Partial<CreateArgs> = {}): CreateArgs {
-  return {
-    vaultPath: "Notes/note.md",
-    kind: "modify-vs-modify",
-    theirsContent: arr("theirs\n"),
-    theirsBlobSha: "theirs-sha",
-    oursBlobSha: "ours-sha",
-    baseMtime: null,
-    baseSize: null,
-    baseSha: null,
-    remoteDevice: "Phone",
-    ...over,
-  };
+// Register one TRACKED sibling the v2 way. Returns its derived disk name.
+let mtimeSeq = Date.UTC(2026, 5, 5, 0, 0, 0);
+async function track(
+  f: ReturnType<typeof fixture>,
+  basePath = "Notes/note.md",
+): Promise<{ siblingPath: string }> {
+  const whenMs = (mtimeSeq += 1000);
+  let entry = f.state.entries.get(basePath);
+  if (!entry) {
+    entry = {
+      conflictBase: { ...emptyFileInfo(), path: basePath, sha: "cb" },
+      siblings: [],
+    };
+    f.state.entries.set(basePath, entry);
+  }
+  entry.siblings.push({
+    ...emptyFileInfo(),
+    path: basePath,
+    mtime: whenMs,
+    deviceLabel: "Phone",
+    sha: `theirs-${whenMs}`,
+  });
+  const siblingPath = buildSiblingFilePath(basePath, whenMs, "Phone");
+  writeVaultFile(f.root, siblingPath, "theirs\n");
+  await f.store.save(f.state);
+  return { siblingPath };
 }
 
 describe("ConflictCounter", () => {
@@ -110,7 +118,7 @@ describe("ConflictCounter", () => {
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "local\n");
     // Create a record so the counter has something to recompute.
-    await f.store.create(baseArgs());
+    await track(f);
 
     // Reset scheduler — constructor may have done its own initial
     // dirty schedule.
@@ -124,7 +132,7 @@ describe("ConflictCounter", () => {
   it("flush makes getValue reflect the live recomputed count", async () => {
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "local\n");
-    const rec = await f.store.create(baseArgs());
+    const rec = await track(f);
     // Force divergence: sibling SHA != base SHA. Record was just
     // created so its cached siblingSha == theirsBlobSha, baseSha is
     // null/unmatched → counts as a conflict.
@@ -170,7 +178,7 @@ describe("ConflictCounter", () => {
   it("subscribe callback fires only on a value CHANGE, never on a no-op recompute", async () => {
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "local\n");
-    await f.store.create(baseArgs());
+    await track(f);
 
     const calls: number[] = [];
     const unsubscribe = f.counter.subscribe((n) => {
@@ -193,7 +201,7 @@ describe("ConflictCounter", () => {
   it("subscribe unsubscribe stops further callbacks", async () => {
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "local\n");
-    await f.store.create(baseArgs());
+    await track(f);
 
     const calls: number[] = [];
     const unsubscribe = f.counter.subscribe((n) => {
@@ -208,9 +216,7 @@ describe("ConflictCounter", () => {
 
     // After unsubscribe: even a real change shouldn't fire the
     // callback.
-    await f.store.create(
-      baseArgs({ vaultPath: "Other/note.md", theirsBlobSha: "another-sha" }),
-    );
+    await track(f, "Other/note.md");
     writeVaultFile(f.root, "Other/note.md", "local2\n");
     f.counter.markDirty();
     await f.counter.flush();
@@ -222,7 +228,7 @@ describe("ConflictCounter", () => {
   it("flush() forces immediate recompute, bypassing microtask debounce", async () => {
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "local\n");
-    await f.store.create(baseArgs());
+    await track(f);
 
     f.counter.markDirty();
     // Without flushing the scheduler manually — flush() should pick
@@ -241,10 +247,10 @@ describe("ConflictCounter", () => {
     expect(f.counter.getValue()).toBe(0);
   });
 
-  it("record with !siblingExists → NOT counted (will be resolved on next drain)", async () => {
+  it("entry with !siblingExists → NOT counted (resolved-pending-prune)", async () => {
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "local\n");
-    const rec = await f.store.create(baseArgs());
+    const rec = await track(f);
 
     // User externally deletes the sibling — record stays in store
     // until next drain, but counter shouldn't include it.
@@ -255,10 +261,10 @@ describe("ConflictCounter", () => {
     expect(f.counter.getValue()).toBe(0);
   });
 
-  it("record with !baseExists, siblingExists → COUNTED (base gone, sibling alone)", async () => {
+  it("entry with !baseExists, siblingExists → COUNTED (base gone, sibling alone — delete-vs-modify)", async () => {
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "local\n");
-    await f.store.create(baseArgs());
+    await track(f);
 
     // User externally deletes the base file. Sibling still on disk.
     fs.unlinkSync(path.join(f.root, "Notes/note.md"));
@@ -268,24 +274,22 @@ describe("ConflictCounter", () => {
     expect(f.counter.getValue()).toBe(1);
   });
 
-  it("record with siblingSha == baseSha → NOT counted (Phase A will auto-clean)", async () => {
+  it("v2 deviation: a content-equal (resolved-in-place) sibling still COUNTS until process_conflicts prunes it", async () => {
+    // v1's default formula skipped SHA-equal siblings using the
+    // record's cached base/sibling shas. v2 entries carry no local
+    // base sha, and hashing on a UI counter would put a read+SHA on
+    // every recompute — so the DEFAULT formula counts any sibling
+    // whose file exists. This matches what production shows anyway:
+    // the injected findAllConflicts override (TODO #7) lists that
+    // sibling too. The next process_conflicts pass deletes the file
+    // and prunes the entry, and the count drops then.
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "theirs\n");
-    // Create with default args, then push base cache to match sibling.
-    // User copied sibling content onto base. The record's cached
-    // siblingSha now equals the live base SHA. The counter should
-    // treat this as "already resolved at the next drain".
-    const rec = await f.store.create(baseArgs());
-    const baseStat = fs.statSync(path.join(f.root, "Notes/note.md"));
-    await f.store.updateCache(rec.id, {
-      baseSha: rec.siblingSha,
-      baseMtime: baseStat.mtimeMs,
-      baseSize: baseStat.size,
-    });
+    await track(f);
 
     f.counter.markDirty();
     await f.counter.flush();
-    expect(f.counter.getValue()).toBe(0);
+    expect(f.counter.getValue()).toBe(1);
   });
 
   it("multiple records with mixed states are counted independently", async () => {
@@ -295,16 +299,14 @@ describe("ConflictCounter", () => {
     writeVaultFile(f.root, "c.md", "local-c\n");
 
     // a.md: normal conflict → counts as 1
-    await f.store.create(baseArgs({ vaultPath: "a.md", theirsBlobSha: "sha-a" }));
+    await track(f, "a.md");
 
     // b.md: user deleted sibling → does NOT count
-    const recB = await f.store.create(
-      baseArgs({ vaultPath: "b.md", theirsBlobSha: "sha-b" }),
-    );
+    const recB = await track(f, "b.md");
     fs.unlinkSync(path.join(f.root, recB.siblingPath));
 
     // c.md: normal conflict → counts as 1
-    await f.store.create(baseArgs({ vaultPath: "c.md", theirsBlobSha: "sha-c" }));
+    await track(f, "c.md");
 
     f.counter.markDirty();
     await f.counter.flush();
@@ -316,7 +318,7 @@ describe("ConflictCounter", () => {
   it("100 markDirty calls in tight loop produce a single scheduled recompute", async () => {
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "local\n");
-    await f.store.create(baseArgs());
+    await track(f);
 
     // Reset scheduler after any constructor-time scheduling.
     f.scheduler.flush();
@@ -329,7 +331,7 @@ describe("ConflictCounter", () => {
   it("bulk markDirty before any subscriber → still only one callback fire after subscribe + flush", async () => {
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "local\n");
-    await f.store.create(baseArgs());
+    await track(f);
 
     for (let i = 0; i < 50; i++) f.counter.markDirty();
 

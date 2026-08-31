@@ -44,7 +44,12 @@ vi.mock("../src/sync2/views/pre-sync-conflict-modal", () => ({
 }));
 
 import GitHubSyncPlugin from "../src/main";
-import ConflictStore from "../src/sync2/conflict-store";
+import ConflictStoreV2, {
+  emptyConflictsState,
+  type ConflictsState,
+} from "../src/sync2/conflict-store-v2";
+import { buildSiblingFilePath } from "../src/sync2/conflict-siblings";
+import { emptyFileInfo } from "../src/sync2/diff3";
 import { Vault } from "../mock-obsidian";
 
 // The gate is a PRIVATE method — casting to `GitHubSyncPlugin & {method}` reduces to `never`
@@ -52,7 +57,7 @@ import { Vault } from "../mock-obsidian";
 // drives (the three fields it assigns + the method); the prototype provides the real impl.
 interface GateHandle {
   app: unknown;
-  conflictStore: unknown;
+  conflictStoreV2: unknown;
   logger: unknown;
   confirmPendingConflictsBeforeSync(): Promise<boolean>;
 }
@@ -67,19 +72,12 @@ function fixture() {
   const root = path.join(os.tmpdir(), `presync-gate-${crypto.randomBytes(4).toString("hex")}`);
   fs.mkdirSync(path.join(root, CONFIG_DIR), { recursive: true });
   const vault = new Vault(root);
-  let nowMs = Date.UTC(2026, 6, 4, 9, 0, 0, 0);
-  const store = new ConflictStore({
+  const store = new ConflictStoreV2({
     vault: vault as unknown as import("obsidian").Vault,
-    configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
-    now: () => {
-      const t = nowMs;
-      nowMs += 1000;
-      return t;
-    },
-    idFactory: () => crypto.randomUUID(),
   });
-  return { root, vault, store };
+  const state: ConflictsState = emptyConflictsState();
+  return { root, vault, store, state };
 }
 
 function writeFile(root: string, rel: string, content = "x"): void {
@@ -93,7 +91,7 @@ function writeFile(root: string, rel: string, content = "x"): void {
 // branch is observable; logger.error is a spy for the catch branch.
 function makeGate(
   vault: Vault,
-  store: ConflictStore,
+  store: ConflictStoreV2,
   // §24 — "Resolve" now activates the diff conflicts PANEL (not openLinkText on a sibling);
   // this thunk lets a test make that activation reject to drive the catch branch.
   activateDiffEditView: () => Promise<void> = () => Promise.resolve(),
@@ -107,39 +105,41 @@ function makeGate(
       vault,
       workspace: { openLinkText: openSpy },
     },
-    conflictStore: store,
+    conflictStoreV2: store,
     logger: { error: errorSpy },
     activateDiffEditView: activateSpy,
   });
   return { plugin, openSpy, activateSpy, errorSpy };
 }
 
-// theirsBlobSha is derived from (vaultPath, device) so two tracked conflicts on the SAME
-// base with different devices stay distinct — a fixed sha would trip ConflictStore's
-// content-based dedup and collapse them into one sibling.
-function fakeSha(seed: string): string {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
-  return h.toString(16).padStart(8, "0").repeat(5).slice(0, 40);
-}
-
+// Register a TRACKED sibling the v2 way: entry + sibling file at the
+// derived disk name; save() rebuilds the store's cached indexes.
+let trackedMtime = Date.UTC(2026, 6, 4, 9, 0, 0, 0);
 async function createTracked(
-  store: ConflictStore,
+  fx: ReturnType<typeof fixture>,
   vaultPath: string,
   device: string,
 ): Promise<{ siblingPath: string }> {
-  const rec = await store.create({
-    vaultPath,
-    kind: "modify-vs-modify",
-    oursBlobSha: "1111111111111111111111111111111111111111",
-    theirsBlobSha: fakeSha(`${vaultPath}|${device}`),
-    theirsContent: new TextEncoder().encode(`theirs-${vaultPath}-${device}`).buffer as ArrayBuffer,
-    remoteDevice: device,
-    baseMtime: null,
-    baseSize: null,
-    baseSha: null,
+  const whenMs = (trackedMtime += 1000);
+  let entry = fx.state.entries.get(vaultPath);
+  if (!entry) {
+    entry = {
+      conflictBase: { ...emptyFileInfo(), path: vaultPath, sha: "cb" },
+      siblings: [],
+    };
+    fx.state.entries.set(vaultPath, entry);
+  }
+  entry.siblings.push({
+    ...emptyFileInfo(),
+    path: vaultPath,
+    mtime: whenMs,
+    deviceLabel: device,
+    sha: `theirs-${vaultPath}-${device}`,
   });
-  return { siblingPath: rec.siblingPath };
+  const siblingPath = buildSiblingFilePath(vaultPath, whenMs, device);
+  writeFile(fx.root, siblingPath, `theirs-${vaultPath}-${device}`);
+  await fx.store.save(fx.state);
+  return { siblingPath };
 }
 
 describe("confirmPendingConflictsBeforeSync (pre-sync conflict gate)", () => {
@@ -160,7 +160,7 @@ describe("confirmPendingConflictsBeforeSync (pre-sync conflict gate)", () => {
 
   it("no ConflictStore → proceeds without a modal", async () => {
     const plugin = bareInstance();
-    Object.assign(plugin, { app: { vault: fx.vault }, conflictStore: undefined });
+    Object.assign(plugin, { app: { vault: fx.vault }, conflictStoreV2: undefined });
     expect(await plugin.confirmPendingConflictsBeforeSync()).toBe(true);
     expect(modal.constructed).toBe(0);
   });
@@ -188,8 +188,8 @@ describe("confirmPendingConflictsBeforeSync (pre-sync conflict gate)", () => {
   // intro copy can say "tracked conflicts … resolve them" instead of "a conflict … it".
   it("§24 single file, multiple tracked conflicts → one path listed, conflictCount counts siblings", async () => {
     writeFile(fx.root, "busy.md", "ours");
-    await createTracked(fx.store, "busy.md", "Phone");
-    await createTracked(fx.store, "busy.md", "Laptop");
+    await createTracked(fx, "busy.md", "Phone");
+    await createTracked(fx, "busy.md", "Laptop");
     modal.decision = "sync-anyway";
 
     const { plugin } = makeGate(fx.vault, fx.store);
@@ -204,7 +204,7 @@ describe("confirmPendingConflictsBeforeSync (pre-sync conflict gate)", () => {
     writeFile(fx.root, "leftover.md", "ours");
     writeFile(fx.root, "leftover.conflict-from-OldPhone-2026-05-26T10-30-00Z.md", "theirs");
     writeFile(fx.root, "real.md", "ours");
-    await createTracked(fx.store, "real.md", "Laptop");
+    await createTracked(fx, "real.md", "Laptop");
     modal.decision = "sync-anyway";
 
     const { plugin } = makeGate(fx.vault, fx.store);
@@ -215,7 +215,7 @@ describe("confirmPendingConflictsBeforeSync (pre-sync conflict gate)", () => {
 
   it('live conflict + "sync-anyway" → proceeds, modal shown with the base path', async () => {
     writeFile(fx.root, "live.md", "ours");
-    await createTracked(fx.store, "live.md", "Phone");
+    await createTracked(fx, "live.md", "Phone");
     modal.decision = "sync-anyway";
 
     const { plugin, openSpy } = makeGate(fx.vault, fx.store);
@@ -227,7 +227,7 @@ describe("confirmPendingConflictsBeforeSync (pre-sync conflict gate)", () => {
 
   it('live conflict + "cancel" → aborts sync', async () => {
     writeFile(fx.root, "live.md", "ours");
-    await createTracked(fx.store, "live.md", "Phone");
+    await createTracked(fx, "live.md", "Phone");
     modal.decision = "cancel";
 
     const { plugin, openSpy } = makeGate(fx.vault, fx.store);
@@ -237,7 +237,7 @@ describe("confirmPendingConflictsBeforeSync (pre-sync conflict gate)", () => {
 
   it('live conflict + "resolve" → aborts sync AND opens the diff conflicts panel (§24, NOT the sibling .md)', async () => {
     writeFile(fx.root, "live.md", "ours");
-    await createTracked(fx.store, "live.md", "Phone");
+    await createTracked(fx, "live.md", "Phone");
     modal.decision = "resolve";
 
     const { plugin, openSpy, activateSpy } = makeGate(fx.vault, fx.store);
@@ -248,7 +248,7 @@ describe("confirmPendingConflictsBeforeSync (pre-sync conflict gate)", () => {
 
   it('"resolve" with panel activation throwing → logs the error and still aborts (no throw)', async () => {
     writeFile(fx.root, "live.md", "ours");
-    await createTracked(fx.store, "live.md", "Phone");
+    await createTracked(fx, "live.md", "Phone");
     modal.decision = "resolve";
 
     const { plugin, errorSpy } = makeGate(fx.vault, fx.store, () =>
@@ -265,16 +265,19 @@ describe("confirmPendingConflictsBeforeSync (pre-sync conflict gate)", () => {
   it("EXCLUDES a resolved conflict (sibling deleted, record lingers); modal lists only the live one", async () => {
     // Resolved: tracked record exists, but the user's resolution deleted the sibling.
     writeFile(fx.root, "resolved.md", "merged");
-    const resolved = await createTracked(fx.store, "resolved.md", "Phone");
+    const resolved = await createTracked(fx, "resolved.md", "Phone");
     fs.rmSync(path.join(fx.root, resolved.siblingPath)); // diff2 removed the sibling on resolve
 
     // Live: still-unresolved, sibling on disk.
     writeFile(fx.root, "live.md", "ours");
-    await createTracked(fx.store, "live.md", "Laptop");
+    await createTracked(fx, "live.md", "Laptop");
 
-    // The stale record is still in the store (drain hasn't reconciled) — the OLD gate read
-    // this and re-surfaced "resolved.md".
-    expect(fx.store.getAll().map((r) => r.vaultPath).sort()).toEqual(["live.md", "resolved.md"]);
+    // The stale entry is still in the store (process_conflicts hasn't pruned) — the OLD
+    // gate read raw records and re-surfaced "resolved.md".
+    expect([...fx.store.getCachedState().entries.keys()].sort()).toEqual([
+      "live.md",
+      "resolved.md",
+    ]);
 
     modal.decision = "cancel";
     const { plugin } = makeGate(fx.vault, fx.store);

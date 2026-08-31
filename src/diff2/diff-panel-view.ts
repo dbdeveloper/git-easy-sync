@@ -23,7 +23,7 @@
 
 import { ItemView, type Vault, WorkspaceLeaf } from "obsidian";
 import type { ConflictCounter } from "../sync2/conflict-counter";
-import type ConflictStore from "../sync2/conflict-store";
+import type ConflictStoreV2 from "../sync2/conflict-store-v2";
 import {
   conflictKey,
   renderConflictsList,
@@ -46,7 +46,13 @@ export const DIFF2_PANEL_VIEW_TYPE = "diff2-panel-view";
 // conflictStore, conflictCounter, and openEditor.
 export interface DiffEditViewDeps {
   vault: Vault;
-  conflictStore: ConflictStore;
+  conflictStore: ConflictStoreV2;
+  // Phase 5.5 step 3b — the §III "ЗАУВАЖЕННЯ" UI reconcile sites: the
+  // panel calls this on open (site 2 of 3) so the list reflects
+  // reality even between drains (user resolved a conflict manually,
+  // deleted a sibling in the file explorer, …). main.ts binds it to
+  // processConflicts + store.save + counter refresh.
+  reconcileConflicts?: () => Promise<void>;
   conflictCounter: ConflictCounter;
   // Snapshot store passed to atomicWriteFile so the post-write
   // recordSync step lines up with the snapshot's expectations.
@@ -151,6 +157,13 @@ export class DiffPanelView extends ItemView {
       .filter((l) => l !== this.leaf)) {
       l.detach();
     }
+
+    // UI reconcile site 2 of 3 (§III "ЗАУВАЖЕННЯ"): opening the panel
+    // reconciles conflicts.json with the CURRENT vault reality before
+    // the first render — fire-and-forget so a slow scan never blocks
+    // the view mount; the counter subscription below repaints when it
+    // lands.
+    void this.deps.reconcileConflicts?.();
 
     // ConflictCounter notifies on any sibling-event vault change → re-render the list.
     // Deferred to a microtask so multiple rapid changes collapse into one re-render.

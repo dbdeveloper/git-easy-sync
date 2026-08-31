@@ -21,9 +21,11 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
-import ConflictStore, {
-  type CreateArgs,
-} from "../../src/sync2/conflict-store";
+import ConflictStoreV2, {
+  emptyConflictsState,
+} from "../../src/sync2/conflict-store-v2";
+import { buildSiblingFilePath } from "../../src/sync2/conflict-siblings";
+import { emptyFileInfo } from "../../src/sync2/diff3";
 import { ConflictWatcher } from "../../src/sync2/conflict-watcher";
 import { ConflictCounter } from "../../src/sync2/conflict-counter";
 import { Vault } from "../../mock-obsidian";
@@ -38,14 +40,9 @@ function fixture() {
   );
   fs.mkdirSync(path.join(root, CONFIG_DIR), { recursive: true });
   const vault = new Vault(root);
-  let counter = 0;
-  const store = new ConflictStore({
+  const store = new ConflictStoreV2({
     vault: vault as unknown as import("obsidian").Vault,
-    configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
-    now: () => Date.now(),
-    idFactory: () =>
-      `00000000-0000-0000-0000-${String(++counter).padStart(12, "0")}`,
   });
   // Counter is mocked with a spy on markDirty so tests can assert
   // the watcher's only side effect. We don't exercise the counter's
@@ -57,29 +54,35 @@ function fixture() {
   return { root, vault, store, conflictCounter, markDirty };
 }
 
-function arr(text: string): ArrayBuffer {
-  return new TextEncoder().encode(text).buffer.slice(0) as ArrayBuffer;
-}
-
 function writeVaultFile(root: string, rel: string, content: string): void {
   const abs = path.join(root, rel);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, content);
 }
 
-function baseArgs(over: Partial<CreateArgs> = {}): CreateArgs {
-  return {
-    vaultPath: "Notes/note.md",
-    kind: "modify-vs-modify",
-    theirsContent: arr("theirs\n"),
-    theirsBlobSha: "t",
-    oursBlobSha: "o",
-    baseMtime: null,
-    baseSize: null,
-    baseSha: null,
-    remoteDevice: "Phone",
-    ...over,
-  };
+// Register one TRACKED conflict on Notes/note.md the v2 way (entry +
+// sibling file at the derived name; save rebuilds the cached indexes).
+const SIB_MTIME = Date.UTC(2026, 5, 5, 0, 0, 0);
+async function trackNote(
+  f: ReturnType<typeof fixture>,
+): Promise<{ siblingPath: string }> {
+  const state = emptyConflictsState();
+  state.entries.set("Notes/note.md", {
+    conflictBase: { ...emptyFileInfo(), path: "Notes/note.md", sha: "cb" },
+    siblings: [
+      {
+        ...emptyFileInfo(),
+        path: "Notes/note.md",
+        mtime: SIB_MTIME,
+        deviceLabel: "Phone",
+        sha: "t",
+      },
+    ],
+  });
+  const siblingPath = buildSiblingFilePath("Notes/note.md", SIB_MTIME, "Phone");
+  writeVaultFile(f.root, siblingPath, "theirs\n");
+  await f.store.save(state);
+  return { siblingPath };
 }
 
 describe("ConflictWatcher (counter-only listener)", () => {
@@ -126,7 +129,7 @@ describe("ConflictWatcher (counter-only listener)", () => {
   it("handle(): base path with active conflict → markDirty called", async () => {
     writeVaultFile(f.root, "Notes/note.md", "local\n");
     await f.store.load();
-    await f.store.create(baseArgs());
+    await trackNote(f);
     const watcher = new ConflictWatcher({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store,
@@ -141,7 +144,7 @@ describe("ConflictWatcher (counter-only listener)", () => {
   it("handle(): sibling path → markDirty called (fast-path includes siblings)", async () => {
     writeVaultFile(f.root, "Notes/note.md", "local\n");
     await f.store.load();
-    const rec = await f.store.create(baseArgs());
+    const rec = await trackNote(f);
     const watcher = new ConflictWatcher({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store,
@@ -211,7 +214,7 @@ describe("ConflictWatcher (counter-only listener)", () => {
   it("end-to-end: vault.fireEvent('delete', sibling) → markDirty called", async () => {
     writeVaultFile(f.root, "Notes/note.md", "local\n");
     await f.store.load();
-    const rec = await f.store.create(baseArgs());
+    const rec = await trackNote(f);
     const watcher = new ConflictWatcher({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store,
@@ -227,7 +230,7 @@ describe("ConflictWatcher (counter-only listener)", () => {
   it("end-to-end: vault.fireEvent('rename', new, old) → both paths trigger handle", async () => {
     writeVaultFile(f.root, "Notes/note.md", "local\n");
     await f.store.load();
-    await f.store.create(baseArgs());
+    await trackNote(f);
     const watcher = new ConflictWatcher({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store,

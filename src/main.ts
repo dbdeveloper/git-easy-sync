@@ -36,6 +36,8 @@ import InvariantStateStore from "./sync2/invariant-state";
 import { Sync2Manager } from "./sync2/sync2-manager";
 import { IntervalScheduler } from "./sync2/interval-scheduler";
 import ConflictStore from "./sync2/conflict-store";
+import ConflictStoreV2 from "./sync2/conflict-store-v2";
+import { processConflicts } from "./sync2/process-conflicts";
 import PendingDeletionsStore from "./sync2/pending-deletions-store";
 import { ConflictCounter } from "./sync2/conflict-counter";
 import { ConflictWatcher } from "./sync2/conflict-watcher";
@@ -185,6 +187,12 @@ export default class GitHubSyncPlugin extends Plugin {
   // pointers — the runtime is single-engine.
   sync2Manager!: Sync2Manager;
   conflictStore!: ConflictStore;
+  // Phase 5.5 step 3b — the v2 store the ported UI reads. The old
+  // engine keeps writing v1 until THE SWITCH; between the port and
+  // the switch the UI therefore lists drain-born conflicts as
+  // SYNTHETIC only (adopted from disk by the reconcile sites) — the
+  // approved interim state, not a defect. v1 dies with the old drain.
+  conflictStoreV2!: ConflictStoreV2;
   pendingDeletions!: PendingDeletionsStore;
   conflictWatcher!: ConflictWatcher;
   conflictCounter!: ConflictCounter;
@@ -965,6 +973,13 @@ export default class GitHubSyncPlugin extends Plugin {
     });
     await conflictStore.load();
     this.conflictStore = conflictStore;
+    const conflictStoreV2 = new ConflictStoreV2({
+      vault: this.app.vault,
+      selfPluginId: manifest.id,
+      logger: this.logger,
+    });
+    await conflictStoreV2.load(); // seeds the cached view for the sync UI reads
+    this.conflictStoreV2 = conflictStoreV2;
 
     // Pending-deletions queue (SYNC2 §4.2). Replaces
     // the 2.0.1-beta2 phantom-snapshot trick: pull-side sanitize
@@ -1065,13 +1080,13 @@ export default class GitHubSyncPlugin extends Plugin {
     // separation.
     const conflictCounter = new ConflictCounter({
       vault: this.app.vault,
-      store: conflictStore,
+      store: conflictStoreV2,
       // TODO #7 — count EXACTLY what the diff-panel lists (tracked + synthetic
       // siblings) so the ribbon badge / status bar / menu can't undercount. Same
       // source as the panel (findAllConflicts); main.ts bridges sync2's counter
       // to diff2's detector so neither module imports across the layer boundary.
       countConflicts: () =>
-        findAllConflicts(this.app.vault, conflictStore).entries.length,
+        findAllConflicts(this.app.vault, conflictStoreV2).entries.length,
     });
     conflictCounter.subscribe(() => this.refreshConflictUI());
     this.conflictCounter = conflictCounter;
@@ -1082,11 +1097,17 @@ export default class GitHubSyncPlugin extends Plugin {
     await conflictCounter.flush();
     const conflictWatcher = new ConflictWatcher({
       vault: this.app.vault,
-      store: conflictStore,
+      store: conflictStoreV2,
       counter: conflictCounter,
     });
     conflictWatcher.start();
     this.conflictWatcher = conflictWatcher;
+    // UI reconcile site 1 of 3 (§III "ЗАУВАЖЕННЯ"): onload aligns
+    // conflicts.json with whatever happened while the plugin was off
+    // (siblings deleted/added externally). Fire-and-forget — the
+    // counter repaints when it lands; the drain re-reconciles at its
+    // own start regardless.
+    void this.reconcileConflictsV2();
 
     this.sync2Manager = new Sync2Manager({
       vault: this.app.vault,
@@ -1415,8 +1436,34 @@ export default class GitHubSyncPlugin extends Plugin {
   // OR user picked "Sync anyway"). Returns false when sync should be
   // aborted (user picked "Cancel" or "Resolve"; the latter opens the
   // first sibling in the editor as a courtesy).
+  // Phase 5.5 step 3b — the shared implementation behind the three §III
+  // UI reconcile sites (onload / panel open / editor exit): scan the
+  // vault, reconcile the v2 conflicts state, persist, refresh the
+  // badge. Skipped while a drain runs — the drain reconciles at every
+  // restart itself, and two concurrent writers of conflicts.json would
+  // just last-wins-clobber each other.
+  private async reconcileConflictsV2(): Promise<void> {
+    if (!this.conflictStoreV2) return;
+    if (this.sync2Manager?.getDrainStatus().state !== "idle") return;
+    try {
+      const state = await processConflicts(
+        {
+          vault: this.app.vault,
+          store: this.conflictStoreV2,
+          computeSha: (bytes) => this.workerClient.computeGitBlobSHA(bytes),
+          logger: this.logger,
+        },
+        null,
+      );
+      await this.conflictStoreV2.save(state);
+      this.conflictCounter?.markDirty();
+    } catch (err) {
+      this.logger.warn("reconcileConflictsV2 failed", { err: `${err}` });
+    }
+  }
+
   private async confirmPendingConflictsBeforeSync(): Promise<boolean> {
-    if (!this.conflictStore) return true;
+    if (!this.conflictStoreV2) return true;
     // Source of truth = pendingConflictSummary → findAllConflicts (live vault siblings) —
     // the SAME source the diff-panel, badge, status bar and menu use — NOT the raw
     // ConflictStore records. A conflict the user already resolved (sibling deleted + base
@@ -1426,7 +1473,7 @@ export default class GitHubSyncPlugin extends Plugin {
     // the panel no longer listed it. Read-only: record cleanup stays the drain's job.
     // §24 — summary is TRACKED-only: null means no tracked conflicts (none, or only
     // synthetic leftovers) → let the sync proceed silently, no modal over local-only echoes.
-    const summary = pendingConflictSummary(this.app.vault, this.conflictStore);
+    const summary = pendingConflictSummary(this.app.vault, this.conflictStoreV2);
     if (!summary) return true;
     const decision = await new PreSyncConflictModal(
       this.app,
@@ -2522,7 +2569,7 @@ export default class GitHubSyncPlugin extends Plugin {
     origin: DiffEditorOrigin,
     anchorPath: string,
   ): Promise<void> {
-    const baseHasConflicts = findAllConflicts(this.app.vault, this.conflictStore).byBasePath.has(
+    const baseHasConflicts = findAllConflicts(this.app.vault, this.conflictStoreV2).byBasePath.has(
       anchorPath,
     );
     const nav = planBackNav(origin, anchorPath, baseHasConflicts);
@@ -2548,8 +2595,9 @@ export default class GitHubSyncPlugin extends Plugin {
   private diffViewDeps(): DiffEditViewDeps {
     return {
       vault: this.app.vault,
-      conflictStore: this.conflictStore,
+      conflictStore: this.conflictStoreV2,
       conflictCounter: this.conflictCounter,
+      reconcileConflicts: () => this.reconcileConflictsV2(),
       // §5.0.e one-side-silent exit logs here instead of a Notice.
       logger: this.logger,
       localDeviceLabel: () => this.settings.deviceLabel ?? "Obsidian",

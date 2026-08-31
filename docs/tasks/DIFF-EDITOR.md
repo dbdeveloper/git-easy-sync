@@ -339,21 +339,33 @@ crash зникає. На recovery — відновлюється природн�
 Storage overhead (2x file size per session) — для типового markdown-vault'у
 30-300 kB на сесію. Negligible.
 
-**`<conflictId>`** — три можливі джерела залежно від типу сесії:
+**`<conflictId>`** — джерела залежно від типу сесії:
+
+> ⚠️ **ЗМІНЕНО 2026-08-31 (Фаза 5.5 крок 3b, порт на conflict store v2).**
+> v1-ре́корд з opaque UUID помер разом зі старим ConflictStore; у v2
+> (conflicts.json) записи не мають UUID — стабільною ідентичністю tracked
+> конфлікту є детермінована пара `(basePath, siblingPath)` (ім'я sibling-а
+> детерміноване: buildSiblingFilePath). Тому tracked перейшов на ту САМУ
+> формулу §2.4.1, з kind-префіксом `tracked-`, який гарантує, що tracked-
+> і synthetic-сесія однієї пари ніколи не колізують. Кут "нова генерація
+> конфлікту вивела старе ім'я sibling-а → той самий id" покривається
+> reopen-класифікацією (вона валідує content-SHA сесії проти диска).
+> Старий стан на диску не існує (blank-slate cutover) — міграції нема.
 
 | Kind                                                     | Джерело id                                                         | Form                |
 |----------------------------------------------------------|--------------------------------------------------------------------|---------------------|
-| **Tracked conflict** (ConflictStore record exists, R2.2) | UUID assigned ConflictStore'ом при `create()`. Opaque, не з paths. | `tracked-<uuid>`    |
+| **Tracked conflict** (запис у conflicts.json, R2.2)      | Deterministic hash з `(basePath, siblingPath)` pair (§2.4.1).      | `tracked-<16hex>`   |
 | **Synthetic conflict** (sibling-only, R2.2 Правило 3)    | Deterministic hash з `(basePath, siblingPath)` pair (§2.4.1).      | `synthetic-<16hex>` |
 | **R2.1 Compare-any-two** (arbitrary file pair, Phase 8)  | Deterministic hash з `(pathA, pathB)` pair, sorted (§2.4.1).       | `compare-<16hex>`   |
 
 #### §2.4.1 Уніфікована формула deriveAutosaveId
 
-Для non-tracked сесій (synthetic + compare) використовуємо **одну функцію**:
+**Одна функція** для всіх видів (2026-08-31: tracked приєднався — див.
+примітку вище; "history" додано ще у 7a.1):
 
 ```typescript
 function deriveAutosaveId(
-    kind: "synthetic" | "compare",
+    kind: "tracked" | "synthetic" | "compare" | "history",
     path1: string,
     path2: string,
 ): string {

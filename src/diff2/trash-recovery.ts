@@ -34,7 +34,7 @@
 
 import { DataAdapter, Vault } from "obsidian";
 import Logger from "../logger";
-import { extensionOf } from "../sync2/conflict-store";
+import { extensionOf } from "../sync2/conflict-siblings";
 import { safeRename } from "../sync2/cross-platform";
 import { TrashStore } from "./trash-store";
 import {

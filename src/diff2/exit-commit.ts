@@ -41,7 +41,7 @@ import { normalizePath, TFile, type Vault } from "obsidian";
 import { atomicWriteFile, MODIFY_IN_PLACE_MAX_BYTES, stagingPathFor, withViewPreserve } from "../sync2/atomic-write";
 import { restoreEol } from "./eol";
 import { safeRename } from "../sync2/cross-platform";
-import { buildSiblingPath } from "../sync2/conflict-store";
+import { buildSiblingFilePath } from "../sync2/conflict-siblings";
 import { calculateGitBlobSHA } from "../utils";
 import { autosaveDir, readMeta, type AutosaveMeta } from "./autosave-store";
 
@@ -562,7 +562,7 @@ export async function commitToAlt(
   }
   let siblingPath: string | undefined;
   if (!converged) {
-    siblingPath = buildSiblingPath(target, deviceLabel, ts, "modify-vs-modify");
+    siblingPath = buildSiblingFilePath(target, ts, deviceLabel);
     if (await vault.adapter.exists(siblingPath)) {
       throw new AltTargetExistsError(siblingPath);
     }

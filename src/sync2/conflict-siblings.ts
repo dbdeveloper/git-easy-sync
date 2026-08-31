@@ -61,6 +61,14 @@ function splitPath(vaultPath: string): {
   return { dir, stem, ext };
 }
 
+// The extension split rule (leading dot = hidden file, not an
+// extension) — v1 conflict-store's extensionOf, re-homed here for the
+// Phase 5.5 port (v1 dies at THE SWITCH; trash-recovery keeps using
+// this).
+export function extensionOf(vaultPath: string): string {
+  return splitPath(vaultPath).ext;
+}
+
 // "YYYY-MM-DDTHH-MM-SSZ" — the PSEUDO-MERGE-MODE.md timestamp shape
 // (ISO with colons/dot made filesystem-safe, milliseconds dropped).
 // Byte-identical to what v1's buildSiblingPath produces.

@@ -8,11 +8,7 @@
 // own output, which would be circular).
 
 import { describe, expect, it } from "vitest";
-import {
-  deriveAutosaveId,
-  fnv1a64,
-  trackedAutosaveId,
-} from "../../src/diff2/autosave-store";
+import { deriveAutosaveId, fnv1a64 } from "../../src/diff2/autosave-store";
 
 describe("fnv1a64 — published FNV-1a-64 vectors", () => {
   // Canonical Landon Noll / reference-suite test vectors.
@@ -86,10 +82,10 @@ describe("deriveAutosaveId — §2.4.1", () => {
   });
 });
 
-describe("trackedAutosaveId — §2.4", () => {
-  it("wraps the ConflictStore record UUID", () => {
-    expect(trackedAutosaveId("550e8400-e29b-41d4-a716-446655440000")).toBe(
-      "tracked-550e8400-e29b-41d4-a716-446655440000",
-    );
+describe("tracked ids — §2.4 (v2)", () => {
+  it("a tracked id is the kind-prefixed path-pair derivation, distinct from the synthetic id of the same pair", () => {
+    const t = deriveAutosaveId("tracked", "a.md", "b.md");
+    expect(t.startsWith("tracked-")).toBe(true);
+    expect(t).not.toBe(deriveAutosaveId("synthetic", "a.md", "b.md"));
   });
 });
