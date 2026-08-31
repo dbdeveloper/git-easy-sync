@@ -195,7 +195,8 @@ import {
         await client.vault.adapter.write("b.md", "fresh");
         await sync2AllAndAssertNoErrors(client);
 
-        expect(await countBranchCommits(branch, env)).toBe(2);
+        // seed + first sync + the incremental one.
+        expect(await countBranchCommits(branch, env)).toBe(3);
         expect(await readRemoteFile(branch, "a.md", env)).toBe("v2\n");
         expect(await readRemoteFile(branch, "b.md", env)).toBe("fresh\n");
       },
