@@ -1107,6 +1107,22 @@ A.1 п.21-25, P.25, L.3, E.3-5.
 на `~/Obsidian-test` (`reset` → `syncAll` на відповідному vault → нуль
 конфліктів/пушів, метадані заповнені, `findChanges` порожній) → ETag device-pass.
 
+### 🧭 ПОРЯДОК РОБІТ ПІСЛЯ ГЕЙТА ФАЗИ 5.5 (рішення власника, 2026-08-31)
+
+Затверджена черга (власник переставив DOT-FILES ПЕРЕД двогілковим пошуком —
+технічна причина: пошук спирається на `readRootGitignore` + `walkDotDir`, яких до
+DOT-FILES не існує; у самій DOT-FILES-спеці він і стоїть Кроком C після ядра A-D):
+
+1. **Re-platform Deleted-кошика** (TrashStore → `sync_store` + `deleted.json`,
+   `deletedSha` у deletion-запис батчу) — [`DIFF-EDITOR-HISTORY-DELETED.md`](./DIFF-EDITOR-HISTORY-DELETED.md) §5.2.1.
+2. **Імплементація DOT-FILES** (ядро: D1-D7, dot-hide блок, `walkDotDir`,
+   `readRootGitignore`, симетрія push/pull) — [`SYNC2-DOT-FILES-REFACTOR.md`](./SYNC2-DOT-FILES-REFACTOR.md) Кроки A-D.
+3. **Двогілковий пошук synthetic для панелі** — той самий документ §4.3.1 + Крок C
+   (tracked зі store, synthetic memory-only двома гілками, existence-прохід).
+4. **PLUGIN-UPDATE-COMPAT** (Phase 7) — семвер + bundle-атомарність plugin-core;
+   ТИМ ЖЕ кроком знімаються приспані E3/E5 і зникає інтеримне mtime-правило.
+5. **Фаза 6** — матриця краху, наскрізне (нижче).
+
 ### Фаза 6 — Матриця краху, наскрізне (епілог ↗ переїхав у Фазу 5.5, рішення 2026-08-31)
 
 1. ~~Епілог (кроки 1-5)~~ → **Фаза 5.5 крок 1** (кроки 1/3/4; крок 2 витягнуто ще у
