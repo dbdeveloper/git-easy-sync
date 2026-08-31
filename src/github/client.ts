@@ -378,12 +378,23 @@ export default class GithubClient {
     treeSha,
     parent,
     message,
+    author,
     retry = false,
     maxRetries = 5,
   }: {
     treeSha: string;
     parent: string | null;
     message: string;
+    // Optional git identity, sent as BOTH author and committer (same
+    // contract as createCommit). ⚠️ Injecting a `date` here CHANGES
+    // what the returned `committedAt` means: it is parsed from the
+    // response's committer.date, and the drain stamps it onto every
+    // pushed path's tracked.remote.mtime (§III mtime invariant) — so
+    // with an injected date the invariant records YOUR date, not
+    // GitHub's push time. Wiring this up is a Phase 5.5 step-4 (THE
+    // SWITCH) decision, together with per-batch commit messages; no
+    // caller passes it yet.
+    author?: { name: string; email: string; date: string };
     retry?: boolean;
     maxRetries?: number;
   }): Promise<{ sha: string; committedAt: number }> {
@@ -398,6 +409,7 @@ export default class GithubClient {
               message,
               tree: treeSha,
               parents: parent === null ? [] : [parent],
+              ...(author !== undefined ? { author, committer: author } : {}),
             }),
             throw: false,
           },
@@ -437,6 +449,133 @@ export default class GithubClient {
       });
     }
     return { sha, committedAt };
+  }
+
+  /**
+   * Head sha of an ARBITRARY branch by name (the drain's
+   * conflict-branch read, NEW-DRAIN §II.7 — always read LIVE, never
+   * persisted), or null when the branch doesn't exist (404).
+   *
+   * Uses the SINGULAR /git/ref/ endpoint deliberately: the plural
+   * /git/refs/heads/{name} form does prefix MATCHING and answers with
+   * an ARRAY when {name} is a proper prefix of other branches — .object
+   * would be undefined and the read silently broken. The singular form
+   * returns exactly one ref or 404. Same cache-buster as
+   * getBranchHeadSha: this is a mutable ref and MUST be fresh.
+   */
+  async getBranchHeadShaByName({
+    branch,
+    retry = false,
+    maxRetries = 5,
+  }: {
+    branch: string;
+    retry?: boolean;
+    maxRetries?: number;
+  }): Promise<string | null> {
+    const response = await retryUntil(
+      async () => {
+        return this.timed(
+          {
+            url: `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/git/ref/heads/${branch}?ts=${Date.now()}`,
+            headers: this.headers(),
+            throw: false,
+          },
+          `branch head ${branch}`,
+        );
+      },
+      (res) => !isRetriableStatus(res.status),
+      retry ? maxRetries : 0,
+    );
+    if (response.status === 404) return null;
+    if (response.status < 200 || response.status >= 400) {
+      this.logger.error("Failed to get branch head sha by name", response);
+      throw makeGithubAPIError(
+        response.status,
+        `Failed to get branch head sha for ${branch}, status ${response.status}`,
+      );
+    }
+    return response.json.object.sha;
+  }
+
+  /**
+   * The conflict-branch push (NEW-DRAIN §II.15 "Межа застосування"):
+   * the OLD shape on purpose — a plain blob list (blobs already
+   * uploaded by the caller), one commit, no accumulator, no inline
+   * content. Units of files, so no rate-limit pressure.
+   *
+   * `parent: null` = the branch doesn't exist yet → a PARENTLESS root
+   * commit whose tree holds ONLY `entries` (no base_tree), then
+   * createReference. FINALIZE's merge commit (parents
+   * [main, conflict]) later joins the histories, so main's
+   * reachability is never affected. `parent` non-null → chain on the
+   * parent's tree (base_tree) + non-force PATCH.
+   *
+   * Throws ValidationError (422) when `parent` is stale: PATCH
+   * "not a fast forward", or createReference "Reference already
+   * exists" (someone created the branch since our null read) — the
+   * drain's 3-attempt re-read loop catches it ("АБСОЛЮТНО НЕМОЖЛИВО,
+   * але…", §III).
+   */
+  async pushCommitToBranch({
+    branch,
+    parent,
+    entries,
+    message,
+    author,
+    retry = false,
+    maxRetries = 5,
+  }: {
+    branch: string;
+    parent: string | null;
+    entries: Array<{ path: string; sha: string }>;
+    message: string;
+    // Same pass-through contract (and the same step-4 wiring note) as
+    // pushCommitFromTree.
+    author?: { name: string; email: string; date: string };
+    retry?: boolean;
+    maxRetries?: number;
+  }): Promise<{ sha: string }> {
+    let baseTree: string | undefined;
+    if (parent !== null) {
+      const parentCommit = await this.getCommit({
+        sha: parent,
+        retry,
+        maxRetries,
+      });
+      baseTree = parentCommit.tree.sha;
+    }
+    const treeSha = await this.createTree({
+      tree: {
+        tree: entries.map((e) => ({
+          path: e.path,
+          mode: "100644" as const,
+          type: "blob" as const,
+          sha: e.sha,
+        })),
+        ...(baseTree !== undefined ? { base_tree: baseTree } : {}),
+      },
+      retry,
+      maxRetries,
+    });
+    const sha = await this.createCommit({
+      message,
+      treeSha,
+      parents: parent === null ? [] : [parent],
+      author,
+      retry,
+      maxRetries,
+    });
+    if (parent === null) {
+      await this.createReference({
+        ref: `refs/heads/${branch}`,
+        sha,
+        retry,
+        maxRetries,
+      });
+    } else {
+      await this.updateReference({ ref: `heads/${branch}`, sha, retry, maxRetries });
+    }
+    return { sha };
   }
 
   /**
