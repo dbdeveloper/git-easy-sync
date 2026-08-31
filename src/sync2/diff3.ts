@@ -395,3 +395,41 @@ export async function mergeBlobsWithMainThreadDiff3(
     ) as ArrayBuffer,
   };
 }
+
+// The production mirror (Phase 5.5 step 2b): same gates, same shape,
+// but the merge itself routes through the worker orchestra
+// (WorkerClient.mergeText — CPU pool above its size threshold, inline
+// fallback below it; both run the SAME node-diff3 call as mergeText,
+// so the two variants are behaviourally one function). The round-trip
+// gate stays on the main thread deliberately: it is a decode+encode
+// pass the worker boundary would pay for in transfer costs anyway.
+export function makeWorkerMergeBlobs(worker: {
+  mergeText(
+    ours: string,
+    base: string,
+    theirs: string,
+  ): Promise<
+    | { kind: "clean"; content: string }
+    | { kind: "conflict"; conflictMarkedContent: string }
+  >;
+}): Diff3Deps["mergeBlobs"] {
+  return async (path, base, ours, theirs) => {
+    if (!hasTextExtension(path)) return { kind: "conflict" };
+    const baseText = utf8RoundTrip(base);
+    const oursText = utf8RoundTrip(ours);
+    const theirsText = utf8RoundTrip(theirs);
+    if (baseText === null || oursText === null || theirsText === null) {
+      return { kind: "conflict" };
+    }
+    const outcome = await worker.mergeText(oursText, baseText, theirsText);
+    if (outcome.kind === "conflict") return { kind: "conflict" };
+    const encoded = new TextEncoder().encode(outcome.content);
+    return {
+      kind: "clean",
+      merged: encoded.buffer.slice(
+        encoded.byteOffset,
+        encoded.byteOffset + encoded.byteLength,
+      ) as ArrayBuffer,
+    };
+  };
+}
