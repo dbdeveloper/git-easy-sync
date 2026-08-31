@@ -991,6 +991,28 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(baselines.has(canonical)).toBe(false); // detector picks it up as new
   });
 
+  it("free-size (epilogue): a compare-born baseline carries the REAL size, never 0 — the stat short-circuit must stay usable", async () => {
+    await setupAligned();
+    // Remote-only change; the honest fake (like the real compare API)
+    // reports NO size for it.
+    discoveryOverride = async () => [
+      {
+        path: "note.md",
+        sha: await sha("R\n"),
+        size: null, // ← compare gives none
+        mtime: null,
+        deleted: false,
+      },
+    ];
+    await world.commitFiles({ "note.md": "R\n" });
+
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    // The blob was fetched for the vault write, so the size is free.
+    expect(baselines.get("note.md")!.size).toBe(enc("R\n").byteLength);
+    expect(baselines.get("note.md")!.size).not.toBe(0);
+  });
+
   it("S3 §12.5 sweep: an orphan sync_store blob is reaped at the drain boundaries; queue/journal/conflict-referenced blobs survive", async () => {
     await setupAligned();
     // An orphan from some previous crash…

@@ -266,6 +266,27 @@ export async function _diff3(
   // remote.size == null. LAZY fetch — pay the network only for an
   // actual divergence, never per changed remote file.
   if (remote.size === null) {
+    // Free first (MASTER-PLAN free-size inventory): the bytes may
+    // already be in hand, or the blob may already sit in the
+    // content-addressed store from pull-folding / a previous drain /
+    // a Layer-2 inline fetch. Either way the size costs nothing and
+    // the ~300 ms round-trip below is skipped — on exactly the paths
+    // where a conflict already lives.
+    // PREFERENCE ORDER (owner, 2026-08-31): in-memory bytes FIRST —
+    // they are already hash-proven (getBlobFromSyncStore verifies on
+    // load; a freshly fetched/merged blob is the content by
+    // construction), so `byteLength` is not just free but STRONGER
+    // than any stat: it cannot be wrong. The store's stat is the
+    // weaker second choice (it trusts the file name, see
+    // SyncStore.sizeOf), and the network is the last resort.
+    if (remote.blob !== null) {
+      remote.size = remote.blob.byteLength;
+    } else if (remote.sha !== null) {
+      const stored = await deps.syncStore.sizeOf(remote.sha);
+      if (stored !== null) remote.size = stored;
+    }
+  }
+  if (remote.size === null) {
     if (headHash === null) {
       // Unreachable-but-loud (advisor 2026-08-30): an empty repo has
       // no remote content, so no side can need a live size fetch —

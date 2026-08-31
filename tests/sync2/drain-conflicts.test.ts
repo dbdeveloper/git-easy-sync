@@ -331,6 +331,24 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
     expect(fs.existsSync(path.join(dir, ".obsidian/plugins", PLUGIN_ID, ".runtime", SIBLING_TX_MARK_FILE))).toBe(false);
   });
 
+  it("C.21 (free size): every sibling persisted in conflicts.json carries a PROVEN size — the fake compare gives none", async () => {
+    baseCommit = await world.commitFiles({ [NOTE]: V0 });
+    baselines.set(NOTE, { baselineSha: await sha(V0), mtime: 50, size: 12 });
+    vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+    await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    const e = conflictStore.getCachedState().entries.get(NOTE)!;
+    // conflictBase (ours, from the batch metafile) AND the sibling
+    // (theirs, from a size-less compare) both carry real sizes.
+    expect(e.conflictBase.size).toBe(enc(LOCAL_CLASH).byteLength);
+    expect(e.siblings[0].size).toBe(enc(REMOTE_CLASH).byteLength);
+    // And the durable baseline is truthful too (never 0).
+    expect(baselines.get(NOTE)!.size).toBe(enc(REMOTE_CLASH).byteLength);
+  });
+
   it("C.20 (gate regression 2026-08-31): a SECOND divergent remote version FOLDS into the sibling — size=null from compare must not freeze the theirs-side", async () => {
     // EXACT real-test shapes: single-line files.
     baseCommit = await world.commitFiles({ [NOTE]: "v0 baseline\n" });

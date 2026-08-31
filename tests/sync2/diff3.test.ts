@@ -682,18 +682,18 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
 
   // ── P.20-22: rule 7's lazy remote.size ──────────────────────────
 
-  it("P.20/P.21: remote.size=null (remote-only change + uncommitted vault edit) → exactly ONE metadata call, rule 7 uses the REAL size", async () => {
+  it("P.20/P.21: remote.size=null with NO bytes anywhere → exactly ONE metadata call, rule 7 uses the FETCHED size", async () => {
     const base = side("n.md", "one\ntwo\nthree\n");
     const local = side("n.md", "ONE\ntwo\nthree\n");
+    // No blob in hand and nothing in the store → the genuine gap.
     const remote = fi({
       path: "n.md",
       sha: "sha-remote",
-      size: null, // the one legitimate gap
-      blob: enc("one\ntwo\nTHREE\n"),
+      size: null,
       mode: "",
     });
-    // Real size 200 > max 100 → conflict; the decision came from the
-    // fetched size, not a guess.
+    // Fetched size 200 > max 100 → conflict; the decision came from
+    // the fetched size, not a guess.
     const deps = makeDeps({
       maxAutoMergeFileSize: () => 100,
       getContentsMetadataAtRef: async (p) => {
@@ -705,18 +705,47 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
       kind: "manual-conflict",
     });
     expect(metaCalls).toEqual(["n.md"]);
+  });
 
-    // Same gap with a permissive limit → proceeds into the real merge.
-    metaCalls = [];
-    const deps2 = makeDeps({
-      getContentsMetadataAtRef: async (p) => {
-        metaCalls.push(p);
-        return { sha: "sha-remote", size: 16 };
-      },
+  it("P.20b (free size): bytes in hand OR a blob already in sync_store → rule 7 costs ZERO metadata calls", async () => {
+    const base = side("n.md", "one\ntwo\nthree\n");
+    const local = side("n.md", "ONE\ntwo\nthree\n");
+    const remoteText = "one\ntwo\nTHREE\n";
+
+    // (a) blob in hand.
+    const withBlob = fi({
+      path: "n.md",
+      sha: "sha-remote",
+      size: null,
+      blob: enc(remoteText),
+      mode: "",
     });
-    const ok = await _diff3(deps2, t(base, { ...remote }), local, HEAD);
-    expect(ok.kind).toBe("file");
-    expect(metaCalls).toEqual(["n.md"]);
+    const r1 = await _diff3(makeDeps(), t(base, withBlob), local, HEAD);
+    expect(r1.kind).toBe("file");
+    expect(metaCalls).toEqual([]); // no network for a size we hold
+
+    // (b) no blob, but the store already has it (pull-folding, a
+    // previous drain, a Layer-2 inline fetch).
+    metaCalls = [];
+    const storedSha = await calculateGitBlobSHA(enc(remoteText));
+    await syncStore.saveBlobToSyncStore(storedSha, enc(remoteText));
+    const fromStore = fi({
+      path: "n.md",
+      sha: storedSha,
+      size: null,
+      mode: "",
+    });
+    const r2 = await _diff3(makeDeps(), t(base, fromStore), local, HEAD);
+    expect(r2.kind).toBe("file");
+    expect(metaCalls).toEqual([]); // the store's stat answered it
+
+    // (c) the gate still bites when the free size is over the limit —
+    // the shortcut changes the SOURCE of the number, not the rule.
+    metaCalls = [];
+    const tight = makeDeps({ maxAutoMergeFileSize: () => 5 });
+    const r3 = await _diff3(tight, t(base, { ...fromStore }), local, HEAD);
+    expect(r3).toEqual({ kind: "manual-conflict" });
+    expect(metaCalls).toEqual([]);
   });
 
   it("P.20a: the path vanished from remote between discovery and the size fetch → RemoteFileNotInRepoError", async () => {

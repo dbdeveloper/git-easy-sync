@@ -109,6 +109,23 @@ export default class SyncStore {
     return this.vault.adapter.exists(this.blobPath(sha));
   }
 
+  // Byte size of a stored blob, or null when we don't have it. A bare
+  // `adapter.stat` — NO read, NO hash (the same cheapest-possible
+  // spirit as existInSyncStore above), so callers that only need a
+  // SIZE never pay a network round-trip for it ("size is an
+  // invitation, SHA is proof" — MASTER-PLAN free-size inventory).
+  //
+  // ⚠️ Trusts the file NAME, not its content: a corrupt same-named
+  // copy would report a wrong size. Every current caller uses the
+  // size for a THRESHOLD decision (the rule-4.7 auto-merge gate) or a
+  // stat short-circuit hint — never as a correctness invariant — and
+  // the bytes themselves are still hash-proven on the next
+  // getBlobFromSyncStore.
+  async sizeOf(sha: string): Promise<number | null> {
+    const st = await this.vault.adapter.stat(this.blobPath(sha));
+    return st === null || st.type !== "file" ? null : st.size;
+  }
+
   // Direct write — no temp+rename (§II.9): a content-addressed store
   // never holds DIFFERENT content under the same name, so
   // "last writer wins" is always harmless; a torn write is caught by

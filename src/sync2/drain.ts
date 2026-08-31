@@ -897,6 +897,11 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       }
 
       const D = verdict.file;
+      // Bytes in memory ⇒ the size is hash-PROVEN and can never be
+      // wrong (owner's rule 2026-08-31). Fill it as close to the use
+      // as possible: D becomes tracked.remote below, and the epilogue
+      // writes that size as the durable baseline.
+      if (D.size === null && D.blob !== null) D.size = D.blob.byteLength;
       if (tracked.remote.sha !== D.sha) {
         // Push D. Ensure bytes (D may be a sha-only side verdict).
         if (D.blob === null && D.mode !== DELETED) {
@@ -904,12 +909,14 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             D.sha!,
             verifiedShas,
           );
+          if (D.blob !== null) D.size = D.blob.byteLength;
           if (D.blob === null) {
             const r = await deps.retry.run(() =>
               deps.client.getBlobFromRepo(D.sha!),
             );
             if (r.error !== null) return statusFromError(r.error, result);
             D.blob = r.result;
+            if (D.blob !== null) D.size = D.blob.byteLength;
             if (D.blob === null) {
               return statusFromError(
                 new Error(`remote blob ${D.sha} vanished from repo`),
@@ -1179,15 +1186,32 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // Ensure the remote half's bytes are on hand (sync_store first,
   // network second; save-back on fetch). null result = confirmed
   // NOT_FOUND; a network failure aborts via the returned DrainResult.
+  // Materialize tracked.remote.blob (store → network) AND, as a side
+  // effect, its `size`: once the bytes are in memory their length is
+  // hash-PROVEN, so it can never be wrong — strictly better than any
+  // stat and closest to where the size is used (owner, 2026-08-31).
+  // Discovery's compare path leaves size null, and a null size later
+  // trips _diff3's rule-6 assert / weakens the baseline (C.20 class).
   const ensureRemoteBlob = async (
     tracked: TrackedFile,
   ): Promise<{ abort: DrainResult | null; found: boolean }> => {
-    if (tracked.remote.blob !== null) return { abort: null, found: true };
+    const proveSize = (): void => {
+      if (tracked.remote.blob !== null) {
+        tracked.remote.size = tracked.remote.blob.byteLength;
+      }
+    };
+    if (tracked.remote.blob !== null) {
+      proveSize();
+      return { abort: null, found: true };
+    }
     tracked.remote.blob = await deps.syncStore.getBlobFromSyncStore(
       tracked.remote.sha!,
       verifiedShas,
     );
-    if (tracked.remote.blob !== null) return { abort: null, found: true };
+    if (tracked.remote.blob !== null) {
+      proveSize();
+      return { abort: null, found: true };
+    }
     const r = await deps.retry.run(() =>
       deps.client.getBlobFromRepo(tracked.remote.sha!),
     );
@@ -1196,6 +1220,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     }
     tracked.remote.blob = r.result;
     if (tracked.remote.blob === null) return { abort: null, found: false };
+    proveSize();
     if (!(await deps.syncStore.existInSyncStore(tracked.remote.sha!))) {
       await deps.syncStore.saveBlobToSyncStore(
         tracked.remote.sha!,
@@ -1350,6 +1375,9 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             });
             continue;
           }
+          // Proven size for the sibling we are about to persist —
+          // a null there is exactly what froze the theirs-side (C.20).
+          merged.size = merged.blob.byteLength;
         }
         // Owner rule (§II.6 п.5): the sibling's name carries the date
         // and author of the LAST remote commit folded in — _diff3
@@ -1590,6 +1618,11 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     }
     await deps.vaultFiles.write(writePath, bytes);
     vaultStepWrites.push(writePath);
+    // The bytes we just wrote ARE the remote content (hash-proven on
+    // load / by construction): record the proven size so the epilogue
+    // writes a TRUE baseline instead of falling back to 0 (which
+    // would defeat the change detector's stat short-circuit forever).
+    if (tracked.remote.size === null) tracked.remote.size = bytes.byteLength;
     tracked.base = tracked.remote;
   }
 
@@ -1627,11 +1660,28 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         removals.push(path);
         continue;
       }
+      // `size` is about TRUTH here, not speed: a 0 written for an
+      // unknown size permanently defeats the change detector's
+      // stat short-circuit (`stat.size === snap.size` can never
+      // hold), so the path is fully re-read + re-hashed on EVERY
+      // findChanges until something re-syncs it through the
+      // tree fallback. Discovery's compare path gives no sizes, so
+      // take it for free: bytes in hand → byteLength; else the
+      // content-addressed store's stat; only then the honest 0.
+      // In-memory bytes FIRST (owner's preference order): they are
+      // hash-proven, so byteLength CANNOT be wrong; the store's stat
+      // trusts the file name and is the weaker fallback.
+      let size = tracked.remote.size;
+      if (size === null) {
+        size =
+          tracked.remote.blob?.byteLength ??
+          (await deps.syncStore.sizeOf(tracked.remote.sha));
+      }
       writes.push({
         path,
         baselineSha: tracked.remote.sha,
         mtime: 0,
-        size: tracked.remote.size ?? 0,
+        size: size ?? 0,
       });
     }
     if (writes.length > 0) await deps.baselines.setMany(writes);
