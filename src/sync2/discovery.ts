@@ -45,6 +45,34 @@ export interface RemoteFileChange {
   deleted: boolean;
 }
 
+// A COMPLETE picture of what the repo holds at ONE pinned commit, kept
+// so that later steps can answer "what is the remote sha/size of this
+// path?" without a per-path request.
+//
+// Why this is sound rather than a cache of a mutable thing: `atCommit`
+// is a commit SHA, never a branch name, and a commit's tree is
+// immutable. Asking the Contents API for `<path>@<commitSha>` can only
+// ever return what this map already holds — so the map is not a stale
+// copy of the answer, it IS the answer.
+//
+// Absence of a path means the path does not exist at that commit,
+// which is exactly what a 404 from the Contents API means. That
+// equivalence holds ONLY because the tree was complete: a truncated
+// tree never produces a snapshot (fullTreeDiffAgainstColdBaseline
+// throws instead), and consumers re-assert `atCommit` before use.
+export interface RemoteTreeSnapshot {
+  atCommit: string;
+  paths: Map<string, { sha: string; size: number | null }>;
+}
+
+export interface DiscoveryResult {
+  changes: RemoteFileChange[];
+  // Present only when discovery read the FULL tree (cold start, or a
+  // fallback from compare). The compare path sees a diff, not a
+  // complete picture, so it cannot answer for unrelated paths.
+  tree: RemoteTreeSnapshot | null;
+}
+
 // GitHub's documented, API-version-frozen compare() cap
 // (SPIKE-COMPARE-300 §1) — at exactly this count the list is
 // untrustworthy and the tree fallback REPLACES it.
@@ -90,7 +118,7 @@ export async function getChangedFilesFromGitHubRepo(
   deps: DiscoveryDeps,
   base: string | null,
   head: string,
-): Promise<RemoteFileChange[]> {
+): Promise<DiscoveryResult> {
   // Step 0 — cold start: compare() without a base is impossible by
   // definition; the tree fallback doesn't need one.
   if (base === null) {
@@ -155,7 +183,8 @@ export async function getChangedFilesFromGitHubRepo(
       deleted: f.sha === null,
     });
   }
-  return out;
+  // No snapshot: compare() answers "what changed", not "what exists".
+  return { changes: out, tree: null };
 }
 
 // The shared fallback for BOTH triggers plus cold start. Base-free by
@@ -167,7 +196,7 @@ export async function getChangedFilesFromGitHubRepo(
 export async function fullTreeDiffAgainstColdBaseline(
   deps: DiscoveryDeps,
   head: string,
-): Promise<RemoteFileChange[]> {
+): Promise<DiscoveryResult> {
   const tree = await deps.client.getRepoTree({ sha: head, retry: true });
   if (tree.truncated) {
     // Hard error, NEVER a silent partial return (SPIKE-TREES-LIMIT
@@ -179,8 +208,18 @@ export async function fullTreeDiffAgainstColdBaseline(
     );
   }
 
+  // Two maps from one response, deliberately different in scope:
+  //   snapshot — EVERY blob, because it answers "what does the repo
+  //     hold at this commit?" and a path can be un-syncable here while
+  //     still existing on the server (the gitignore may have moved
+  //     since the batch was written). Filtering it would make an
+  //     existing file look deleted.
+  //   treePaths — syncable only, because THAT is our sync scope and
+  //     the diff below must not resurrect ignored paths.
+  const snapshot: RemoteTreeSnapshot = { atCommit: head, paths: new Map() };
   const treePaths = new Map<string, { sha: string; size: number | null }>();
   for (const f of tree.files) {
+    snapshot.paths.set(f.path, { sha: f.sha, size: f.size });
     if (await deps.isSyncable(f.path)) {
       treePaths.set(f.path, { sha: f.sha, size: f.size });
     }
@@ -213,7 +252,7 @@ export async function fullTreeDiffAgainstColdBaseline(
           },
     );
   }
-  return out;
+  return { changes: out, tree: snapshot };
 }
 
 function deletedChange(path: string): RemoteFileChange {

@@ -78,6 +78,8 @@ import {
 } from "./diff3";
 import {
   RemoteFileChange,
+  DiscoveryResult,
+  RemoteTreeSnapshot,
   DELETED_SHA_HASH,
 } from "./discovery";
 import { ClaimedBatch } from "./get-batch";
@@ -232,7 +234,7 @@ export interface DrainDeps {
   discoverChangedFiles(
     base: string | null,
     head: string,
-  ): Promise<RemoteFileChange[]>;
+  ): Promise<DiscoveryResult>;
   hot: {
     getLastSyncCommitSha(): string | null;
     // J.2 fallback: the conflict-branch name survives BETWEEN drains
@@ -413,6 +415,12 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // anchor at the wrong tree (METAFILE §2.1.2).
   let knownHeadTreeSha: string | null = null;
   let conflictHeadHash: string | null = null;
+  // Discovery's complete picture of the repo at ONE pinned commit,
+  // when it read the full tree. Layer 2 (§II.13) answers from it
+  // instead of one HEAD request per file — see the call site for why
+  // that is the same authority, not a shortcut around it. Set to null
+  // whenever it can no longer be trusted for the CURRENT head.
+  let remoteTree: RemoteTreeSnapshot | null = null;
   // Run-scoped ambient conflicts (§III): null = not loaded yet; an
   // EMPTY state is a distinct legal value. Survives 422 restarts —
   // fresh in-memory STEP1 records must not vanish on a restart scan.
@@ -500,7 +508,9 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           deps.discoverChangedFiles(baseHash, headHash!),
         );
         if (r.error !== null) return statusFromError(r.error, result);
-        remoteFiles = r.result!;
+        remoteFiles = r.result!.changes;
+        // Layer 2's free answer source for THIS head (§II.13 below).
+        remoteTree = r.result!.tree;
       }
       // headHash == null: empty repo, nothing to read — the whole run
       // is one-directional (push local). headHash == baseHash: remote
@@ -780,11 +790,51 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // is nothing to verify against, and a discovery blindspot is
       // impossible where the server holds nothing.
       if (headHash !== null) {
-        const r = await deps.retry.run(() =>
-          deps.client.getContentsMetadataAtRef(entry.path, headHash!),
-        );
-        if (r.error !== null) return statusFromError(r.error, result);
-        const live = r.result;
+        // Source of the answer, in order of cost:
+        //
+        //   1. discovery's tree snapshot, when it was read at THIS very
+        //      commit. Free — the bytes are already in memory.
+        //   2. one HEAD request per path. ~300 ms each, and on a cold
+        //      start EVERY local file is a batch entry: the owner's
+        //      63 MB vault measured 255 of these, 78 s of a 90 s run.
+        //
+        // (1) is not a shortcut around Layer 2, it is the same
+        // authority through a cheaper transport. `atCommit` is a
+        // commit SHA, so the tree is immutable and `<path>@<sha>`
+        // cannot answer anything else. And the snapshot stays an
+        // INDEPENDENT read of the ref: discovery's cold path compares
+        // baselines against the tree, while Layer 2 compares the
+        // journal's belief against it — different beliefs, one
+        // authority, so the blindspot check still checks something.
+        //
+        // The guard is `atCommit === headHash`, never "we have a
+        // snapshot": headHash rolls after every batch push, and a map
+        // answering for the wrong commit is precisely the silent
+        // clobber G9 exists to prevent. Unknown commit → network.
+        let live: {
+          sha: string;
+          // NOT `number` as the HEAD transport types it: the tree can
+          // legitimately omit a size, and `?? 0` here would be a LIE,
+          // not a default — a recorded 0 permanently defeats the
+          // change detector's stat short-circuit, so the path gets
+          // re-read and re-hashed on every findChanges (gate finding,
+          // 2026-08-31). Unknown stays null all the way down.
+          size: number | null;
+        } | null;
+        if (remoteTree !== null && remoteTree.atCommit === headHash) {
+          const hit = remoteTree.paths.get(entry.path);
+          // Absent from a COMPLETE tree == the 404 a HEAD would give.
+          live =
+            hit === undefined
+              ? null
+              : { sha: hit.sha, size: hit.size };
+        } else {
+          const r = await deps.retry.run(() =>
+            deps.client.getContentsMetadataAtRef(entry.path, headHash!),
+          );
+          if (r.error !== null) return statusFromError(r.error, result);
+          live = r.result;
+        }
         const liveSha = live?.sha ?? DELETED_SHA_HASH;
         // What we BELIEVE remote holds. ⚠️ Spec-gap found by P.28
         // (2026-08-30, annotated back into §III): the spec's literal

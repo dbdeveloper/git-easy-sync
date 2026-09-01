@@ -96,11 +96,13 @@ describe.skipIf(!integrationEnabled())(
           vault: vault as never,
           selfPluginId: PLUGIN_ID,
         });
-        const result = await getChangedFilesFromGitHubRepo(
+        const result = (
+          await getChangedFilesFromGitHubRepo(
           makeDeps(client, baselines),
           mainHead,
           newCommitSha,
-        );
+          )
+        ).changes;
         const got = new Set(result.map((c) => c.path));
         for (let i = 0; i < FILE_COUNT; i++) {
           expect(got.has(`${prefix}/file-${i}.md`)).toBe(true);
@@ -144,11 +146,13 @@ describe.skipIf(!integrationEnabled())(
           size: anchor.size ?? 0,
         });
 
-        const result = await getChangedFilesFromGitHubRepo(
+        const result = (
+          await getChangedFilesFromGitHubRepo(
           makeDeps(client, baselines),
           unreachableBase,
           mainHead,
-        );
+          )
+        ).changes;
         const got = new Set(result.map((c) => c.path));
         expect(got.has(anchor.path)).toBe(false); // matches baseline → silent
         // Every OTHER live file has no baseline → reported as added.

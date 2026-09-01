@@ -12,7 +12,11 @@ import SiblingTx from "../../src/sync2/sibling-tx";
 import { mergeBlobsWithMainThreadDiff3 } from "../../src/sync2/diff3";
 import { ClaimedBatch } from "../../src/sync2/get-batch";
 import { BatchEntry } from "../../src/sync2/batch-metafile";
-import { RemoteFileChange, DELETED_SHA_HASH } from "../../src/sync2/discovery";
+import {
+  RemoteFileChange,
+  DiscoveryResult,
+  DELETED_SHA_HASH,
+} from "../../src/sync2/discovery";
 import { NetworkError, ValidationError } from "../../src/errors";
 import { calculateGitBlobSHA } from "../../src/utils";
 
@@ -45,15 +49,17 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
   let syncStore: SyncStore;
   let journal: DrainJournal;
   let vaultFiles: FakeVaultFiles;
-  let baselines: Map<string, { baselineSha: string; mtime: number; size: number }>;
+  let baselines: Map<
+    string,
+    { baselineSha: string; mtime: number; size: number }
+  >;
   let batches: Array<{ claimed: ClaimedBatch; removed: boolean }>;
   let removedDirs: string[];
   let conflictStore: ConflictStoreV2;
   let siblingTx: SiblingTx;
   let baseCommit: string | null;
   let discoveryOverride:
-    | ((base: string | null, head: string) => Promise<RemoteFileChange[]>)
-    | null;
+    ((base: string | null, head: string) => Promise<DiscoveryResult>) | null;
   let progressLog: Array<[number, number]>;
   let batchSeq: number;
   let hotUpdates: Array<{
@@ -66,8 +72,14 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     dir = mkdtempSync(path.join(tmpdir(), "drain-test-"));
     vault = new Vault(dir);
     world = new FakeWorld();
-    syncStore = new SyncStore({ vault: vault as never, selfPluginId: PLUGIN_ID });
-    journal = new DrainJournal({ vault: vault as never, selfPluginId: PLUGIN_ID });
+    syncStore = new SyncStore({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+    });
+    journal = new DrainJournal({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+    });
     conflictStore = new ConflictStoreV2({
       vault: vault as never,
       selfPluginId: PLUGIN_ID,
@@ -100,7 +112,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
   const honestDiscovery = async (
     base: string | null,
     head: string,
-  ): Promise<RemoteFileChange[]> => {
+  ): Promise<DiscoveryResult> => {
     const headFiles = world.filesAt(head);
     const baseFiles: RepoFiles =
       base === null ? new Map() : world.filesAt(base);
@@ -118,7 +130,9 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
         deleted: h === null,
       });
     }
-    return out;
+    // tree: null → Layer 2 keeps using the per-path transport,
+    // so every pre-existing assertion here still covers THAT path.
+    return { changes: out, tree: null };
   };
 
   // Stage a batch the way BatchWriter would: entries + blobs in the
@@ -252,7 +266,10 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     await stageBatch({ "note.md": "C1-one\ntwo\nthree\n" });
     await stageBatch({ "note.md": "C2-one\ntwo\nthree\n" });
     // The batches were snapshotted FROM the vault — it holds C2 now.
-    vaultFiles.files.set("note.md", { content: "C2-one\ntwo\nthree\n", mtime: 100 });
+    vaultFiles.files.set("note.md", {
+      content: "C2-one\ntwo\nthree\n",
+      mtime: 100,
+    });
 
     const r = await drainOnce(makeDeps());
     expect(r.status).toBe("ok");
@@ -269,7 +286,10 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     await setupAligned();
     await stageBatch({ "note.md": "C1-one\ntwo\nthree\n" });
     await stageBatch({ "note.md": "C2-one\ntwo\nthree\n" });
-    vaultFiles.files.set("note.md", { content: "C2-one\ntwo\nthree\n", mtime: 100 });
+    vaultFiles.files.set("note.md", {
+      content: "C2-one\ntwo\nthree\n",
+      mtime: 100,
+    });
 
     // An external commit lands between batch 1's push and batch 2's:
     // trigger it from the SECOND pushCommitFromTree attempt.
@@ -346,7 +366,10 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     await setupAligned();
     await world.commitFiles({ "note.md": "one\ntwo\nREMOTE\n" });
     await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
-    vaultFiles.files.set("note.md", { content: "LOCAL\ntwo\nthree\n", mtime: 100 });
+    vaultFiles.files.set("note.md", {
+      content: "LOCAL\ntwo\nthree\n",
+      mtime: 100,
+    });
 
     const r = await drainOnce(makeDeps());
     expect(r.status).toBe("ok");
@@ -363,7 +386,10 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     await setupAligned();
     await world.commitFiles({ "note.md": "one\ntwo\nR1\n" });
     // The user edits line 1 while the drain runs (stat differs → full read).
-    vaultFiles.files.set("note.md", { content: "USER\ntwo\nthree\n", mtime: 77 });
+    vaultFiles.files.set("note.md", {
+      content: "USER\ntwo\nthree\n",
+      mtime: 77,
+    });
 
     const r = await drainOnce(makeDeps());
     expect(r.status).toBe("ok");
@@ -415,7 +441,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
   it("P.2/P.9/P.27: discovery omits a remotely-changed path with a local edit → Layer 2 corrects EXACTLY once, then the normal path (merge)", async () => {
     await setupAligned();
     await world.commitFiles({ "note.md": "one\ntwo\nHIDDEN\n" });
-    discoveryOverride = async () => []; // the lie: "nothing changed"
+    discoveryOverride = async () => ({ changes: [], tree: null }); // the lie: "nothing changed"
     await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
 
     const r = await drainOnce(makeDeps());
@@ -433,16 +459,34 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     const localContent = "LOCAL\ntwo\nthree\n";
     const localSha = await sha(localContent);
     // Poisoned journal from a previous run: remote allegedly == local.
-    const state = (await journal.load()) ?? (await import("../../src/sync2/drain-journal")).emptyDrainState();
+    const state =
+      (await journal.load()) ??
+      (await import("../../src/sync2/drain-journal")).emptyDrainState();
     state.trackedFiles.set("note.md", {
-      base: { path: "note.md", sha: await sha(V0), size: 1, mtime: 1, blob: null, mode: "", deviceLabel: null },
-      remote: { path: "note.md", sha: localSha, size: 1, mtime: 1, blob: null, mode: "", deviceLabel: null },
+      base: {
+        path: "note.md",
+        sha: await sha(V0),
+        size: 1,
+        mtime: 1,
+        blob: null,
+        mode: "",
+        deviceLabel: null,
+      },
+      remote: {
+        path: "note.md",
+        sha: localSha,
+        size: 1,
+        mtime: 1,
+        blob: null,
+        mode: "",
+        deviceLabel: null,
+      },
       isManualConflict: false,
     });
     await journal.persist(state);
     // Truth: remote actually moved to something else entirely.
     await world.commitFiles({ "note.md": "one\ntwo\nTRUTH\n" });
-    discoveryOverride = async () => []; // and discovery misses it
+    discoveryOverride = async () => ({ changes: [], tree: null }); // and discovery misses it
     await stageBatch({ "note.md": localContent });
 
     const r = await drainOnce(makeDeps());
@@ -458,7 +502,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
   it("P.4: path deleted on the server behind discovery's back → corrected to DELETED, local edit wins (4.6.a), file restored by push", async () => {
     await setupAligned();
     await world.commitFiles({ "note.md": null }); // deleted remotely
-    discoveryOverride = async () => [];
+    discoveryOverride = async () => ({ changes: [], tree: null });
     await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
 
     const r = await drainOnce(makeDeps());
@@ -474,7 +518,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     await setupAligned();
     // Remote rewrote the SAME line the local batch touches → conflict.
     await world.commitFiles({ "note.md": "CLASH\ntwo\nthree\n" });
-    discoveryOverride = async () => [];
+    discoveryOverride = async () => ({ changes: [], tree: null });
     await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
 
     const r = await drainOnce(makeDeps());
@@ -511,10 +555,19 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
   it("P.10 (parameterized): N paths, N runs each omitting ONE from discovery → no remote content is ever lost silently", async () => {
     for (const victim of ["a.md", "b.md", "c.md"]) {
       const w = new FakeWorld();
-      const store = new SyncStore({ vault: vault as never, selfPluginId: PLUGIN_ID });
-      const j = new DrainJournal({ vault: vault as never, selfPluginId: `${PLUGIN_ID}-${victim}` });
+      const store = new SyncStore({
+        vault: vault as never,
+        selfPluginId: PLUGIN_ID,
+      });
+      const j = new DrainJournal({
+        vault: vault as never,
+        selfPluginId: `${PLUGIN_ID}-${victim}`,
+      });
       const vf = new FakeVaultFiles();
-      const bl = new Map<string, { baselineSha: string; mtime: number; size: number }>();
+      const bl = new Map<
+        string,
+        { baselineSha: string; mtime: number; size: number }
+      >();
       const base: Record<string, string> = {};
       for (const p of ["a.md", "b.md", "c.md"]) {
         base[p] = `${p}: one\ntwo\nthree\n`;
@@ -593,7 +646,12 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
               : {
                   id: "b1",
                   dir: "queue/b1",
-                  meta: { v: 1, id: "b1", createdAt: 0, entries: localBatchEntries },
+                  meta: {
+                    v: 1,
+                    id: "b1",
+                    createdAt: 0,
+                    entries: localBatchEntries,
+                  },
                 },
           removeBatchDir: async () => {
             removed = true;
@@ -602,13 +660,22 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
             const honest = await (async () => {
               const out: RemoteFileChange[] = [];
               for (const [p, f] of w.filesAt(h)) {
-                const bf = b === null ? null : w.filesAt(b).get(p) ?? null;
+                const bf = b === null ? null : (w.filesAt(b).get(p) ?? null);
                 if (bf?.sha === f.sha) continue;
-                out.push({ path: p, sha: f.sha, size: f.bytes.byteLength, mtime: null, deleted: false });
+                out.push({
+                  path: p,
+                  sha: f.sha,
+                  size: f.bytes.byteLength,
+                  mtime: null,
+                  deleted: false,
+                });
               }
               return out;
             })();
-            return honest.filter((c) => c.path !== victim);
+            return {
+              changes: honest.filter((c) => c.path !== victim),
+              tree: null,
+            };
           },
         }),
       );
@@ -626,15 +693,33 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     await setupAligned();
     const localContent = "LOCAL\ntwo\nthree\n";
     const localSha = await sha(localContent);
-    const state = (await import("../../src/sync2/drain-journal")).emptyDrainState();
+    const state = (
+      await import("../../src/sync2/drain-journal")
+    ).emptyDrainState();
     state.trackedFiles.set("note.md", {
-      base: { path: "note.md", sha: await sha(V0), size: 1, mtime: 1, blob: null, mode: "", deviceLabel: null },
-      remote: { path: "note.md", sha: localSha, size: 1, mtime: 1, blob: null, mode: "", deviceLabel: null },
+      base: {
+        path: "note.md",
+        sha: await sha(V0),
+        size: 1,
+        mtime: 1,
+        blob: null,
+        mode: "",
+        deviceLabel: null,
+      },
+      remote: {
+        path: "note.md",
+        sha: localSha,
+        size: 1,
+        mtime: 1,
+        blob: null,
+        mode: "",
+        deviceLabel: null,
+      },
       isManualConflict: false,
     });
     await journal.persist(state);
     await world.commitFiles({ "note.md": "one\ntwo\nTRUTH\n" });
-    discoveryOverride = async () => [];
+    discoveryOverride = async () => ({ changes: [], tree: null });
     await stageBatch({ "note.md": localContent });
 
     const r1 = await drainOnce(makeDeps());
@@ -651,7 +736,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
   it("P.12 (coverage boundary, EXPECTED): a remote-only change omitted by discovery — no batch entry → Layer 2 never sees it", async () => {
     await setupAligned();
     await world.commitFiles({ "note.md": "one\ntwo\nUNSEEN\n" });
-    discoveryOverride = async () => []; // omitted, and no local batch
+    discoveryOverride = async () => ({ changes: [], tree: null }); // omitted, and no local batch
     const r = await drainOnce(makeDeps());
     expect(r.status).toBe("ok");
     expect(r.layer2Corrections).toEqual([]); // documented limit, not a bug:
@@ -839,9 +924,9 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     // the poisoned journal claims base==remote==C1 → the redo
     // short-circuits the batch and C1 is silently lost.)
     const j1 = await journal.load();
-    expect(
-      j1?.trackedFiles.get("note.md")?.remote.sha ?? null,
-    ).not.toBe(await sha("C1\n"));
+    expect(j1?.trackedFiles.get("note.md")?.remote.sha ?? null).not.toBe(
+      await sha("C1\n"),
+    );
     expect(hotUpdates).toEqual([]); // no CONFIRMED anchor from an abort
     expect(baselines.get("note.md")!.mtime).toBe(50); // untouched
 
@@ -924,7 +1009,11 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     // edits note.md and deletes obs.md.
     baseCommit = await world.commitFiles({ "obs.md": "x" });
     vaultFiles.files.set("obs.md", { content: "x", mtime: 50 });
-    baselines.set("obs.md", { baselineSha: await sha("x"), mtime: 50, size: 1 });
+    baselines.set("obs.md", {
+      baselineSha: await sha("x"),
+      mtime: 50,
+      size: 1,
+    });
     await world.commitFiles({ "note.md": "R\n", "obs.md": null });
     await stageBatch({ "other.md": "O\n" });
 
@@ -995,15 +1084,18 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     await setupAligned();
     // Remote-only change; the honest fake (like the real compare API)
     // reports NO size for it.
-    discoveryOverride = async () => [
-      {
-        path: "note.md",
-        sha: await sha("R\n"),
-        size: null, // ← compare gives none
-        mtime: null,
-        deleted: false,
-      },
-    ];
+    discoveryOverride = async () => ({
+      tree: null,
+      changes: [
+        {
+          path: "note.md",
+          sha: await sha("R\n"),
+          size: null, // ← compare gives none
+          mtime: null,
+          deleted: false,
+        },
+      ],
+    });
     await world.commitFiles({ "note.md": "R\n" });
 
     const r = await drainOnce(makeDeps());
@@ -1065,5 +1157,160 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     // NO baseline for BAD: recording it would make the next commit-pass
     // DELETE remote content that never landed anywhere locally.
     expect(baselines.has(BAD)).toBe(false);
+  });
+
+  // ── P.29 — Layer 2 answered from discovery's tree snapshot ────────
+  //
+  // The measurement that forced this (owner's bootstrap on a 63 MB
+  // vault, 2026-09-01): 255 of 283 requests were per-path Layer-2
+  // HEADs, 78 s of a 90 s run. On a cold start EVERY local file is a
+  // batch entry, so Layer 2 fired once per file — asking the network
+  // for `sha`+`size` at a PINNED commit that discovery had already
+  // read in full, one request earlier.
+  //
+  // These tests pin the two halves that make the substitution safe:
+  // it must still catch a blindspot (that is Layer 2's whole job), and
+  // it must refuse to answer for any commit other than the one the
+  // tree was read at.
+
+  // Wraps the world's client so a test can count the per-path HEADs
+  // and, where needed, make them explode: a call that MUST NOT happen
+  // is better proven by a throw than by a counter nobody reads.
+  const countingClient = (opts?: { forbidHead?: boolean }) => {
+    const base = world.makeClient();
+    let heads = 0;
+    return {
+      client: {
+        ...base,
+        getContentsMetadataAtRef: async (path: string, ref: string) => {
+          heads += 1;
+          if (opts?.forbidHead) {
+            throw new Error(`unexpected Layer-2 HEAD for ${path}@${ref}`);
+          }
+          return base.getContentsMetadataAtRef(path, ref);
+        },
+      } as DrainDeps["client"],
+      heads: () => heads,
+    };
+  };
+
+  // An HONEST snapshot of the fake repo at its current head — the same
+  // thing production discovery builds from one recursive tree read.
+  const snapshotAtHead = () => ({
+    atCommit: world.head as string,
+    paths: new Map(
+      [...world.headFiles()].map(([p, f]) => [
+        p,
+        { sha: f.sha, size: f.bytes.byteLength as number | null },
+      ]),
+    ),
+  });
+
+  it("P.29a: on a COLD START the snapshot answers everything — zero per-path requests", async () => {
+    // The shape that produced the 255 HEADs: no baseline commit, so
+    // discovery reads the full tree, and every local file is a batch
+    // entry that Layer 2 wants to verify.
+    await setupAligned();
+    baseCommit = null; // cold start — .runtime/ was wiped (or is new)
+    const c = countingClient({ forbidHead: true });
+    discoveryOverride = async () => ({ changes: [], tree: snapshotAtHead() });
+    await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
+
+    const r = await drainOnce(makeDeps({ client: c.client }));
+
+    expect(r.status).toBe("ok");
+    expect(c.heads()).toBe(0);
+    // P.28's sentinel: nothing was hidden, so nothing to correct.
+    expect(r.layer2Corrections).toEqual([]);
+  });
+
+  it("P.29a-bis: when the remote has NOT moved, discovery is skipped — so is the snapshot, and Layer 2 pays per path", async () => {
+    // Documents the boundary rather than pretending it away: the drain
+    // only calls discovery when head !== base, so an incremental sync
+    // against an unmoved remote has no tree to answer from. Cheap
+    // anyway — the batch holds only what the user just edited.
+    await setupAligned();
+    const c = countingClient();
+    discoveryOverride = async () => ({ changes: [], tree: snapshotAtHead() });
+    await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
+
+    const r = await drainOnce(makeDeps({ client: c.client }));
+
+    expect(r.status).toBe("ok");
+    expect(c.heads()).toBe(1); // one entry, one HEAD
+  });
+
+  it("P.29b: a blindspot is corrected from the snapshot exactly as it would be from a HEAD", async () => {
+    // Byte-for-byte the P.2 scenario, with the only difference being
+    // where the answer came from — the outcome must be identical.
+    await setupAligned();
+    await world.commitFiles({ "note.md": "one\ntwo\nHIDDEN\n" });
+    const c = countingClient({ forbidHead: true });
+    discoveryOverride = async () => ({ changes: [], tree: snapshotAtHead() });
+    await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
+
+    const r = await drainOnce(makeDeps({ client: c.client }));
+
+    expect(r.status).toBe("ok");
+    expect(c.heads()).toBe(0);
+    expect(r.layer2Corrections.map((x) => x.path)).toEqual(["note.md"]);
+    expect(dec(world.headFiles().get("note.md")!.bytes)).toBe(
+      "LOCAL\ntwo\nHIDDEN\n",
+    );
+  });
+
+  it("P.29c: a snapshot from a DIFFERENT commit is refused — the network answers instead", async () => {
+    // The guard that keeps this from becoming the silent clobber G9
+    // exists to prevent: head rolls after every batch push, and a map
+    // keyed to yesterday's commit must never speak for today's.
+    await setupAligned();
+    await world.commitFiles({ "note.md": "one\ntwo\nHIDDEN\n" });
+    const c = countingClient();
+    const stale = snapshotAtHead();
+    discoveryOverride = async () => ({
+      changes: [],
+      tree: { ...stale, atCommit: "0".repeat(40) },
+    });
+    await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
+
+    const r = await drainOnce(makeDeps({ client: c.client }));
+
+    expect(r.status).toBe("ok");
+    expect(c.heads()).toBeGreaterThan(0);
+    // And the correction still happens — via the transport, not the map.
+    expect(r.layer2Corrections.map((x) => x.path)).toEqual(["note.md"]);
+  });
+
+  it("P.29d: absent from a complete snapshot means DELETED, the same as a 404", async () => {
+    await setupAligned();
+    await world.commitFiles({ "note.md": null }); // deleted remotely
+    const c = countingClient({ forbidHead: true });
+    discoveryOverride = async () => ({ changes: [], tree: snapshotAtHead() });
+    await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
+
+    const r = await drainOnce(makeDeps({ client: c.client }));
+
+    expect(r.status).toBe("ok");
+    expect(c.heads()).toBe(0);
+    expect(r.layer2Corrections).toHaveLength(1);
+    expect(r.layer2Corrections[0].actual).toBe(DELETED_SHA_HASH);
+    // 4.6.a — the live local edit wins over a remote deletion.
+    expect(dec(world.headFiles().get("note.md")!.bytes)).toBe(
+      "LOCAL\ntwo\nthree\n",
+    );
+  });
+
+  it("P.29e: no snapshot (the compare path) keeps using the per-path transport", async () => {
+    await setupAligned();
+    await world.commitFiles({ "note.md": "one\ntwo\nHIDDEN\n" });
+    const c = countingClient();
+    discoveryOverride = async () => ({ changes: [], tree: null });
+    await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
+
+    const r = await drainOnce(makeDeps({ client: c.client }));
+
+    expect(r.status).toBe("ok");
+    expect(c.heads()).toBeGreaterThan(0);
+    expect(r.layer2Corrections.map((x) => x.path)).toEqual(["note.md"]);
   });
 });

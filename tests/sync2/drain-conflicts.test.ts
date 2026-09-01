@@ -19,7 +19,11 @@ import {
 } from "../../src/sync2/conflict-siblings";
 import { ClaimedBatch } from "../../src/sync2/get-batch";
 import { BatchEntry } from "../../src/sync2/batch-metafile";
-import { RemoteFileChange, DELETED_SHA_HASH } from "../../src/sync2/discovery";
+import {
+  RemoteFileChange,
+  DiscoveryResult,
+  DELETED_SHA_HASH,
+} from "../../src/sync2/discovery";
 import { NetworkError } from "../../src/errors";
 import { calculateGitBlobSHA } from "../../src/utils";
 import {
@@ -91,7 +95,7 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
   const honestDiscovery = async (
     base: string | null,
     head: string,
-  ): Promise<RemoteFileChange[]> => {
+  ): Promise<DiscoveryResult> => {
     const headFiles = world.filesAt(head);
     const baseFiles: RepoFiles =
       base === null ? new Map() : world.filesAt(base);
@@ -114,7 +118,9 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
         deleted: h === null,
       });
     }
-    return out;
+    // tree: null → Layer 2 keeps using the per-path transport,
+    // so every pre-existing assertion here still covers THAT path.
+    return { changes: out, tree: null };
   };
 
   const stageBatch = async (
@@ -772,7 +778,10 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const honest = async (base: string | null, head: string): Promise<RemoteFileChange[]> => {
+  const honest = async (
+    base: string | null,
+    head: string,
+  ): Promise<DiscoveryResult> => {
     const headFiles = world.filesAt(head);
     const baseFiles: RepoFiles = base === null ? new Map() : world.filesAt(base);
     const out: RemoteFileChange[] = [];
@@ -793,7 +802,9 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
         deleted: h === null,
       });
     }
-    return out;
+    // tree: null → this fake keeps Layer 2 on the per-path
+    // transport, mirroring the compare path it imitates.
+    return { changes: out, tree: null };
   };
 
   const stage = async (files: Record<string, string>): Promise<void> => {

@@ -14,7 +14,11 @@ import { mergeBlobsWithMainThreadDiff3 } from "../../src/sync2/diff3";
 import { buildSiblingFilePath } from "../../src/sync2/conflict-siblings";
 import { ClaimedBatch } from "../../src/sync2/get-batch";
 import { BatchEntry } from "../../src/sync2/batch-metafile";
-import { RemoteFileChange, DELETED_SHA_HASH } from "../../src/sync2/discovery";
+import {
+  RemoteFileChange,
+  DiscoveryResult,
+  DELETED_SHA_HASH,
+} from "../../src/sync2/discovery";
 import { calculateGitBlobSHA } from "../../src/utils";
 import {
   FakeWorld,
@@ -97,7 +101,7 @@ describe("diff2 port real composition (drainOnce → conflicts.json → findAllC
   const honestDiscovery = async (
     base: string | null,
     head: string,
-  ): Promise<RemoteFileChange[]> => {
+  ): Promise<DiscoveryResult> => {
     const headFiles = world.filesAt(head);
     const baseFiles: RepoFiles =
       base === null ? new Map() : world.filesAt(base);
@@ -115,7 +119,9 @@ describe("diff2 port real composition (drainOnce → conflicts.json → findAllC
         deleted: h === null,
       });
     }
-    return out;
+    // tree: null → Layer 2 keeps using the per-path transport,
+    // so every pre-existing assertion here still covers THAT path.
+    return { changes: out, tree: null };
   };
 
   const stageBatch = async (

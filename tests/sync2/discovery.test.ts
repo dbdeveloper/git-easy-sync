@@ -91,7 +91,7 @@ describe("discovery Layer 1 (§VIII O)", () => {
       { filename: "a.md", status: "modified", sha: "sha-a" },
       { filename: "b.md", status: "added", sha: "sha-b" },
     ];
-    const result = await getChangedFilesFromGitHubRepo(deps(), "base", "head");
+    const result = (await getChangedFilesFromGitHubRepo(deps(), "base", "head")).changes;
     expect(paths(result)).toEqual(["a.md", "b.md"]);
     expect(result.find((c) => c.path === "a.md")).toEqual({
       path: "a.md",
@@ -113,7 +113,7 @@ describe("discovery Layer 1 (§VIII O)", () => {
         previous_filename: "old-name.md",
       },
     ];
-    const result = await getChangedFilesFromGitHubRepo(deps(), "base", "head");
+    const result = (await getChangedFilesFromGitHubRepo(deps(), "base", "head")).changes;
     expect(paths(result)).toEqual(["gone.md", "new-name.md", "old-name.md"]);
     const gone = result.find((c) => c.path === "gone.md")!;
     expect(gone.deleted).toBe(true);
@@ -135,7 +135,7 @@ describe("discovery Layer 1 (§VIII O)", () => {
       files: [{ path: "from-tree.md", sha: "tree-sha", size: 7 }],
       truncated: false,
     };
-    const result = await getChangedFilesFromGitHubRepo(deps(), "base", "head");
+    const result = (await getChangedFilesFromGitHubRepo(deps(), "base", "head")).changes;
     // Nothing from the partial compare list survives; the tree diff
     // is the whole answer.
     expect(paths(result)).toEqual(["from-tree.md"]);
@@ -149,7 +149,7 @@ describe("discovery Layer 1 (§VIII O)", () => {
       files: [{ path: "x.md", sha: "sha-x", size: 3 }],
       truncated: false,
     };
-    const result = await getChangedFilesFromGitHubRepo(deps(), "base", "head");
+    const result = (await getChangedFilesFromGitHubRepo(deps(), "base", "head")).changes;
     expect(paths(result)).toEqual(["x.md"]);
     expect(warnings.some((w) => w.includes("force-push"))).toBe(true);
   });
@@ -169,7 +169,7 @@ describe("discovery Layer 1 (§VIII O)", () => {
       ],
       truncated: false,
     };
-    const result = await getChangedFilesFromGitHubRepo(deps(), null, "head");
+    const result = (await getChangedFilesFromGitHubRepo(deps(), null, "head")).changes;
     expect(paths(result)).toEqual(["a.md", "sub/b.md"]);
     expect(compareCalls).toBe(0);
   });
@@ -187,7 +187,7 @@ describe("discovery Layer 1 (§VIII O)", () => {
       ],
       truncated: false,
     };
-    const result = await fullTreeDiffAgainstColdBaseline(deps(), "head");
+    const result = (await fullTreeDiffAgainstColdBaseline(deps(), "head")).changes;
     expect(paths(result)).toEqual(["differs.md"]);
   });
 
@@ -198,7 +198,7 @@ describe("discovery Layer 1 (§VIII O)", () => {
       size: 1,
     });
     treeResult = { files: [], truncated: false };
-    const result = await fullTreeDiffAgainstColdBaseline(deps(), "head");
+    const result = (await fullTreeDiffAgainstColdBaseline(deps(), "head")).changes;
     expect(result).toEqual([
       {
         path: "vanished.md",
@@ -215,7 +215,7 @@ describe("discovery Layer 1 (§VIII O)", () => {
       files: [{ path: "brand-new.md", sha: "sha-n", size: 42 }],
       truncated: false,
     };
-    const result = await fullTreeDiffAgainstColdBaseline(deps(), "head");
+    const result = (await fullTreeDiffAgainstColdBaseline(deps(), "head")).changes;
     expect(result).toEqual([
       {
         path: "brand-new.md",
@@ -251,7 +251,7 @@ describe("discovery Layer 1 (§VIII O)", () => {
       ],
       truncated: false,
     };
-    const result = await getChangedFilesFromGitHubRepo(deps(), "base", "head");
+    const result = (await getChangedFilesFromGitHubRepo(deps(), "base", "head")).changes;
     expect(paths(result)).toEqual(["rewritten.md"]);
   });
 
@@ -271,7 +271,7 @@ describe("discovery Layer 1 (§VIII O)", () => {
       files: [{ path: "edited.md", sha: "sha-forced", size: 9 }],
       truncated: false,
     };
-    const result = await getChangedFilesFromGitHubRepo(deps(), "base", "head");
+    const result = (await getChangedFilesFromGitHubRepo(deps(), "base", "head")).changes;
     expect(result).toEqual([
       {
         path: "edited.md",
@@ -292,7 +292,7 @@ describe("discovery Layer 1 (§VIII O)", () => {
       { filename: "kept.md", status: "modified", sha: "k" },
     ];
     expect(
-      paths(await getChangedFilesFromGitHubRepo(deps(), "base", "head")),
+      paths((await getChangedFilesFromGitHubRepo(deps(), "base", "head")).changes),
     ).toEqual(["kept.md"]);
 
     treeResult = {
@@ -302,7 +302,7 @@ describe("discovery Layer 1 (§VIII O)", () => {
       ],
       truncated: false,
     };
-    expect(paths(await fullTreeDiffAgainstColdBaseline(deps(), "head"))).toEqual(
+    expect(paths((await fullTreeDiffAgainstColdBaseline(deps(), "head")).changes)).toEqual(
       ["kept.md"],
     );
   });
