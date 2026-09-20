@@ -233,7 +233,10 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
   const REMOTE_CLASH = "REMOTE\ntwo\nthree\n";
   const LOCAL_CLASH = "LOCAL\ntwo\nthree\n";
 
-  it("C.1 + C.4 + C.13(step1) + L.3: STEP1 births the conflict — branch gets local, main gets the OTHER file, base file untouched, first sibling written", async () => {
+  // + G.2: the journal doesn't confirm and the branch doesn't exist
+  // yet (conflict_head_hash == null) → shouldPushToConflictBranch says
+  // PUSH. That decision is what mints the branch below.
+  it("C.1 + C.4 + C.13(step1) + L.3 + G.2: STEP1 births the conflict — branch gets local, main gets the OTHER file, base file untouched, first sibling written", async () => {
     await setupAligned({ "clean.md": "clean v0\n" });
     await world.commitFiles({ [NOTE]: REMOTE_CLASH });
     await stageBatch({ [NOTE]: LOCAL_CLASH, "clean.md": "clean v1\n" });
@@ -268,7 +271,11 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
     expect(vaultFiles.files.get(NOTE)!.content).toBe(LOCAL_CLASH);
   });
 
-  it("C.2: STEP2 dedups the branch push — identical local content is NOT re-pushed; a new edit IS", async () => {
+  // + G.1 (head-unchanged half): the journal confirms
+  // conflictBase.sha == local.sha → the push is skipped. G.1's strict
+  // form also demands "and without a network call"; that half is
+  // pinned separately, by the spy in the G.4/G.5 tests.
+  it("C.2 + G.1: STEP2 dedups the branch push — identical local content is NOT re-pushed; a new edit IS", async () => {
     await setupAligned();
     await world.commitFiles({ [NOTE]: REMOTE_CLASH });
     await stageBatch({ [NOTE]: LOCAL_CLASH });
@@ -910,7 +917,9 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     expect(world.branchHeads.has(branch)).toBe(true);
   });
 
-  it("G.9 🔑 + G.10 + G.12: resolution → FINALIZE reachability-merge — main tree byte-identical, parents [main, conflict] positionally, empty diff", async () => {
+  // + G.11: the last assertion — the epilogue's hot anchor records the
+  // MERGE commit, not the pre-merge head (the blocker found 2026-08-29).
+  it("G.9 🔑 + G.10 + G.11 + G.12: resolution → FINALIZE reachability-merge — main tree byte-identical, parents [main, conflict] positionally, empty diff, hot anchor = merge sha", async () => {
     await setup();
     const branch = await birthConflict();
     const rec = (await conflictStore.load()).entries.get(NOTE2)!;
@@ -1042,7 +1051,10 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     expect(world.branchHeads.has(branch)).toBe(false);
   });
 
-  it("G.6: the branch name survives BETWEEN drains via the hot fallback when no journal exists", async () => {
+  // + J.2: this IS restoreTrackedFilesFromDiskOrCreateNewOne's
+  // no-journal-but-conflicts-non-empty branch — conflictBranchName
+  // must come from the hot fallback, never back as null.
+  it("G.6 + J.2: the branch name survives BETWEEN drains via the hot fallback when no journal exists", async () => {
     await setup();
     await journal.clear();
     // A live unresolved conflict blocks FINALIZE — otherwise the

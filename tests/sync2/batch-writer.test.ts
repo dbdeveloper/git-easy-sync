@@ -339,9 +339,13 @@ describe("BatchWriter (Phase 2 group B)", () => {
     expect(warnings.some((w) => w.includes("unrepairable"))).toBe(true);
   });
 
-  // ── §7.3 explicit dedup (§VIII L) ────────────────────────────────
+  // ── §7.3 explicit dedup = §VIII L.2 ──────────────────────────────
+  // L.2's invariant ("the same path never appears twice in one batch")
+  // is a property of the WRITER, so it is pinned here and not in the
+  // drain suites — that is why a grep for "L.2" in drain.test.ts finds
+  // nothing.
 
-  it("§7.3: duplicate paths in one writeBatch dedupe explicitly, last wins", async () => {
+  it("§7.3 / L.2: duplicate paths in one writeBatch dedupe explicitly, last wins", async () => {
     putVaultFile("dup.md", "final\n");
     const id = await makeWriter().writeBatch([
       modified("dup.md"),
@@ -353,7 +357,7 @@ describe("BatchWriter (Phase 2 group B)", () => {
     expect(meta.entries[0].sha).toBe(await calculateGitBlobSHA(enc("final\n")));
   });
 
-  it("§7.3: modified-then-deleted collapses to the single sha:null entry", async () => {
+  it("§7.3 / L.2: modified-then-deleted collapses to the single sha:null entry", async () => {
     putVaultFile("doomed.md", "x\n");
     const id = await makeWriter().writeBatch([
       modified("doomed.md"),
