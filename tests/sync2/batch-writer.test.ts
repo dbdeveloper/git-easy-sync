@@ -44,11 +44,16 @@ describe("BatchWriter (Phase 2 group B)", () => {
     autoCanonicalize?: boolean;
     vault?: unknown;
     syncStore?: SyncStore;
+    deletedBin?: {
+      peek(path: string): string | null;
+      release(paths: string[]): Promise<void>;
+    };
   }): BatchWriter =>
     new BatchWriter({
       vault: (opts?.vault ?? vault) as never,
       selfPluginId: PLUGIN_ID,
       syncStore: opts?.syncStore ?? syncStore,
+      deletedBin: opts?.deletedBin,
       autoCanonicalize: () => opts?.autoCanonicalize ?? true,
       logger: { info: () => {}, warn: (m) => warnings.push(m) },
       // Advancing clock: unique ids without real-time collisions.
@@ -386,6 +391,100 @@ describe("BatchWriter (Phase 2 group B)", () => {
     const after = readMeta(id!);
     const gone = after.entries.find((e) => e.path === "gone.md")!;
     expect(gone.deletedSha).toBe("cafebabe");
+  });
+
+
+  // ── §5.2.1 step 3: the hand-off from the bin to the batch ─────────
+  //
+  // A deletion's last-live bytes are protected by deleted.json only
+  // until the deletion is committed. At that moment the protection has
+  // to MOVE into the batch — the entry carries `deletedSha`, the bin
+  // drops its record, and the queue's sweep source takes over. The
+  // order matters as much as it did at capture time: the metafile must
+  // be durable BEFORE the record is released, or a crash in between
+  // loses both the record and the reference.
+
+  const fakeBin = () => {
+    const shas = new Map<string, string>();
+    const released: string[] = [];
+    return {
+      shas,
+      released,
+      api: {
+        peek: (p: string) => shas.get(p) ?? null,
+        release: async (paths: string[]) => {
+          released.push(...paths);
+          for (const p of paths) shas.delete(p);
+        },
+      },
+    };
+  };
+
+  it("§5.2.1: a committed deletion carries deletedSha and the bin releases its record", async () => {
+    const bin = fakeBin();
+    bin.shas.set("gone.md", "beefcafe");
+
+    const id = await makeWriter({ deletedBin: bin.api }).writeBatch([
+      deleted("gone.md"),
+    ]);
+
+    const entry = readMeta(id!).entries[0];
+    expect(entry.sha).toBeNull(); // the deletion sentinel is untouched
+    expect(entry.deletedSha).toBe("beefcafe");
+    expect(bin.released).toEqual(["gone.md"]);
+  });
+
+  it("§5.2.1: no capture (a delete outside our hooks) → deletedSha stays null, nothing released", async () => {
+    const bin = fakeBin();
+    const id = await makeWriter({ deletedBin: bin.api }).writeBatch([
+      deleted("untracked.md"),
+    ]);
+
+    expect(readMeta(id!).entries[0].deletedSha).toBeNull();
+    expect(bin.released).toEqual([]);
+  });
+
+  it("🔑 §5.2.1: the metafile is DURABLE before the record is released", async () => {
+    // If the metafile write fails, the bin must still hold the record:
+    // releasing first would leave the bytes referenced by nothing while
+    // the deletion never reached a batch.
+    const bin = fakeBin();
+    bin.shas.set("gone.md", "beefcafe");
+    const failing = wrapVault({
+      write: (p: unknown, c: unknown) => {
+        if (typeof p === "string" && p.endsWith(BATCH_META_FILE)) {
+          throw new Error("disk full");
+        }
+        return (vault.adapter as never as Record<string, AnyFn>).write(p, c);
+      },
+    });
+
+    await expect(
+      makeWriter({ vault: failing, deletedBin: bin.api }).writeBatch([
+        deleted("gone.md"),
+      ]),
+    ).rejects.toThrow("disk full");
+
+    expect(bin.released).toEqual([]);
+    expect(bin.shas.get("gone.md")).toBe("beefcafe");
+  });
+
+  it("§5.2.1: a deletion folded into the TAIL hands off too", async () => {
+    const bin = fakeBin();
+    putVaultFile("first.md", "x\n");
+    const id = await makeWriter({ deletedBin: bin.api }).writeBatch([
+      modified("first.md"),
+    ]);
+
+    bin.shas.set("gone.md", "d00d");
+    const tail = await makeWriter({ deletedBin: bin.api }).consolidateIntoTail([
+      deleted("gone.md"),
+    ]);
+    expect(tail).toBe(id);
+
+    const entries = readMeta(id!).entries;
+    expect(entries.find((e) => e.path === "gone.md")!.deletedSha).toBe("d00d");
+    expect(bin.released).toEqual(["gone.md"]);
   });
 
   // ── §7.3 explicit dedup = §VIII L.2 ──────────────────────────────

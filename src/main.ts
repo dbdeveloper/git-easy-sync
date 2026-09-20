@@ -953,6 +953,12 @@ export default class GitHubSyncPlugin extends Plugin {
       syncStore,
       autoCanonicalize: () => this.settings.autoCanonicalizeTextFiles ?? false,
       logger: this.logger,
+      // §5.2.1: a committed deletion carries the bin's captured sha,
+      // and the bin lets go once the metafile is durable.
+      deletedBin: {
+        peek: (p) => deletedStore.peek(p),
+        release: (paths) => deletedStore.release(paths),
+      },
     });
     this.batchHistorySource = new BatchHistorySource({
       vault: this.app.vault,

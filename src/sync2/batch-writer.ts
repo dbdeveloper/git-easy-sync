@@ -85,6 +85,19 @@ export interface BatchWriterDeps {
   workerClient?: WorkerClient;
   // Clock override for deterministic batch ids in tests.
   now?: () => Date;
+  // HISTORY-DELETED §5.2.1 — the Deleted bin's hand-off seam. A
+  // committed deletion carries the sha of the file's last LIVE bytes
+  // so the bin can still offer a restore afterwards; the bin then
+  // releases its own record and the protection of that blob moves to
+  // the queue's sweep source.
+  //
+  // Optional: with no bin wired, deletions simply carry null — which
+  // is also the permanent, honest answer for a delete made outside our
+  // hooks (external fs, another plugin, a dot-file).
+  deletedBin?: {
+    peek(path: string): string | null;
+    release(paths: string[]): Promise<void>;
+  };
 }
 
 export default class BatchWriter {
@@ -94,6 +107,7 @@ export default class BatchWriter {
   private readonly autoCanonicalize: () => boolean;
   private readonly workerClient: WorkerClient;
   private readonly now: () => Date;
+  private readonly deletedBin: BatchWriterDeps["deletedBin"];
 
   constructor(deps: BatchWriterDeps) {
     this.vault = deps.vault;
@@ -102,6 +116,7 @@ export default class BatchWriter {
     this.autoCanonicalize = deps.autoCanonicalize ?? (() => true);
     this.workerClient = deps.workerClient ?? new WorkerClient();
     this.now = deps.now ?? (() => new Date());
+    this.deletedBin = deps.deletedBin;
     this.queueRoot = normalizePath(
       `${deps.vault.configDir}/plugins/${deps.selfPluginId}/${QUEUE_DIRNAME}`,
     );
@@ -136,6 +151,11 @@ export default class BatchWriter {
       `${dir}/${BATCH_META_FILE}`,
       JSON.stringify(meta),
     );
+    // …the bin hand-off SECOND (§5.2.1): the metafile now references
+    // every deletedSha, so the queue's sweep source protects those
+    // blobs and the bin may let go. Releasing earlier would open a
+    // window where a crash loses both the record and the reference.
+    await this.releaseHandedOff(meta);
     // …then the bytes.
     await this.writeBlobs(dir, meta);
 
@@ -207,8 +227,10 @@ export default class BatchWriter {
       return null;
     }
     const updated: BatchMetafile = { ...meta, entries: merged };
-    // §12.4 again: manifest first, bytes second.
+    // §12.4 again: manifest first, bytes second — and the §5.2.1
+    // hand-off in between, for the same reason as in writeBatch.
     await this.vault.adapter.write(metaPath, JSON.stringify(updated));
+    await this.releaseHandedOff(updated);
     await this.writeBlobs(tailDir, updated);
 
     await this.removeIfExists(marker);
@@ -231,11 +253,10 @@ export default class BatchWriter {
           sha: null,
           size: null,
           mtime: null,
-          // HISTORY-DELETED §5.2.1: filled from deleted.json once the
-          // bin re-platform lands. Null here means "no captured bytes
-          // for this deletion", which is also the honest answer for a
-          // delete made outside our hooks.
-          deletedSha: null,
+          // §5.2.1: the last LIVE bytes of this path, if the bin
+          // captured them. Null = nothing to restore later, which is
+          // the honest answer for a delete made outside our hooks.
+          deletedSha: this.deletedBin?.peek(c.path) ?? null,
         });
         continue;
       }
@@ -353,6 +374,27 @@ export default class BatchWriter {
       await this.vault.adapter.write(
         `${dir}/${BATCH_META_FILE}`,
         JSON.stringify(reduced),
+      );
+    }
+  }
+
+  // §5.2.1 hand-off, called ONLY after the metafile is durable: the
+  // paths whose captured bytes this batch now references can leave the
+  // bin. `release` is best-effort — a failure leaves a stale record,
+  // which `reconcile()` prunes on the next load, and never loses a
+  // blob (both sources would simply reference it).
+  private async releaseHandedOff(meta: BatchMetafile): Promise<void> {
+    if (!this.deletedBin) return;
+    const handed = meta.entries
+      .filter((e) => e.sha === null && e.deletedSha !== null)
+      .map((e) => e.path);
+    if (handed.length === 0) return;
+    try {
+      await this.deletedBin.release(handed);
+    } catch (err) {
+      this.logger?.warn(
+        "BatchWriter: deleted-bin release failed (stale record, no data lost)",
+        { paths: handed, err: `${err}` },
       );
     }
   }

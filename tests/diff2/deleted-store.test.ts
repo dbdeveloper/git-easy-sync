@@ -185,4 +185,59 @@ describe("DeletedStore (§5.2.1)", () => {
     await reopened.load();
     expect(reopened.list()).toEqual([written]);
   });
+
+  // ── protection never lapses across the hand-off (§5.2.1 step 3) ───
+
+  it("🔑 the blob stays referenced across the hand-off — bin, then queue, never neither", async () => {
+    // The bin protects the bytes until the deletion is committed; the
+    // batch's deletedSha protects them afterwards. If the two windows
+    // failed to overlap, a sweep landing in the gap would reap the
+    // bytes and the restore would silently stop working.
+    const { default: BatchWriter } = await import(
+      "../../src/sync2/batch-writer"
+    );
+    const { collectQueueReferencedShas } = await import(
+      "../../src/sync2/queue-sha-index"
+    );
+
+    put("note.md", "precious\n");
+    await store.captureForDelete("note.md");
+    const sha = store.peek("note.md")!;
+    fs.unlinkSync(path.join(dir, "note.md"));
+
+    // BEFORE the commit: only the bin knows.
+    expect(store.referencedShas().has(sha)).toBe(true);
+    expect(
+      (await collectQueueReferencedShas(vault as never, PLUGIN_ID)).has(sha),
+    ).toBe(false);
+
+    const writer = new BatchWriter({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+      syncStore,
+      autoCanonicalize: () => false,
+      logger: { info: () => {}, warn: () => {} },
+      deletedBin: {
+        peek: (p: string) => store.peek(p),
+        release: (paths: string[]) => store.release(paths),
+      },
+    });
+    await writer.writeBatch([
+      { kind: "deleted", path: "note.md", previousRemoteSha: "prev" },
+    ]);
+
+    // AFTER: the bin has let go, and the queue holds the reference.
+    expect(store.referencedShas().has(sha)).toBe(false);
+    expect(
+      (await collectQueueReferencedShas(vault as never, PLUGIN_ID)).has(sha),
+    ).toBe(true);
+
+    // And a sweep run with BOTH real sources keeps the bytes.
+    const r = await syncStore.sweep([
+      () => collectQueueReferencedShas(vault as never, PLUGIN_ID),
+      async () => store.referencedShas(),
+    ]);
+    expect(r.removed).toBe(0);
+    expect(fs.existsSync(path.join(storeAbs(), sha))).toBe(true);
+  });
 });
