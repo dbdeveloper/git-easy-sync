@@ -40,6 +40,24 @@ export interface BatchEntry {
   // (§7.2: losing this on consolidation silently handed .obsidian/
   // tie-breaks to remote; the writer must carry it through merges).
   mtime: number | null;
+  // Deleted-bin only (HISTORY-DELETED §5.2.1). On a DELETION entry
+  // (`sha === null`), the sha of the last LIVE bytes of that path,
+  // parked in sync_store so the bin can still offer a restore after
+  // the delete is committed. Null everywhere else — and null on a
+  // deletion too when the bytes were never captured (a delete made
+  // outside our hooks: external fs, another plugin, a dot-file).
+  //
+  // ⚠️ `sha` STAYS the deletion sentinel. This is a separate field on
+  // purpose: the tree API reads `sha`, the bin reads `deletedSha`, and
+  // conflating them would make a deletion look like an upload.
+  //
+  // ⚠️ The parser below must carry it, and that is not optional
+  // bookkeeping: every entry is REBUILT from the fields the parser
+  // knows, and two paths rewrite meta.json from that structure — the
+  // claimer's crash repair AND `consolidateIntoTail`, which runs on the
+  // ordinary offline-accumulate path. An unparsed field is therefore
+  // erased by normal operation, not merely by a crash.
+  deletedSha: string | null;
 }
 
 export interface BatchMetafile {
@@ -77,7 +95,12 @@ export function parseBatchMetafile(raw: string): BatchMetafile | null {
     if (size !== null && typeof size !== "number") return null;
     const mtime = r.mtime === null ? null : r.mtime;
     if (mtime !== null && typeof mtime !== "number") return null;
-    entries.push({ path: r.path, sha, size, mtime });
+    // Absent (every batch written before §5.2.1) reads as null — the
+    // tolerant direction: an old batch is still a valid batch, it just
+    // offers no restore.
+    const deletedSha = r.deletedSha == null ? null : r.deletedSha;
+    if (deletedSha !== null && typeof deletedSha !== "string") return null;
+    entries.push({ path: r.path, sha, size, mtime, deletedSha });
   }
   return { v: 1, id: o.id, createdAt: o.createdAt, entries };
 }

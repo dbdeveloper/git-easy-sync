@@ -132,7 +132,13 @@ describe("diff2 port real composition (drainOnce → conflicts.json → findAllC
     for (const [p, content] of Object.entries(files)) {
       const s = await sha(content);
       await syncStore.saveBlobToSyncStore(s, enc(content));
-      entries.push({ path: p, sha: s, size: enc(content).byteLength, mtime });
+      entries.push({
+        path: p,
+        sha: s,
+        size: enc(content).byteLength,
+        mtime,
+        deletedSha: null,
+      });
     }
     const id = `b${++batchSeq}`;
     batches.push({

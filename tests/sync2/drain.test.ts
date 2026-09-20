@@ -145,7 +145,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     const entries: BatchEntry[] = [];
     for (const [p, content] of Object.entries(files)) {
       if (content === null) {
-        entries.push({ path: p, sha: null, size: null, mtime: null });
+        entries.push({ path: p, sha: null, size: null, mtime: null, deletedSha: null });
         continue;
       }
       const s = await sha(content);
@@ -155,6 +155,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
         sha: s,
         size: enc(content).byteLength,
         mtime,
+        deletedSha: null,
       });
     }
     const id = `b${++batchSeq}`;
@@ -597,7 +598,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
           path: p,
           sha: s,
           size: enc(content).byteLength,
-          mtime: 100,
+          mtime: 100, deletedSha: null
         });
       }
       let removed = false;

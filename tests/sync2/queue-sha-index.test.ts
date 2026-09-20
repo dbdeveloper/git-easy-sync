@@ -6,7 +6,10 @@ import { tmpdir } from "os";
 import { Vault } from "../../mock-obsidian";
 import SyncStore from "../../src/sync2/sync-store";
 import BatchWriter from "../../src/sync2/batch-writer";
-import { buildQueueShaIndex } from "../../src/sync2/queue-sha-index";
+import {
+  buildQueueShaIndex,
+  collectQueueReferencedShas,
+} from "../../src/sync2/queue-sha-index";
 import { DELETED_SHA_HASH } from "../../src/sync2/discovery";
 import { calculateGitBlobSHA } from "../../src/utils";
 import type { FileChange } from "../../src/sync2/types";
@@ -107,6 +110,35 @@ describe("buildQueueShaIndex", () => {
         new TextEncoder().encode("recreated\n").buffer as ArrayBuffer,
       ),
     );
+  });
+
+
+  it("§5.2.1: the sweep source protects deletedSha blobs too, not only content shas", async () => {
+    // The bin's last-live bytes live in sync_store and are referenced
+    // ONLY by the deletion entry's deletedSha. If the sweep's queue
+    // source ignores that field the blob is unreferenced, gets reaped,
+    // and the restore window dies silently between a delete and its
+    // push.
+    const id = await writer().writeBatch([deleted("gone.md")]);
+    const metaPath = path.join(
+      dir,
+      ".obsidian",
+      "plugins",
+      PLUGIN_ID,
+      ".runtime",
+      "push-queue",
+      id!,
+      "meta.json",
+    );
+    const raw = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    raw.entries[0].deletedSha = "d00dfeed";
+    fs.writeFileSync(metaPath, JSON.stringify(raw));
+
+    const referenced = await collectQueueReferencedShas(
+      vault as never,
+      PLUGIN_ID,
+    );
+    expect(referenced.has("d00dfeed")).toBe(true);
   });
 
   it("a torn metafile contributes nothing (repair is the claimer's job)", async () => {

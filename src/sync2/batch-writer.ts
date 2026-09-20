@@ -231,6 +231,11 @@ export default class BatchWriter {
           sha: null,
           size: null,
           mtime: null,
+          // HISTORY-DELETED §5.2.1: filled from deleted.json once the
+          // bin re-platform lands. Null here means "no captured bytes
+          // for this deletion", which is also the honest answer for a
+          // delete made outside our hooks.
+          deletedSha: null,
         });
         continue;
       }
@@ -274,7 +279,13 @@ export default class BatchWriter {
     const bytes = await this.readCanonicalBytes(path, true);
     if (bytes === null) return null;
     const sha = await this.workerClient.computeGitBlobSHA(bytes);
-    return { path, sha, size: bytes.byteLength, mtime: stat.mtime };
+    return {
+      path,
+      sha,
+      size: bytes.byteLength,
+      mtime: stat.mtime,
+      deletedSha: null, // content entry — nothing was deleted
+    };
   }
 
   // Canonical bytes of a vault file. Text files (when the toggle is

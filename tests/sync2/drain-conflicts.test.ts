@@ -130,12 +130,18 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     const entries: BatchEntry[] = [];
     for (const [p, content] of Object.entries(files)) {
       if (content === null) {
-        entries.push({ path: p, sha: null, size: null, mtime: null });
+        entries.push({ path: p, sha: null, size: null, mtime: null, deletedSha: null });
         continue;
       }
       const s = await sha(content);
       await syncStore.saveBlobToSyncStore(s, enc(content));
-      entries.push({ path: p, sha: s, size: enc(content).byteLength, mtime });
+      entries.push({
+        path: p,
+        sha: s,
+        size: enc(content).byteLength,
+        mtime,
+        deletedSha: null,
+      });
     }
     const id = `b${++batchSeq}`;
     batches.push({
@@ -1120,7 +1126,7 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     for (const [p, content] of Object.entries(files)) {
       const s = await sha(content);
       await syncStore.saveBlobToSyncStore(s, enc(content));
-      entries.push({ path: p, sha: s, size: enc(content).byteLength, mtime: 100 });
+      entries.push({ path: p, sha: s, size: enc(content).byteLength, mtime: 100 , deletedSha: null});
     }
     const id = `g${++seq}`;
     batches.push({

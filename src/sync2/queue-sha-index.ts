@@ -95,6 +95,10 @@ export async function collectQueueReferencedShas(
     if (meta === null) continue;
     for (const e of meta.entries) {
       if (e.sha !== null) out.add(e.sha);
+      // §5.2.1: the Deleted-bin's last-live bytes are referenced ONLY
+      // here. Miss this and the blob is unreferenced, the sweep reaps
+      // it, and the restore window dies between a delete and its push.
+      if (e.deletedSha !== null) out.add(e.deletedSha);
     }
   }
   return out;

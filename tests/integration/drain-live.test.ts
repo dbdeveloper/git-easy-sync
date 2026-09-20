@@ -244,7 +244,7 @@ describe.skipIf(!integrationEnabled())(
                 path: filePath,
                 sha: s,
                 size: enc(content).byteLength,
-                mtime: 100 + i,
+                mtime: 100 + i, deletedSha: null
               },
             ],
           });
@@ -481,7 +481,7 @@ describe.skipIf(!integrationEnabled())(
                         path: notePath,
                         sha: localSha,
                         size: enc(localContent).byteLength,
-                        mtime: 100,
+                        mtime: 100, deletedSha: null
                       },
                     ],
                   },

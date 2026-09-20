@@ -146,6 +146,8 @@ describe("BatchWriter (Phase 2 group B)", () => {
       sha: expectedSha,
       size: 6,
       mtime: 1_700_000_000_000,
+      // §5.2.1: a content entry never carries one — nothing was deleted.
+      deletedSha: null,
     });
 
     expect(fs.existsSync(path.join(storeAbs(), expectedSha))).toBe(true);
@@ -163,7 +165,7 @@ describe("BatchWriter (Phase 2 group B)", () => {
     const id = await makeWriter().writeBatch([deleted("gone.md")]);
     const meta = readMeta(id!);
     expect(meta.entries).toEqual([
-      { path: "gone.md", sha: null, size: null, mtime: null },
+      { path: "gone.md", sha: null, size: null, mtime: null, deletedSha: null },
     ]);
     expect(fs.existsSync(storeAbs())).toBe(false);
   });
@@ -339,6 +341,53 @@ describe("BatchWriter (Phase 2 group B)", () => {
     expect(warnings.some((w) => w.includes("unrepairable"))).toBe(true);
   });
 
+
+  // ── §5.2.1 metafile contract: deletedSha ──────────────────────────
+  //
+  // The Deleted-bin re-platform puts the last LIVE bytes of a deleted
+  // file in sync_store and records the sha on the batch's deletion
+  // entry, so the bin can still offer a restore after the delete is
+  // committed. `sha: null` stays the deletion sentinel (tree API);
+  // `deletedSha` is a separate, bin-only field.
+  //
+  // It is NOT an additive on-disk field, which is the whole reason this
+  // lands first: the parser REBUILDS every entry from the fields it
+  // knows, and two paths rewrite meta.json from that parsed structure —
+  // the claimer's crash repair, and (the decisive one) consolidation,
+  // which runs on the ordinary offline-accumulate path. A field the
+  // parser ignores is therefore erased by normal operation, not just by
+  // a crash.
+
+  it("§5.2.1: a deletion entry's deletedSha survives parse → write round-trip", async () => {
+    const id = await makeWriter().writeBatch([deleted("gone.md")]);
+    const metaPath = path.join(queueAbs(), id!, BATCH_META_FILE);
+    const raw = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    raw.entries[0].deletedSha = "cafebabe";
+    fs.writeFileSync(metaPath, JSON.stringify(raw));
+
+    const parsed = parseBatchMetafile(fs.readFileSync(metaPath, "utf8"));
+    expect(parsed!.entries[0].deletedSha).toBe("cafebabe");
+    // …and the sentinel is untouched: deletedSha never replaces `sha`.
+    expect(parsed!.entries[0].sha).toBeNull();
+  });
+
+  it("§5.2.1: consolidation must NOT erase deletedSha on an untouched entry", async () => {
+    const id = await makeWriter().writeBatch([deleted("gone.md")]);
+    const metaPath = path.join(queueAbs(), id!, BATCH_META_FILE);
+    const raw = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    raw.entries[0].deletedSha = "cafebabe";
+    fs.writeFileSync(metaPath, JSON.stringify(raw));
+
+    // An ORDINARY offline-accumulate fold of a DIFFERENT path.
+    putVaultFile("other.md", "x\n");
+    const tail = await makeWriter().consolidateIntoTail([modified("other.md")]);
+    expect(tail).toBe(id);
+
+    const after = readMeta(id!);
+    const gone = after.entries.find((e) => e.path === "gone.md")!;
+    expect(gone.deletedSha).toBe("cafebabe");
+  });
+
   // ── §7.3 explicit dedup = §VIII L.2 ──────────────────────────────
   // L.2's invariant ("the same path never appears twice in one batch")
   // is a property of the WRITER, so it is pinned here and not in the
@@ -364,7 +413,7 @@ describe("BatchWriter (Phase 2 group B)", () => {
       deleted("doomed.md"),
     ]);
     expect(readMeta(id!).entries).toEqual([
-      { path: "doomed.md", sha: null, size: null, mtime: null },
+      { path: "doomed.md", sha: null, size: null, mtime: null, deletedSha: null },
     ]);
   });
 
@@ -415,7 +464,7 @@ describe("BatchWriter (Phase 2 group B)", () => {
     const id = await writer.writeBatch([modified("note.md")]);
     await writer.consolidateIntoTail([deleted("note.md")]);
     expect(readMeta(id!).entries).toEqual([
-      { path: "note.md", sha: null, size: null, mtime: null },
+      { path: "note.md", sha: null, size: null, mtime: null, deletedSha: null },
     ]);
   });
 

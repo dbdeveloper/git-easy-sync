@@ -90,8 +90,8 @@ describe("BatchClaimer (§VIII H)", () => {
     expect(await makeClaimer().getBatch()).toBeNull();
 
     const sha = await putBlob("x");
-    writeBatch("20260830T2", [{ path: "b.md", sha, size: 1, mtime: 5 }]);
-    writeBatch("20260830T1", [{ path: "a.md", sha, size: 1, mtime: 5 }]);
+    writeBatch("20260830T2", [{ path: "b.md", sha, size: 1, mtime: 5 , deletedSha: null}]);
+    writeBatch("20260830T1", [{ path: "a.md", sha, size: 1, mtime: 5 , deletedSha: null}]);
 
     const claimed = await makeClaimer().getBatch();
     expect(claimed!.id).toBe("20260830T1"); // oldest, lexicographic
@@ -103,9 +103,9 @@ describe("BatchClaimer (§VIII H)", () => {
   it("H: commit-side claim present → drain WAITS (never skips to a newer dir) and proceeds once released", async () => {
     const sha = await putBlob("x");
     const bdir = writeBatch("20260830T1", [
-      { path: "a.md", sha, size: 1, mtime: 5 },
+      { path: "a.md", sha, size: 1, mtime: 5 , deletedSha: null},
     ]);
-    writeBatch("20260830T2", [{ path: "b.md", sha, size: 1, mtime: 5 }]);
+    writeBatch("20260830T2", [{ path: "b.md", sha, size: 1, mtime: 5 , deletedSha: null}]);
     const marker = path.join(bdir, ATTEMPTED_COMMIT_MARKER);
     fs.writeFileSync(marker, "");
 
@@ -125,7 +125,7 @@ describe("BatchClaimer (§VIII H)", () => {
   it("H: give-up ceiling — a marker that never clears returns null (next drain retries), with the long-hold warning", async () => {
     const sha = await putBlob("x");
     const bdir = writeBatch("20260830T1", [
-      { path: "a.md", sha, size: 1, mtime: 5 },
+      { path: "a.md", sha, size: 1, mtime: 5 , deletedSha: null},
     ]);
     fs.writeFileSync(path.join(bdir, ATTEMPTED_COMMIT_MARKER), "");
 
@@ -139,7 +139,7 @@ describe("BatchClaimer (§VIII H)", () => {
   it("H TOCTOU: commit claims BETWEEN the first check and markAttempted → both flags up → drain waits it out", async () => {
     const sha = await putBlob("x");
     const bdir = writeBatch("20260830T1", [
-      { path: "a.md", sha, size: 1, mtime: 5 },
+      { path: "a.md", sha, size: 1, mtime: 5 , deletedSha: null},
     ]);
     const commitMarker = path.join(bdir, ATTEMPTED_COMMIT_MARKER);
 
@@ -187,7 +187,7 @@ describe("BatchClaimer (§VIII H)", () => {
     fs.writeFileSync(path.join(bad, BATCH_META_FILE), '{"v":1,"id":"20260'); // torn
     fs.writeFileSync(path.join(bad, ATTEMPTED_COMMIT_MARKER), "");
     const sha = await putBlob("good");
-    writeBatch("20260830T2", [{ path: "b.md", sha, size: 4, mtime: 5 }]);
+    writeBatch("20260830T2", [{ path: "b.md", sha, size: 4, mtime: 5 , deletedSha: null}]);
 
     // Production order (§II.8): the onload sweep repairs stale
     // commit claims FIRST; getBatch itself only waits on a live one.
@@ -204,7 +204,7 @@ describe("BatchClaimer (§VIII H)", () => {
     fs.writeFileSync(path.join(dir, "a.md"), "vault content");
     const sha = await calculateGitBlobSHA(enc("vault content"));
     const bdir = writeBatch("20260830T1", [
-      { path: "a.md", sha, size: "vault content".length, mtime: 5 },
+      { path: "a.md", sha, size: "vault content".length, mtime: 5 , deletedSha: null},
     ]);
     // Blob NEVER made it to sync_store (crash between metadata and
     // blobs — the §12.4 order guarantees the metadata exists).
@@ -229,9 +229,9 @@ describe("BatchClaimer (§VIII H)", () => {
     const missingSha = await calculateGitBlobSHA(enc("OLD content"));
     const okSha = await putBlob("intact");
     const bdir = writeBatch("20260830T1", [
-      { path: "changed.md", sha: missingSha, size: "OLD content".length, mtime: 5 },
-      { path: "ok.md", sha: okSha, size: 6, mtime: 5 },
-      { path: "gone.md", sha: null, size: null, mtime: null }, // deletion — no blob needed
+      { path: "changed.md", sha: missingSha, size: "OLD content".length, mtime: 5 , deletedSha: null},
+      { path: "ok.md", sha: okSha, size: 6, mtime: 5 , deletedSha: null},
+      { path: "gone.md", sha: null, size: null, mtime: null, deletedSha: null }, // deletion — no blob needed
     ]);
     fs.writeFileSync(path.join(bdir, ATTEMPTED_COMMIT_MARKER), "");
 
@@ -247,7 +247,7 @@ describe("BatchClaimer (§VIII H)", () => {
   it("H: a batch whose EVERY entry dropped is returned empty — the caller's П11 skip, not a crash", async () => {
     const missingSha = await calculateGitBlobSHA(enc("nowhere"));
     const bdir = writeBatch("20260830T1", [
-      { path: "gone-from-vault.md", sha: missingSha, size: 7, mtime: 5 },
+      { path: "gone-from-vault.md", sha: missingSha, size: 7, mtime: 5 , deletedSha: null},
     ]);
     fs.writeFileSync(path.join(bdir, ATTEMPTED_COMMIT_MARKER), "");
 
@@ -261,7 +261,7 @@ describe("BatchClaimer (§VIII H)", () => {
     fs.writeFileSync(path.join(dir, "a.md"), "different length content");
     const sha = await calculateGitBlobSHA(enc("short"));
     const bdir = writeBatch("20260830T1", [
-      { path: "a.md", sha, size: "short".length, mtime: 5 },
+      { path: "a.md", sha, size: "short".length, mtime: 5 , deletedSha: null},
     ]);
     fs.writeFileSync(path.join(bdir, ATTEMPTED_COMMIT_MARKER), "");
     await makeClaimer().recoverStaleCommitClaims();
