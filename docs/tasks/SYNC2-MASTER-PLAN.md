@@ -1207,6 +1207,13 @@ DOT-FILES не існує; у самій DOT-FILES-спеці він і стої
 
 1. **Re-platform Deleted-кошика** (TrashStore → `sync_store` + `deleted.json`,
    `deletedSha` у deletion-запис батчу) — [`DIFF-EDITOR-HISTORY-DELETED.md`](./DIFF-EDITOR-HISTORY-DELETED.md) §5.2.1.
+   ⚠️ **Звірено з кодом 2026-09-20:** дизайн чинний, але ПЕРШИЙ коміт — не кошик, а
+   розширення контракту метафайлу: `deletedSha` НЕ адитивне (парсер збирає записи
+   заново, а `consolidateIntoTail` переписує метафайл на штатному шляху, тож поле
+   зникло б при першому ж складанні батчів). Тип → парсер → sweep-джерело «черга» →
+   Deleted-view їдуть одним кроком. Плюс дві раніше не згадані частини кошика —
+   `liftForCompare`/`returnFromCompare` і `trash-recovery.ts` — потребують явного
+   рішення (деталі в §5.2.1).
 2. **Імплементація DOT-FILES** (ядро: D1-D7, dot-hide блок, `walkDotDir`,
    `readRootGitignore`, симетрія push/pull) — [`SYNC2-DOT-FILES-REFACTOR.md`](./SYNC2-DOT-FILES-REFACTOR.md) Кроки A-D.
 3. **Двогілковий пошук synthetic для панелі** — той самий документ §4.3.1 + Крок C
