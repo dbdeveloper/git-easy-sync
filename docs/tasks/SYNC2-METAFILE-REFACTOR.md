@@ -1,6 +1,13 @@
 # SYNC2-METAFILE-REFACTOR — сховище метаданих для великих vault-ів
 
-> **Статус:** дизайн-документ. ТІЛЬКИ про **сховище** метаданих для vault-ів масштабу
+> **Статус: ✅ ІМПЛЕМЕНТОВАНО (Фаза 1, 2026-08-30) — документ читається як обґрунтування
+> чинного коду, а не як план.** `hot-metadata.ts` + `file-baselines.ts` + `invariant-state.ts`,
+> покриті юніт-тестами (13 + 14 + 3). Незакритим лишається рівно те, що свідомо віддано іншим
+> воркстрімам: `heldPluginUpdates` у hot-парі (PLUGIN-UPDATE-COMPAT Phase 2, §4) і багатша
+> форма `invariantState` + dot-файли в `files{}` (DOT-FILES, §1.B/§2.2). Решта тексту нижче
+> писалась ДО імплементації — там, де він говорить у майбутньому часі, дивись §2.4.
+>
+> Нижче — дизайн-документ. ТІЛЬКИ про **сховище** метаданих для vault-ів масштабу
 > 2k–20k+ файлів: **hot-пара слотів** (кілька глобальних sync-параметрів; 2-слотовий
 > ping-pong із `seq`, БЕЗ `atomicWriteFile` — §2.1) + **cold-кошики** (per-file baseline;
 > hash-buckets + MRU-кеш, crash-safe наявним `atomic-write.ts`) проти
@@ -351,18 +358,22 @@ Per DOT-FILES: dot-файли + normal-файли в дозволених dot-т
 (тобто в кошики) → відслідковуються при commit і merge-аться в drain **як ordinary-файли**.
 Зараз цього нема (dot-простір поза `files{}` → ні change-tracking, ні коректний diff3 для них).
 
-### 2.4 Розташування на диску (поточне → майбутнє)
+### 2.4 Розташування на диску (✅ ЗРОБЛЕНО, 2026-08-30)
 
-**Зараз:** усе (hot + cold) в ОДНОМУ файлі `<configDir>/git-easy-sync-metadata.json`
+**Було (до Фази 1):** усе (hot + cold) в ОДНОМУ файлі `<configDir>/git-easy-sync-metadata.json`
 (`SYNC2_MANIFEST_FILE_NAME`; виключений із синку в `isSyncable`).
 
-**Майбутнє — у per-device `.runtime/`** (`<configDir>/plugins/<plugin-id>/.runtime/` — уже
-hardcoded-excluded зі синку як per-device runtime-стан, `change-detector.ts:45`). Попередній
-метафайл `<configDir>/git-easy-sync-metadata.json` при цьому видаляється — ⚠️ **у ДВОХ
-місцях, не в одному**:
-1. рядок `git-easy-sync-metadata.json` у керованому блоці `<configDir>/.gitignore`
-   (`gitignore-invariants.ts:54`);
-2. хардкод у `isSyncable` (`change-detector.ts:31`) — приберете лише перше, лишиться мертвий код.
+**Стало — per-device `.runtime/`** (`<configDir>/plugins/<plugin-id>/.runtime/` — hardcoded-
+excluded зі синку як per-device runtime-стан, `change-detector.ts`). Монолітного метафайлу в
+`src/` більше немає жодної згадки; ⚠️ обидві точки видалення (їх було **ДВІ, не одна**) закриті:
+1. ✅ рядок `git-easy-sync-metadata.json` у керованому блоці `<configDir>/.gitignore` —
+   прибраний із seed-констант `gitignore-invariants.ts`;
+2. ✅ хардкод у `isSyncable` (`change-detector.ts`) — прибраний разом із ним (лишили б лише
+   перше — лишився б мертвий код).
+
+⚠️ Механізм «доїде саме» нижче описує шлях для ІСНУЮЧИХ інсталяцій. Після рішення «білий лист»
+(MASTER-PLAN, 2026-08-30) `git-easy-sync` — це ФІЗИЧНО ІНШИЙ плагін з іншим `manifest.id`, який
+монолітного метафайлу ніколи не мав; для нього цей абзац — не міграція, а історія рішення.
 
 Як видалення доїде на інші пристрої — **само**, механізмом із
 [`DOT-FILES §3.1.3`](./SYNC2-DOT-FILES-REFACTOR.md): рядок лежить усередині **константи** блоку,

@@ -1,18 +1,9 @@
-// The new drain — main loop (NEW-DRAIN §III), Phase 4 assembly.
-// NOT wired into the live engine: the cutover is Phase 5.5, after the
-// conflict machinery (Phase 5) completes this module. Until then it
-// exists as a module behind tests (fake client + the real Phase 1-3
-// primitives).
-//
-// ── PHASE 5 SEAMS (explicit, greppable) ─────────────────────────────
-// Every place the conflict machinery plugs in is marked `PHASE5:`.
-// In Phase 4 a manual conflict is a VERDICT-AS-DATA: the loop records
-// it in DrainResult.conflictVerdicts, sets the tracked flag and the
-// in-memory/journal conflict record — but never pushes to the
-// conflict branch, never writes sibling files, never finalizes.
-// process_conflicts() / recoverSiblingTransactionIfNeeded() /
-// STEP1-3 pushes / FINALIZE all arrive in Phase 5 and replace these
-// seams in place.
+// The new drain — main loop (NEW-DRAIN §III). Since Phase 5.5 (THE
+// SWITCH, 2026-08-31) this IS the live engine: `Sync2Manager` is a
+// thin shell over `drainOnce`, and the old manager-owned drain/pull/
+// tree-builder/conflict machinery is deleted. The fake-client unit
+// suites (drain.test.ts, drain-conflicts.test.ts) stay the fast TDD
+// loop; production composition lives in drain-deps.ts.
 //
 // ── What IS here (§III faithfully) ──────────────────────────────────
 // - drain-scoped state: verifiedShas + layer2Corrections (§II.9/§II.13
@@ -37,16 +28,23 @@
 //   AFTER the confirmed push, one date per batch;
 // - Vault-step for NON-conflict paths (§II.3/II.4/II.5 endings +
 //   B.7-9): live vault read, deletion-while-drain = DELETED (not
-//   null), merged result written back / deleted; conflict verdicts
-//   born here are recorded (PHASE5 registers them);
+//   null), merged result written back / deleted; a conflict born here
+//   goes through STEP1 like any other;
+// - the conflict machinery (Phase 5, §II.6/II.7/II.11/II.14): STEP1-3,
+//   the sibling replace-transaction + its recovery, process_conflicts()
+//   dedup, seeding/RECONCILE and FINALIZE;
 // - progress by FILE COUNT only, through the injected callback. The
 //   progress bar is not worth a single extra request (§4.1) — every
-//   number here is already in hand.
+//   number here is already in hand;
+// - the EPILOGUE (§III steps 1-5, at the end of this file): baseline
+//   transfer → conflicts reconcile → hot anchor → journal.clear() →
+//   sweep. The journal is persisted per batch and after the Vault-step
+//   and survives ONLY an aborted run — its presence at the next drain
+//   start is what says "the previous one died mid-way".
 //
-// PHASE 6 (deliberately absent): the epilogue (baselines/hot/journal
-// clear). The journal is persisted per batch and after the
-// Vault-step, and intentionally LEFT on disk — the next drain resumes
-// from it. Epilogue lands with Phase 6.
+// PHASE 6 (still absent): `vaultStepErrors` reach the LOG only
+// (Sync2Manager.logDrainSummary) — surfacing them in the UI is the
+// remaining epilogue item, together with the §VIII D/K crash matrix.
 
 import { arrayBufferToBase64, type Vault } from "obsidian";
 import { NewTreeRequestItem } from "../github/client";
@@ -390,8 +388,8 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // in-flight refs ride the journal. Optional: fake-world suites
   // don't wire a queue reader.
   await sweepSyncStore(deps);
-  // PHASE5.5 (cutover): rearangeSyncStore() — the §12.5 sweep runs
-  // here and again after the loop.
+  // §12.5 names this rearangeSyncStore(); it runs here and again after
+  // the loop (epilogue step 5).
 
   const diff3Deps: Diff3Deps = {
     syncStore: deps.syncStore,
@@ -1676,8 +1674,8 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     tracked.base = tracked.remote;
   }
 
-  // ── EPILOGUE (§III steps 1-4; step 5 = the sync_store sweep, wired
-  // in the Phase 5.5 wiring commit). Runs ONLY on the fully-completed
+  // ── EPILOGUE (§III steps 1-4; step 5 = the sync_store sweep).
+  // Runs ONLY on the fully-completed
   // path — every abort above returns BEFORE it, leaving the journal
   // alive so the next run redoes the Vault-step + epilogue (§IV.2).
   // Order: step 2 MUST precede step 4 (after the journal dies, the

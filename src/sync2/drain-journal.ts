@@ -11,9 +11,9 @@
 // consistent (METAFILE §2.1.2 grouping rule). head_hash /
 // conflict_head_hash are NOT persisted — always re-read live (§II.7).
 // Written once per COMPLETED batch ("BATCH ОБРОБЛЕНО!"), not per file;
-// deleted by the epilogue when a drain fully completes (Phase 6) —
-// a journal on disk at drain start means the previous run died
-// mid-way, and its state seeds the restart.
+// deleted by the epilogue (drain.ts, step 4) when a drain fully
+// completes — a journal on disk at drain start means the previous run
+// died mid-way, and its state seeds the restart.
 //
 // Blobs are NEVER serialized — bytes live in the content-addressed
 // sync_store; the journal carries shas only. That is also what makes
@@ -21,8 +21,7 @@
 // every sha the interrupted drain still leans on — downloaded theirs,
 // diff3 intermediates ("ours became theirs"), conflict bases — so the
 // start-of-drain sweep can never reap work a previous attempt already
-// paid for. The schema requirement exists NOW even though the sweep
-// itself is wired at the Phase 5.5 cutover.
+// paid for.
 
 import { normalizePath, type Vault } from "obsidian";
 import { DELETED, FileInfo, emptyFileInfo } from "./diff3";
@@ -195,7 +194,7 @@ export default class DrainJournal {
     );
   }
 
-  // Epilogue step 4 (Phase 6): a completed drain removes the journal —
+  // Epilogue step 4: a completed drain removes the journal —
   // its absence is what tells the next run "previous drain finished".
   async clear(): Promise<void> {
     for (const slot of ["a", "b"] as const) {
