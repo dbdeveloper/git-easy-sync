@@ -809,6 +809,142 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
       expect(r.status).toBe(expected);
     });
   }
+
+  it("J.1: a journal on disk RESUMES the interrupted drain — tracked files and the branch name come back verbatim", async () => {
+    // Distinct from B.3 (a 422 restart INSIDE one run): here the
+    // process is gone and a brand-new drainOnce has to pick the state
+    // back up off the disk.
+    const OTHER = "other.md";
+    await setupAligned({ [OTHER]: "other v0\n" });
+    await world.commitFiles({
+      [NOTE]: REMOTE_CLASH,
+      [OTHER]: "other v2\n",
+    });
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+    const otherSha = await sha("other v2\n");
+
+    // Drain 1 dies in the Vault-step — AFTER the batch completed, so
+    // STEP1 has already pushed the branch and the journal carries both
+    // the tracked files and the branch name.
+    const d1 = makeDeps();
+    const passThrough = d1.client.getBlobFromRepo.bind(d1.client);
+    d1.client.getBlobFromRepo = async (s: string) => {
+      if (s === otherSha) throw new NetworkError("net down");
+      return passThrough(s);
+    };
+    expect((await drainOnce(d1)).status).toBe("network-error");
+
+    const crashed = await journal.load();
+    expect(crashed).not.toBeNull();
+    const branchFromJournal = crashed!.conflictBranchName;
+    expect(branchFromJournal).not.toBeNull();
+    expect(crashed!.trackedFiles.get(NOTE)!.isManualConflict).toBe(true);
+    const trackedRemoteSha = crashed!.trackedFiles.get(NOTE)!.remote.sha;
+
+    // Drain 2: healthy network, fresh deps. It must RESUME — same
+    // branch, no second one minted, and the tracked remote it acts on
+    // is the one the journal kept.
+    expect(trackedRemoteSha).toBe(await sha(REMOTE_CLASH));
+
+    // Drain 2: healthy network, fresh deps. The restored name must be
+    // the one from the journal — a second mint would strand the branch
+    // this device already pushed to, and every later drain would make
+    // yet another one. Asserted over the branch names the drain
+    // actually TOUCHES, not over the end state (what FINALIZE then
+    // does with that branch is G's business, not J.1's).
+    const touched: string[] = [];
+    // A LATER clock, on purpose: the branch name is minted from
+    // (deviceLabel, now), so with the harness's frozen clock a re-mint
+    // would be byte-identical to the restored name and this test could
+    // not tell restore from re-mint. Ten minutes later it can.
+    const d2 = makeDeps({ now: () => 1_800_000_600_000 });
+    const realHead = d2.client.getBranchHeadSha.bind(d2.client);
+    d2.client.getBranchHeadSha = async (b: string) => {
+      touched.push(b);
+      return realHead(b);
+    };
+    const realDelete = d2.client.deleteBranch.bind(d2.client);
+    d2.client.deleteBranch = async (b: string) => {
+      touched.push(b);
+      return realDelete(b);
+    };
+
+    const r2 = await drainOnce(d2);
+    expect(r2.status).toBe("ok");
+    expect(touched.length).toBeGreaterThan(0);
+    expect([...new Set(touched)]).toEqual([branchFromJournal]);
+    // And the work the crash interrupted actually finished.
+    expect(vaultFiles.files.get(OTHER)!.content).toBe("other v2\n");
+  });
+
+  it("J.6: RECONCILE resets a flag whose path is gone from the authoritative scan (the positive half of J.7)", async () => {
+    await setupAligned();
+    // A journal from a previous run still flags the path as a manual
+    // conflict, but conflicts.json no longer has it: the user resolved
+    // it outside the drain (deleted the sibling, reconciled the file).
+    const { emptyDrainState } = await import("../../src/sync2/drain-journal");
+    const js = emptyDrainState();
+    const info = {
+      path: NOTE,
+      sha: await sha(V0),
+      size: enc(V0).byteLength,
+      mtime: 50,
+      blob: null,
+      mode: "" as const,
+      deviceLabel: null,
+    };
+    js.trackedFiles.set(NOTE, {
+      base: { ...info },
+      remote: { ...info },
+      isManualConflict: true,
+    });
+    await journal.persist(js);
+
+    const warnings: string[] = [];
+    const logger = {
+      info: () => {},
+      warn: (m: string) => warnings.push(m),
+    };
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+
+    const r = await drainOnce(makeDeps({ logger } as Partial<DrainDeps>));
+    expect(r.status).toBe("ok");
+    expect(warnings.some((w) => w.startsWith("RECONCILE:"))).toBe(true);
+    // The flag really went down: the batch took the MAIN route, not
+    // STEP2 — the exact inverse of J.3's seeded-flag assertion.
+    expect(r.pushedCommits).toHaveLength(1);
+    expect(dec(world.headFiles().get(NOTE)!.bytes)).toBe(LOCAL_CLASH);
+    expect(world.branchHeads.size).toBe(0);
+  });
+
+  it("E.2: a CONFIRMED absence is NOT an abort — the path is recorded and the rest of the drain finishes", async () => {
+    // The other half of E.1's boundary, and the reason the fix above
+    // had to distinguish them: `error != null` (the transport failed,
+    // retry may help) aborts everything; `result == null` (the
+    // transport worked and the repo simply has no such blob) is a
+    // narrow per-path record. Getting this backwards would make a
+    // single corrupt path stop every future sync.
+    await setupAligned({ "clean.md": "clean v0\n" });
+    await world.commitFiles({
+      [NOTE]: "remote v2\n",
+      "clean.md": "clean v2\n",
+    });
+    const vanishedSha = await sha("remote v2\n");
+
+    const deps = makeDeps();
+    const passThrough = deps.client.getBlobFromRepo.bind(deps.client);
+    deps.client.getBlobFromRepo = async (s: string) =>
+      s === vanishedSha ? null : passThrough(s);
+
+    const r = await drainOnce(deps);
+    expect(r.status).toBe("ok");
+    expect(r.vaultStepErrors.map((e) => e.path)).toEqual([NOTE]);
+    // The healthy path in the SAME drain still landed in the vault.
+    expect(vaultFiles.files.get("clean.md")!.content).toBe("clean v2\n");
+    expect(vaultFiles.files.get(NOTE)!.content).toBe(V0); // untouched
+  });
 });
 
 describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
@@ -1203,5 +1339,128 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     expect(r.status).toBe("ok");
     expect(world.branchHeads.get(branch)).toBe(tipAfterBirth); // no new commit
   });
+
+  it("G.4: the live check finds a DIFFERENT sha, or no such path on the branch → PUSH (the inverse of G.3)", async () => {
+    await setup();
+    const branch = await birthConflict();
+    const tipAfterBirth = world.branchHeads.get(branch)!;
+    const V0sha = await sha(V0b);
+    const LOCAL_2 = "LOCAL-2\ntwo\nthree\n";
+
+    // Both halves regress the durable conflictBase, so the journal can
+    // never confirm and the decision rests ENTIRELY on the live read.
+    const forgetConflictBase = async (): Promise<void> => {
+      const durable = await conflictStore.load();
+      const rec = durable.entries.get(NOTE2)!;
+      durable.entries.set(NOTE2, {
+        conflictBase: { ...rec.conflictBase, sha: V0sha },
+        siblings: rec.siblings,
+      });
+      await conflictStore.save(durable);
+    };
+
+    // (a) the branch holds LOCAL_B, ours is LOCAL_2 → different → push.
+    await forgetConflictBase();
+    await stage({ [NOTE2]: LOCAL_2 });
+    vaultFiles.files.set(NOTE2, { content: LOCAL_2, mtime: 200 });
+    baseCommit = world.head;
+    expect((await drainOnce(deps())).status).toBe("ok");
+    const tipAfterPush = world.branchHeads.get(branch)!;
+    expect(tipAfterPush).not.toBe(tipAfterBirth);
+    expect(dec(world.filesAt(tipAfterPush).get(NOTE2)!.bytes)).toBe(LOCAL_2);
+
+    // (b) the 404 shape — the branch carries no such path at all.
+    // Ours did NOT change since (a), so a push here can only come
+    // from the live answer, never from a content comparison.
+    await forgetConflictBase();
+    await stage({ [NOTE2]: LOCAL_2 });
+    baseCommit = world.head;
+    const d = deps();
+    const origMeta = d.client.getContentsMetadataAtRef.bind(d.client);
+    d.client.getContentsMetadataAtRef = async (p: string, ref: string) =>
+      ref === tipAfterPush ? null : origMeta(p, ref);
+    expect((await drainOnce(d)).status).toBe("ok");
+    expect(world.branchHeads.get(branch)).not.toBe(tipAfterPush);
+  });
+
+  it("G.5: the branch NAME reaches the journal BEFORE the first network call that touches the branch (§II.7)", async () => {
+    await setup();
+    // The point of the ordering: a crash between "minted" and
+    // "persisted" would leave a branch on GitHub this device can no
+    // longer name — every later drain would mint a second one.
+    const order: string[] = [];
+    const realPersist = journal.persist.bind(journal);
+    journal.persist = async (s) => {
+      if (s.conflictBranchName !== null) order.push("journal:name");
+      return realPersist(s);
+    };
+
+    const d = deps();
+    const realHead = d.client.getBranchHeadSha.bind(d.client);
+    d.client.getBranchHeadSha = async (b: string) => {
+      order.push("net:getBranchHeadSha");
+      return realHead(b);
+    };
+    const realPush = d.client.pushCommitToBranch.bind(d.client);
+    d.client.pushCommitToBranch = async (args: Parameters<typeof realPush>[0]) => {
+      order.push("net:pushCommitToBranch");
+      return realPush(args);
+    };
+
+    await world.commitFiles({ [NOTE2]: REMOTE_B });
+    await stage({ [NOTE2]: LOCAL_B });
+    vaultFiles.files.set(NOTE2, { content: LOCAL_B, mtime: 100 });
+    expect((await drainOnce(d)).status).toBe("ok");
+
+    // Not "contains, in some order" — the FIRST event of the whole
+    // sequence must be the persist.
+    expect(order[0]).toBe("journal:name");
+    expect(order).toContain("net:getBranchHeadSha");
+    expect(order).toContain("net:pushCommitToBranch");
+  });
+
+  // G.14 — isAncestorOf is compare().status, and only these four
+  // values exist. The two ancestor answers mean "a previous merge
+  // already landed": delete the branch, do NOT merge again (that is
+  // what keeps FINALIZE idempotent after a crash). The two others
+  // mean the branch still carries commits main cannot reach → merge.
+  const ANCESTOR_CASES: Array<
+    ["ahead" | "behind" | "identical" | "diverged", boolean]
+  > = [
+    ["ahead", true],
+    ["identical", true],
+    ["diverged", false],
+    ["behind", false],
+  ];
+
+  for (const [status, isAncestor] of ANCESTOR_CASES) {
+    it(`G.14: compare status "${status}" → ${isAncestor ? "ancestor: delete only" : "not an ancestor: merge"}`, async () => {
+      await setup();
+      const branch = await birthConflict();
+      const rec = (await conflictStore.load()).entries.get(NOTE2)!;
+      // Resolve: sibling deleted, reconciled content committed.
+      fs.rmSync(
+        path.join(
+          dir,
+          buildSiblingFilePath(NOTE2, rec.siblings[0].mtime!, "other-device"),
+        ),
+      );
+      const RESOLVED = "RESOLVED\ntwo\nthree\n";
+      await stage({ [NOTE2]: RESOLVED });
+      vaultFiles.files.set(NOTE2, { content: RESOLVED, mtime: 300 });
+      baseCommit = world.head;
+
+      const d = deps();
+      d.client.compareStatus = async () => status;
+      const r = await drainOnce(d);
+
+      expect(r.status).toBe("ok");
+      expect(r.finalizedMergeSha === null).toBe(isAncestor);
+      // Either way the branch is gone and the name is cleared —
+      // the difference is only whether a merge commit was made.
+      expect(world.branchHeads.has(branch)).toBe(false);
+      expect(hotUpdates[hotUpdates.length - 1].conflictBranchName).toBeNull();
+    });
+  }
 });
 
