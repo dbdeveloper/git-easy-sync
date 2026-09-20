@@ -47,6 +47,7 @@ import {
 } from "../helpers";
 import GitignoreInvariants from "../../../../../src/sync2/gitignore-invariants";
 import InvariantStateStore from "../../../../../src/sync2/invariant-state";
+import GitignoreSeedStore from "../../../../../src/sync2/gitignore-seeds";
 
 const CONFIG_DIR = ".obsidian";
 const SELF = "git-easy-sync";
@@ -151,6 +152,10 @@ describe.skipIf(!integrationEnabled())("sync2 S1 — no secret leak", () => {
       }),
       configDir: CONFIG_DIR,
       selfPluginId: SELF,
+      seeds: new GitignoreSeedStore({
+        vault: c.vault,
+        selfPluginId: SELF,
+      }),
     });
 
   beforeAll(async () => {

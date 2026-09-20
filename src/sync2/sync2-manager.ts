@@ -112,6 +112,14 @@ export interface Sync2ManagerDeps {
   conflictStore: ConflictStoreV2;
   siblingTx: SiblingTx;
   invariants?: { enforce(): Promise<void> } | null;
+  // DOT-FILES §8.0 — read-only view for the engine: "is this managed
+  // .gitignore currently byte-identical to what we seeded?".
+  // REQUIRED here, on purpose. It stays optional one level down (the
+  // engine treats absence as "rule does not fire", which the drain
+  // unit suites want), but the COMPOSITION must not be able to forget
+  // it: that exact mistake made the first shape of this fix inert
+  // outside main.ts, twice in one day, and only a live probe caught it.
+  gitignoreSeeds: { matches(path: string, sha: string | null): boolean };
   // Discovery's remote-path filter (async-capable — gitignore walks).
   isSyncable(path: string): boolean | Promise<boolean>;
   mainBranch(): string;
@@ -424,6 +432,28 @@ export class Sync2Manager {
     if (this.running) return; // H3: collapse into the in-flight drain
     this.running = true;
     this.abortRequested = false;
+    // DOT-FILES §3.1.2 / owner 2026-09-20: the managed .gitignore
+    // files return to canonical before EVERY operation, not just
+    // before a commit. Until now enforce() ran only on the commit
+    // path, so with `syncStartsWithCommit=false` the interval tick,
+    // the startup pulse and the watchdog all pushed without checking
+    // the invariants at all — and a foreign copy of
+    // `<self>/.gitignore` pulled from another device stayed in force
+    // until someone happened to commit.
+    //
+    // Safe to run here only BECAUSE of the §8.0 seed markers: a cold
+    // start's freshly-written file now carries its own ancestor, so
+    // this call cannot manufacture the conflict §8.0 is about.
+    if (this.deps.invariants) {
+      try {
+        await this.deps.invariants.enforce();
+      } catch (err) {
+        // Hygiene, never a reason to skip the sync itself.
+        this.deps.logger.warn("drain: invariant enforcement failed", {
+          err: `${err}`,
+        });
+      }
+    }
     const startedAtMs = this.now();
     this.emitDrainStatus({
       state: "running",
@@ -520,6 +550,7 @@ export class Sync2Manager {
       autoCanonicalize: this.deps.autoCanonicalize,
       cancelRequested: () => this.abortRequested,
       trashHooks: this.deps.trashHooks,
+      gitignoreSeeds: this.deps.gitignoreSeeds,
       onProgress: (processed, totalFiles, path) =>
         this.emitDrainStatus({
           currentFile: processed,

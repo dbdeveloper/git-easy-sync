@@ -5,6 +5,7 @@
 import { Vault } from "obsidian";
 import { calculateGitBlobSHA } from "../utils";
 import InvariantStateStore, { InvariantFileState } from "./invariant-state";
+import GitignoreSeedStore from "./gitignore-seeds";
 
 // Invariant block markers. Editing anything between BEGIN and END on
 // disk triggers a rewrite back to canonical on the next sync.
@@ -142,11 +143,13 @@ export interface GitignoreInvariantsDeps {
   state: InvariantStateStore;
   configDir: string;
   selfPluginId: string;
-  // DOT-FILES §8.0 — true while this vault has never completed a sync
-  // (`lastSyncCommitSha === null`, the same cold-start signal discovery
-  // uses). While true, the ROOT .gitignore is left alone; see
-  // enforceRootGitignore for why only that one.
-  deferRootUntilBaseline?: () => boolean;
+  // DOT-FILES §8.0 seed markers. REQUIRED, not optional — learned the
+  // hard way on 2026-09-20: an earlier shape of this fix shipped as an
+  // optional dep with a harmless default, the integration harness
+  // (which builds its own composition) never passed it, and the fix
+  // was inert everywhere except main.ts. A mandatory dep turns that
+  // class of mistake into a compile error at every construction site.
+  seeds: GitignoreSeedStore;
 }
 
 // Owner of the two managed gitignore files. Public surface:
@@ -162,12 +165,12 @@ export default class GitignoreInvariants {
   private readonly selfPluginGitignorePath: string;
   // Root <vault>/.gitignore. Bare ".gitignore" — relative to vault root.
   private readonly rootGitignorePath = ".gitignore";
-  private readonly deferRootUntilBaseline: () => boolean;
+  private readonly seeds: GitignoreSeedStore;
 
   constructor(deps: GitignoreInvariantsDeps) {
     this.vault = deps.vault;
     this.state = deps.state;
-    this.deferRootUntilBaseline = deps.deferRootUntilBaseline ?? (() => false);
+    this.seeds = deps.seeds;
     this.configDirGitignorePath = `${deps.configDir}/.gitignore`;
     this.selfPluginGitignorePath = `${deps.configDir}/plugins/${deps.selfPluginId}/.gitignore`;
   }
@@ -288,6 +291,7 @@ export default class GitignoreInvariants {
       const content = `${block}\n\n${CONFIG_DIR_RECOMMENDED_DEFAULTS}\n`;
       await this.write(path, content);
       await this.refreshState(slot, path);
+      await this.noteSeedState(path, content);
       return;
     }
 
@@ -329,48 +333,18 @@ export default class GitignoreInvariants {
     if (fixed === content) {
       // Nothing to change on disk; just refresh the cache.
       await this.state.set(slot, { mtime: stat.mtime, hash });
+      await this.noteSeedState(path, content);
       return;
     }
     await this.write(path, fixed);
     await this.refreshState(slot, path);
+    await this.noteSeedState(path, fixed);
   }
 
   // Same shape as enforceConfigDirGitignore but for the ROOT vault
   // gitignore. The forced rule here is `*.conflict-from-*`, which
   // pins per-device conflict-sibling files to local-only.
   private async enforceRootGitignore(): Promise<void> {
-    // DOT-FILES §8.0 — ORDER, measured twice on real GitHub. enforce()
-    // runs at the top of the commit pass, so on a cold start it would
-    // write this file BEFORE any baseline exists; the scan then sees
-    // local ≠ remote with no common base and rule 4.2 turns our own
-    // write into a MANUAL CONFLICT the user never caused. That is the
-    // ordinary "adopt an existing repo" path, not an edge case.
-    //
-    // While no sync has ever completed we therefore leave the root
-    // file alone: the first drain adopts the remote one (rule 4.1.b, a
-    // clean pull), and the NEXT commit pass splices our block into it
-    // and pushes it normally. If the vault has its own differing
-    // .gitignore the conflict still happens — correctly (§6.4 rule A,
-    // "both sides exist, no common base") — and now it compares the
-    // user's real file against remote's, without our block mixed in.
-    //
-    // ONLY this file defers. <configDir>/.gitignore carries the
-    // `plugins/*/data.json` deny (leak-guard layer L3) and must stand
-    // before the first push; it also cannot produce this conflict,
-    // because diff3 routes everything under .obsidian/ into rule 3
-    // where a collision never becomes manual.
-    //
-    // Cost of the window, stated honestly: `*.ges-tmp*`/`*.ges-bak*`
-    // have no hardcoded deny, so a staging file caught mid-write could
-    // be committed on pass 1 (transient, cleaned by the onload sweep).
-    // Sibling files are safe regardless — isSyncable denies them by
-    // pattern, independently of any .gitignore.
-    //
-    // Returning here leaves the freshness slot UNTOUCHED on purpose:
-    // the next pass must do a real read+splice, not hit a cache entry
-    // for a file we never looked at.
-    if (this.deferRootUntilBaseline()) return;
-
     const slot = "rootGitignore" as const;
     const path = this.rootGitignorePath;
     const recorded = this.state.get()[slot];
@@ -384,6 +358,7 @@ export default class GitignoreInvariants {
       const content = `${ROOT_INVARIANT_BLOCK}\n\n${ROOT_RECOMMENDED_DEFAULTS}\n`;
       await this.write(path, content);
       await this.refreshState(slot, path);
+      await this.noteSeedState(path, content);
       return;
     }
 
@@ -398,10 +373,12 @@ export default class GitignoreInvariants {
     const fixed = spliceInvariantBlock(content, ROOT_INVARIANT_BLOCK);
     if (fixed === content) {
       await this.state.set(slot, { mtime: stat.mtime, hash });
+      await this.noteSeedState(path, content);
       return;
     }
     await this.write(path, fixed);
     await this.refreshState(slot, path);
+    await this.noteSeedState(path, fixed);
   }
 
   private async enforceSelfPluginGitignore(): Promise<void> {
@@ -433,6 +410,50 @@ export default class GitignoreInvariants {
     // anything else) wrote into it.
     await this.write(path, SELF_PLUGIN_GITIGNORE);
     await this.refreshState(slot, path);
+  }
+
+  // ── DOT-FILES §8.0 seed markers ─────────────────────────────────
+  // "This file, right now, is byte-identical to what WE would seed"
+  // — the claim that lets the drain use it as a fake ancestor so the
+  // repo's own .gitignore reads as an edit on top of ours instead of
+  // an unrelated file (rule 4.3, clean pull) . Recomputed on every
+  // pass rather than written once at seed time: a user edit that
+  // enforce() deliberately leaves alone (anything outside our block)
+  // must drop the claim on the very next pass.
+  //
+  // Returns the candidate seed contents for a path — plural for
+  // <configDir>/.gitignore, whose canonical form differs only by the
+  // data.json toggle line, and EMPTY for anything we do not seed
+  // (notably <self>/.gitignore, a constant that never negotiates).
+  private canonicalSeeds(path: string): string[] {
+    if (path === this.rootGitignorePath) {
+      return [`${ROOT_INVARIANT_BLOCK}\n\n${ROOT_RECOMMENDED_DEFAULTS}\n`];
+    }
+    if (path === this.configDirGitignorePath) {
+      return [true, false].map(
+        (pushPluginsDataJson) =>
+          `${configDirInvariantBlock({ pushPluginsDataJson })}` +
+          `\n\n${CONFIG_DIR_RECOMMENDED_DEFAULTS}\n`,
+      );
+    }
+    return [];
+  }
+
+  private async noteSeedState(path: string, content: string): Promise<void> {
+    const candidates = this.canonicalSeeds(path);
+    if (candidates.length === 0) return; // not a seeded file
+    if (!candidates.includes(content)) {
+      await this.seeds.clear(path);
+      return;
+    }
+    const bytes = new TextEncoder().encode(content);
+    const sha = await calculateGitBlobSHA(
+      bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer,
+    );
+    await this.seeds.set(path, sha);
   }
 
   private async refreshState(

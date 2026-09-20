@@ -428,6 +428,9 @@ export interface BuildDrainDepsArgs {
   };
   tokenExpired(): Promise<boolean>;
   isSyncable(path: string): boolean;
+  // DOT-FILES §8.0 seed markers (optional: the fake-ancestor rule
+  // simply does not fire when absent, which is the pre-§8.0 behaviour).
+  gitignoreSeeds?: { matches(path: string, sha: string | null): boolean };
   deviceLabel(): string;
   maxAutoMergeFileSize(): number;
   // S1: git identity thunk (settings gitAuthor) — drainOnce stamps
@@ -523,6 +526,7 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
     siblingTx: args.siblingTx,
     tokenExpired: args.tokenExpired,
     trashHooks: args.trashHooks,
+    gitignoreSeeds: args.gitignoreSeeds,
     vaultFiles: makeVaultFileReader({
       vault: args.vault,
       autoCanonicalize: args.autoCanonicalize,

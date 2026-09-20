@@ -17,7 +17,9 @@ import GitignoreInvariants, {
   blockHasAllowLine,
 } from "../../src/sync2/gitignore-invariants";
 import InvariantStateStore from "../../src/sync2/invariant-state";
+import GitignoreSeedStore from "../../src/sync2/gitignore-seeds";
 import { Vault } from "../../mock-obsidian";
+import { calculateGitBlobSHA } from "../../src/utils";
 
 const CONFIG_DIR = ".obsidian";
 const SELF = "git-easy-sync";
@@ -36,28 +38,7 @@ function fixture() {
     vault: vault as unknown as import("obsidian").Vault,
     selfPluginId: SELF,
   });
-  const inv = new GitignoreInvariants({
-    vault: vault as unknown as import("obsidian").Vault,
-    state,
-    configDir: CONFIG_DIR,
-    selfPluginId: SELF,
-  });
-  return { root, vault, state, inv };
-}
-
-// Same fixture, but with the §8.0 predicate wired — `defer()` returns
-// whatever the caller's flag currently says, read live on each
-// enforce() exactly as main.ts does.
-function deferrableFixture(defer: { value: boolean }) {
-  const root = path.join(
-    os.tmpdir(),
-    `gi-inv-defer-${crypto.randomBytes(4).toString("hex")}`,
-  );
-  fs.mkdirSync(path.join(root, CONFIG_DIR, "plugins", SELF), {
-    recursive: true,
-  });
-  const vault = new Vault(root);
-  const state = new InvariantStateStore({
+  const seeds = new GitignoreSeedStore({
     vault: vault as unknown as import("obsidian").Vault,
     selfPluginId: SELF,
   });
@@ -66,9 +47,9 @@ function deferrableFixture(defer: { value: boolean }) {
     state,
     configDir: CONFIG_DIR,
     selfPluginId: SELF,
-    deferRootUntilBaseline: () => defer.value,
+    seeds,
   });
-  return { root, vault, state, inv };
+  return { root, vault, state, seeds, inv };
 }
 
 const cdGitignore = (root: string) =>
@@ -411,10 +392,12 @@ describe("extractInvariantBlock / blockHasAllowLine (pure)", () => {
   });
 });
 
-// DOT-FILES §8.0 — the root file is the only one that defers, and the
-// deferral must leave NO trace in the freshness cache (a recorded slot
-// for a file we never read would short-circuit the next pass's splice).
-describe("§8.0 root deferral until the first baseline", () => {
+// DOT-FILES §8.0 — the seed markers. The claim they carry is narrow
+// and must stay narrow: "this file, right now, is byte-identical to
+// what WE seed". Everything else about the file — who wrote it, when,
+// which plugin version — is deliberately not recorded, because the
+// only consumer asks exactly that one question.
+describe("§8.0 seed markers", () => {
   const roots: string[] = [];
   afterEach(() => {
     for (const r of roots.splice(0)) {
@@ -422,53 +405,100 @@ describe("§8.0 root deferral until the first baseline", () => {
     }
   });
 
-  it("deferred: root untouched, configDir + self-plugin still enforced, no state recorded", async () => {
-    const defer = { value: true };
-    const f = deferrableFixture(defer);
+  const fresh = async () => {
+    const f = fixture();
     roots.push(f.root);
     await f.state.load();
+    await f.seeds.load();
+    return f;
+  };
 
+  const rootPath = (root: string) => path.join(root, ".gitignore");
+
+  it("a file we seeded from nothing is marked — both managed files", async () => {
+    const f = await fresh();
     await f.inv.enforce();
 
-    expect(fs.existsSync(path.join(f.root, ".gitignore"))).toBe(false);
-    // The two files that carry the secret guarantees DO land.
-    expect(fs.existsSync(cdGitignore(f.root))).toBe(true);
-    expect(fs.existsSync(selfGitignore(f.root))).toBe(true);
-    // Nothing recorded for a file we never looked at.
-    expect(f.state.get().rootGitignore).toBeUndefined();
-  });
-
-  it("deferral lifts: the very next enforce() seeds the root file in full", async () => {
-    const defer = { value: true };
-    const f = deferrableFixture(defer);
-    roots.push(f.root);
-    await f.state.load();
-    await f.inv.enforce();
-    expect(fs.existsSync(path.join(f.root, ".gitignore"))).toBe(false);
-
-    defer.value = false; // the first sync completed
-    await f.inv.enforce();
-
-    const body = fs.readFileSync(path.join(f.root, ".gitignore"), "utf8");
-    expect(body).toContain(INVARIANT_BEGIN);
-    expect(body).toContain("*.conflict-from-*");
-    expect(f.state.get().rootGitignore).toBeDefined();
-  });
-
-  it("deferred does NOT mean 'ignore an existing file' — a user root .gitignore is left byte-exact", async () => {
-    const defer = { value: true };
-    const f = deferrableFixture(defer);
-    roots.push(f.root);
-    await f.state.load();
-    const userBody = "# mine\n*.tmp\n";
-    fs.writeFileSync(path.join(f.root, ".gitignore"), userBody);
-
-    await f.inv.enforce();
-
-    // Untouched: this is what keeps a genuine scenario-B conflict
-    // comparing the USER's file against remote's, not ours-with-block.
-    expect(fs.readFileSync(path.join(f.root, ".gitignore"), "utf8")).toBe(
-      userBody,
+    const rootSha = f.seeds.get(".gitignore");
+    const cdSha = f.seeds.get(`${CONFIG_DIR}/.gitignore`);
+    expect(rootSha).toBeDefined();
+    expect(cdSha).toBeDefined();
+    // The recorded sha is the git blob sha of what is actually on disk
+    // — that is what the drain compares a batch entry against.
+    expect(rootSha).toBe(
+      await calculateGitBlobSHA(
+        new TextEncoder().encode(fs.readFileSync(rootPath(f.root), "utf8"))
+          .buffer as ArrayBuffer,
+      ),
     );
+  });
+
+  it("our own plugin's .gitignore is NEVER marked — it is a constant, not a proposal", async () => {
+    const f = await fresh();
+    await f.inv.enforce();
+    expect(
+      f.seeds.get(`${CONFIG_DIR}/plugins/${SELF}/.gitignore`),
+    ).toBeUndefined();
+  });
+
+  it("a user edit OUTSIDE our block drops the claim on the next pass", async () => {
+    const f = await fresh();
+    await f.inv.enforce();
+    expect(f.seeds.get(".gitignore")).toBeDefined();
+
+    // enforce() deliberately leaves user content alone, so the file is
+    // no longer ours — the claim must go, and the path returns to
+    // ordinary rules (including a legitimate conflict).
+    fs.appendFileSync(rootPath(f.root), "\n# mine\n*.bak\n");
+    await f.inv.enforce();
+    expect(f.seeds.get(".gitignore")).toBeUndefined();
+  });
+
+  it("a plugin upgrade that rewrites the block KEEPS the claim — the file is still 100% ours", async () => {
+    const f = await fresh();
+    await f.inv.enforce();
+    const first = f.seeds.get(".gitignore");
+
+    // Simulate the upgrade shape: the on-disk block drifts from
+    // canonical, enforce() rewrites it, and the result is again
+    // exactly our seed. A marker written once at seed time would have
+    // gone stale here; recomputing every pass keeps it honest.
+    const body = fs.readFileSync(rootPath(f.root), "utf8");
+    fs.writeFileSync(
+      rootPath(f.root),
+      body.replace("*.conflict-from-*", "*.conflict-from-*\n# stray"),
+    );
+    await f.inv.enforce();
+
+    expect(f.seeds.get(".gitignore")).toBe(first);
+  });
+
+  it("a user edit INSIDE our block leaves the file ours-plus-theirs → no claim", async () => {
+    const f = await fresh();
+    await f.inv.enforce();
+    // Mangle the block AND add content below it. enforce() restores
+    // the block, but the extra line stays — so the file is no longer
+    // byte-identical to the seed.
+    fs.writeFileSync(
+      rootPath(f.root),
+      `${INVARIANT_BEGIN}\nhand-written\n${INVARIANT_END}\n# theirs\n*.zip\n`,
+    );
+    await f.inv.enforce();
+    expect(f.seeds.get(".gitignore")).toBeUndefined();
+  });
+
+  it("markers survive a restart — a fresh store reads them back", async () => {
+    const f = await fresh();
+    await f.inv.enforce();
+    const sha = f.seeds.get(".gitignore");
+
+    const reopened = new GitignoreSeedStore({
+      vault: f.vault as unknown as import("obsidian").Vault,
+      selfPluginId: SELF,
+    });
+    await reopened.load();
+    expect(reopened.get(".gitignore")).toBe(sha);
+    expect(reopened.matches(".gitignore", sha!)).toBe(true);
+    expect(reopened.matches(".gitignore", "deadbeef")).toBe(false);
   });
 });

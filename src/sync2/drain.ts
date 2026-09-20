@@ -256,6 +256,9 @@ export interface DrainDeps {
   // trailing "(deviceLabel)" contract. Called with now().
   mergeMessage(whenMs: number): string;
   conflictStore: ConflictStoreV2;
+  // DOT-FILES §8.0 — which managed .gitignore files are currently
+  // byte-identical to what we seeded (see applySeedAncestor).
+  gitignoreSeeds?: { matches(path: string, sha: string | null): boolean };
   siblingTx: SiblingTx;
   tokenExpired(): Promise<boolean>;
   // S1: cooperative cancellation (Settings [Stop sync], reset O3).
@@ -770,6 +773,8 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         };
         state.trackedFiles.set(entry.path, tracked);
       }
+
+      applySeedAncestor(deps, tracked, local.sha, entry.path);
 
       if (tracked.isManualConflict) {
         // STEP2 (§II.6): while in conflict, every local edit goes to
@@ -1572,6 +1577,8 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             blob: vaultEntry.blob,
           };
 
+    applySeedAncestor(deps, tracked, local.sha, path);
+
     let verdict: Diff3Result;
     try {
       verdict = await _diff3(diff3Deps, tracked, local, headHash);
@@ -1918,6 +1925,52 @@ function siblingInfoFrom(info: FileInfo): FileInfo {
     blob: null,
   };
 }
+
+// DOT-FILES §8.0 — the "fake ancestor" for a managed .gitignore.
+//
+// `enforce()` writes our managed .gitignore files before any sync has
+// happened, so on a cold start OUR OWN write meets the repo's own
+// .gitignore with no common base and rule 4.2 calls it a manual
+// conflict the user never caused (measured twice on real GitHub).
+//
+// A file whose bytes are exactly what we seed is not user content, it
+// is our proposal — so it may serve as the BASE for its own path:
+// the repo's version then reads as an ordinary edit on top of it and
+// resolves as a clean pull (4.3, or 3.b.2.b inside .obsidian/ — same
+// outcome, and it replaces that branch's mtime coin-flip with a
+// determined answer). The next enforce() splices our block into the
+// adopted file and it travels back as an ordinary local change.
+//
+// THREE conditions, and the third is not optional:
+//   - no baseline yet (this is a first meeting, nothing else to use);
+//   - the marker matches the CURRENT local sha (any user edit drops
+//     the claim, and the path returns to ordinary rules — including a
+//     legitimate conflict, which is scenario B);
+//   - THE REMOTE ACTUALLY HAS THE PATH. Without this the substitution
+//     would make base == local with remote == null, which no rule
+//     handles: 2.a/2.b need matching nullness, 4.3-4.6 all require
+//     local.sha !== base.sha, so it falls through to the merge path
+//     with a null remote. Today that case is base==null → 4.1.a →
+//     "push ours", which is exactly right and must stay.
+function applySeedAncestor(
+  deps: DrainDeps,
+  tracked: TrackedFile,
+  localSha: string | null,
+  path: string,
+): void {
+  if (tracked.base.sha !== null) return;
+  if (tracked.remote.sha === null) return;
+  if (!deps.gitignoreSeeds?.matches(path, localSha)) return;
+  tracked.base = {
+    ...tracked.base,
+    path,
+    sha: localSha,
+  };
+  deps.logger?.info("§8.0: seeded .gitignore acts as its own base", {
+    path,
+  });
+}
+
 
 function statusFromError(
   error: unknown,

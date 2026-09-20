@@ -30,6 +30,7 @@ import FileBaselinesStore from "./sync2/file-baselines";
 import { AtomicWriteRecovery } from "./sync2/atomic-write";
 import ChangeDetector from "./sync2/change-detector";
 import GitignoreInvariants from "./sync2/gitignore-invariants";
+import GitignoreSeedStore from "./sync2/gitignore-seeds";
 import InvariantStateStore from "./sync2/invariant-state";
 import { Sync2Manager } from "./sync2/sync2-manager";
 import { IntervalScheduler } from "./sync2/interval-scheduler";
@@ -220,6 +221,7 @@ export default class GitHubSyncPlugin extends Plugin {
   // Exposed for the settings tab's "Push plugins data.json" toggle,
   // which reads/writes the allow line directly via this owner.
   invariants!: GitignoreInvariants;
+  gitignoreSeeds!: GitignoreSeedStore;
   // Metadata stores — durable references so reset can re-init their
   // in-memory state after wiping .runtime/ (RESET-PLUGIN O2).
   hotMeta!: HotMetadataStore;
@@ -988,18 +990,21 @@ export default class GitHubSyncPlugin extends Plugin {
     });
     await invariantState.load();
     this.invariantState = invariantState;
+    // DOT-FILES §8.0 — which managed .gitignore files are, right now,
+    // exactly what we seeded. The drain uses them as fake ancestors so
+    // a repo's own .gitignore is adopted instead of conflicting.
+    const gitignoreSeeds = new GitignoreSeedStore({
+      vault: this.app.vault,
+      selfPluginId: manifest.id,
+    });
+    await gitignoreSeeds.load();
+    this.gitignoreSeeds = gitignoreSeeds;
     this.invariants = new GitignoreInvariants({
       vault: this.app.vault,
       state: invariantState,
       configDir: this.app.vault.configDir,
       selfPluginId: manifest.id,
-      // DOT-FILES §8.0: on a vault that has never completed a sync the
-      // ROOT .gitignore is left for the first drain to adopt —
-      // otherwise our own write becomes a manual conflict against the
-      // repo's existing one. Read LIVE (a thunk, not a captured
-      // boolean): the very first successful sync flips it.
-      deferRootUntilBaseline: () =>
-        this.hotMeta?.getLastSyncCommitSha() == null,
+      seeds: gitignoreSeeds,
     });
     // Prime the toggle cache once, here, so the settings tab can
     // read it synchronously without re-entering Obsidian via an
@@ -1160,6 +1165,7 @@ export default class GitHubSyncPlugin extends Plugin {
       siblingTx,
       logger: this.logger,
       invariants: this.invariants,
+      gitignoreSeeds,
       // Discovery's remote-path filter — the SAME predicate findChanges
       // uses locally (hardcoded blocklist + per-device configDir gate +
       // gitignore), so push and pull agree on scope (SYNC2 §3.3).

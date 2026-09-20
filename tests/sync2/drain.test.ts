@@ -844,6 +844,87 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect((await conflictStore.load()).entries.size).toBe(0);
   });
 
+  // ── DOT-FILES §8.0 — the seeded .gitignore as its own ancestor ────
+  //
+  // The engine half of the fix. `enforce()` writes the managed
+  // .gitignore files BEFORE any sync, so on a cold start our own write
+  // would meet the repo's version with no common base and rule 4.2
+  // would call it a manual conflict the user never caused. A file that
+  // is byte-identical to what we seed is marked, and the marker lets
+  // that content serve as the path's own base.
+
+  it("§8.0: a MARKED local file adopts the remote version instead of conflicting", async () => {
+    baseCommit = await world.commitFiles({ "note.md": "n\n" });
+    baselines.set("note.md", {
+      baselineSha: await sha("n\n"),
+      mtime: 1,
+      size: 2,
+    });
+    vaultFiles.files.set("note.md", { content: "n\n", mtime: 1 });
+    // The repo already carries its own .gitignore…
+    await world.commitFiles({ ".gitignore": "# repo\n*.tmp\n" });
+    // …and enforce() has just seeded ours, which the commit pass
+    // queued. No baseline for it: this is the first meeting.
+    const OURS = "# ours\n*.log\n";
+    await stageBatch({ ".gitignore": OURS });
+    vaultFiles.files.set(".gitignore", { content: OURS, mtime: 100 });
+    const oursSha = await sha(OURS);
+
+    const r = await drainOnce(
+      makeDeps({
+        gitignoreSeeds: { matches: (p, s2) => p === ".gitignore" && s2 === oursSha },
+      }),
+    );
+
+    expect(r.status).toBe("ok");
+    expect(r.conflictVerdicts).toEqual([]); // the whole point
+    // Clean pull: the repo's version wins and lands in the vault.
+    expect(vaultFiles.files.get(".gitignore")!.content).toBe("# repo\n*.tmp\n");
+  });
+
+  it("§8.0: the SAME state without a marker conflicts — the marker is what changes the answer", async () => {
+    baseCommit = await world.commitFiles({ "note.md": "n\n" });
+    baselines.set("note.md", { baselineSha: await sha("n\n"), mtime: 1, size: 2 });
+    vaultFiles.files.set("note.md", { content: "n\n", mtime: 1 });
+    await world.commitFiles({ ".gitignore": "# repo\n*.tmp\n" });
+    const OURS = "# ours\n*.log\n";
+    await stageBatch({ ".gitignore": OURS });
+    vaultFiles.files.set(".gitignore", { content: OURS, mtime: 100 });
+
+    const r = await drainOnce(makeDeps()); // no seeds view at all
+
+    expect(r.status).toBe("ok");
+    // Recorded at more than one site (STEP1 + the Vault-step) — the
+    // point is that the path conflicts at all.
+    expect([...new Set(r.conflictVerdicts.map((v) => v.path))]).toEqual([
+      ".gitignore",
+    ]);
+  });
+
+  it("§8.0: a marked file with NO remote counterpart is still PUSHED — the ancestor must not fire", async () => {
+    // The trap: base := local with remote == null is handled by no
+    // rule (2.a/2.b need matching nullness, 4.3-4.6 need
+    // local.sha !== base.sha), so it would fall into the merge path
+    // with a null remote. The right answer stays base == null →
+    // 4.1.a → push ours.
+    baseCommit = await world.commitFiles({ "note.md": "n\n" });
+    baselines.set("note.md", { baselineSha: await sha("n\n"), mtime: 1, size: 2 });
+    vaultFiles.files.set("note.md", { content: "n\n", mtime: 1 });
+    const OURS = "# ours\n*.log\n";
+    await stageBatch({ ".gitignore": OURS });
+    vaultFiles.files.set(".gitignore", { content: OURS, mtime: 100 });
+    const oursSha = await sha(OURS);
+
+    const r = await drainOnce(
+      makeDeps({
+        gitignoreSeeds: { matches: (p, s2) => p === ".gitignore" && s2 === oursSha },
+      }),
+    );
+
+    expect(r.status).toBe("ok");
+    expect(dec(world.headFiles().get(".gitignore")!.bytes)).toBe(OURS);
+  });
+
   // ── D: the epilogue (§III steps 1-4) ─────────────────────────────
 
   it("D.13: baseline transfer — final remote sha with the mtime:0 sentinel; deleted paths LEAVE the baselines; journal dies", async () => {

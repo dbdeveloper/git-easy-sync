@@ -46,6 +46,7 @@ import * as os from "os";
 import * as crypto from "crypto";
 import GitignoreInvariants from "../../src/sync2/gitignore-invariants";
 import InvariantStateStore from "../../src/sync2/invariant-state";
+import GitignoreSeedStore from "../../src/sync2/gitignore-seeds";
 import { isSyncable } from "../../src/sync2/change-detector";
 import GI from "../../src/gi";
 import { Vault } from "../../mock-obsidian";
@@ -121,6 +122,10 @@ function makeFixture(): Fixture {
     }),
     configDir: CONFIG_DIR,
     selfPluginId: SELF,
+    seeds: new GitignoreSeedStore({
+      vault: vault as unknown as import("obsidian").Vault,
+      selfPluginId: SELF,
+    }),
   });
 
   const reader = async (abs: string) => {
