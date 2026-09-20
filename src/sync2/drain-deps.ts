@@ -431,6 +431,8 @@ export interface BuildDrainDepsArgs {
   // DOT-FILES §8.0 seed markers (optional: the fake-ancestor rule
   // simply does not fire when absent, which is the pre-§8.0 behaviour).
   gitignoreSeeds?: { matches(path: string, sha: string | null): boolean };
+  // Sweep source №5 — the Deleted bin's pending captures (§5.2.1).
+  deletedBinReferencedShas?: () => Set<string>;
   deviceLabel(): string;
   maxAutoMergeFileSize(): number;
   // S1: git identity thunk (settings gitAuthor) — drainOnce stamps
@@ -527,6 +529,7 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
     tokenExpired: args.tokenExpired,
     trashHooks: args.trashHooks,
     gitignoreSeeds: args.gitignoreSeeds,
+    deletedBinReferencedShas: args.deletedBinReferencedShas,
     vaultFiles: makeVaultFileReader({
       vault: args.vault,
       autoCanonicalize: args.autoCanonicalize,

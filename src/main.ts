@@ -31,6 +31,7 @@ import { AtomicWriteRecovery } from "./sync2/atomic-write";
 import ChangeDetector from "./sync2/change-detector";
 import GitignoreInvariants from "./sync2/gitignore-invariants";
 import GitignoreSeedStore from "./sync2/gitignore-seeds";
+import DeletedStore from "./diff2/deleted-store";
 import InvariantStateStore from "./sync2/invariant-state";
 import { Sync2Manager } from "./sync2/sync2-manager";
 import { IntervalScheduler } from "./sync2/interval-scheduler";
@@ -222,6 +223,7 @@ export default class GitHubSyncPlugin extends Plugin {
   // which reads/writes the allow line directly via this owner.
   invariants!: GitignoreInvariants;
   gitignoreSeeds!: GitignoreSeedStore;
+  deletedStore!: DeletedStore;
   // Metadata stores — durable references so reset can re-init their
   // in-memory state after wiping .runtime/ (RESET-PLUGIN O2).
   hotMeta!: HotMetadataStore;
@@ -929,6 +931,18 @@ export default class GitHubSyncPlugin extends Plugin {
       selfPluginId: manifest.id,
     });
     this.syncStore = syncStore;
+    // HISTORY-DELETED §5.2.1 — the re-platformed Deleted bin: bytes in
+    // the content-addressed store, one flat index. Loaded (and
+    // reconciled) before anything can capture into it.
+    const deletedStore = new DeletedStore({
+      vault: this.app.vault,
+      selfPluginId: manifest.id,
+      syncStore,
+      logger: this.logger,
+    });
+    await deletedStore.load();
+    await deletedStore.reconcile();
+    this.deletedStore = deletedStore;
     const journal = new DrainJournal({
       vault: this.app.vault,
       selfPluginId: manifest.id,
@@ -1200,7 +1214,16 @@ export default class GitHubSyncPlugin extends Plugin {
       // vault-step remove, confirmDeleted at batch completion,
       // confirmResolved on the process_conflicts prune, sweepOlderThan
       // at drain end on success.
-      trashHooks: trashStore.asHooks(),
+      trashHooks: {
+        ...trashStore.asHooks(),
+        // §5.2.1: capture moves to the new bin. The remaining hooks
+        // still belong to the old store until its own removal step.
+        captureForDelete: async (path: string) => {
+          await deletedStore.captureForDelete(path);
+        },
+      },
+      // Sweep source №5 — the bin's pending captures.
+      deletedBinReferencedShas: () => deletedStore.referencedShas(),
       // Obsidian link-aware rename for the pre-sync filename sanitizer.
       renameFile: async (oldPath: string, newPath: string): Promise<void> => {
         const file = this.app.vault.getAbstractFileByPath(oldPath);
@@ -1267,7 +1290,11 @@ export default class GitHubSyncPlugin extends Plugin {
     // patch another plugin may have applied between install and
     // unload. See R3.2.
     try {
-      const watcher = new TrashWatcher(this.app.vault, this.trashStore, this.logger);
+      const watcher = new TrashWatcher(
+        this.app.vault,
+        this.deletedStore,
+        this.logger,
+      );
       watcher.install();
       this.trashWatcher = watcher;
     } catch (err) {

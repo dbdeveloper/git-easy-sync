@@ -71,7 +71,12 @@ function fixture() {
     trash: fakeTrash,
   };
 
-  const watcher = new TrashWatcher(fakeVault as never, trashStore);
+  // §5.2.1: the watcher now takes a narrow capture surface. The old
+  // store's `intercept` IS that surface — adapted here so this suite
+  // keeps pinning the monkey-patch itself, not the bin's storage.
+  const watcher = new TrashWatcher(fakeVault as never, {
+    captureForDelete: (p: string) => trashStore.intercept(p),
+  });
 
   return {
     root,

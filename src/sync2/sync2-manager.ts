@@ -120,6 +120,9 @@ export interface Sync2ManagerDeps {
   // it: that exact mistake made the first shape of this fix inert
   // outside main.ts, twice in one day, and only a live probe caught it.
   gitignoreSeeds: { matches(path: string, sha: string | null): boolean };
+  // Sweep source №5 — the Deleted bin's pending captures (§5.2.1).
+  // Optional: absence means "no bin wired", never "nothing to protect".
+  deletedBinReferencedShas?: () => Set<string>;
   // Discovery's remote-path filter (async-capable — gitignore walks).
   isSyncable(path: string): boolean | Promise<boolean>;
   mainBranch(): string;
@@ -551,6 +554,7 @@ export class Sync2Manager {
       cancelRequested: () => this.abortRequested,
       trashHooks: this.deps.trashHooks,
       gitignoreSeeds: this.deps.gitignoreSeeds,
+      deletedBinReferencedShas: this.deps.deletedBinReferencedShas,
       onProgress: (processed, totalFiles, path) =>
         this.emitDrainStatus({
           currentFile: processed,

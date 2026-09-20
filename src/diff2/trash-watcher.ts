@@ -54,9 +54,12 @@ export class TrashWatcher {
   private originalTrash: DeleteLike | null = null;
   private installed = false;
 
+  // §5.2.1: the watcher only needs "capture this path before it goes".
+  // Narrowed from TrashStore to that one method so the bin's storage
+  // can be re-platformed under it without touching the monkey-patch.
   constructor(
     private readonly vault: Vault,
-    private readonly trashStore: TrashStore,
+    private readonly capture: { captureForDelete(path: string): Promise<unknown> },
     private readonly logger?: Logger,
   ) {}
 
@@ -119,7 +122,7 @@ export class TrashWatcher {
   private async captureBeforeDelete(file: TAbstractFile): Promise<void> {
     if (!(file instanceof TFile)) return;
     try {
-      await this.trashStore.intercept(file.path);
+      await this.capture.captureForDelete(file.path);
     } catch (e) {
       this.logger?.warn(
         "[diff2/trash-watcher] capture failed; proceeding with delete",

@@ -259,6 +259,8 @@ export interface DrainDeps {
   // DOT-FILES §8.0 — which managed .gitignore files are currently
   // byte-identical to what we seeded (see applySeedAncestor).
   gitignoreSeeds?: { matches(path: string, sha: string | null): boolean };
+  // Sweep source №5 — the Deleted bin's pending captures (§5.2.1).
+  deletedBinReferencedShas?: () => Set<string>;
   siblingTx: SiblingTx;
   tokenExpired(): Promise<boolean>;
   // S1: cooperative cancellation (Settings [Stop sync], reset O3).
@@ -1863,6 +1865,11 @@ async function sweepSyncStore(deps: DrainDeps): Promise<void> {
       deps.queueReferencedShas,
       () => deps.journal.collectReferencedShas(),
       () => deps.conflictStore.collectReferencedShas(),
+      // Source №5 (HISTORY-DELETED §5.2.1): the Deleted bin's pending
+      // captures. Their bytes are referenced by NOTHING else until the
+      // deletion reaches a batch — miss this and the restore window
+      // dies between a delete and its commit.
+      async () => deps.deletedBinReferencedShas?.() ?? new Set<string>(),
     ]);
     if (r.removed > 0) {
       deps.logger?.info("sync_store sweep", r);
