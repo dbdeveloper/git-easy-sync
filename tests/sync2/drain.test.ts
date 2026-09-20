@@ -833,6 +833,15 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     const r = await drainOnce(makeDeps({ client }));
     expect(r.status).toBe("too-many-concurrent-pushes");
     expect(batches[0].removed).toBe(false); // the batch survives for the next run
+    // D.16 extended to the durable conflicts (W1 fix, 2026-09-20): the
+    // CAP exit persists none of the FAILED ATTEMPT's state. The new
+    // store-then-journal pair sits at the batch END, which a CAP exit
+    // never reaches — pinned here so a future "just save it
+    // defensively" cannot poison the store. (The journal itself is not
+    // null: the branch-name mint persists a CLEAN state early, which is
+    // exactly what D.16 carved out.)
+    expect((await journal.load())!.trackedFiles.size).toBe(0);
+    expect((await conflictStore.load()).entries.size).toBe(0);
   });
 
   // ── D: the epilogue (§III steps 1-4) ─────────────────────────────

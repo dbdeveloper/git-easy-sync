@@ -38,9 +38,15 @@
 //   number here is already in hand;
 // - the EPILOGUE (§III steps 1-5, at the end of this file): baseline
 //   transfer → conflicts reconcile → hot anchor → journal.clear() →
-//   sweep. The journal is persisted per batch and after the Vault-step
-//   and survives ONLY an aborted run — its presence at the next drain
-//   start is what says "the previous one died mid-way".
+//   sweep. The journal is persisted at the branch-name mint and once
+//   per COMPLETED batch — NOT after the Vault-step (checked, not
+//   assumed: the persist sites are the mint, the batch end and
+//   FINALIZE). That absence is load-bearing twice over: an aborted run
+//   leaves the journal behind, so its presence at the next drain start
+//   is what says "the previous one died mid-way" and the whole
+//   Vault-step is redone; and a conflict born ON the Vault-step never
+//   gets its flag into the journal, which is why it needs no durable
+//   pairing (see the batch-end comment on §VIII D / W1).
 //
 // PHASE 6 (still absent): `vaultStepErrors` reach the LOG only
 // (Sync2Manager.logDrainSummary) — surfacing them in the UI is the
@@ -1134,7 +1140,32 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       }
     }
 
-    // BATCH ОБРОБЛЕНО! One ping-pong journal write, then the dir.
+    // BATCH ОБРОБЛЕНО! The durable conflicts FIRST, the journal
+    // second, then the dir.
+    //
+    // ⚠️ THE ORDER IS THE POINT (§VIII D, W1). STEP1 raises
+    // `isManualConflict` and the journal persist below is the only
+    // place that flag becomes durable — so of the four crash states,
+    // exactly one is destructive:
+    //   journal flag + NO record → RECONCILE reads the empty scan as
+    //     "resolved externally", drops the flag, FINALIZE then merges
+    //     and deletes the branch, and the next batch takes rule 4.4
+    //     and clobbers theirs on main. Silent, G9-class.
+    //   record + NO journal flag → benign: seeding (J.3) re-asserts it.
+    //   neither                  → benign: _diff3 re-derives the
+    //     conflict, and shouldPushToConflictBranch's live check keeps
+    //     the branch push idempotent.
+    //   both                     → RECONCILE is correct.
+    // Saving the store first makes the only reachable in-between state
+    // the benign one. The invariant every consumer can now rely on:
+    // a flag readable from the journal implies a durable record.
+    //
+    // This is the ONLY paired site, deliberately: the `:532` branch-name
+    // mint persists a CLEAN state (D.16) and the CAP / cancel exits
+    // persist nothing at all — both must stay unpaired. A conflict born
+    // on the Vault-step needs no pairing either: nothing persists the
+    // journal after the Vault-step, so its flag never outlives the run.
+    await deps.conflictStore.save(conflicts!);
     await deps.journal.persist(state);
     await deps.removeBatchDir(claimed.dir);
   }

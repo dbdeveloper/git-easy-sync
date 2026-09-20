@@ -883,6 +883,89 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     expect(vaultFiles.files.get(OTHER)!.content).toBe("other v2\n");
   });
 
+  it("W1 ordering, benign half: a durable record with NO journal converges — the flag comes back, the branch gets no duplicate commit", async () => {
+    // The fix saves the store BEFORE the journal, so the only crash
+    // state it can create is this one. It has to be harmless, or the
+    // ordering argument collapses: seeding (J.3) must re-assert the
+    // flag from the record alone, and the idempotent push check must
+    // keep the branch from growing a second identical commit.
+    await setupAligned();
+    await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+    await drainOnce(makeDeps()); // births the conflict; epilogue clears the journal
+    const branch = [...world.branchHeads.keys()][0];
+    const tip = world.branchHeads.get(branch)!;
+    expect(await journal.load()).toBeNull(); // the "no journal" half is real
+
+    // The same local content is committed again (the crashed run's
+    // batch is re-claimed after a restart).
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    // Flag re-asserted from the record alone — the batch is conflict
+    // traffic, not main traffic.
+    expect(r.conflictVerdicts.some((v) => v.site === "step2-existing")).toBe(
+      true,
+    );
+    expect(r.pushedCommits).toEqual([]);
+    expect(world.branchHeads.get(branch)).toBe(tip); // no duplicate commit
+    expect(dec(world.headFiles().get(NOTE)!.bytes)).toBe(REMOTE_CLASH);
+  });
+
+  it("W1 (§VIII D): a crash between STEP1 and the epilogue must NOT end with theirs overwritten — the redo re-creates the sibling", async () => {
+    // The same crash as J.1, judged by its OUTCOME instead of by the
+    // restore. Before the durable save was paired with the per-batch
+    // journal persist, this ran as follows, each step correct by its
+    // own rule and the sum silently destructive:
+    //   drain 2 — RECONCILE saw flag=true + an EMPTY authoritative
+    //             scan (the record only ever reached the journal) ⇒
+    //             "resolved externally" ⇒ flag down; FINALIZE then
+    //             counted zero conflicts ⇒ merge + DELETE the branch;
+    //             the epilogue wrote baseline := THEIRS.
+    //   drain 3 — findChanges reports the vault file as modified, the
+    //             batch resolves base==remote==THEIRS vs local=LOCAL
+    //             ⇒ rule 4.4 "clean push" ⇒ LOCAL lands on main with
+    //             no conflict, no sibling, no verdict. The G9 contract,
+    //             one commit-cycle late.
+    const OTHER = "other.md";
+    await setupAligned({ [OTHER]: "other v0\n" });
+    await world.commitFiles({
+      [NOTE]: REMOTE_CLASH,
+      [OTHER]: "other v2\n",
+    });
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+    const otherSha = await sha("other v2\n");
+
+    // Drain 1 dies in the Vault-step — after the batch completed, so
+    // STEP1 pushed the branch and the journal carries the flag.
+    const d1 = makeDeps();
+    const passThrough = d1.client.getBlobFromRepo.bind(d1.client);
+    d1.client.getBlobFromRepo = async (s: string) => {
+      if (s === otherSha) throw new NetworkError("net down");
+      return passThrough(s);
+    };
+    expect((await drainOnce(d1)).status).toBe("network-error");
+    const branch = [...world.branchHeads.keys()][0];
+
+    // Drain 2: the redo. The conflict must survive it.
+    expect((await drainOnce(makeDeps())).status).toBe("ok");
+    const after2 = await conflictStore.load();
+    expect([...after2.entries.keys()]).toEqual([NOTE]);
+    expect(after2.entries.get(NOTE)!.siblings).toHaveLength(1); // re-created
+    expect(world.branchHeads.has(branch)).toBe(true); // FINALIZE stayed out
+    expect(dec(world.headFiles().get(NOTE)!.bytes)).toBe(REMOTE_CLASH);
+
+    // Drain 3: the next local edit is still conflict traffic — it goes
+    // to the branch (STEP2), never to main.
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    const r3 = await drainOnce(makeDeps());
+    expect(r3.status).toBe("ok");
+    expect(dec(world.headFiles().get(NOTE)!.bytes)).toBe(REMOTE_CLASH);
+    expect(r3.pushedCommits).toEqual([]);
+  });
+
   it("J.6: RECONCILE resets a flag whose path is gone from the authoritative scan (the positive half of J.7)", async () => {
     await setupAligned();
     // A journal from a previous run still flags the path as a manual
