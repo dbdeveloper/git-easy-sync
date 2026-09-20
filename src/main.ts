@@ -1228,8 +1228,11 @@ export default class GitHubSyncPlugin extends Plugin {
           await deletedStore.captureForDelete(path);
         },
       },
-      // Sweep source №5 — the bin's pending captures.
-      deletedBinReferencedShas: () => deletedStore.referencedShas(),
+      // §5.2.1 — sweep source №5 + the retention backstop.
+      deletedBin: {
+        referencedShas: () => deletedStore.referencedShas(),
+        pruneBefore: (iso) => deletedStore.pruneBefore(iso),
+      },
       // Obsidian link-aware rename for the pre-sync filename sanitizer.
       renameFile: async (oldPath: string, newPath: string): Promise<void> => {
         const file = this.app.vault.getAbstractFileByPath(oldPath);

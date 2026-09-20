@@ -120,9 +120,14 @@ export interface Sync2ManagerDeps {
   // it: that exact mistake made the first shape of this fix inert
   // outside main.ts, twice in one day, and only a live probe caught it.
   gitignoreSeeds: { matches(path: string, sha: string | null): boolean };
-  // Sweep source №5 — the Deleted bin's pending captures (§5.2.1).
-  // Optional: absence means "no bin wired", never "nothing to protect".
-  deletedBinReferencedShas?: () => Set<string>;
+  // The Deleted bin's engine-facing surface (§5.2.1). Optional:
+  // absence means "no bin wired", never "nothing to protect".
+  //   referencedShas — sweep source №5 (pending captures + held ones)
+  //   pruneBefore    — the retention backstop, drain-end on success
+  deletedBin?: {
+    referencedShas(): Set<string>;
+    pruneBefore(beforeIso: string): Promise<void>;
+  };
   // Discovery's remote-path filter (async-capable — gitignore walks).
   isSyncable(path: string): boolean | Promise<boolean>;
   mainBranch(): string;
@@ -479,7 +484,24 @@ export class Sync2Manager {
       switch (r.status) {
         case "ok": {
           this.emitDrainStatus({ lastError: null });
-          // R3.5 layer 2 — the drain-end backstop sweep, success only.
+          // §5.2.1 retention (owner, 2026-09-21): a fully successful
+          // drain drops every bin record that predates it — the
+          // successor of R3.5 layer 2, and what bounds a bin whose
+          // hand-off only releases deletions that reach a commit.
+          // Records an open diff-editor holds are skipped by the store.
+          if (this.deps.deletedBin) {
+            try {
+              await this.deps.deletedBin.pruneBefore(
+                new Date(startedAtMs).toISOString(),
+              );
+            } catch (err) {
+              this.deps.logger.warn("Sync2 drain: deleted-bin prune failed", {
+                err: `${err}`,
+              });
+            }
+          }
+          // R3.5 layer 2 — the OLD bin's backstop, still running until
+          // TrashStore itself is removed (nothing writes to it now).
           if (this.deps.trashHooks) {
             try {
               await this.deps.trashHooks.sweepOlderThan(
@@ -554,7 +576,9 @@ export class Sync2Manager {
       cancelRequested: () => this.abortRequested,
       trashHooks: this.deps.trashHooks,
       gitignoreSeeds: this.deps.gitignoreSeeds,
-      deletedBinReferencedShas: this.deps.deletedBinReferencedShas,
+      deletedBinReferencedShas: this.deps.deletedBin
+        ? () => this.deps.deletedBin!.referencedShas()
+        : undefined,
       onProgress: (processed, totalFiles, path) =>
         this.emitDrainStatus({
           currentFile: processed,

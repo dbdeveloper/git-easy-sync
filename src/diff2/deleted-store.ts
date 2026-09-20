@@ -76,6 +76,18 @@ export default class DeletedStore {
   private records: DeletedRecord[] = [];
   private loaded = false;
   private listeners = new Set<() => void>();
+  // The view-session shield (successor of the old `liftedAsSessionId`
+  // marker). A sha held here survives BOTH the retention prune and the
+  // sync_store sweep, for as long as a diff-editor tab has it open —
+  // "поки він не закриє їх або поки не відновиться з них".
+  //
+  // IN MEMORY on purpose, and that is the whole crash story: a killed
+  // Obsidian has no open tabs, so it can have no stale holds. The old
+  // bin's persisted marker needed a recovery pass to clear exactly
+  // this (trash-recovery case B); here the state cannot outlive the
+  // session that owns it. A restored tab re-registers its hold when it
+  // mounts, the same way it re-reads everything else.
+  private holds = new Set<string>();
 
   constructor(deps: DeletedStoreDeps) {
     this.vault = deps.vault;
@@ -191,9 +203,59 @@ export default class DeletedStore {
     }
   }
 
-  // Sweep source №5 (§12.5): every blob the bin still needs.
+  // Sweep source №5 (§12.5): every blob the bin still needs — its
+  // pending captures PLUS anything a view session is holding open. The
+  // hold matters on its own: a user may be looking at a generation
+  // whose record already handed off to a batch, and the batch's
+  // protection ends when the batch does.
   referencedShas(): Set<string> {
-    return new Set(this.records.map((r) => r.sha));
+    const out = new Set(this.records.map((r) => r.sha));
+    for (const sha of this.holds) out.add(sha);
+    return out;
+  }
+
+  // Called when a diff-editor tab opens a deleted version, and again
+  // when it closes (or after a restore). Idempotent both ways.
+  hold(sha: string): void {
+    this.holds.add(sha);
+  }
+
+  unhold(sha: string): void {
+    this.holds.delete(sha);
+  }
+
+  isHeld(sha: string): boolean {
+    return this.holds.has(sha);
+  }
+
+  // Retention (owner's rule, 2026-09-21): at the end of a FULLY
+  // successful drain, every record that predates that drain goes —
+  // their blobs then fall to the ordinary sweep. This is the successor
+  // of the old bin's layer-2 backstop, and it is what bounds the bin:
+  // the hand-off only releases deletions that REACH A COMMIT, while
+  // siblings, gitignored files and remote-originated deletes never do.
+  //
+  // Held records are skipped — an open editor keeps its subject alive
+  // until it is closed or restored from.
+  //
+  // The local restore window is therefore "until the next successful
+  // drain" by design (§5.2.1: the committed generations' window ends
+  // with their batch); the complete list of deletions still comes from
+  // GitHub history.
+  async pruneBefore(beforeIso: string): Promise<void> {
+    if (!this.loaded) await this.load();
+    const kept = this.records.filter(
+      (r) => r.deletedAt >= beforeIso || this.holds.has(r.sha),
+    );
+    if (kept.length === this.records.length) return;
+    this.logger?.info("deleted-bin: retention prune", {
+      dropped: this.records.length - kept.length,
+      kept: kept.length,
+      before: beforeIso,
+    });
+    this.records = kept;
+    await this.persist();
+    this.notify();
   }
 
   // Load-time reconcile, the successor of trash-recovery's hygiene

@@ -249,6 +249,38 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(drainCalls).toBe(1); // the drain still ran
   });
 
+  // ── §5.2.1 retention: the bin is bounded by the drain ─────────────
+
+  it("a fully successful drain prunes the bin with its OWN start time", async () => {
+    const pruned: string[] = [];
+    deps.deletedBin = {
+      referencedShas: () => new Set<string>(),
+      pruneBefore: async (iso) => {
+        pruned.push(iso);
+      },
+    };
+    await manager.resumeQueue();
+    expect(pruned).toHaveLength(1);
+    // The boundary is the drain's own start, so anything captured
+    // WHILE it ran (a pull-delete, say) survives to be seen.
+    expect(Date.parse(pruned[0])).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("a drain that did NOT finish cleanly leaves the bin alone", async () => {
+    const pruned: string[] = [];
+    deps.deletedBin = {
+      referencedShas: () => new Set<string>(),
+      pruneBefore: async (iso) => {
+        pruned.push(iso);
+      },
+    };
+    drainResult = okResult({ status: "network-error" as DrainOutcome });
+    // The shell surfaces a failed drain by throwing — the point here is
+    // what happened to the bin before it did.
+    await expect(manager.resumeQueue()).rejects.toThrow();
+    expect(pruned).toEqual([]);
+  });
+
   // ── R3a: commit singleton + coalescing bell ────────────────────────
 
   it("R3a: a commit trigger during a running pass rings the bell — the RUNNER loops once more, the second caller returns 0", async () => {

@@ -240,4 +240,92 @@ describe("DeletedStore (§5.2.1)", () => {
     expect(r.removed).toBe(0);
     expect(fs.existsSync(path.join(storeAbs(), sha))).toBe(true);
   });
+
+  // ── retention: bounded by the drain, except what the user holds ───
+
+  it("pruneBefore drops records that predate the drain, keeps later ones", async () => {
+    put("old.md", "old\n");
+    put("new.md", "new\n");
+    const early = new DeletedStore({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+      syncStore,
+      now: () => new Date("2026-09-20T10:00:00.000Z"),
+    });
+    await early.load();
+    await early.captureForDelete("old.md");
+    const late = new DeletedStore({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+      syncStore,
+      now: () => new Date("2026-09-20T12:00:00.000Z"),
+    });
+    await late.load();
+    await late.captureForDelete("new.md");
+
+    await late.pruneBefore("2026-09-20T11:00:00.000Z");
+    expect(late.list().map((r) => r.path)).toEqual(["new.md"]);
+  });
+
+  it("🔑 a record HELD by an open editor survives the prune AND the sweep", async () => {
+    // "Крім тих, які користувач відкрив у diff editor — вони висять,
+    // поки він не закриє їх або поки не відновиться з них."
+    put("watched.md", "precious\n");
+    await store.captureForDelete("watched.md");
+    const sha = store.peek("watched.md")!;
+    fs.unlinkSync(path.join(dir, "watched.md"));
+
+    store.hold(sha); // a diff-editor tab opened this version
+    await store.pruneBefore("2099-01-01T00:00:00.000Z"); // prune everything
+    expect(store.list().map((r) => r.path)).toEqual(["watched.md"]);
+
+    const swept = await syncStore.sweep([async () => store.referencedShas()]);
+    expect(swept.removed).toBe(0);
+    expect(fs.existsSync(path.join(storeAbs(), sha))).toBe(true);
+  });
+
+  it("a hold outlives its record — the blob stays even after the hand-off released it", async () => {
+    // The user may be looking at a generation whose record already
+    // moved into a batch; the batch's protection ends with the batch.
+    put("watched.md", "precious\n");
+    await store.captureForDelete("watched.md");
+    const sha = store.peek("watched.md")!;
+    store.hold(sha);
+    await store.release(["watched.md"]); // the hand-off
+
+    expect(store.list()).toEqual([]);
+    expect(store.referencedShas().has(sha)).toBe(true);
+  });
+
+  it("closing the tab releases the hold — the next prune takes the record", async () => {
+    put("watched.md", "precious\n");
+    await store.captureForDelete("watched.md");
+    const sha = store.peek("watched.md")!;
+    fs.unlinkSync(path.join(dir, "watched.md"));
+    store.hold(sha);
+    await store.pruneBefore("2099-01-01T00:00:00.000Z");
+    expect(store.list()).toHaveLength(1);
+
+    store.unhold(sha);
+    await store.pruneBefore("2099-01-01T00:00:00.000Z");
+    expect(store.list()).toEqual([]);
+  });
+
+  it("holds do NOT survive a restart — a killed app has no open tabs, so no stale shield", async () => {
+    put("watched.md", "precious\n");
+    await store.captureForDelete("watched.md");
+    store.hold(store.peek("watched.md")!);
+
+    const reopened = new DeletedStore({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+      syncStore,
+    });
+    await reopened.load();
+    // This is the whole reason the shield is in memory: the old bin's
+    // persisted marker needed a recovery pass to clear exactly this.
+    expect(reopened.referencedShas().size).toBe(1); // the RECORD, not a hold
+    await reopened.release(["watched.md"]);
+    expect(reopened.referencedShas().size).toBe(0);
+  });
 });
