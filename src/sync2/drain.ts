@@ -674,9 +674,23 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       path: string,
       sha: string | null, // null = ours is a DELETION
     ): Promise<{ should: boolean; abort: DrainResult | null }> => {
+      // ⚠️ SECOND LINE OF DEFENCE, not the primary one — corrected
+      // 2026-09-20 after the §VIII G.1 probes. The comment here used
+      // to say this branch serves a crash-restart ("push succeeded,
+      // disk didn't"); it does not, because such a restart finds the
+      // durable record, seeding raises isManualConflict from it, and
+      // the path then goes to STEP2 — whose caller compares these very
+      // shas BEFORE calling. In normal operation this line is
+      // therefore unreachable from either caller.
+      //
+      // It still earns its place: with the STEP2 caller's guard
+      // removed and this one intact, G.1 stays green (measured — the
+      // push is skipped HERE); removing both is what finally lets the
+      // drain read the branch. So it is the belt behind STEP2's
+      // braces, and arming G.1 needs a two-line probe for that reason.
       const rec = conflicts!.entries.get(path);
       if (rec !== undefined && rec.conflictBase.sha === sha) {
-        return { should: false, abort: null }; // journal confirms — no network
+        return { should: false, abort: null }; // the record answers — no network
       }
       if (conflictHeadHash === null) {
         // Branch doesn't exist yet. A deletion-ours has nothing to
