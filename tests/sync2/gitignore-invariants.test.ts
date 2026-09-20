@@ -45,6 +45,32 @@ function fixture() {
   return { root, vault, state, inv };
 }
 
+// Same fixture, but with the §8.0 predicate wired — `defer()` returns
+// whatever the caller's flag currently says, read live on each
+// enforce() exactly as main.ts does.
+function deferrableFixture(defer: { value: boolean }) {
+  const root = path.join(
+    os.tmpdir(),
+    `gi-inv-defer-${crypto.randomBytes(4).toString("hex")}`,
+  );
+  fs.mkdirSync(path.join(root, CONFIG_DIR, "plugins", SELF), {
+    recursive: true,
+  });
+  const vault = new Vault(root);
+  const state = new InvariantStateStore({
+    vault: vault as unknown as import("obsidian").Vault,
+    selfPluginId: SELF,
+  });
+  const inv = new GitignoreInvariants({
+    vault: vault as unknown as import("obsidian").Vault,
+    state,
+    configDir: CONFIG_DIR,
+    selfPluginId: SELF,
+    deferRootUntilBaseline: () => defer.value,
+  });
+  return { root, vault, state, inv };
+}
+
 const cdGitignore = (root: string) =>
   path.join(root, CONFIG_DIR, ".gitignore");
 const selfGitignore = (root: string) =>
@@ -382,5 +408,67 @@ describe("extractInvariantBlock / blockHasAllowLine (pure)", () => {
       blockOff + "\n\nplugins/*/*\n!plugins/*/data.json\n";
     const body = extractInvariantBlock(fileWithOutsideMatch);
     expect(blockHasAllowLine(body!)).toBe(false);
+  });
+});
+
+// DOT-FILES §8.0 — the root file is the only one that defers, and the
+// deferral must leave NO trace in the freshness cache (a recorded slot
+// for a file we never read would short-circuit the next pass's splice).
+describe("§8.0 root deferral until the first baseline", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const r of roots.splice(0)) {
+      fs.rmSync(r, { recursive: true, force: true });
+    }
+  });
+
+  it("deferred: root untouched, configDir + self-plugin still enforced, no state recorded", async () => {
+    const defer = { value: true };
+    const f = deferrableFixture(defer);
+    roots.push(f.root);
+    await f.state.load();
+
+    await f.inv.enforce();
+
+    expect(fs.existsSync(path.join(f.root, ".gitignore"))).toBe(false);
+    // The two files that carry the secret guarantees DO land.
+    expect(fs.existsSync(cdGitignore(f.root))).toBe(true);
+    expect(fs.existsSync(selfGitignore(f.root))).toBe(true);
+    // Nothing recorded for a file we never looked at.
+    expect(f.state.get().rootGitignore).toBeUndefined();
+  });
+
+  it("deferral lifts: the very next enforce() seeds the root file in full", async () => {
+    const defer = { value: true };
+    const f = deferrableFixture(defer);
+    roots.push(f.root);
+    await f.state.load();
+    await f.inv.enforce();
+    expect(fs.existsSync(path.join(f.root, ".gitignore"))).toBe(false);
+
+    defer.value = false; // the first sync completed
+    await f.inv.enforce();
+
+    const body = fs.readFileSync(path.join(f.root, ".gitignore"), "utf8");
+    expect(body).toContain(INVARIANT_BEGIN);
+    expect(body).toContain("*.conflict-from-*");
+    expect(f.state.get().rootGitignore).toBeDefined();
+  });
+
+  it("deferred does NOT mean 'ignore an existing file' — a user root .gitignore is left byte-exact", async () => {
+    const defer = { value: true };
+    const f = deferrableFixture(defer);
+    roots.push(f.root);
+    await f.state.load();
+    const userBody = "# mine\n*.tmp\n";
+    fs.writeFileSync(path.join(f.root, ".gitignore"), userBody);
+
+    await f.inv.enforce();
+
+    // Untouched: this is what keeps a genuine scenario-B conflict
+    // comparing the USER's file against remote's, not ours-with-block.
+    expect(fs.readFileSync(path.join(f.root, ".gitignore"), "utf8")).toBe(
+      userBody,
+    );
   });
 });

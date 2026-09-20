@@ -15,6 +15,8 @@ import HotMetadataStore from "../../src/sync2/hot-metadata";
 import FileBaselinesStore from "../../src/sync2/file-baselines";
 import ChangeDetector from "../../src/sync2/change-detector";
 import GI from "../../src/gi";
+import GitignoreInvariants from "../../src/sync2/gitignore-invariants";
+import InvariantStateStore from "../../src/sync2/invariant-state";
 import { FileChange } from "../../src/sync2/types";
 import { calculateGitBlobSHA } from "../../src/utils";
 import { mergeText } from "../../src/sync2/three-way-merge";
@@ -210,6 +212,69 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     await p1;
     expect(drainCalls).toBe(1); // still one
     expect(manager.isDrainRunning()).toBe(false);
+  });
+
+  // ── DOT-FILES §8.0: enforce() ordering on a base-free first pass ───
+  //
+  // The measured defect (2026-09-01, twice on real GitHub): enforce()
+  // runs at the top of the commit pass, so on a COLD start it writes
+  // the managed .gitignore files before any baseline exists. The scan
+  // then sees local ≠ remote with no common base → rule 4.2 → a MANUAL
+  // CONFLICT on the root .gitignore that the user never caused. This
+  // is the ordinary "adopt an existing repo" path, not an edge case.
+  //
+  // The fix is ordering, and it is deliberately narrow: while
+  // `lastSyncCommitSha === null`, the ROOT file is left alone so the
+  // first drain can adopt the remote one (rule 4.1.b, a clean pull);
+  // the next pass splices our block into it and pushes cleanly.
+  // <configDir>/.gitignore is NOT deferred — it carries the
+  // `plugins/*/data.json` deny (leak-guard layer L3), and it cannot
+  // produce this conflict anyway (diff3 routes everything under
+  // .obsidian/ into rule 3, where a collision never becomes manual).
+
+  const makeInvariants = async (): Promise<GitignoreInvariants> => {
+    const state = new InvariantStateStore({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+    });
+    await state.load();
+    return new GitignoreInvariants({
+      vault: vault as never,
+      state,
+      configDir: CONFIG_DIR,
+      selfPluginId: PLUGIN_ID,
+      // Mirrors main.ts's wiring verbatim — the predicate reads the
+      // SAME hot store the manager uses, live on every enforce().
+      deferRootUntilBaseline: () =>
+        deps.hotMeta.getLastSyncCommitSha() == null,
+    });
+  };
+
+  it("§8.0: with NO baseline yet, the commit pass must not create the root .gitignore — but must still write the configDir one", async () => {
+    deps.invariants = await makeInvariants();
+    // A cold start: nothing has ever synced.
+    expect(deps.hotMeta.getLastSyncCommitSha()).toBeNull();
+
+    await manager.commitOnly();
+
+    // The secret-carrying block still lands on pass 1 — deferring THAT
+    // would expose other plugins' data.json on the very first sync.
+    expect(fs.existsSync(path.join(dir, CONFIG_DIR, ".gitignore"))).toBe(true);
+    // The root file is what manufactures the conflict. Leave it for
+    // the drain to adopt.
+    expect(fs.existsSync(path.join(dir, ".gitignore"))).toBe(false);
+  });
+
+  it("§8.0: once a baseline exists, the root .gitignore is enforced as before", async () => {
+    deps.invariants = await makeInvariants();
+    await deps.hotMeta.update({ lastSyncCommitSha: "c1" });
+
+    await manager.commitOnly();
+
+    expect(fs.existsSync(path.join(dir, ".gitignore"))).toBe(true);
+    expect(fs.readFileSync(path.join(dir, ".gitignore"), "utf8")).toContain(
+      "*.conflict-from-*",
+    );
   });
 
   // ── R3a: commit singleton + coalescing bell ────────────────────────

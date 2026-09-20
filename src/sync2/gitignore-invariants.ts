@@ -142,6 +142,11 @@ export interface GitignoreInvariantsDeps {
   state: InvariantStateStore;
   configDir: string;
   selfPluginId: string;
+  // DOT-FILES §8.0 — true while this vault has never completed a sync
+  // (`lastSyncCommitSha === null`, the same cold-start signal discovery
+  // uses). While true, the ROOT .gitignore is left alone; see
+  // enforceRootGitignore for why only that one.
+  deferRootUntilBaseline?: () => boolean;
 }
 
 // Owner of the two managed gitignore files. Public surface:
@@ -157,10 +162,12 @@ export default class GitignoreInvariants {
   private readonly selfPluginGitignorePath: string;
   // Root <vault>/.gitignore. Bare ".gitignore" — relative to vault root.
   private readonly rootGitignorePath = ".gitignore";
+  private readonly deferRootUntilBaseline: () => boolean;
 
   constructor(deps: GitignoreInvariantsDeps) {
     this.vault = deps.vault;
     this.state = deps.state;
+    this.deferRootUntilBaseline = deps.deferRootUntilBaseline ?? (() => false);
     this.configDirGitignorePath = `${deps.configDir}/.gitignore`;
     this.selfPluginGitignorePath = `${deps.configDir}/plugins/${deps.selfPluginId}/.gitignore`;
   }
@@ -332,6 +339,38 @@ export default class GitignoreInvariants {
   // gitignore. The forced rule here is `*.conflict-from-*`, which
   // pins per-device conflict-sibling files to local-only.
   private async enforceRootGitignore(): Promise<void> {
+    // DOT-FILES §8.0 — ORDER, measured twice on real GitHub. enforce()
+    // runs at the top of the commit pass, so on a cold start it would
+    // write this file BEFORE any baseline exists; the scan then sees
+    // local ≠ remote with no common base and rule 4.2 turns our own
+    // write into a MANUAL CONFLICT the user never caused. That is the
+    // ordinary "adopt an existing repo" path, not an edge case.
+    //
+    // While no sync has ever completed we therefore leave the root
+    // file alone: the first drain adopts the remote one (rule 4.1.b, a
+    // clean pull), and the NEXT commit pass splices our block into it
+    // and pushes it normally. If the vault has its own differing
+    // .gitignore the conflict still happens — correctly (§6.4 rule A,
+    // "both sides exist, no common base") — and now it compares the
+    // user's real file against remote's, without our block mixed in.
+    //
+    // ONLY this file defers. <configDir>/.gitignore carries the
+    // `plugins/*/data.json` deny (leak-guard layer L3) and must stand
+    // before the first push; it also cannot produce this conflict,
+    // because diff3 routes everything under .obsidian/ into rule 3
+    // where a collision never becomes manual.
+    //
+    // Cost of the window, stated honestly: `*.ges-tmp*`/`*.ges-bak*`
+    // have no hardcoded deny, so a staging file caught mid-write could
+    // be committed on pass 1 (transient, cleaned by the onload sweep).
+    // Sibling files are safe regardless — isSyncable denies them by
+    // pattern, independently of any .gitignore.
+    //
+    // Returning here leaves the freshness slot UNTOUCHED on purpose:
+    // the next pass must do a real read+splice, not hit a cache entry
+    // for a file we never looked at.
+    if (this.deferRootUntilBaseline()) return;
+
     const slot = "rootGitignore" as const;
     const path = this.rootGitignorePath;
     const recorded = this.state.get()[slot];

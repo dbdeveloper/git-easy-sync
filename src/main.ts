@@ -993,6 +993,13 @@ export default class GitHubSyncPlugin extends Plugin {
       state: invariantState,
       configDir: this.app.vault.configDir,
       selfPluginId: manifest.id,
+      // DOT-FILES §8.0: on a vault that has never completed a sync the
+      // ROOT .gitignore is left for the first drain to adopt —
+      // otherwise our own write becomes a manual conflict against the
+      // repo's existing one. Read LIVE (a thunk, not a captured
+      // boolean): the very first successful sync flips it.
+      deferRootUntilBaseline: () =>
+        this.hotMeta?.getLastSyncCommitSha() == null,
     });
     // Prime the toggle cache once, here, so the settings tab can
     // read it synchronously without re-entering Obsidian via an
