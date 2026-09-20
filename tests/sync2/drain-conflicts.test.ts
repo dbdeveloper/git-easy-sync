@@ -45,7 +45,7 @@ const PLUGIN_ID = "git-easy-sync";
 const NOTE = "note.md";
 const V0 = "one\ntwo\nthree\n";
 
-describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
+describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => {
   let dir: string;
   let vault: Vault;
   let world: FakeWorld;
@@ -272,10 +272,15 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
   });
 
   // + G.1 (head-unchanged half): the journal confirms
-  // conflictBase.sha == local.sha → the push is skipped. G.1's strict
-  // form also demands "and without a network call"; that half is
-  // pinned separately, by the spy in the G.4/G.5 tests.
-  it("C.2 + G.1: STEP2 dedups the branch push — identical local content is NOT re-pushed; a new edit IS", async () => {
+  // ⚠️ NOT G.1, despite the resemblance — verified by probe
+  // 2026-09-20. Re-committing identical content never reaches
+  // shouldPushToConflictBranch at all: the restored placeholder makes
+  // tracked.base == local, so the entry is resolved as "unchanged"
+  // before STEP2. Disabling the journal-confirm branch entirely leaves
+  // this test green. G.1 (the journal confirms → skip, no network) has
+  // its own test in the §VIII G suite, where tracked.base is made to
+  // DIFFER so STEP2 is actually entered.
+  it("C.2: STEP2 dedups the branch push — identical local content is NOT re-pushed; a new edit IS", async () => {
     await setupAligned();
     await world.commitFiles({ [NOTE]: REMOTE_CLASH });
     await stageBatch({ [NOTE]: LOCAL_CLASH });
@@ -1338,6 +1343,69 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     const r = await drainOnce(deps());
     expect(r.status).toBe("ok");
     expect(world.branchHeads.get(branch)).toBe(tipAfterBirth); // no new commit
+  });
+
+  it("G.1: the journal confirms the same sha → STEP2 skips the push WITHOUT touching the network", async () => {
+    await setup();
+    const branch = await birthConflict();
+    const tip = world.branchHeads.get(branch)!;
+
+    // Entering STEP2 at all takes a tracked.base that DIFFERS from
+    // local — otherwise the entry resolves as "unchanged" long before
+    // the branch decision (that is why C.2, which looks like this
+    // scenario, does not actually exercise it; probe-verified).
+    // A journal from an interrupted run gives exactly that shape:
+    // base still V0, while the durable conflictBase already carries
+    // the content we are about to commit again.
+    const { emptyDrainState } = await import("../../src/sync2/drain-journal");
+    const js = emptyDrainState();
+    const mk = async (content: string) => ({
+      path: NOTE2,
+      sha: await sha(content),
+      size: enc(content).byteLength,
+      mtime: 50,
+      blob: null,
+      mode: "" as const,
+      deviceLabel: null,
+    });
+    js.trackedFiles.set(NOTE2, {
+      base: await mk(V0b),
+      remote: await mk(REMOTE_B),
+      isManualConflict: true,
+    });
+    js.conflictBranchName = branch;
+    await journal.persist(js);
+
+    await stage({ [NOTE2]: LOCAL_B }); // == the durable conflictBase
+    baseCommit = world.head;
+
+    const d = deps();
+    const branchReads: string[] = [];
+    const realMeta = d.client.getContentsMetadataAtRef.bind(d.client);
+    d.client.getContentsMetadataAtRef = async (p: string, ref: string) => {
+      if (ref === tip) branchReads.push(p); // scoped BY REF: Layer 2
+      return realMeta(p, ref); // legitimately reads main in the same run
+    };
+    let branchPushes = 0;
+    const realPush = d.client.pushCommitToBranch.bind(d.client);
+    d.client.pushCommitToBranch = async (
+      args: Parameters<typeof realPush>[0],
+    ) => {
+      branchPushes += 1;
+      return realPush(args);
+    };
+
+    const r = await drainOnce(d);
+    expect(r.status).toBe("ok");
+    expect(world.branchHeads.get(branch)).toBe(tip); // nothing pushed
+    expect(branchPushes).toBe(0);
+    // The whole point of G.1: the durable record ANSWERED, so the live
+    // check never ran. G.3 is the mirror — record silent, live check
+    // used. The answer is guarded TWICE (the STEP2 caller compares
+    // conflictBase.sha first, shouldPushToConflictBranch compares it
+    // again for its other caller, STEP1 crash-restart), so the probe
+    // that arms this assertion has to remove both.
+    expect(branchReads).toEqual([]);
   });
 
   it("G.4: the live check finds a DIFFERENT sha, or no such path on the branch → PUSH (the inverse of G.3)", async () => {
