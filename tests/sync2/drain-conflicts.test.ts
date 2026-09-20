@@ -24,7 +24,7 @@ import {
   DiscoveryResult,
   DELETED_SHA_HASH,
 } from "../../src/sync2/discovery";
-import { NetworkError } from "../../src/errors";
+import { AuthError, NetworkError } from "../../src/errors";
 import { calculateGitBlobSHA } from "../../src/utils";
 import {
   FakeWorld,
@@ -732,6 +732,83 @@ describe("drain conflict lifecycle (§VIII C + E.3-5 + L.3)", () => {
     };
     expect((await drainOnce(deps)).status).toBe("network-error");
   });
+
+  // ── E.1: every Vault-step network site aborts the WHOLE drain ─────
+  // The spec asks for one case per site. E.3-5 above covers the three
+  // getCommitInfoForPath sites; the two below cover the BLOB sites,
+  // which is where the sites can differ — every network call in the
+  // Vault-step ends with `return statusFromError(...)` except one.
+  //
+  // Both error classes are checked, because both must abort by the
+  // same route (§II.6 п.8): NetworkError → "network-error",
+  // AuthError → "token-expired". A retry helper returns the second one
+  // WITHOUT retrying, so a site that only inspects "did retry give me
+  // bytes" swallows an expired token exactly as it swallows a dead
+  // network.
+
+  const FAILURES: Array<[string, () => Error, string]> = [
+    ["NETWORK_ERROR", () => new NetworkError("net down"), "network-error"],
+    ["TOKEN_EXPIRED", () => new AuthError("token expired", 401), "token-expired"],
+  ];
+
+  for (const [label, make, expected] of FAILURES) {
+    it(`E.1 (plain pull site): ${label} on the remote blob fetch aborts the whole drain`, async () => {
+      await setupAligned();
+      // A remote-only change: no batch, the vault file untouched →
+      // _diff3 rule 4.3 hands back the remote VERBATIM (sha only), so
+      // the Vault-step has to materialise the bytes itself.
+      await world.commitFiles({ [NOTE]: "remote v2\n" });
+      const deps = makeDeps();
+      deps.client.getBlobFromRepo = async () => {
+        throw make();
+      };
+      const r = await drainOnce(deps);
+      expect(r.status).toBe(expected);
+      // Aborted BEFORE the vault was touched — the next drain repeats
+      // the whole Vault-step from the surviving journal (§IV.2).
+      expect(vaultFiles.writes).toEqual([]);
+    });
+
+    it(`E.1 (fold-result site): ${label} while materialising the fold result aborts the whole drain`, async () => {
+      await setupAligned();
+      await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+      await stageBatch({ [NOTE]: LOCAL_CLASH });
+      vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+      await drainOnce(makeDeps()); // births the conflict + first sibling
+
+      // Seeded on purpose: conflictBase is made EQUAL to the sibling.
+      // That is what puts the fold on rule 4.3 (local == base → the
+      // remote wins verbatim), the one fold outcome that returns a
+      // sha-only FileInfo and forces the drain to fetch the bytes
+      // itself. The healthy flow rarely produces this shape —
+      // conflictBase is ours, the sibling is theirs — but a restore
+      // from the durable store after a crash can, and the abort
+      // contract does not depend on how the state was reached.
+      const durable = await conflictStore.load();
+      const rec = durable.entries.get(NOTE)!;
+      rec.conflictBase = { ...rec.siblings[0] };
+      await conflictStore.save(durable);
+
+      const REMOTE_2 = "REMOTE\ntwo\nTHREE-v2\n";
+      world.committedAt += 5000;
+      await world.commitFiles({ [NOTE]: REMOTE_2 });
+      baseCommit = world.commits[world.commits.length - 2];
+      const remote2Sha = await sha(REMOTE_2);
+
+      const deps = makeDeps();
+      const passThrough = deps.client.getBlobFromRepo.bind(deps.client);
+      // Scoped to the ONE blob the fold needs: any other fetch failing
+      // would abort at a different (already correct) site and the test
+      // would pass for the wrong reason.
+      deps.client.getBlobFromRepo = async (s: string) => {
+        if (s === remote2Sha) throw make();
+        return passThrough(s);
+      };
+
+      const r = await drainOnce(deps);
+      expect(r.status).toBe(expected);
+    });
+  }
 });
 
 describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {

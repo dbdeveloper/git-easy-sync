@@ -1407,15 +1407,25 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             merged.sha!,
             verifiedShas,
           );
-          merged.blob =
-            b ??
-            (await (async () => {
-              const r = await deps.retry.run(() =>
-                deps.client.getBlobFromRepo(merged.sha!),
-              );
-              if (r.error !== null) return null;
-              return r.result;
-            })());
+          if (b !== null) {
+            merged.blob = b;
+          } else {
+            const r = await deps.retry.run(() =>
+              deps.client.getBlobFromRepo(merged.sha!),
+            );
+            // The SAME rule as every other network call in the
+            // Vault-step (§II.6 п.8 / §VIII E.1): a network or auth
+            // failure aborts the WHOLE drain — the journal survives
+            // and the next run repeats the fold. This site used to
+            // fold `r.error` into `null` and fall into the per-path
+            // record below, so a dead network — and an expired token,
+            // which `retry` returns without retrying — silently
+            // skipped the fold while the epilogue still advanced the
+            // baseline past the remote version that never reached the
+            // sibling.
+            if (r.error !== null) return statusFromError(r.error, result);
+            merged.blob = r.result;
+          }
           if (merged.blob === null) {
             vaultStepErrors.push({
               path,
