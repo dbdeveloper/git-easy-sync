@@ -90,6 +90,12 @@ function headerValue(
   return null;
 }
 
+// git's canonical EMPTY TREE object: the sha1 of a tree with no
+// entries, identical in every git repository that has ever existed.
+// GitHub's REST API returns 404 for it rather than an empty tree, so
+// every read path that can meet a repo with no files has to know it.
+export const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
 export default class GithubClient {
   // Optional Worker orchestra controller. When provided, every
   // HTTP request below routes through the network worker (Stage 6:
@@ -210,6 +216,16 @@ export default class GithubClient {
       // how analyzeRemoteState detects a bare repo. It's an expected
       // signal, not an error, so log at info level to avoid noise in the
       // log file. Anything else really is unexpected and stays at error.
+      //
+      // ⚠️ LANDMINE if this method is ever revived. Nothing in src/ calls
+      // it any more (only integration tests do) — but the equivalence
+      // "404 here ⇒ bare repo" is FALSE, and dangerously so: a branch
+      // whose every file was deleted points at git's empty tree, which
+      // GitHub also answers 404 for (see EMPTY_TREE_SHA and
+      // getRepoTree's handling of it). A repo with real history would
+      // then be read as brand-new and take the bootstrap path. Before
+      // putting this back on a live path, disambiguate the two the way
+      // getRepoTree does.
       if (response.status === 404 || response.status === 409) {
         this.logger.info("Repo has no commits yet (bare)", {
           status: response.status,
@@ -843,6 +859,36 @@ export default class GithubClient {
    * error; this method only reports it. Blob entries only; per-entry
    * `size` comes in the same response for free.
    */
+  // Tell "this tree is empty" apart from "this object does not exist",
+  // both of which GitHub reports as 404 on the trees endpoint.
+  //
+  // `sha` may be a TREE sha (then the constant answers directly) or a
+  // COMMIT sha (callers pass a branch head), in which case one extra
+  // request resolves the commit and we compare ITS tree. That request
+  // only ever happens on the 404 path, so the happy path is unchanged.
+  // Any failure to resolve means "we do not know" → false → the caller
+  // throws exactly as before.
+  private async resolvesToEmptyTree(sha: string): Promise<boolean> {
+    if (sha === EMPTY_TREE_SHA) return true;
+    try {
+      const commit = await this.timed(
+        {
+          url: `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/git/commits/${sha}`,
+          headers: this.headers(),
+          throw: false,
+        },
+        `commit/${sha.slice(0, 7)} (empty-tree probe)`,
+      );
+      if (commit.status < 200 || commit.status >= 400) return false;
+      return (
+        (commit.json as { tree?: { sha?: string } })?.tree?.sha ===
+        EMPTY_TREE_SHA
+      );
+    } catch {
+      return false;
+    }
+  }
+
   async getRepoTree({
     sha,
     retry = false,
@@ -869,6 +915,28 @@ export default class GithubClient {
       (res) => !isRetriableStatus(res.status),
       retry ? maxRetries : 0,
     );
+    if (response.status === 404 && (await this.resolvesToEmptyTree(sha))) {
+      // A branch whose every file has been deleted points at git's
+      // canonical EMPTY TREE, and GitHub answers 404 for that object —
+      // even when asked by its own sha. Measured, not inferred, and it
+      // is not eventual consistency: the 404 held for a full 20 s probe
+      // (DOT-FILES §10, side finding).
+      //
+      // "The remote has no files" is a perfectly ordinary state, and it
+      // is one WE can produce: deleting every file in the vault and
+      // syncing sends deletion entries, whose resulting tree is empty.
+      // So the next sync after that would have died in discovery with a
+      // NotFoundError — a self-inflicted dead end, not just something a
+      // user could do from the GitHub web UI.
+      //
+      // Distinct from the BARE repo (no commits at all), which is
+      // detected elsewhere and takes the bootstrap path. Here there IS
+      // history; it just currently holds nothing.
+      this.logger.info("Repo tree is empty (git's empty-tree object)", {
+        sha,
+      });
+      return { files: [], truncated: false };
+    }
     if (response.status < 200 || response.status >= 400) {
       this.logger.error("Failed to get repo tree", response);
       throw makeGithubAPIError(
