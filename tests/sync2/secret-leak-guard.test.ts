@@ -128,6 +128,7 @@ function makeFixture(): Fixture {
     }),
     // Anomalies are not the subject here; a real reporter lives in
     // main.ts (DOT-FILES §3.1.3).
+    gi: { invalidate: () => {} },
     onAnomaly: () => {},
   });
 

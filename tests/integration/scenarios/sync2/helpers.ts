@@ -208,6 +208,7 @@ export async function createSync2Client(
     seeds: gitignoreSeeds,
     // Anomalies are not the subject here; surfacing them would only
     // add noise. A real reporter lives in main.ts (DOT-FILES §3.1.3).
+    gi: { invalidate: () => {} },
     onAnomaly: () => {},
   });
 

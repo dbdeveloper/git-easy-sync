@@ -32,6 +32,15 @@ export const INVARIANTS_BEGIN =
 export const INVARIANTS_END =
   "# ===== end of git-easy-sync invariants =====";
 
+// Markers of the managed `final` section — the one nothing may override.
+// Same 🔒 frozen contract as the pair above, same 2026-09-21 birthday.
+// It is a SEPARATE pair because the two sections mean opposite things
+// about user authority (§3.1): `invariants` is a default the user is
+// invited to tune from below, `final` is not up for discussion. One pair
+// could not express that, since in gitignore position IS strength.
+export const FINAL_BEGIN = "# ===== git-easy-sync final - DO NOT EDIT =====";
+export const FINAL_END = "# ===== end of git-easy-sync final =====";
+
 // Markers + body are DELIBERATELY separate values (DOT-FILES §3.1.3). The
 // two halves have opposite life cycles — markers are frozen forever, bodies
 // change freely with every redesign of the rules — and while they lived in
@@ -180,6 +189,20 @@ export interface GitignoreInvariantsDeps {
   // told about — we deliberately do NOT guess where a damaged section
   // ended, so only they can finish the repair.
   onAnomaly: (report: SectionAnomalyReport) => void;
+  // The rule matcher whose parse we are about to invalidate. Narrow on
+  // purpose: this owner writes .gitignore files, it does not ask
+  // questions of them.
+  //
+  // Required because the alternative is a silent, same-pass bug: `gi`
+  // keys a parsed level on its mtime and trusts it for 500 ms
+  // (gi.ts STAT_COOLDOWN_MS), so without this the isSyncable calls that
+  // FOLLOW this pass, inside the same commit or drain, would answer from
+  // the rules we just replaced.
+  gi: GitignoreMatcherCache;
+}
+
+export interface GitignoreMatcherCache {
+  invalidate(dir?: string): void;
 }
 
 export interface SectionAnomalyReport {
@@ -203,14 +226,18 @@ export default class GitignoreInvariants {
   private readonly rootGitignorePath = ".gitignore";
   private readonly seeds: GitignoreSeedStore;
   private readonly onAnomaly: (report: SectionAnomalyReport) => void;
+  private readonly gi: GitignoreMatcherCache;
+  private readonly pluginsDir: string;
 
   constructor(deps: GitignoreInvariantsDeps) {
     this.vault = deps.vault;
     this.state = deps.state;
     this.seeds = deps.seeds;
     this.onAnomaly = deps.onAnomaly;
+    this.gi = deps.gi;
     this.configDirGitignorePath = `${deps.configDir}/.gitignore`;
-    this.selfPluginGitignorePath = `${deps.configDir}/plugins/${deps.selfPluginId}/.gitignore`;
+    this.pluginsDir = `${deps.configDir}/plugins`;
+    this.selfPluginGitignorePath = `${this.pluginsDir}/${deps.selfPluginId}/.gitignore`;
   }
 
   // Path of <configDir>/.gitignore. Exposed so callers (e.g.
@@ -227,15 +254,69 @@ export default class GitignoreInvariants {
     return this.rootGitignorePath;
   }
 
-  // Verify and, if needed, rewrite all three invariant gitignore
-  // files. Cheap path: stat each, compare mtime to recorded; if
-  // equal, do nothing else. Slow path (mtime moved): read content,
-  // compare hash; if hash matches recorded, refresh just the mtime
-  // cache. Only when hash truly changed do we rewrite.
+  // The restore pass (DOT-FILES §3.1.2). Runs at the start of BOTH
+  // commit and drain — they are separate operations and either can be
+  // the first thing a session does.
+  //
+  // The file set is DYNAMIC, which is the whole reason this stopped
+  // being three hardcoded calls: third-party `plugins/*/.gitignore`
+  // appear and vanish with their plugins, and at syncConfigDir=OFF our
+  // section has to reach every one of them that exists.
+  //
+  // Cost when nothing moved is one `adapter.list` of the plugins folder
+  // plus one `stat` per file — no reads, no hashing. That is what makes
+  // it affordable on every operation.
   async enforce(): Promise<void> {
     await this.enforceConfigDirGitignore();
     await this.enforceSelfPluginGitignore();
     await this.enforceRootGitignore();
+    for (const path of await this.foreignPluginGitignores()) {
+      await this.enforceForeignPluginGitignore(path);
+    }
+    await this.pruneVanishedRecords();
+  }
+
+  // Third-party `<configDir>/plugins/<id>/.gitignore` files that EXIST
+  // right now. We never create one: a plugin folder without its own
+  // .gitignore has no deeper node, so the `*` in <configDir> already
+  // hides it (measured — `plugins/plain/main.js` → hidden). Writing a
+  // file into someone else's folder to say something already true would
+  // be pure intrusion.
+  private async foreignPluginGitignores(): Promise<string[]> {
+    let entries: { folders: string[] };
+    try {
+      entries = await this.vault.adapter.list(this.pluginsDir);
+    } catch {
+      // No plugins folder yet (fresh vault), or unreadable. Nothing to
+      // enumerate; the three files we own are handled above.
+      return [];
+    }
+    const out: string[] = [];
+    for (const folder of entries.folders) {
+      const candidate = `${folder}/.gitignore`;
+      if (candidate === this.selfPluginGitignorePath) continue;
+      if (await this.vault.adapter.exists(candidate)) out.push(candidate);
+    }
+    return out;
+  }
+
+  // A plugin was uninstalled: its folder and .gitignore are gone. Drop
+  // the record — keeping a fingerprint would be a claim about a file
+  // that no longer exists, and the next install of the same plugin
+  // would then be measured against a stranger's bytes.
+  private async pruneVanishedRecords(): Promise<void> {
+    for (const path of Object.keys(this.state.get())) {
+      if (
+        path === this.rootGitignorePath ||
+        path === this.configDirGitignorePath ||
+        path === this.selfPluginGitignorePath
+      ) {
+        continue;
+      }
+      if (!(await this.vault.adapter.exists(path))) {
+        await this.state.remove(path);
+      }
+    }
   }
 
   // True iff the allow line is currently inside the invariant
@@ -336,19 +417,33 @@ export default class GitignoreInvariants {
       return;
     }
 
-    // Always read+splice+compare. A short-circuit on `mtime` /
-    // `recorded.hash` would skip the splice when the on-disk file
-    // hadn't changed since the last enforce — which is fine for
-    // user edits but breaks plugin upgrades: if the canonical block
-    // CONSTANT changes but the on-disk file doesn't (still pinned
-    // to the previous plugin version's block), the recorded hash
-    // matches the file's current hash and enforce() would return
-    // without applying the new canonical lines.
+    // Freshness gate (§3.1.2): skip the read entirely when the file has
+    // not moved AND the section we want is the section we recorded.
     //
-    // The post-splice `fixed === content` check below is the
-    // remaining short-circuit. It's safe — it compares the spliced
-    // output to the actual on-disk content, so it can't lie about
-    // canonical-block changes.
+    // The version of this that existed before compared mtime+hash only,
+    // and that is exactly why it was removed: it could not see a plugin
+    // UPGRADE, where the constant changes while the file on disk sits
+    // untouched, so the new rules never reached disk. Comparing the
+    // recorded FINGERPRINT against what we now want closes that hole,
+    // which is what lets the short-circuit come back.
+    //
+    // When the toggle state is not forced, either canonical body counts
+    // as fresh — the file is untouched, so whichever one we last wrote
+    // is still the right one.
+    const wanted =
+      desiredPushPluginsDataJson === undefined
+        ? [true, false].map((pushPluginsDataJson) =>
+            configDirInvariantsBody({ pushPluginsDataJson }),
+          )
+        : [
+            configDirInvariantsBody({
+              pushPluginsDataJson: desiredPushPluginsDataJson,
+            }),
+          ];
+    for (const candidate of wanted) {
+      if (await this.isFresh(path, stat, { invariants: candidate })) return;
+    }
+
     const content = await this.vault.adapter.read(path);
 
     // The block's "push plugins data.json" toggle survives this
@@ -397,10 +492,13 @@ export default class GitignoreInvariants {
       return;
     }
 
-    // Always read+splice+compare. See the matching comment in
-    // `enforceConfigDirGitignoreWith` for the rationale (plugin
-    // upgrades that change ROOT_INVARIANTS_BODY must reach disk
-    // even when the user's file mtime hasn't moved).
+    // Same freshness gate as configDir — see the comment there for why
+    // the fingerprint half is load-bearing (a plugin upgrade changes
+    // ROOT_INVARIANTS_BODY while the file on disk never moves).
+    if (await this.isFresh(path, stat, { invariants: ROOT_INVARIANTS_BODY })) {
+      return;
+    }
+
     const content = await this.vault.adapter.read(path);
 
     const fixed = await this.spliceOne(path, content, ROOT_INVARIANTS_BODY);
@@ -489,6 +587,76 @@ export default class GitignoreInvariants {
     await this.seeds.set(path, sha);
   }
 
+  // A third-party plugin's own .gitignore. Ownership mode 3: we touch
+  // EXACTLY our `final` section and nothing else — every other line in
+  // that file belongs to whoever wrote it.
+  //
+  // The section only exists to carry the syncConfigDir=OFF silencer
+  // (§3.1.1), which arrives with its content in A-6. Until then the
+  // desired state is "no section", and that is not a no-op: a file left
+  // carrying our section by an earlier version gets it REMOVED, rather
+  // than keeping an empty marked block around forever.
+  private async enforceForeignPluginGitignore(path: string): Promise<void> {
+    const stat = await this.vault.adapter.stat(path);
+    if (!stat) return; // vanished between list and stat — pruned below
+    const body = this.foreignPluginFinalBody();
+    if (await this.isFresh(path, stat, { final: body })) return;
+
+    const content = await this.vault.adapter.read(path);
+    const fixed = await this.spliceOne(path, content, body, FINAL_SECTION);
+    if (fixed === content) {
+      await this.refreshState(path, { final: body ?? undefined });
+      return;
+    }
+    await this.write(path, fixed);
+    await this.refreshState(path, { final: body ?? undefined });
+  }
+
+  // Desired body of our section inside a FOREIGN plugin's .gitignore.
+  // null = the section must not be there at all. A-6 gives this the
+  // syncConfigDir=OFF silencer.
+  private foreignPluginFinalBody(): string | null {
+    return null;
+  }
+
+  // Cheap freshness gate (§3.1.2): skip the read and the hashing when
+  // the file has not moved AND what we want from it has not changed.
+  //
+  // Both halves are needed, and the second is the one that was missing
+  // before. `mtime`+`size` answer "did anyone touch the FILE?" — they
+  // are blind to a plugin upgrade that changes the constant while the
+  // file on disk sits untouched, which is exactly how the new rules
+  // failed to reach disk and why the short-circuit was ripped out
+  // (`void recorded`) instead of fixed. Comparing the recorded
+  // fingerprint against what we NOW want closes that hole, so the
+  // short-circuit can come back.
+  //
+  // `desired` maps a section to the body we want, `null`/undefined
+  // meaning "this section must not exist" — in which case freshness
+  // requires the record to carry no fingerprint for it either.
+  private async isFresh(
+    path: string,
+    stat: { mtime: number; size: number },
+    desired: Partial<Record<SectionId, string | null>>,
+  ): Promise<boolean> {
+    const rec = this.state.getFor(path);
+    if (!rec) return false;
+    if (rec.mtime !== stat.mtime || rec.size !== stat.size) return false;
+    for (const [id, body] of Object.entries(desired) as Array<
+      [SectionId, string | null | undefined]
+    >) {
+      const recorded = rec[id];
+      if (body === null || body === undefined) {
+        if (recorded) return false;
+        continue;
+      }
+      if (!recorded) return false;
+      const want = await fingerprintOf(body);
+      if (recorded.sha !== want.sha || recorded.len !== want.len) return false;
+    }
+    return true;
+  }
+
   // Splice ONE section of `path`, feeding the repair its recorded
   // fingerprint and reporting whatever the splice found wrong.
   private async spliceOne(
@@ -497,7 +665,7 @@ export default class GitignoreInvariants {
     body: string | null,
     markers: SectionMarkers = INVARIANTS_SECTION,
   ): Promise<string> {
-    const sectionId = markers === INVARIANTS_SECTION ? "invariants" : "final";
+    const sectionId = markers.id;
     const { content, anomalies } = await spliceSection({
       existing,
       markers,
@@ -575,6 +743,11 @@ export default class GitignoreInvariants {
         bytes.byteOffset + bytes.byteLength,
       ) as ArrayBuffer,
     );
+    // The rules at this level just changed. Drop the matcher's parse of
+    // it, or the isSyncable calls later in THIS same commit/drain answer
+    // from what we replaced (gi.ts holds a level by mtime for 500 ms).
+    const slash = path.lastIndexOf("/");
+    this.gi.invalidate(slash <= 0 ? "" : path.substring(0, slash));
   }
 
   private async ensureParentDir(filePath: string): Promise<void> {
@@ -602,15 +775,24 @@ export default class GitignoreInvariants {
 export type SectionPlacement = "top" | "bottom";
 
 export interface SectionMarkers {
+  id: SectionId;
   begin: string;
   end: string;
   placement: SectionPlacement;
 }
 
 export const INVARIANTS_SECTION: SectionMarkers = {
+  id: "invariants",
   begin: INVARIANTS_BEGIN,
   end: INVARIANTS_END,
   placement: "top",
+};
+
+export const FINAL_SECTION: SectionMarkers = {
+  id: "final",
+  begin: FINAL_BEGIN,
+  end: FINAL_END,
+  placement: "bottom",
 };
 
 const enc = new TextEncoder();

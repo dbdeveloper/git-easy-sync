@@ -15,6 +15,8 @@ import GitignoreInvariants, {
   spliceSection,
   fingerprintOf,
   INVARIANTS_SECTION,
+  FINAL_BEGIN,
+  FINAL_END,
   type SectionMarkers,
   type SectionAnomalyReport,
   extractInvariantBlock,
@@ -58,6 +60,7 @@ function fixture() {
     configDir: CONFIG_DIR,
     selfPluginId: SELF,
     seeds,
+    gi: { invalidate: () => {} },
     onAnomaly: (report) => anomalies.push(report),
   });
   return { root, vault, state, seeds, inv, anomalies };
@@ -75,10 +78,11 @@ const selfGitignore = (root: string) =>
 const sect = (body: string) =>
   `${INVARIANTS_BEGIN}\n${body}\n${INVARIANTS_END}`;
 
-// A `final`-shaped section for the placement cases. The real FINAL
-// markers arrive with their content in A-6; what is under test here is
-// that placement is a parameter and BOTTOM works, not the rule text.
+// A `final`-shaped section for the placement cases, with throwaway
+// marker text: what is under test here is that placement is a parameter
+// and BOTTOM works, not the shipped rule text.
 const BOTTOM: SectionMarkers = {
+  id: "final",
   begin: "# ===== test tail - DO NOT EDIT =====",
   end: "# ===== end of test tail =====",
   placement: "bottom",
@@ -719,5 +723,123 @@ describe("managed .gitignore writes are crash-safe (DOT-FILES §3.1.3)", () => {
     expect(after).toContain(INVARIANTS_BEGIN);
     expect(after).toContain("*.log"); // recommended defaults still there
     expect(fs.existsSync(path.join(f.root, ".gitignore.ges-tmp"))).toBe(false);
+  });
+});
+
+describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
+  let f: ReturnType<typeof fixture>;
+  const foreignDir = (root: string) =>
+    path.join(root, CONFIG_DIR, "plugins", "brat");
+  const foreign = (root: string) => path.join(foreignDir(root), ".gitignore");
+  const FOREIGN_REL = `${CONFIG_DIR}/plugins/brat/.gitignore`;
+
+  beforeEach(async () => {
+    f = fixture();
+    await f.state.load();
+  });
+
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  it("a fingerprint that no longer matches rewrites an UNTOUCHED file", async () => {
+    // The regression that killed the old short-circuit: a plugin upgrade
+    // changes the constant while the file on disk never moves, so
+    // mtime+size still agree and the new rules never ship. Here the
+    // record claims a body we no longer want — the pass must not believe
+    // the file is fresh.
+    await f.inv.enforce();
+    const rootPath = path.join(f.root, ".gitignore");
+    fs.writeFileSync(rootPath, `${sect("# something we never wrote")}\n`);
+    const stat = fs.statSync(rootPath);
+    await f.state.set(".gitignore", {
+      mtime: stat.mtimeMs,
+      size: stat.size,
+      invariants: await fingerprintOf("# a body from an older version"),
+    });
+
+    await f.inv.enforce();
+    expect(fs.readFileSync(rootPath, "utf8")).toContain("*.conflict-from-*");
+  });
+
+  it("re-stats AFTER writing, so a settled file is not rewritten forever", async () => {
+    // A pre-write mtime in the record makes the next pass see "changed",
+    // rewrite, and record another pre-write mtime — for ever.
+    await f.inv.enforce();
+    const rootPath = path.join(f.root, ".gitignore");
+    const firstMtime = fs.statSync(rootPath).mtimeMs;
+
+    await new Promise((r) => setTimeout(r, 20));
+    await f.inv.enforce();
+    expect(fs.statSync(rootPath).mtimeMs).toBe(firstMtime);
+    expect(f.state.getFor(".gitignore")?.mtime).toBe(firstMtime);
+  });
+
+  it("invalidates the matcher for the level it just wrote", async () => {
+    // gi holds a parsed level by mtime for 500 ms, so without this the
+    // isSyncable calls LATER IN THE SAME pass answer from the rules we
+    // just replaced.
+    const invalidated: (string | undefined)[] = [];
+    const inv = new GitignoreInvariants({
+      vault: f.vault as unknown as import("obsidian").Vault,
+      state: f.state,
+      configDir: CONFIG_DIR,
+      selfPluginId: SELF,
+      seeds: f.seeds,
+      gi: { invalidate: (dir) => invalidated.push(dir) },
+      onAnomaly: () => {},
+    });
+    await inv.enforce();
+    expect(invalidated).toContain(""); // root
+    expect(invalidated).toContain(CONFIG_DIR);
+    expect(invalidated).toContain(`${CONFIG_DIR}/plugins/${SELF}`);
+  });
+
+  it("a third-party plugin's file is picked up by listing, not by a hardcoded name", async () => {
+    fs.mkdirSync(foreignDir(f.root), { recursive: true });
+    fs.writeFileSync(foreign(f.root), "*.map\n");
+    await f.inv.enforce();
+    // It entered the managed set...
+    expect(f.state.getFor(FOREIGN_REL)).toBeDefined();
+    // ...and nothing of theirs was touched: at syncConfigDir=ON we have
+    // no section to put there, so the file is byte-identical.
+    expect(fs.readFileSync(foreign(f.root), "utf8")).toBe("*.map\n");
+  });
+
+  it("we never CREATE a .gitignore in someone else's plugin folder", async () => {
+    // A plugin folder without one has no deeper node, so the configDir
+    // rules already cover it. Writing a file there to say something
+    // already true would be pure intrusion.
+    fs.mkdirSync(foreignDir(f.root), { recursive: true });
+    fs.writeFileSync(path.join(foreignDir(f.root), "main.js"), "//");
+    await f.inv.enforce();
+    expect(fs.existsSync(foreign(f.root))).toBe(false);
+    expect(f.state.getFor(FOREIGN_REL)).toBeUndefined();
+  });
+
+  it("our section is REMOVED from a third-party file when it should not be there", async () => {
+    // Left behind by an earlier version, or by the toggle having been
+    // OFF. "Should not be there" means gone, not an empty marked block.
+    fs.mkdirSync(foreignDir(f.root), { recursive: true });
+    fs.writeFileSync(
+      foreign(f.root),
+      `*.map\n\n${FINAL_BEGIN}\n*\n${FINAL_END}\n`,
+    );
+    await f.inv.enforce();
+    const after = fs.readFileSync(foreign(f.root), "utf8");
+    expect(after).toBe("*.map\n");
+    expect(after).not.toContain(FINAL_BEGIN);
+  });
+
+  it("an uninstalled plugin's record is pruned, and no file is resurrected", async () => {
+    fs.mkdirSync(foreignDir(f.root), { recursive: true });
+    fs.writeFileSync(foreign(f.root), "*.map\n");
+    await f.inv.enforce();
+    expect(f.state.getFor(FOREIGN_REL)).toBeDefined();
+
+    fs.rmSync(foreignDir(f.root), { recursive: true, force: true });
+    await f.inv.enforce();
+    expect(f.state.getFor(FOREIGN_REL)).toBeUndefined();
+    expect(fs.existsSync(foreign(f.root))).toBe(false);
   });
 });

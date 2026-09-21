@@ -1018,6 +1018,10 @@ export default class GitHubSyncPlugin extends Plugin {
       configDir: this.app.vault.configDir,
       selfPluginId: manifest.id,
       seeds: gitignoreSeeds,
+      // DOT-FILES §3.1.2: the matcher whose parse this pass invalidates
+      // after each write, so the isSyncable calls that follow in the
+      // SAME commit/drain do not answer from the rules we replaced.
+      gi,
       // DOT-FILES §3.1.3. Everything here is logged; only the case we
       // cannot fix ourselves reaches the user, because only they can
       // finish it — we refuse to guess where a damaged section ended,
