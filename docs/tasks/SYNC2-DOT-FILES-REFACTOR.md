@@ -349,14 +349,21 @@ Root-секції ховають `.*` на будь-якій глибині, т�
 ```
 # ===== git-easy-sync final - DO NOT EDIT =====
                     ON                    │                 OFF
-  !/.gitignore                            │   /.gitignore     ← файл стає локальним
-  !/plugins/*/.gitignore                  │   *               ← глушить усе піддерево
-  workspace.json                          │
+  !/.gitignore                            │   plugins/*/data.json (або !…)
+  !/plugins/*/.gitignore                  │   /.gitignore     ← файл стає локальним
+  workspace.json                          │   *               ← глушить усе піддерево
   workspace-mobile.json                   │
   community-plugins.json                  │
   plugins/*/data.json  (або !… при ON)    │
 # ===== end of git-easy-sync final =====
 ```
+
+⚠️ **Рядок `data.json` присутній і при OFF** (уточнення 2026-09-22, знайдено при
+реалізації). Він там **інертний** — `*` нижче все одно перезабороняє все — але цей
+gitignore є **ЄДИНИМ** сховищем стану тумблера (саме тому тумблер і їздить між
+пристроями). Якби при OFF рядок зникав, то цикл «вимкнув синк configDir → увімкнув
+назад» тихо скидав би опт-ін користувача до безпечного дефолту. Інертний, але не
+відсутній. Пін: тест «ON → configDir OFF → configDir ON keeps the opt-in».
 
 **`<configDir>/plugins/*/.gitignore`** — та сама пара маркерів, але секція існує **лише
 при OFF** і несе лише глушник; при ON вона **видаляється цілком**, а не лишається
@@ -1939,9 +1946,12 @@ push-candidati + Pass 2); **[int]** інтеграція (реальний GitHu
   `data.json` / `/.runtime/` / `*.log` / `.conflict-from-` / `.ges-tmp`.
 - **TD6a.8 [int]** S1 ON: `<self>/data.json` і `<old-self>/data.json` усе одно відсутні в
   дереві.
-- **🟡 TD6a.9 [gi] пін дефекту 1:** ON + catch-all → сторонній `data.json` НЕ їде (має їхати).
-- **🔴 TD6a.10 [gi] пін дефекту 2:** релікт без catch-all → сторонній `data.json` їде
-  (не має).
+- ✅ **TD6a.9 [gi] — ЗАКРИТО 2026-09-22 (A-6).** Був 🟡-пін дефекту 1 (ON + catch-all →
+  сторонній `data.json` НЕ їде). Секція переїхала в кінець файлу, тумблер тепер нижче за
+  катч-ол; `it.fails` знято.
+- ✅ **TD6a.10 [gi] — ЗАКРИТО 2026-09-22 (A-6).** Був 🔴-пін дефекту 2 (релікт без
+  catch-all → сторонній `data.json` їде). Тією ж зміною: наш рядок говорить останнім,
+  чужого тексту не чіпаємо; `it.fails` знято.
 
 ### D7 — немає дозволу без discoverability (load-bearing) — приходить Кроком **B2**
 - **TD7.1 [syn]** неанкороване `!.myconfig/` → `.myconfig/foo.md` `isSyncable=false`.

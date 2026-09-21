@@ -32,6 +32,7 @@ import {
 } from "../../src/sync2/atomic-write";
 import { Vault } from "../../mock-obsidian";
 import GI from "../../src/gi";
+import { isUnhonouredGitignore } from "../../src/sync2/change-detector";
 import { calculateGitBlobSHA } from "../../src/utils";
 
 const CONFIG_DIR = ".obsidian";
@@ -1016,5 +1017,136 @@ describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () =>
       FINAL_BEGIN,
     );
     expect(new GI(f.root).ignored(`${CONFIG_DIR}/app.json`)).toBe(false);
+  });
+});
+
+describe("§12 Крок A done-criteria that the content tests above do not cover", () => {
+  let f: ReturnType<typeof fixture>;
+
+  beforeEach(async () => {
+    f = fixture();
+    await f.state.load();
+  });
+
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  it("TD2.1a/b — a user `/.gitignore` takes the root file out of sync, and control is unaffected (D6a)", async () => {
+    // Reading a control file is ABSOLUTE and does not go through
+    // isSyncable (D2.1); membership in the sync set is ordinary and may
+    // lapse. Making the root file per-device is a FEATURE — device A
+    // shares `!.editorconfig`, device B keeps its own.
+    await f.inv.enforce();
+    const rootPath = path.join(f.root, ".gitignore");
+    const before = fs.readFileSync(rootPath, "utf8");
+    fs.writeFileSync(
+      rootPath,
+      before.replace(FINAL_BEGIN, `/.gitignore\n\n${FINAL_BEGIN}`),
+    );
+
+    // (a) the file leaves scope...
+    expect(new GI(f.root).ignored(".gitignore")).toBe(true);
+
+    // (b) ...while it keeps governing, and enforce() keeps maintaining
+    // it: the user's line survives, our sections stay canonical.
+    await f.inv.enforce();
+    const after = fs.readFileSync(rootPath, "utf8");
+    expect(after).toContain("/.gitignore\n");
+    expect(after).toContain(INVARIANTS_BEGIN);
+    expect(after).toContain(FINAL_BEGIN);
+    expect(new GI(f.root).ignored("notes/.hidden/x.md")).toBe(true);
+  });
+
+  it("the configDir re-admission is ANCHORED: a nested .gitignore stays hidden", async () => {
+    // Bare `!.gitignore` at this node would also resurrect
+    // `<configDir>/snippets/.gitignore` — a direct D6 violation. The
+    // anchored form leaves it hidden. (§3.1.1, and §10 probe 4's same
+    // conclusion for the root node.)
+    fs.mkdirSync(path.join(f.root, CONFIG_DIR, "snippets"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(f.root, CONFIG_DIR, "snippets", ".gitignore"),
+      "!x.css\n",
+    );
+    await f.inv.enforce();
+
+    const gi = new GI(f.root);
+    expect(gi.ignored(`${CONFIG_DIR}/.gitignore`)).toBe(false);
+    expect(gi.ignored(`${CONFIG_DIR}/snippets/.gitignore`)).toBe(true);
+    // And the isSyncable backstop agrees independently of the rule text.
+    expect(
+      isUnhonouredGitignore(`${CONFIG_DIR}/snippets/.gitignore`, CONFIG_DIR),
+    ).toBe(true);
+  });
+
+  it("`!/plugins/*/.gitignore` works BELOW the catch-all — a third party's file syncs", async () => {
+    // Above `plugins/*/*` this line does nothing (the catch-all
+    // re-ignores it by last-match). It is only load-bearing because the
+    // whole section moved to the bottom of the file.
+    fs.mkdirSync(path.join(f.root, CONFIG_DIR, "plugins", "brat"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(f.root, CONFIG_DIR, "plugins", "brat", ".gitignore"),
+      "*.map\n",
+    );
+    await f.inv.enforce();
+
+    const gi = new GI(f.root);
+    expect(gi.ignored(`${CONFIG_DIR}/plugins/brat/.gitignore`)).toBe(false);
+    // ...while the catch-all still does its job for everything else in
+    // that folder.
+    expect(gi.ignored(`${CONFIG_DIR}/plugins/brat/other.js`)).toBe(true);
+  });
+});
+
+describe("the data.json toggle survives a syncConfigDir round-trip", () => {
+  // This gitignore is the ONLY store of that toggle — which is exactly
+  // what lets it travel between devices. So turning configDir sync off
+  // and back on must not quietly reset the user's opt-in.
+  let f: ReturnType<typeof fixture>;
+  let syncConfigDir = true;
+
+  const invWith = (state: InvariantStateStore) =>
+    new GitignoreInvariants({
+      vault: f.vault as unknown as import("obsidian").Vault,
+      state,
+      configDir: CONFIG_DIR,
+      selfPluginId: SELF,
+      seeds: f.seeds,
+      syncConfigDir: () => syncConfigDir,
+      gi: { invalidate: () => {} },
+      onAnomaly: () => {},
+    });
+
+  beforeEach(async () => {
+    f = fixture();
+    await f.state.load();
+    syncConfigDir = true;
+  });
+
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  it("ON → configDir OFF → configDir ON keeps the opt-in", async () => {
+    const inv = invWith(f.state);
+    await inv.enforce();
+    await inv.setPushPluginsDataJson(true);
+    expect(await inv.getPushPluginsDataJson()).toBe(true);
+
+    syncConfigDir = false;
+    await inv.enforce();
+    // Still remembered while inert — and still inert: `*` below wins.
+    expect(await inv.getPushPluginsDataJson()).toBe(true);
+    expect(
+      new GI(f.root).ignored(`${CONFIG_DIR}/plugins/brat/data.json`),
+    ).toBe(true);
+
+    syncConfigDir = true;
+    await inv.enforce();
+    expect(await inv.getPushPluginsDataJson()).toBe(true);
   });
 });

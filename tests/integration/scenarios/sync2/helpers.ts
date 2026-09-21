@@ -209,7 +209,13 @@ export async function createSync2Client(
     // Anomalies are not the subject here; surfacing them would only
     // add noise. A real reporter lives in main.ts (DOT-FILES §3.1.3).
     syncConfigDir: () => settings.syncConfigDir ?? true,
-    gi: { invalidate: () => {} },
+    // The REAL matcher, not a stub. This is the same composition the
+    // plugin builds, and a no-op here would recreate exactly the failure
+    // the dep was made required to prevent (DOT-FILES §8.0's lesson:
+    // "the integration harness builds its own composition and never
+    // passed it"). The stale-parse window is 500 ms, so it only shows up
+    // under timing — i.e. it would not fail loudly, it would flake.
+    gi,
     onAnomaly: () => {},
   });
 

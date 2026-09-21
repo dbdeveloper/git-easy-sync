@@ -95,20 +95,30 @@ function configDirFinalBody(opts: {
   pushPluginsDataJson: boolean;
   syncConfigDir: boolean;
 }): string {
+  const dataJsonLine = opts.pushPluginsDataJson
+    ? DATA_JSON_ALLOW_LINE
+    : DATA_JSON_BLOCK_LINE;
   if (!opts.syncConfigDir) {
     // syncConfigDir=OFF. `/.gitignore` takes this file itself out of
     // sync (so the OFF decision does not travel), `*` silences the whole
     // subtree. Purely for git consistency: the hardcoded configDir gate
     // in isSyncable cuts all of <configDir>/ regardless of this text.
+    //
+    // ⚠️ The data.json line is carried through the OFF state even though
+    // `*` below makes it inert. This gitignore is the ONLY store of that
+    // toggle (that is what lets it travel between devices), so dropping
+    // the line would silently reset the user's opt-in every time they
+    // turned configDir sync off and on again. Inert, not absent.
     return `# Editing this block triggers a rewrite to canonical on next load.
+
+# Remembered across the syncConfigDir switch; inert while it is OFF,
+# because the rules below re-ignore everything anyway.
+${dataJsonLine}
 
 # syncConfigDir is OFF on this device.
 /.gitignore
 *`;
   }
-  const dataJsonLine = opts.pushPluginsDataJson
-    ? DATA_JSON_ALLOW_LINE
-    : DATA_JSON_BLOCK_LINE;
   return `# Editing this block triggers a rewrite to canonical on next load.
 
 # Control files, re-admitted at their own node (anchored - bare forms

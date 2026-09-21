@@ -157,6 +157,10 @@ describe.skipIf(!integrationEnabled())("sync2 S1 — no secret leak", () => {
         selfPluginId: SELF,
       }),
       syncConfigDir: () => true,
+      // Legitimately a stub HERE: this is a second, throwaway handle
+      // built only to flip the toggle from outside the shared fixture.
+      // The matcher this test actually asks lives inside the client's
+      // own composition (helpers.ts), which is wired to the real GI.
       gi: { invalidate: () => {} },
       onAnomaly: () => {},
     });

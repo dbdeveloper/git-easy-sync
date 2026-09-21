@@ -138,28 +138,105 @@ describe.skipIf(!gitAvailable())("GI ↔ real git parity", () => {
     });
   });
 
-  it("the shipped seeds: root block + configDir block + per-plugin allowlist", () => {
+  // ── the shipped layout, as of DOT-FILES Крок A ────────────────────
+  //
+  // Two sections in the root file with DIFFERENT authority, and a single
+  // `final` section in configDir and in plugin files. These literals
+  // mirror what GitignoreInvariants writes; keeping them here rather
+  // than importing the constants is deliberate — an edit to the shipped
+  // rules must surface as a failing parity test to be re-measured
+  // against git, not ride along silently.
+  const ROOT_TOP = ".*\n.*/\n!/.gitignore\n";
+  const ROOT_BOTTOM =
+    "!.obsidian/\n*.conflict-from-*\n*.ges-tmp*\n*.ges-bak*\n";
+  const ROOT_DEFAULTS = "*.log\n.DS_Store\n.trash/\n";
+  const CONFIG_DEFAULTS =
+    "plugins/*/*\n!plugins/*/\n" +
+    "!plugins/*/main.js\n!plugins/*/manifest.json\n!plugins/*/styles.css\n";
+  const CONFIG_FINAL_ON =
+    "!/.gitignore\n!/plugins/*/.gitignore\n" +
+    "workspace.json\nworkspace-mobile.json\ncommunity-plugins.json\n" +
+    "plugins/*/data.json\n";
+  // The data.json line rides through OFF, inert below `*` — the toggle
+  // has nowhere else to live (see configDirFinalBody).
+  const CONFIG_FINAL_OFF = "plugins/*/data.json\n/.gitignore\n*\n";
+  const SILENCER = "*\n";
+
+  const VAULT_FILES = {
+    ".obsidian/plugins/git-easy-sync/main.js": "//",
+    ".obsidian/plugins/git-easy-sync/data.json": "{}",
+    ".obsidian/plugins/git-easy-sync/nested/thing.json": "{}",
+    ".obsidian/plugins/brat/main.js": "//",
+    ".obsidian/plugins/brat/data.json": "{}",
+    ".obsidian/plugins/brat/sub/data.json": "{}",
+    ".obsidian/app.json": "{}",
+    ".obsidian/workspace.json": "{}",
+    ".obsidian/snippets/.gitignore": "!secret.css\n",
+    ".obsidian/snippets/secret.css": "body{}",
+    "note.md": "hi",
+    "notes/.gitignore": "!anything\n",
+    ".editorconfig": "root = true",
+    "note.md.ges-tmp": "staging",
+    "note.conflict-from-Mac-2026-01-01T00-00-00Z.md": "sibling",
+    "git-easy-sync.log": "log",
+    ".trash/gone.md": "trashed",
+  };
+
+  it("the shipped layout at syncConfigDir=ON", () => {
     expectParity({
-      ".gitignore":
-        "*.conflict-from-*\n*.ges-tmp*\n*.ges-bak*\n*.log\n.DS_Store\n.trash/\n",
-      ".obsidian/.gitignore":
-        "workspace.json\nworkspace-mobile.json\ncommunity-plugins.json\n" +
-        "plugins/*/data.json\nplugins/*/*\n!plugins/*/\n" +
-        "!plugins/*/main.js\n!plugins/*/manifest.json\n!plugins/*/styles.css\n",
+      ...VAULT_FILES,
+      ".gitignore": ROOT_TOP + ROOT_DEFAULTS + ROOT_BOTTOM,
+      ".obsidian/.gitignore": CONFIG_DEFAULTS + CONFIG_FINAL_ON,
       ".obsidian/plugins/git-easy-sync/.gitignore": SELF_ALLOWLIST,
-      ".obsidian/plugins/git-easy-sync/main.js": "//",
-      ".obsidian/plugins/git-easy-sync/data.json": "{}",
-      ".obsidian/plugins/git-easy-sync/nested/thing.json": "{}",
-      ".obsidian/plugins/brat/main.js": "//",
-      ".obsidian/plugins/brat/data.json": "{}",
-      ".obsidian/plugins/brat/sub/data.json": "{}",
-      ".obsidian/app.json": "{}",
-      ".obsidian/workspace.json": "{}",
-      "note.md": "hi",
-      "note.md.ges-tmp": "staging",
-      "note.conflict-from-Mac-2026-01-01T00-00-00Z.md": "sibling",
-      "git-easy-sync.log": "log",
-      ".trash/gone.md": "trashed",
+      ".obsidian/plugins/brat/.gitignore": "*.map\n",
+    });
+  });
+
+  it("the shipped layout at syncConfigDir=OFF", () => {
+    // The silencer goes into configDir, our own file and EVERY
+    // third-party plugin .gitignore that exists — our node and theirs
+    // both speak last for their own folders, so <configDir>'s `*` alone
+    // would not hold.
+    expectParity({
+      ...VAULT_FILES,
+      ".gitignore": ROOT_TOP + ROOT_DEFAULTS + ROOT_BOTTOM,
+      ".obsidian/.gitignore": CONFIG_DEFAULTS + CONFIG_FINAL_OFF,
+      ".obsidian/plugins/git-easy-sync/.gitignore":
+        SELF_ALLOWLIST + SILENCER,
+      ".obsidian/plugins/brat/.gitignore": "*.map\n" + SILENCER,
+    });
+  });
+
+  it("a user rule between the two root sections: overrides the top, not the bottom", () => {
+    // The asymmetry the whole two-section split exists for, measured
+    // against git rather than against our own matcher.
+    expectParity({
+      ...VAULT_FILES,
+      ".gitignore":
+        ROOT_TOP +
+        ROOT_DEFAULTS +
+        "!.editorconfig\n!*.conflict-from-*\n" +
+        ROOT_BOTTOM,
+      ".obsidian/.gitignore": CONFIG_DEFAULTS + CONFIG_FINAL_ON,
+      ".obsidian/plugins/git-easy-sync/.gitignore": SELF_ALLOWLIST,
+      ".obsidian/plugins/brat/.gitignore": "*.map\n",
+    });
+  });
+
+  it("the data.json toggle ON is honoured BELOW the recommended catch-all", () => {
+    // The formerly-pinned defect: with the allow line above
+    // `plugins/*/*` the opt-in was a no-op. Asked of git directly.
+    expectParity({
+      ...VAULT_FILES,
+      ".gitignore": ROOT_TOP + ROOT_DEFAULTS + ROOT_BOTTOM,
+      ".obsidian/.gitignore":
+        CONFIG_DEFAULTS +
+        CONFIG_FINAL_ON.replace(
+          "plugins/*/data.json",
+          "!plugins/*/data.json",
+        ),
+      ".obsidian/plugins/git-easy-sync/.gitignore": SELF_ALLOWLIST,
+      ".obsidian/plugins/brat/.gitignore": "*.map\n",
     });
   });
 
