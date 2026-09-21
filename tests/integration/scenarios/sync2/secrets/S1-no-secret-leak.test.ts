@@ -122,6 +122,11 @@ async function assertNoTokenInPushedBytes(
   branch: string,
   before: Map<string, string>,
   env: ReturnType<typeof requireEnv>,
+  // Paths the user has EXPLICITLY opted into. At syncConfigDir=ON with
+  // the data.json toggle on, a third party's settings travel by design —
+  // that is what the toggle is for — so a blanket "no token bytes
+  // anywhere" would be asserting the feature does not work.
+  optedIn: string[] = [],
 ): Promise<string[]> {
   const head = await getBranchHead(branch, env);
   expect(head).not.toBeNull();
@@ -130,6 +135,7 @@ async function assertNoTokenInPushedBytes(
     .filter(([p, sha]) => before.get(p) !== sha)
     .map(([p]) => p);
   for (const p of changed) {
+    if (optedIn.includes(p)) continue;
     const body = await readRemoteFile(branch, p, env);
     expect(body, `secret bytes found in ${p}`).not.toContain(FAKE_TOKEN);
   }
@@ -219,7 +225,7 @@ describe.skipIf(!integrationEnabled())("sync2 S1 — no secret leak", () => {
   );
 
   it(
-    "toggle ON: the two sync plugins' data.json STILL never travel",
+    "toggle ON: a third party's data.json travels, ours and the pre-rename one still never do",
     { retry: 0, timeout: 180_000 },
     async () => {
       // The opt-in is about OTHER plugins' settings. Our own token file
@@ -240,10 +246,24 @@ describe.skipIf(!integrationEnabled())("sync2 S1 — no secret leak", () => {
 
       await sync2AllAndAssertNoErrors(client);
 
-      await assertNoTokenInPushedBytes(client, branch, before, env);
+      const otherDataJson = `${CONFIG_DIR}/plugins/${OTHER}/data.json`;
+      await assertNoTokenInPushedBytes(client, branch, before, env, [
+        otherDataJson,
+      ]);
 
       const head = await getBranchHead(branch, env);
       const after = await treeAt(client, head as string);
+      // The toggle actually DOES something now. Until 2026-09-22 it was
+      // a no-op: the allow line sat above the recommended catch-all
+      // `plugins/*/*` and lost by last-match, so this file never moved
+      // however the user set the switch (DOT-FILES §3.4.1, pin TD6a.9).
+      // Крок A moved the managed section to the END of the file, and
+      // this is that fix verified against real GitHub rather than
+      // against our own matcher.
+      expect(
+        after.has(otherDataJson),
+        "a third party's data.json must travel when the user opts in",
+      ).toBe(true);
       expect(
         after.has(`${CONFIG_DIR}/plugins/${SELF}/data.json`),
         "our own data.json must never be pushed",
