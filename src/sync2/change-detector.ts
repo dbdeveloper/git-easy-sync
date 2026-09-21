@@ -54,7 +54,37 @@ export async function isSyncable(
   // user's "ours" copy DOES land on the conflict branch via the
   // split-push (sync2-manager.pushConflictPathsToBranch).
   if (CONFLICT_SIBLING_PATTERN.test(path)) return false;
+  // D6 (DOT-FILES §3.2 step 4): a `.gitignore` is syncable only where it
+  // is HONOURED. `gi` consults exactly three locations — root,
+  // `<configDir>`, `<configDir>/plugins/*` (D5) — so a `.gitignore`
+  // anywhere else is a control file we do not execute. Syncing one would
+  // ship a file that looks like it governs something and does not, on
+  // every device that receives it.
+  //
+  // This is a BACKSTOP, not the mechanism: the anchored `!/.gitignore`
+  // in the managed sections already hides nested ones through the
+  // matcher itself (§10 probe 4-A). It earns its place in the window
+  // where the root file is missing or hand-edited, since it does not
+  // depend on any file's contents to be true.
+  if (isUnhonouredGitignore(path, configDir)) return false;
   return !(await gi.ignoredAsync(path, asyncReader));
+}
+
+// True for a `.gitignore` outside the three locations D5 reads.
+export function isUnhonouredGitignore(
+  path: string,
+  configDir: string,
+): boolean {
+  const slash = path.lastIndexOf("/");
+  if (path.slice(slash + 1) !== ".gitignore") return false;
+  const dir = slash < 0 ? "" : path.slice(0, slash);
+  if (dir === "" || dir === configDir) return false;
+  // `<configDir>/plugins/<one segment>` — and no deeper.
+  const pluginsPrefix = `${configDir}/plugins/`;
+  if (dir.startsWith(pluginsPrefix)) {
+    return dir.slice(pluginsPrefix.length).includes("/");
+  }
+  return true;
 }
 
 // Sibling files written by ConflictStore look like

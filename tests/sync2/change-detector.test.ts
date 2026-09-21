@@ -13,7 +13,9 @@ import * as crypto from "crypto";
 import GI from "../../src/gi";
 import HotMetadataStore from "../../src/sync2/hot-metadata";
 import FileBaselinesStore from "../../src/sync2/file-baselines";
-import ChangeDetector from "../../src/sync2/change-detector";
+import ChangeDetector, {
+  isUnhonouredGitignore,
+} from "../../src/sync2/change-detector";
 import { Vault } from "../../mock-obsidian";
 import { calculateGitBlobSHA } from "../../src/utils";
 
@@ -817,5 +819,39 @@ describe("ChangeDetector", () => {
       const out = await det.findChanges();
       expect(out.find((c) => c.path === "a.md")).toBeUndefined();
     });
+  });
+});
+
+describe("D6 backstop — a .gitignore syncs only where it is honoured", () => {
+  // DOT-FILES §3.2 step 4. `gi` reads exactly three locations (D5), so a
+  // .gitignore anywhere else is a control file we do not execute, and
+  // shipping one would put a file that LOOKS authoritative on every
+  // other device. The managed sections already hide nested ones through
+  // the matcher; this holds in the window where the root file is missing
+  // or hand-edited, because it does not depend on any file's contents.
+  const CD = ".obsidian";
+
+  it("honoured locations: root, configDir, one level under plugins/", () => {
+    expect(isUnhonouredGitignore(".gitignore", CD)).toBe(false);
+    expect(isUnhonouredGitignore(`${CD}/.gitignore`, CD)).toBe(false);
+    expect(isUnhonouredGitignore(`${CD}/plugins/brat/.gitignore`, CD)).toBe(
+      false,
+    );
+  });
+
+  it("everywhere else: hidden", () => {
+    expect(isUnhonouredGitignore("notes/.gitignore", CD)).toBe(true);
+    expect(isUnhonouredGitignore(".myconfig/.gitignore", CD)).toBe(true);
+    expect(isUnhonouredGitignore(`${CD}/snippets/.gitignore`, CD)).toBe(true);
+    expect(isUnhonouredGitignore(`${CD}/themes/x/.gitignore`, CD)).toBe(true);
+    // Deeper than one segment under plugins/ is not a node `gi` reads.
+    expect(
+      isUnhonouredGitignore(`${CD}/plugins/brat/sub/.gitignore`, CD),
+    ).toBe(true);
+  });
+
+  it("only exact basenames — a file merely ending in .gitignore is not one", () => {
+    expect(isUnhonouredGitignore("notes/my.gitignore", CD)).toBe(false);
+    expect(isUnhonouredGitignore("notes/.gitignore.bak", CD)).toBe(false);
   });
 });
