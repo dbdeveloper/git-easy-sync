@@ -10,8 +10,8 @@ import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
 import GitignoreInvariants, {
-  INVARIANT_BEGIN,
-  INVARIANT_END,
+  INVARIANTS_BEGIN,
+  INVARIANTS_END,
   spliceInvariantBlock,
   extractInvariantBlock,
   blockHasAllowLine,
@@ -57,36 +57,49 @@ const cdGitignore = (root: string) =>
 const selfGitignore = (root: string) =>
   path.join(root, CONFIG_DIR, "plugins", SELF, ".gitignore");
 
+// The splice takes a BODY now and composes the markers itself — the
+// frozen half and the mutable half stopped sharing a template
+// (DOT-FILES §3.1.3). `sect` mirrors that composition so the expectations
+// below still read as "what lands on disk".
+const sect = (body: string) =>
+  `${INVARIANTS_BEGIN}\n${body}\n${INVARIANTS_END}`;
+
 describe("spliceInvariantBlock (pure)", () => {
   it("replaces an existing block in place", () => {
-    const block = `${INVARIANT_BEGIN}\nNEW\n${INVARIANT_END}`;
-    const existing = `prefix\n${INVARIANT_BEGIN}\nOLD\n${INVARIANT_END}\nsuffix`;
-    expect(spliceInvariantBlock(existing, block)).toBe(
-      `prefix\n${block}\nsuffix`,
+    const existing = `prefix\n${sect("OLD")}\nsuffix`;
+    expect(spliceInvariantBlock(existing, "NEW")).toBe(
+      `prefix\n${sect("NEW")}\nsuffix`,
     );
   });
 
   it("prepends when markers are missing", () => {
-    const block = `${INVARIANT_BEGIN}\nX\n${INVARIANT_END}`;
-    expect(spliceInvariantBlock("user content\n", block)).toBe(
-      `${block}\n\nuser content\n`,
+    expect(spliceInvariantBlock("user content\n", "X")).toBe(
+      `${sect("X")}\n\nuser content\n`,
     );
   });
 
   it("creates fresh content when input is empty", () => {
-    const block = `${INVARIANT_BEGIN}\nY\n${INVARIANT_END}`;
-    expect(spliceInvariantBlock("", block)).toBe(`${block}\n`);
+    expect(spliceInvariantBlock("", "Y")).toBe(`${sect("Y")}\n`);
   });
 
   it("leaves user content above and below the block alone", () => {
-    const block = `${INVARIANT_BEGIN}\nNEW\n${INVARIANT_END}`;
-    const existing = `# header\n\n${INVARIANT_BEGIN}\nOLD\n${INVARIANT_END}\n\n# footer\n*.log\n`;
-    const out = spliceInvariantBlock(existing, block);
+    const existing = `# header\n\n${sect("OLD")}\n\n# footer\n*.log\n`;
+    const out = spliceInvariantBlock(existing, "NEW");
     expect(out).toContain("# header");
     expect(out).toContain("# footer");
     expect(out).toContain("*.log");
     expect(out).toContain("NEW");
     expect(out).not.toContain("OLD");
+  });
+
+  it("the markers are ASCII — no em dash can creep back in", () => {
+    // DOT-FILES §3.1.3: the four marker lines are frozen, and since
+    // 2026-09-21 they are ASCII. A non-ASCII character here would also
+    // put UTF-8 bytes back into the length the repair path measures.
+    for (const m of [INVARIANTS_BEGIN, INVARIANTS_END]) {
+      expect(m).toMatch(/^[\x20-\x7e]+$/);
+      expect(m).toContain("git-easy-sync");
+    }
   });
 });
 
@@ -106,8 +119,8 @@ describe("GitignoreInvariants.enforce", () => {
     expect(fs.existsSync(cdGitignore(f.root))).toBe(false);
     await f.inv.enforce();
     const content = fs.readFileSync(cdGitignore(f.root), "utf8");
-    expect(content).toContain(INVARIANT_BEGIN);
-    expect(content).toContain(INVARIANT_END);
+    expect(content).toContain(INVARIANTS_BEGIN);
+    expect(content).toContain(INVARIANTS_END);
     expect(content).toContain("workspace.json");
     expect(content).toContain("Recommended defaults");
     expect(content).toContain("plugins/*/*");
@@ -124,7 +137,7 @@ describe("GitignoreInvariants.enforce", () => {
     const content = fs.readFileSync(rootGitignorePath, "utf8");
     // Invariant block: conflict-sibling files + atomic-write
     // staging/backup artifacts must never propagate across devices.
-    expect(content).toContain(INVARIANT_BEGIN);
+    expect(content).toContain(INVARIANTS_BEGIN);
     expect(content).toContain("*.conflict-from-*");
     expect(content).toContain("*.ges-tmp");
     expect(content).toContain("*.ges-bak");
@@ -152,7 +165,7 @@ describe("GitignoreInvariants.enforce", () => {
     const cdPath = cdGitignore(f.root);
     fs.writeFileSync(
       cdPath,
-      `# my header\n\n${INVARIANT_BEGIN}\ntampered\n${INVARIANT_END}\n\n# my footer\n*.tmp\n`,
+      `# my header\n\n${INVARIANTS_BEGIN}\ntampered\n${INVARIANTS_END}\n\n# my footer\n*.tmp\n`,
     );
     await f.inv.enforce();
     const content = fs.readFileSync(cdPath, "utf8");
@@ -168,7 +181,7 @@ describe("GitignoreInvariants.enforce", () => {
     fs.writeFileSync(cdPath, "*.user-rule\n");
     await f.inv.enforce();
     const content = fs.readFileSync(cdPath, "utf8");
-    expect(content).toContain(INVARIANT_BEGIN);
+    expect(content).toContain(INVARIANTS_BEGIN);
     expect(content).toContain("*.user-rule");
     // Recommended defaults should NOT appear — file existed beforehand.
     expect(content).not.toContain("Recommended defaults");
@@ -216,7 +229,7 @@ describe("GitignoreInvariants.enforce", () => {
     // User tampers with the invariant block.
     fs.writeFileSync(
       cdPath,
-      `${INVARIANT_BEGIN}\nGOTCHA\n${INVARIANT_END}\n*.user-rule\n`,
+      `${INVARIANTS_BEGIN}\nGOTCHA\n${INVARIANTS_END}\n*.user-rule\n`,
     );
     fs.utimesSync(cdPath, new Date(), new Date(Date.now() + 10_000));
 
@@ -283,11 +296,11 @@ describe("GitignoreInvariants.enforce", () => {
     // a future canonical adds that the recorded snapshot was unaware
     // of).
     const staleBody = [
-      INVARIANT_BEGIN,
+      INVARIANTS_BEGIN,
       "# old block",
       "git-easy-sync-metadata.json",
       "plugins/*/data.json",
-      INVARIANT_END,
+      INVARIANTS_END,
     ].join("\n");
     fs.writeFileSync(cdPath, staleBody + "\n");
     const staleStat = fs.statSync(cdPath);
@@ -332,33 +345,33 @@ describe("extractInvariantBlock / blockHasAllowLine (pure)", () => {
   // → allow rule. The line is ALWAYS in our block; only the
   // prefix flips.
   const blockOff = [
-    INVARIANT_BEGIN,
+    INVARIANTS_BEGIN,
     "# stuff",
     "git-easy-sync-metadata.json",
     "plugins/*/data.json",
-    INVARIANT_END,
+    INVARIANTS_END,
   ].join("\n");
   const blockOn = [
-    INVARIANT_BEGIN,
+    INVARIANTS_BEGIN,
     "# stuff",
     "git-easy-sync-metadata.json",
     "!plugins/*/data.json",
-    INVARIANT_END,
+    INVARIANTS_END,
   ].join("\n");
 
   it("extractInvariantBlock: returns body between markers, exclusive", () => {
     const body = extractInvariantBlock(blockOff);
     expect(body).not.toBeNull();
     expect(body).toContain("git-easy-sync-metadata.json");
-    expect(body).not.toContain(INVARIANT_BEGIN);
-    expect(body).not.toContain(INVARIANT_END);
+    expect(body).not.toContain(INVARIANTS_BEGIN);
+    expect(body).not.toContain(INVARIANTS_END);
   });
 
   it("extractInvariantBlock: returns null when markers missing or out-of-order", () => {
     expect(extractInvariantBlock("no markers anywhere")).toBeNull();
-    expect(extractInvariantBlock(INVARIANT_BEGIN + "\nno end")).toBeNull();
+    expect(extractInvariantBlock(INVARIANTS_BEGIN + "\nno end")).toBeNull();
     expect(
-      extractInvariantBlock(INVARIANT_END + "\nmiddle\n" + INVARIANT_BEGIN),
+      extractInvariantBlock(INVARIANTS_END + "\nmiddle\n" + INVARIANTS_BEGIN),
     ).toBeNull();
   });
 
@@ -375,9 +388,9 @@ describe("extractInvariantBlock / blockHasAllowLine (pure)", () => {
     // as "not ON"; the next enforce() rewrites the block back to
     // canonical and clobbers it.
     const fancier = [
-      INVARIANT_BEGIN,
+      INVARIANTS_BEGIN,
       "!plugins/**/data.json",
-      INVARIANT_END,
+      INVARIANTS_END,
     ].join("\n");
     expect(blockHasAllowLine(extractInvariantBlock(fancier)!)).toBe(false);
   });
@@ -481,7 +494,7 @@ describe("§8.0 seed markers", () => {
     // byte-identical to the seed.
     fs.writeFileSync(
       rootPath(f.root),
-      `${INVARIANT_BEGIN}\nhand-written\n${INVARIANT_END}\n# theirs\n*.zip\n`,
+      `${INVARIANTS_BEGIN}\nhand-written\n${INVARIANTS_END}\n# theirs\n*.zip\n`,
     );
     await f.inv.enforce();
     expect(f.seeds.get(".gitignore")).toBeUndefined();

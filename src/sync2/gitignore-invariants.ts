@@ -7,12 +7,36 @@ import { calculateGitBlobSHA } from "../utils";
 import InvariantStateStore, { InvariantFileState } from "./invariant-state";
 import GitignoreSeedStore from "./gitignore-seeds";
 
-// Invariant block markers. Editing anything between BEGIN and END on
-// disk triggers a rewrite back to canonical on the next sync.
-export const INVARIANT_BEGIN =
-  "# ===== git-easy-sync invariants — DO NOT EDIT =====";
-export const INVARIANT_END =
-  "# ===== end of invariants =====";
+// Markers of the managed `invariants` section. Editing anything between
+// BEGIN and END on disk triggers a rewrite back to canonical on the next
+// sync.
+//
+// 🔒 FROZEN FOREVER (DOT-FILES §3.1.3). Not the punctuation, not the case,
+// not the number of `=`. These two lines are the ONLY bridge between plugin
+// versions: a version that rewrites a marker finds no section in any
+// existing install, appends a second one, and leaves the first behind as
+// litter that can override it by last-match-wins.
+//
+// ⚠️ They were redefined ONCE, on 2026-09-21, while the plugin still had a
+// single user (the owner) — ASCII instead of the em dash, and the plugin
+// name in the closing line too, so the section's boundaries read clearly.
+// Same class of act as the rename: cheap then, impossible after. Em-dash
+// sections already on disk are NOT recognised and are removed by hand; no
+// legacy-marker list lives in this code, by decision.
+export const INVARIANTS_BEGIN =
+  "# ===== git-easy-sync invariants - DO NOT EDIT =====";
+export const INVARIANTS_END =
+  "# ===== end of git-easy-sync invariants =====";
+
+// Markers + body are DELIBERATELY separate values (DOT-FILES §3.1.3). The
+// two halves have opposite life cycles — markers are frozen forever, bodies
+// change freely with every redesign of the rules — and while they lived in
+// one template nothing structurally stopped an edit to the content from
+// nicking the "brackets" and silently orphaning the section on every
+// install. Composition happens at the write site, here:
+function composeSection(begin: string, body: string, end: string): string {
+  return `${begin}\n${body}\n${end}`;
+}
 
 // Body of the invariant block in <configDir>/.gitignore. The plugin
 // rewrites this block in place; the user keeps full ownership of any
@@ -37,34 +61,31 @@ export const INVARIANT_END =
 const DATA_JSON_BLOCK_LINE = "plugins/*/data.json";
 const DATA_JSON_ALLOW_LINE = "!plugins/*/data.json";
 
-// Build the canonical contents of the invariant block in
-// <configDir>/.gitignore. The block is rewritten in place by
-// spliceInvariantBlock on every enforce() and on every toggle, so
-// this function is the SINGLE place that decides what the block
-// looks like — no duplication, no per-call drift.
-function configDirInvariantBlock(opts: {
+// BODY (no markers) of the managed section in <configDir>/.gitignore. The
+// section is rewritten by spliceInvariantBlock on every enforce() and on
+// every toggle, so this function is the SINGLE place that decides what the
+// body looks like — no duplication, no per-call drift.
+function configDirInvariantsBody(opts: {
   pushPluginsDataJson: boolean;
 }): string {
   const dataJsonLine = opts.pushPluginsDataJson
     ? DATA_JSON_ALLOW_LINE
     : DATA_JSON_BLOCK_LINE;
-  return `${INVARIANT_BEGIN}
-# Editing this block triggers a rewrite to canonical on next load.
+  return `# Editing this block triggers a rewrite to canonical on next load.
 
-# Per-device state — never propagate between machines.
+# Per-device state - never propagate between machines.
 workspace.json
 workspace-mobile.json
 community-plugins.json
-${dataJsonLine}
-${INVARIANT_END}`;
+${dataJsonLine}`;
 }
 
 // Recommended defaults seeded ONLY when sync2 first creates
 // <configDir>/.gitignore. Pre-existing files keep the user's content
 // untouched below the invariant block.
-const CONFIG_DIR_RECOMMENDED_DEFAULTS = `# Recommended defaults — feel free to edit.
+const CONFIG_DIR_RECOMMENDED_DEFAULTS = `# Recommended defaults - feel free to edit.
 
-# Plugin folder allowlist — by default sync only the four canonical
+# Plugin folder allowlist - by default sync only the four canonical
 # files (main.js, manifest.json, styles.css; data.json is governed
 # by the settings-tab toggle "Push plugins data.json to GitHub",
 # which lives in the invariant block above).
@@ -84,16 +105,15 @@ const SELF_PLUGIN_GITIGNORE = `*
 !.gitignore
 `;
 
-// Body of the invariant block in the ROOT <vault>/.gitignore (Stage
-// 6.5). Forces conflict-sibling files (`<base>.conflict-from-<label>-
+// BODY (no markers) of the managed section in the ROOT <vault>/.gitignore
+// (Stage 6.5). Forces conflict-sibling files (`<base>.conflict-from-<label>-
 // <iso-no-colons>.<ext>`) to never be pushed: they're per-device
 // markers, propagating them across devices would create feedback
 // loops where one device's deferred state shows up on others as
 // unrelated user files. Splice-on-edit semantics, same as configDir.
-const ROOT_INVARIANT_BLOCK = `${INVARIANT_BEGIN}
-# Editing this block triggers a rewrite to canonical on next load.
+const ROOT_INVARIANTS_BODY = `# Editing this block triggers a rewrite to canonical on next load.
 
-# Conflict-resolver sibling files — per-device markers that must
+# Conflict-resolver sibling files - per-device markers that must
 # never propagate via sync.
 *.conflict-from-*
 
@@ -101,17 +121,16 @@ const ROOT_INVARIANT_BLOCK = `${INVARIANT_BEGIN}
 # Transient files written by the crash-safe write protocol; the
 # onload recovery sweep cleans them up. Must never reach GitHub.
 *.ges-tmp*
-*.ges-bak*
-${INVARIANT_END}`;
+*.ges-bak*`;
 
 // Recommended root-level defaults seeded ONLY when sync2 first
 // creates <vault>/.gitignore. Pre-existing files keep user content
 // untouched below the invariant block.
-const ROOT_RECOMMENDED_DEFAULTS = `# Recommended defaults — feel free to edit.
+const ROOT_RECOMMENDED_DEFAULTS = `# Recommended defaults - feel free to edit.
 
 # Logs (covers the plugin's own <plugin-id>.log at the vault root
 # plus any other *.log anywhere in the vault). Remove this line if
-# you want logs to sync to GitHub — useful for analysing mobile
+# you want logs to sync to GitHub - useful for analysing mobile
 # logs from desktop, but multi-device writes will collide on the
 # same filename.
 *.log
@@ -238,7 +257,7 @@ export default class GitignoreInvariants {
     );
     const after = spliceInvariantBlock(
       before,
-      configDirInvariantBlock({ pushPluginsDataJson: enabled }),
+      configDirInvariantsBody({ pushPluginsDataJson: enabled }),
     );
     if (after === before) return;
     await this.write(this.configDirGitignorePath, after);
@@ -285,9 +304,11 @@ export default class GitignoreInvariants {
       // with the requested toggle state (defaults to OFF when the
       // caller didn't supply one).
       const seedPush = desiredPushPluginsDataJson ?? false;
-      const block = configDirInvariantBlock({
-        pushPluginsDataJson: seedPush,
-      });
+      const block = composeSection(
+        INVARIANTS_BEGIN,
+        configDirInvariantsBody({ pushPluginsDataJson: seedPush }),
+        INVARIANTS_END,
+      );
       const content = `${block}\n\n${CONFIG_DIR_RECOMMENDED_DEFAULTS}\n`;
       await this.write(path, content);
       await this.refreshState(slot, path);
@@ -328,7 +349,7 @@ export default class GitignoreInvariants {
     }
     const fixed = spliceInvariantBlock(
       content,
-      configDirInvariantBlock({ pushPluginsDataJson }),
+      configDirInvariantsBody({ pushPluginsDataJson }),
     );
     if (fixed === content) {
       // Nothing to change on disk; just refresh the cache.
@@ -355,7 +376,7 @@ export default class GitignoreInvariants {
       // small set of recommended OS/editor noise defaults so the user
       // gets a sensible starting point. Pre-existing root gitignores
       // (e.g. user already had one) skip this branch entirely.
-      const content = `${ROOT_INVARIANT_BLOCK}\n\n${ROOT_RECOMMENDED_DEFAULTS}\n`;
+      const content = `${composeSection(INVARIANTS_BEGIN, ROOT_INVARIANTS_BODY, INVARIANTS_END)}\n\n${ROOT_RECOMMENDED_DEFAULTS}\n`;
       await this.write(path, content);
       await this.refreshState(slot, path);
       await this.noteSeedState(path, content);
@@ -364,13 +385,13 @@ export default class GitignoreInvariants {
 
     // Always read+splice+compare. See the matching comment in
     // `enforceConfigDirGitignoreWith` for the rationale (plugin
-    // upgrades that change ROOT_INVARIANT_BLOCK must reach disk
+    // upgrades that change ROOT_INVARIANTS_BODY must reach disk
     // even when the user's file mtime hasn't moved).
     const content = await this.vault.adapter.read(path);
     void recorded;
     const hash = await sha1Of(content);
 
-    const fixed = spliceInvariantBlock(content, ROOT_INVARIANT_BLOCK);
+    const fixed = spliceInvariantBlock(content, ROOT_INVARIANTS_BODY);
     if (fixed === content) {
       await this.state.set(slot, { mtime: stat.mtime, hash });
       await this.noteSeedState(path, content);
@@ -426,13 +447,17 @@ export default class GitignoreInvariants {
   // data.json toggle line, and EMPTY for anything we do not seed
   // (notably <self>/.gitignore, a constant that never negotiates).
   private canonicalSeeds(path: string): string[] {
+    const section = (body: string) =>
+      composeSection(INVARIANTS_BEGIN, body, INVARIANTS_END);
     if (path === this.rootGitignorePath) {
-      return [`${ROOT_INVARIANT_BLOCK}\n\n${ROOT_RECOMMENDED_DEFAULTS}\n`];
+      return [
+        `${section(ROOT_INVARIANTS_BODY)}\n\n${ROOT_RECOMMENDED_DEFAULTS}\n`,
+      ];
     }
     if (path === this.configDirGitignorePath) {
       return [true, false].map(
         (pushPluginsDataJson) =>
-          `${configDirInvariantBlock({ pushPluginsDataJson })}` +
+          `${section(configDirInvariantsBody({ pushPluginsDataJson }))}` +
           `\n\n${CONFIG_DIR_RECOMMENDED_DEFAULTS}\n`,
       );
     }
@@ -491,23 +516,25 @@ export default class GitignoreInvariants {
   }
 }
 
-// Replace the existing invariant block (between the BEGIN/END markers)
-// with `block`. If markers aren't both present, prepend the block at
-// the top of the file with a blank-line separator. Pure function for
-// testability.
+// Replace the existing invariants section (between the BEGIN/END markers)
+// with `body`, composing the markers here — the write site — so the frozen
+// half and the mutable half never share a template. If markers aren't both
+// present, prepend the section at the top of the file with a blank-line
+// separator. Pure function for testability.
 export function spliceInvariantBlock(
   existing: string,
-  block: string,
+  body: string,
 ): string {
-  const beginIdx = existing.indexOf(INVARIANT_BEGIN);
-  const endIdx = existing.indexOf(INVARIANT_END);
+  const block = composeSection(INVARIANTS_BEGIN, body, INVARIANTS_END);
+  const beginIdx = existing.indexOf(INVARIANTS_BEGIN);
+  const endIdx = existing.indexOf(INVARIANTS_END);
   if (beginIdx === -1 || endIdx === -1 || endIdx < beginIdx) {
-    // Markers missing or malformed — prepend canonical block.
+    // Markers missing or malformed — prepend canonical section.
     if (existing.length === 0) return `${block}\n`;
     return `${block}\n\n${existing}`;
   }
   const before = existing.substring(0, beginIdx);
-  const afterStart = endIdx + INVARIANT_END.length;
+  const afterStart = endIdx + INVARIANTS_END.length;
   const after = existing.substring(afterStart);
   return `${before}${block}${after}`;
 }
@@ -524,15 +551,15 @@ async function sha1Of(content: string): Promise<string> {
 // theirs to keep.
 
 // Extract the body of the invariant block from `fileContent`
-// (everything between INVARIANT_BEGIN and INVARIANT_END,
+// (everything between INVARIANTS_BEGIN and INVARIANTS_END,
 // markers excluded). Returns null when the markers are missing or
 // malformed — the caller treats that as "toggle is OFF, the file
 // will be re-seeded with the canonical block on the next enforce".
 export function extractInvariantBlock(fileContent: string): string | null {
-  const beginIdx = fileContent.indexOf(INVARIANT_BEGIN);
-  const endIdx = fileContent.indexOf(INVARIANT_END);
+  const beginIdx = fileContent.indexOf(INVARIANTS_BEGIN);
+  const endIdx = fileContent.indexOf(INVARIANTS_END);
   if (beginIdx === -1 || endIdx === -1 || endIdx < beginIdx) return null;
-  return fileContent.substring(beginIdx + INVARIANT_BEGIN.length, endIdx);
+  return fileContent.substring(beginIdx + INVARIANTS_BEGIN.length, endIdx);
 }
 
 // Returns the toggle state encoded in `blockContent`:

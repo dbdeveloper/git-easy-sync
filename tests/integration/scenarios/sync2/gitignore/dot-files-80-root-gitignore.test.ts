@@ -11,7 +11,7 @@ import {
   writeRemoteFile,
 } from "../../../helpers";
 import { createSync2Client, Sync2TestClient } from "../helpers";
-import { INVARIANT_BEGIN } from "../../../../../src/sync2/gitignore-invariants";
+import { INVARIANTS_BEGIN } from "../../../../../src/sync2/gitignore-invariants";
 
 // DOT-FILES §8.0 — the end-to-end half the unit tests cannot give.
 //
@@ -97,7 +97,7 @@ describe.skipIf(!integrationEnabled())(
         ]).toEqual([]);
 
         const local = await client.vault.adapter.read(".gitignore");
-        expect(local).toContain(INVARIANT_BEGIN);
+        expect(local).toContain(INVARIANTS_BEGIN);
         expect(local).toContain("*.conflict-from-*");
         // The repo's own rules survived underneath ours.
         expect(local).toContain("*.tmp");
@@ -143,7 +143,7 @@ describe.skipIf(!integrationEnabled())(
           ...client.conflictStore.getCachedState().entries.keys(),
         ]).toEqual([]);
         const remote = await readRemoteFile(branch, ".gitignore");
-        expect(remote).toContain(INVARIANT_BEGIN);
+        expect(remote).toContain(INVARIANTS_BEGIN);
         expect(remote).toContain("*.log"); // our seeded defaults travelled
       },
       600_000,
@@ -171,7 +171,7 @@ describe.skipIf(!integrationEnabled())(
         // the repo's version. Our block is ours and idempotent; the
         // user's own rules are untouched below it.
         const ours = await client.vault.adapter.read(".gitignore");
-        expect(ours).toContain(INVARIANT_BEGIN);
+        expect(ours).toContain(INVARIANTS_BEGIN);
         expect(ours).toContain("*.bak"); // the user's rule survived
 
         // Theirs landed beside it as a sibling, as designed.
