@@ -31,7 +31,7 @@ import {
   stagingPathFor,
 } from "../../src/sync2/atomic-write";
 import { Vault } from "../../mock-obsidian";
-import GI from "../../src/gi";
+import GI, { whitelistedGitignoreDirs } from "../../src/gi";
 import { isUnhonouredGitignore } from "../../src/sync2/change-detector";
 import { calculateGitBlobSHA } from "../../src/utils";
 
@@ -917,7 +917,7 @@ describe("section CONTENT: two strengths in the root file (DOT-FILES §3.1)", ()
       ),
     );
 
-    const gi = new GI(f.root);
+    const gi = new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR));
     // Overrides the dot-hide policy above: opt-in works.
     expect(gi.ignored(".editorconfig")).toBe(false);
     // Cannot touch the final rules below: the sibling stays hidden.
@@ -928,7 +928,7 @@ describe("section CONTENT: two strengths in the root file (DOT-FILES §3.1)", ()
 
   it("the dot-hide policy actually hides dot-space, and configDir survives it", async () => {
     await f.inv.enforce();
-    const gi = new GI(f.root);
+    const gi = new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR));
     expect(gi.ignored(".editorconfig")).toBe(true);
     expect(gi.ignored("notes/.hidden/x.md")).toBe(true);
     expect(gi.ignored("notes/.gitignore")).toBe(true); // D6, natively
@@ -984,7 +984,7 @@ describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () =>
 
   it("and the matcher agrees: nothing under configDir is visible", async () => {
     await f.inv.enforce();
-    const gi = new GI(f.root);
+    const gi = new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR));
     expect(gi.ignored(`${CONFIG_DIR}/app.json`)).toBe(true);
     expect(gi.ignored(`${CONFIG_DIR}/plugins/${SELF}/main.js`)).toBe(true);
     expect(gi.ignored(`${CONFIG_DIR}/plugins/brat/main.js`)).toBe(true);
@@ -1016,7 +1016,7 @@ describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () =>
     expect(fs.readFileSync(selfGitignore(f.root), "utf8")).not.toContain(
       FINAL_BEGIN,
     );
-    expect(new GI(f.root).ignored(`${CONFIG_DIR}/app.json`)).toBe(false);
+    expect(new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR)).ignored(`${CONFIG_DIR}/app.json`)).toBe(false);
   });
 });
 
@@ -1046,7 +1046,7 @@ describe("§12 Крок A done-criteria that the content tests above do not cove
     );
 
     // (a) the file leaves scope...
-    expect(new GI(f.root).ignored(".gitignore")).toBe(true);
+    expect(new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR)).ignored(".gitignore")).toBe(true);
 
     // (b) ...while it keeps governing, and enforce() keeps maintaining
     // it: the user's line survives, our sections stay canonical.
@@ -1055,7 +1055,7 @@ describe("§12 Крок A done-criteria that the content tests above do not cove
     expect(after).toContain("/.gitignore\n");
     expect(after).toContain(INVARIANTS_BEGIN);
     expect(after).toContain(FINAL_BEGIN);
-    expect(new GI(f.root).ignored("notes/.hidden/x.md")).toBe(true);
+    expect(new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR)).ignored("notes/.hidden/x.md")).toBe(true);
   });
 
   it("the configDir re-admission is ANCHORED: a nested .gitignore stays hidden", async () => {
@@ -1072,7 +1072,7 @@ describe("§12 Крок A done-criteria that the content tests above do not cove
     );
     await f.inv.enforce();
 
-    const gi = new GI(f.root);
+    const gi = new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR));
     expect(gi.ignored(`${CONFIG_DIR}/.gitignore`)).toBe(false);
     expect(gi.ignored(`${CONFIG_DIR}/snippets/.gitignore`)).toBe(true);
     // And the isSyncable backstop agrees independently of the rule text.
@@ -1094,7 +1094,7 @@ describe("§12 Крок A done-criteria that the content tests above do not cove
     );
     await f.inv.enforce();
 
-    const gi = new GI(f.root);
+    const gi = new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR));
     expect(gi.ignored(`${CONFIG_DIR}/plugins/brat/.gitignore`)).toBe(false);
     // ...while the catch-all still does its job for everything else in
     // that folder.
@@ -1142,7 +1142,7 @@ describe("the data.json toggle survives a syncConfigDir round-trip", () => {
     // Still remembered while inert — and still inert: `*` below wins.
     expect(await inv.getPushPluginsDataJson()).toBe(true);
     expect(
-      new GI(f.root).ignored(`${CONFIG_DIR}/plugins/brat/data.json`),
+      new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR)).ignored(`${CONFIG_DIR}/plugins/brat/data.json`),
     ).toBe(true);
 
     syncConfigDir = true;

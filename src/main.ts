@@ -24,7 +24,7 @@ import GitHubSyncSettingsTab from "./settings/tab";
 import Logger from "./logger";
 import { describeError, calculateGitBlobSHA } from "./utils";
 import GithubClient from "./github/client";
-import GI from "./gi";
+import GI, { whitelistedGitignoreDirs } from "./gi";
 import HotMetadataStore from "./sync2/hot-metadata";
 import FileBaselinesStore from "./sync2/file-baselines";
 import { AtomicWriteRecovery } from "./sync2/atomic-write";
@@ -914,7 +914,15 @@ export default class GitHubSyncPlugin extends Plugin {
     // block below) so the sweep can resolve `.ges-tmp` staging
     // files owned by conflict records via record.theirsBlobSha
     // SHA-verify, not just snapshot-based reasoning.
-    const gi = new GI(vaultRoot);
+    // D5 (DOT-FILES §5): a .gitignore is honoured at the vault root,
+    // at <configDir>, and one level under <configDir>/plugins/ — and
+    // nowhere else. Without this the matcher would walk and obey a
+    // .gitignore at every level of every path.
+    const gi = new GI(
+      vaultRoot,
+      undefined,
+      whitelistedGitignoreDirs(this.app.vault.configDir),
+    );
     // THE SWITCH: the new engine's stores. sync_store is the
     // content-addressed blob home (batch content, History local
     // versions, conflict bases); the journal is the drain's crash

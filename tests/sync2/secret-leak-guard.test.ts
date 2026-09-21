@@ -48,7 +48,7 @@ import GitignoreInvariants from "../../src/sync2/gitignore-invariants";
 import InvariantStateStore from "../../src/sync2/invariant-state";
 import GitignoreSeedStore from "../../src/sync2/gitignore-seeds";
 import { isSyncable } from "../../src/sync2/change-detector";
-import GI from "../../src/gi";
+import GI, { whitelistedGitignoreDirs } from "../../src/gi";
 import { Vault } from "../../mock-obsidian";
 
 const CONFIG_DIR = ".obsidian";
@@ -153,7 +153,7 @@ function makeFixture(): Fixture {
         CONFIG_DIR,
         SELF,
         opts?.syncConfigDir ?? true,
-        new GI(root),
+        new GI(root, undefined, whitelistedGitignoreDirs(CONFIG_DIR)),
         reader,
       ),
   };
@@ -333,7 +333,7 @@ describe("L3-external — the shipped allowlist must hold for a FOREIGN git clie
     };
     // GI.ignoredAsync is the same matcher the engine uses, minus every
     // rule that lives in our code.
-    return new GI(root).ignoredAsync(rel, reader);
+    return new GI(root, undefined, whitelistedGitignoreDirs(CONFIG_DIR)).ignoredAsync(rel, reader);
   };
 
   it("blocks our data.json and .runtime/ by gitignore text alone", async () => {

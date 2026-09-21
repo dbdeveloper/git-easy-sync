@@ -25,7 +25,7 @@ import ignore from "ignore";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import GI from "../src/gi";
+import GI, { whitelistedGitignoreDirs } from "../src/gi";
 
 // The dot-hide rules as §10 states them. In the probes they are just a
 // test INPUT string; in production they are a physical managed section of
@@ -131,7 +131,9 @@ function giWithConfigDir(rootRules: string): GI {
   w(".gitignore", rootRules);
   w(".obsidian/.gitignore", CONFIG_SEED);
   w(".obsidian/plugins/foo/.gitignore", SELF_SEED);
-  return new GI(root);
+  // The real D5 whitelist: these probes are ABOUT the configDir nodes,
+  // so a root-only matcher would answer a different question.
+  return new GI(root, undefined, whitelistedGitignoreDirs(".obsidian"));
 }
 
 describe("§10 probe 3 — `!<configDir>/` composition (real GI, multi-node)", () => {

@@ -3,7 +3,7 @@
 // AGPL-3.0 — see LICENSE.
 
 import { TFile, Vault } from "obsidian";
-import GI from "../gi";
+import GI, { isWhitelistedGitignoreDir } from "../gi";
 import { calculateGitBlobSHA } from "../utils";
 import HotMetadataStore from "./hot-metadata";
 import FileBaselinesStore, {
@@ -71,6 +71,12 @@ export async function isSyncable(
 }
 
 // True for a `.gitignore` outside the three locations D5 reads.
+//
+// Derived from `isWhitelistedGitignoreDir`, not restated: that function
+// answers about a DIRECTORY level and this one about a FILE path, which
+// is the same rule one `dirname` apart. Two encodings of one rule drift,
+// and the drift would be silent — a file we sync but never honour, or
+// the reverse.
 export function isUnhonouredGitignore(
   path: string,
   configDir: string,
@@ -78,13 +84,7 @@ export function isUnhonouredGitignore(
   const slash = path.lastIndexOf("/");
   if (path.slice(slash + 1) !== ".gitignore") return false;
   const dir = slash < 0 ? "" : path.slice(0, slash);
-  if (dir === "" || dir === configDir) return false;
-  // `<configDir>/plugins/<one segment>` — and no deeper.
-  const pluginsPrefix = `${configDir}/plugins/`;
-  if (dir.startsWith(pluginsPrefix)) {
-    return dir.slice(pluginsPrefix.length).includes("/");
-  }
-  return true;
+  return !isWhitelistedGitignoreDir(dir, configDir);
 }
 
 // True for a "file vanished" adapter error — Capacitor surfaces ENOENT with

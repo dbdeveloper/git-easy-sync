@@ -24,7 +24,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
-import GI from "../src/gi";
+import GI, { whitelistedGitignoreDirs } from "../src/gi";
 
 function gitAvailable(): boolean {
   try {
@@ -71,7 +71,8 @@ function bothVerdicts(files: Record<string, string>): {
       .filter((s) => s.length > 0),
   );
 
-  const gi = new GI(root);
+  // The shipped D5 whitelist — the matcher the plugin actually runs.
+  const gi = new GI(root, undefined, whitelistedGitignoreDirs(".obsidian"));
   const gitMap = new Map<string, boolean>();
   const giMap = new Map<string, boolean>();
   for (const rel of Object.keys(files)) {
@@ -86,6 +87,23 @@ function expectParity(files: Record<string, string>): void {
   // Compare as objects so a mismatch prints the whole picture, not just
   // the first differing path.
   expect(Object.fromEntries(gi)).toEqual(Object.fromEntries(git));
+}
+
+// D5 makes us DIVERGE from git on purpose (DOT-FILES §3.4): a
+// `.gitignore` outside the three whitelisted locations is not read at
+// all, while git reads every level. Such cases cannot be parity
+// assertions any more — but deleting them would leave the divergence
+// unwatched, and they are the only tests that would notice git changing
+// behaviour underneath it. So both verdicts are stated explicitly.
+function expectDivergence(
+  files: Record<string, string>,
+  expectations: Record<string, { git: boolean; gi: boolean }>,
+): void {
+  const { git, gi } = bothVerdicts(files);
+  for (const [p, want] of Object.entries(expectations)) {
+    expect(git.get(p), `git verdict for ${p}`).toBe(want.git);
+    expect(gi.get(p), `our verdict for ${p}`).toBe(want.gi);
+  }
 }
 
 const SELF_ALLOWLIST = "*\n!main.js\n!manifest.json\n!styles.css\n!.gitignore\n";
@@ -251,30 +269,68 @@ describe.skipIf(!gitAvailable())("GI ↔ real git parity", () => {
     });
   });
 
-  it("multi-level FILE patterns still agree (the cases that predate no-descent)", () => {
-    expectParity({
-      ".gitignore": "*.log\n",
-      "a/.gitignore": "!keep.log\n",
-      "a/keep.log": "x",
-      "a/other.log": "x",
-      "keep.log": "x",
-    });
-    expectParity({
-      ".gitignore": "a/b/c/file\n",
-      "a/.gitignore": "!b/c/file\n",
-      "a/b/.gitignore": "c/file\n",
-      "a/b/c/.gitignore": "!file\n",
-      "a/b/c/file": "x",
-    });
-    expectParity({
-      ".gitignore": "*.x\n",
-      "a/.gitignore": "!*.x\n",
-      "a/b/.gitignore": "*.x\n",
-      "a/b/c/.gitignore": "!*.x\n",
-      "a/b/c/file.x": "x",
-      "a/file.x": "x",
-      "a/b/file.x": "x",
-    });
+  // ── DELIBERATE DIVERGENCE (D5) ─────────────────────────────────────
+  //
+  // These used to be parity assertions, and passed. Крок B made the
+  // matcher read a .gitignore ONLY at the vault root, at <configDir>
+  // and one level under <configDir>/plugins/ — so a nested control file
+  // now governs nothing for us while git still obeys it.
+  //
+  // That is §3.4's recorded stance, not an oversight: our scope is
+  // narrower and predictable, and a control file we do not execute is
+  // also one we refuse to sync (the D6 backstop), so it cannot travel
+  // to another device looking authoritative.
+
+  it("DIVERGENCE: a nested `!` rule re-includes for git, not for us", () => {
+    expectDivergence(
+      {
+        ".gitignore": "*.log\n",
+        "a/.gitignore": "!keep.log\n",
+        "a/keep.log": "x",
+        "a/other.log": "x",
+        "keep.log": "x",
+      },
+      {
+        // git reads a/.gitignore and lets keep.log back in; we never
+        // open that file, so root's `*.log` stands.
+        "a/keep.log": { git: false, gi: true },
+        // Everything root alone decides still agrees.
+        "a/other.log": { git: true, gi: true },
+        "keep.log": { git: true, gi: true },
+      },
+    );
+  });
+
+  it("DIVERGENCE: an alternating nested chain resolves for git, collapses to root for us", () => {
+    expectDivergence(
+      {
+        ".gitignore": "a/b/c/file\n",
+        "a/.gitignore": "!b/c/file\n",
+        "a/b/.gitignore": "c/file\n",
+        "a/b/c/.gitignore": "!file\n",
+        "a/b/c/file": "x",
+      },
+      { "a/b/c/file": { git: false, gi: true } },
+    );
+  });
+
+  it("DIVERGENCE: only the root level speaks for us, at every depth", () => {
+    expectDivergence(
+      {
+        ".gitignore": "*.x\n",
+        "a/.gitignore": "!*.x\n",
+        "a/b/.gitignore": "*.x\n",
+        "a/b/c/.gitignore": "!*.x\n",
+        "a/b/c/file.x": "x",
+        "a/file.x": "x",
+        "a/b/file.x": "x",
+      },
+      {
+        "a/file.x": { git: false, gi: true },
+        "a/b/file.x": { git: true, gi: true }, // both hide it, different reasons
+        "a/b/c/file.x": { git: false, gi: true },
+      },
+    );
   });
 
   it("a user rule below the managed block wins, at any depth", () => {

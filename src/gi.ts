@@ -15,6 +15,55 @@ import * as path from "path-browserify";
 type ReadFile = (absPath: string) => string | null;
 type AsyncReadFile = (absPath: string) => Promise<string | null>;
 
+// ── D5: where a .gitignore is honoured (DOT-FILES §5) ────────────────
+//
+// A `.gitignore` is read and obeyed at exactly three kinds of location:
+// the vault root, `<configDir>`, and ONE level under
+// `<configDir>/plugins/`. Anywhere else it is not read AT ALL — not
+// consulted, not even opened.
+//
+// That is a deliberate divergence from git (§3.4): our scope is
+// narrower and predictable. A control file the user drops deep in the
+// vault is, for us, a file they did not drop — and we refuse to sync it
+// either (the D6 backstop), so it cannot look authoritative on another
+// device while governing nothing.
+//
+// It also bounds the cost: `ignored()` no longer opens a `.gitignore`
+// at every level of every path it is asked about.
+export type GitignoreDirPredicate = (relDir: string) => boolean;
+
+// THE definition of D5, in one place. `isUnhonouredGitignore` in
+// change-detector.ts is derived from this rather than restating it:
+// the two answer about a FILE path and about a DIRECTORY level, which
+// are the same rule one `dirname` apart, and two encodings of one rule
+// drift.
+export function isWhitelistedGitignoreDir(
+  relDir: string,
+  configDir: string,
+): boolean {
+  if (relDir === "" || relDir === configDir) return true;
+  const pluginsPrefix = `${configDir}/plugins/`;
+  if (relDir.startsWith(pluginsPrefix)) {
+    // exactly one segment below — a plugin's own folder, nothing deeper
+    return !relDir.slice(pluginsPrefix.length).includes("/");
+  }
+  return false;
+}
+
+export function whitelistedGitignoreDirs(
+  configDir: string,
+): GitignoreDirPredicate {
+  return (relDir) => isWhitelistedGitignoreDir(relDir, configDir);
+}
+
+// Default for a GI built without the vault's configDir: root only.
+// Deliberately NOT the full whitelist — a GI that was never told where
+// configDir is has no business guessing, and a root-only default keeps
+// a bare `new GI(root)` meaningful in tests instead of silently
+// half-configured.
+export const ROOT_ONLY_GITIGNORE_DIR: GitignoreDirPredicate = (relDir) =>
+  relDir === "";
+
 // Mtime-aware async reader. Returns null when the file is missing.
 // Used by ignoredAsync() to decide whether a cached level is still
 // fresh: if the on-disk mtime hasn't moved, the cached parse is
@@ -71,8 +120,15 @@ export default class GI {
   private rootDir: string;
   private root: Node;
   private readFile: ReadFile;
+  // D5 (see above). Injected rather than derived from a configDir
+  // string so a caller can say "root only" and mean it.
+  private readonly isGitignoreDir: GitignoreDirPredicate;
 
-  constructor(rootDir: string, readFile: ReadFile = defaultReadFile) {
+  constructor(
+    rootDir: string,
+    readFile: ReadFile = defaultReadFile,
+    isGitignoreDir: GitignoreDirPredicate = ROOT_ONLY_GITIGNORE_DIR,
+  ) {
     // Empty rootDir is allowed: some mobile vault adapters return ""
     // for basePath, and callers already feed us vault-relative paths
     // in that case, so "no prefix" is a valid mode.
@@ -84,6 +140,7 @@ export default class GI {
     this.rootDir =
       rootDir === "" ? "" : path.resolve(rootDir).split(path.sep).join("/");
     this.readFile = readFile;
+    this.isGitignoreDir = isGitignoreDir;
     this.root = makeNode("");
   }
 
@@ -101,7 +158,10 @@ export default class GI {
     let node = this.root;
     for (const dir of dirs) {
       node = this.ensureNode(node, dir);
-      this.ensureLoaded(node);
+      // D5: a level we do not honour is never even opened. Its node
+      // stays `ig: null`, and `verdict` skips null levels — so "not
+      // honoured" and "has no rules" are the same thing downstream.
+      if (this.isGitignoreDir(dir)) this.ensureLoaded(node);
       nodes.push(node);
     }
 
@@ -181,6 +241,11 @@ export default class GI {
     let node = this.root;
     for (const dir of dirs) {
       node = this.ensureNode(node, dir);
+      // Same D5 filter as the sync path, and it MUST be the same: if
+      // only one of the two were filtered, the async preload and the
+      // sync matcher would answer from different rule sets and the
+      // divergence would be invisible (DOT-FILES §5).
+      if (!this.isGitignoreDir(dir)) continue;
       const giAbs =
         dir === ""
           ? `${this.rootDir}/.gitignore`

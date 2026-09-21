@@ -19,7 +19,7 @@ import {
 } from "../../../../mock-obsidian";
 import GithubClient from "../../../../src/github/client";
 import Logger from "../../../../src/logger";
-import GI from "../../../../src/gi";
+import GI, { whitelistedGitignoreDirs } from "../../../../src/gi";
 import { Sync2Manager } from "../../../../src/sync2/sync2-manager";
 import HotMetadataStore from "../../../../src/sync2/hot-metadata";
 import FileBaselinesStore from "../../../../src/sync2/file-baselines";
@@ -154,7 +154,7 @@ export async function createSync2Client(
     vault,
     selfPluginId: SELF_PLUGIN_ID,
   });
-  const gi = new GI(vaultPath);
+  const gi = new GI(vaultPath, undefined, whitelistedGitignoreDirs(".obsidian"));
   const syncStore = new SyncStore({ vault, selfPluginId: SELF_PLUGIN_ID });
   const journal = new DrainJournal({ vault, selfPluginId: SELF_PLUGIN_ID });
   const batchWriter = new BatchWriter({
