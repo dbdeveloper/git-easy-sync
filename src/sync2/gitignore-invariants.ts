@@ -4,7 +4,7 @@
 
 import { Vault } from "obsidian";
 import { calculateGitBlobSHA } from "../utils";
-import InvariantStateStore, { InvariantFileState } from "./invariant-state";
+import InvariantStateStore from "./invariant-state";
 import GitignoreSeedStore from "./gitignore-seeds";
 
 // Markers of the managed `invariants` section. Editing anything between
@@ -261,7 +261,7 @@ export default class GitignoreInvariants {
     );
     if (after === before) return;
     await this.write(this.configDirGitignorePath, after);
-    await this.refreshState("configDirGitignore", this.configDirGitignorePath);
+    await this.refreshState(this.configDirGitignorePath);
   }
 
   // Called by Sync2Manager.recordSync after a successful self-push of
@@ -269,11 +269,11 @@ export default class GitignoreInvariants {
   // next sync's enforce() short-circuits without re-reading.
   async notePathSelfWritten(path: string): Promise<void> {
     if (path === this.configDirGitignorePath) {
-      await this.refreshState("configDirGitignore", path);
+      await this.refreshState(path);
     } else if (path === this.selfPluginGitignorePath) {
-      await this.refreshState("selfPluginGitignore", path);
+      await this.refreshState(path);
     } else if (path === this.rootGitignorePath) {
-      await this.refreshState("rootGitignore", path);
+      await this.refreshState(path);
     }
   }
 
@@ -294,9 +294,7 @@ export default class GitignoreInvariants {
   private async enforceConfigDirGitignoreWith(
     desiredPushPluginsDataJson: boolean | undefined,
   ): Promise<void> {
-    const slot = "configDirGitignore" as const;
     const path = this.configDirGitignorePath;
-    const recorded = this.state.get()[slot];
 
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
@@ -311,7 +309,7 @@ export default class GitignoreInvariants {
       );
       const content = `${block}\n\n${CONFIG_DIR_RECOMMENDED_DEFAULTS}\n`;
       await this.write(path, content);
-      await this.refreshState(slot, path);
+      await this.refreshState(path);
       await this.noteSeedState(path, content);
       return;
     }
@@ -330,8 +328,6 @@ export default class GitignoreInvariants {
     // output to the actual on-disk content, so it can't lie about
     // canonical-block changes.
     const content = await this.vault.adapter.read(path);
-    void recorded; // hash/mtime short-circuits dropped — see comment above
-    const hash = await sha1Of(content);
 
     // The block's "push plugins data.json" toggle survives this
     // rewrite. If the caller asked for a specific state, use it;
@@ -353,12 +349,12 @@ export default class GitignoreInvariants {
     );
     if (fixed === content) {
       // Nothing to change on disk; just refresh the cache.
-      await this.state.set(slot, { mtime: stat.mtime, hash });
+      await this.refreshState(path);
       await this.noteSeedState(path, content);
       return;
     }
     await this.write(path, fixed);
-    await this.refreshState(slot, path);
+    await this.refreshState(path);
     await this.noteSeedState(path, fixed);
   }
 
@@ -366,9 +362,7 @@ export default class GitignoreInvariants {
   // gitignore. The forced rule here is `*.conflict-from-*`, which
   // pins per-device conflict-sibling files to local-only.
   private async enforceRootGitignore(): Promise<void> {
-    const slot = "rootGitignore" as const;
     const path = this.rootGitignorePath;
-    const recorded = this.state.get()[slot];
 
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
@@ -378,7 +372,7 @@ export default class GitignoreInvariants {
       // (e.g. user already had one) skip this branch entirely.
       const content = `${composeSection(INVARIANTS_BEGIN, ROOT_INVARIANTS_BODY, INVARIANTS_END)}\n\n${ROOT_RECOMMENDED_DEFAULTS}\n`;
       await this.write(path, content);
-      await this.refreshState(slot, path);
+      await this.refreshState(path);
       await this.noteSeedState(path, content);
       return;
     }
@@ -388,29 +382,25 @@ export default class GitignoreInvariants {
     // upgrades that change ROOT_INVARIANTS_BODY must reach disk
     // even when the user's file mtime hasn't moved).
     const content = await this.vault.adapter.read(path);
-    void recorded;
-    const hash = await sha1Of(content);
 
     const fixed = spliceInvariantBlock(content, ROOT_INVARIANTS_BODY);
     if (fixed === content) {
-      await this.state.set(slot, { mtime: stat.mtime, hash });
+      await this.refreshState(path);
       await this.noteSeedState(path, content);
       return;
     }
     await this.write(path, fixed);
-    await this.refreshState(slot, path);
+    await this.refreshState(path);
     await this.noteSeedState(path, fixed);
   }
 
   private async enforceSelfPluginGitignore(): Promise<void> {
-    const slot = "selfPluginGitignore" as const;
     const path = this.selfPluginGitignorePath;
-    const recorded = this.state.get()[slot];
 
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
       await this.write(path, SELF_PLUGIN_GITIGNORE);
-      await this.refreshState(slot, path);
+      await this.refreshState(path);
       return;
     }
 
@@ -419,18 +409,16 @@ export default class GitignoreInvariants {
     // SELF_PLUGIN_GITIGNORE reach disk even when the file mtime
     // hasn't moved.
     const content = await this.vault.adapter.read(path);
-    void recorded;
-    const hash = await sha1Of(content);
     if (content === SELF_PLUGIN_GITIGNORE) {
       // Already canonical — refresh cache only.
-      await this.state.set(slot, { mtime: stat.mtime, hash });
+      await this.refreshState(path);
       return;
     }
 
     // Sync2 owns this file outright — overwrite anything the user (or
     // anything else) wrote into it.
     await this.write(path, SELF_PLUGIN_GITIGNORE);
-    await this.refreshState(slot, path);
+    await this.refreshState(path);
   }
 
   // ── DOT-FILES §8.0 seed markers ─────────────────────────────────
@@ -481,18 +469,22 @@ export default class GitignoreInvariants {
     await this.seeds.set(path, sha);
   }
 
-  private async refreshState(
-    slot: keyof ReturnType<InvariantStateStore["get"]>,
-    path: string,
-  ): Promise<void> {
+  // Record what the file looks like NOW, keyed by its path.
+  //
+  // ⚠️ The stat MUST happen after the write, never before — a pre-write
+  // mtime makes the next pass see "changed", rewrite, and record another
+  // pre-write mtime, forever (DOT-FILES §3.1.2).
+  //
+  // Section fingerprints are not written yet: their producer is the
+  // restore pass (A-5), which is the only place that knows which bodies
+  // it just composed. Until then a record carries {mtime, size} alone
+  // and every pass takes the full read+splice+compare route — which is
+  // exactly today's behaviour, since the short-circuit has been off
+  // (`void recorded`) ever since it was found to swallow plugin upgrades.
+  private async refreshState(path: string): Promise<void> {
     const stat = await this.vault.adapter.stat(path);
     if (!stat) return;
-    const content = await this.vault.adapter.read(path);
-    const hash = await sha1Of(content);
-    await this.state.set(slot as never, {
-      mtime: stat.mtime,
-      hash,
-    } as InvariantFileState);
+    await this.state.set(path, { mtime: stat.mtime, size: stat.size });
   }
 
   private async write(path: string, content: string): Promise<void> {
@@ -537,11 +529,6 @@ export function spliceInvariantBlock(
   const afterStart = endIdx + INVARIANTS_END.length;
   const after = existing.substring(afterStart);
   return `${before}${block}${after}`;
-}
-
-async function sha1Of(content: string): Promise<string> {
-  const buf = new TextEncoder().encode(content).buffer as ArrayBuffer;
-  return await calculateGitBlobSHA(buf);
 }
 
 // Pure helpers for the "Push plugins data.json" toggle. Both work

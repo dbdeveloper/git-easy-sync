@@ -86,7 +86,7 @@ describe("reset (RESET-PLUGIN Phase 1.6)", () => {
       mtime: 1,
       size: 1,
     });
-    await invariantState.set("rootGitignore", { mtime: 7, hash: "GHOST_HASH" });
+    await invariantState.set(".gitignore", { mtime: 7, size: 77 });
     // A stray file no store knows about — D1's whole point.
     fs.writeFileSync(
       path.join(runtimeAbs(), "some-future-artifact.json"),
@@ -127,7 +127,7 @@ describe("reset (RESET-PLUGIN Phase 1.6)", () => {
       mtime: 2,
       size: 2,
     });
-    await invariantState.set("configDirGitignore", { mtime: 9, hash: "NEW" });
+    await invariantState.set(".obsidian/.gitignore", { mtime: 9, size: 99 });
 
     const everything: string[] = [];
     const walk = (d: string): void => {

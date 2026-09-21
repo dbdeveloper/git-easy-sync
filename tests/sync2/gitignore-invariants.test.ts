@@ -218,7 +218,7 @@ describe("GitignoreInvariants.enforce", () => {
 
     // Cached state now matches new mtime.
     const stat = fs.statSync(cdPath);
-    expect(f.state.get().configDirGitignore?.mtime).toBe(
+    expect(f.state.getFor(`${CONFIG_DIR}/.gitignore`)?.mtime).toBe(
       stat.mtimeMs,
     );
   });
@@ -253,7 +253,7 @@ describe("GitignoreInvariants.enforce", () => {
 
     await f.inv.notePathSelfWritten(`${CONFIG_DIR}/.gitignore`);
     const stat = fs.statSync(cdPath);
-    expect(f.state.get().configDirGitignore?.mtime).toBe(
+    expect(f.state.getFor(`${CONFIG_DIR}/.gitignore`)?.mtime).toBe(
       stat.mtimeMs,
     );
 
@@ -276,8 +276,10 @@ describe("GitignoreInvariants.enforce", () => {
       selfPluginId: SELF,
     });
     await state2.load();
-    expect(state2.get().configDirGitignore).toBeDefined();
-    expect(state2.get().selfPluginGitignore).toBeDefined();
+    expect(state2.getFor(`${CONFIG_DIR}/.gitignore`)).toBeDefined();
+    expect(
+      state2.getFor(`${CONFIG_DIR}/plugins/${SELF}/.gitignore`),
+    ).toBeDefined();
   });
 
   // ─── enforce() applies new canonical block on plugin upgrade ────────
@@ -304,21 +306,14 @@ describe("GitignoreInvariants.enforce", () => {
     ].join("\n");
     fs.writeFileSync(cdPath, staleBody + "\n");
     const staleStat = fs.statSync(cdPath);
-    // Recompute the hash the same way GitignoreInvariants does
-    // internally (SHA-1 hex of the file content). The exact algorithm
-    // is private to gitignore-invariants.ts; the store's cache just
-    // needs SOME value that, paired with the file's current mtime,
-    // claims "this state was recorded".
-    const staleHash = crypto
-      .createHash("sha1")
-      .update(fs.readFileSync(cdPath, "utf8"))
-      .digest("hex");
 
-    // Seed the store's invariant state to claim this exact stale
-    // content was recorded last enforce.
-    await f.state.set("configDirGitignore", {
+    // Seed the store to claim this exact stale content was what we
+    // recorded last enforce — the file's real mtime and size, so any
+    // "did anyone touch the FILE?" check says no. It has to rewrite
+    // anyway: what changed is what WE want, not what is on disk.
+    await f.state.set(`${CONFIG_DIR}/.gitignore`, {
       mtime: staleStat.mtimeMs,
-      hash: staleHash,
+      size: staleStat.size,
     });
 
     // enforce() must re-splice the file and rewrite to current
