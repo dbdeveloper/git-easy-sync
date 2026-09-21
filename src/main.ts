@@ -1018,6 +1018,21 @@ export default class GitHubSyncPlugin extends Plugin {
       configDir: this.app.vault.configDir,
       selfPluginId: manifest.id,
       seeds: gitignoreSeeds,
+      // DOT-FILES §3.1.3. Everything here is logged; only the case we
+      // cannot fix ourselves reaches the user, because only they can
+      // finish it — we refuse to guess where a damaged section ended,
+      // since the text below a marker is theirs.
+      onAnomaly: (report) => {
+        this.logger.warn("gitignore section anomaly", report);
+        if (report.anomaly === "orphan-unrepairable") {
+          new Notice(
+            `${report.path}: a damaged git-easy-sync block is still in ` +
+              `this file. Please remove it by hand — the plugin will not ` +
+              `guess where it ended.`,
+            10000,
+          );
+        }
+      },
     });
     // Prime the toggle cache once, here, so the settings tab can
     // read it synchronously without re-entering Obsidian via an

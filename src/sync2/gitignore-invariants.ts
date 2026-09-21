@@ -4,7 +4,10 @@
 
 import { Vault } from "obsidian";
 import { calculateGitBlobSHA } from "../utils";
-import InvariantStateStore from "./invariant-state";
+import InvariantStateStore, {
+  InvariantFileState,
+  SectionId,
+} from "./invariant-state";
 import GitignoreSeedStore from "./gitignore-seeds";
 
 // Markers of the managed `invariants` section. Editing anything between
@@ -169,6 +172,19 @@ export interface GitignoreInvariantsDeps {
   // was inert everywhere except main.ts. A mandatory dep turns that
   // class of mistake into a compile error at every construction site.
   seeds: GitignoreSeedStore;
+  // Called when a managed section could not be brought to canonical
+  // cleanly (DOT-FILES §3.1.3). REQUIRED for the same reason `seeds` is:
+  // an optional reporter with a silent default is a reporter nobody
+  // wires, and "unrepairable" is exactly the case the user has to be
+  // told about — we deliberately do NOT guess where a damaged section
+  // ended, so only they can finish the repair.
+  onAnomaly: (report: SectionAnomalyReport) => void;
+}
+
+export interface SectionAnomalyReport {
+  path: string;
+  section: SectionId;
+  anomaly: SpliceAnomaly;
 }
 
 // Owner of the two managed gitignore files. Public surface:
@@ -185,11 +201,13 @@ export default class GitignoreInvariants {
   // Root <vault>/.gitignore. Bare ".gitignore" — relative to vault root.
   private readonly rootGitignorePath = ".gitignore";
   private readonly seeds: GitignoreSeedStore;
+  private readonly onAnomaly: (report: SectionAnomalyReport) => void;
 
   constructor(deps: GitignoreInvariantsDeps) {
     this.vault = deps.vault;
     this.state = deps.state;
     this.seeds = deps.seeds;
+    this.onAnomaly = deps.onAnomaly;
     this.configDirGitignorePath = `${deps.configDir}/.gitignore`;
     this.selfPluginGitignorePath = `${deps.configDir}/plugins/${deps.selfPluginId}/.gitignore`;
   }
@@ -252,27 +270,28 @@ export default class GitignoreInvariants {
       await this.enforceConfigDirGitignoreWith(enabled);
       return;
     }
-    const before = await this.vault.adapter.read(
-      this.configDirGitignorePath,
-    );
-    const after = spliceInvariantBlock(
-      before,
-      configDirInvariantsBody({ pushPluginsDataJson: enabled }),
-    );
+    const path = this.configDirGitignorePath;
+    const before = await this.vault.adapter.read(path);
+    const body = configDirInvariantsBody({ pushPluginsDataJson: enabled });
+    const after = await this.spliceOne(path, before, body);
     if (after === before) return;
-    await this.write(this.configDirGitignorePath, after);
-    await this.refreshState(this.configDirGitignorePath);
+    await this.write(path, after);
+    await this.refreshState(path, { invariants: body });
   }
 
   // Called by Sync2Manager.recordSync after a successful self-push of
   // one of the invariant files. Updates the cached mtime+hash so the
   // next sync's enforce() short-circuits without re-reading.
   async notePathSelfWritten(path: string): Promise<void> {
-    if (path === this.configDirGitignorePath) {
-      await this.refreshState(path);
-    } else if (path === this.selfPluginGitignorePath) {
-      await this.refreshState(path);
-    } else if (path === this.rootGitignorePath) {
+    if (
+      path === this.configDirGitignorePath ||
+      path === this.selfPluginGitignorePath ||
+      path === this.rootGitignorePath
+    ) {
+      // No section bodies to record: what landed here came from a pull,
+      // not from us. Any fingerprint already on file is kept — it is
+      // only ever used as a repair anchor, and a stale one simply fails
+      // to match, which declines the repair. Safe direction.
       await this.refreshState(path);
     }
   }
@@ -309,7 +328,9 @@ export default class GitignoreInvariants {
       );
       const content = `${block}\n\n${CONFIG_DIR_RECOMMENDED_DEFAULTS}\n`;
       await this.write(path, content);
-      await this.refreshState(path);
+      await this.refreshState(path, {
+        invariants: configDirInvariantsBody({ pushPluginsDataJson: seedPush }),
+      });
       await this.noteSeedState(path, content);
       return;
     }
@@ -343,18 +364,16 @@ export default class GitignoreInvariants {
       pushPluginsDataJson =
         existingBlock !== null && blockHasAllowLine(existingBlock);
     }
-    const fixed = spliceInvariantBlock(
-      content,
-      configDirInvariantsBody({ pushPluginsDataJson }),
-    );
+    const body = configDirInvariantsBody({ pushPluginsDataJson });
+    const fixed = await this.spliceOne(path, content, body);
     if (fixed === content) {
       // Nothing to change on disk; just refresh the cache.
-      await this.refreshState(path);
+      await this.refreshState(path, { invariants: body });
       await this.noteSeedState(path, content);
       return;
     }
     await this.write(path, fixed);
-    await this.refreshState(path);
+    await this.refreshState(path, { invariants: body });
     await this.noteSeedState(path, fixed);
   }
 
@@ -372,7 +391,7 @@ export default class GitignoreInvariants {
       // (e.g. user already had one) skip this branch entirely.
       const content = `${composeSection(INVARIANTS_BEGIN, ROOT_INVARIANTS_BODY, INVARIANTS_END)}\n\n${ROOT_RECOMMENDED_DEFAULTS}\n`;
       await this.write(path, content);
-      await this.refreshState(path);
+      await this.refreshState(path, { invariants: ROOT_INVARIANTS_BODY });
       await this.noteSeedState(path, content);
       return;
     }
@@ -383,14 +402,14 @@ export default class GitignoreInvariants {
     // even when the user's file mtime hasn't moved).
     const content = await this.vault.adapter.read(path);
 
-    const fixed = spliceInvariantBlock(content, ROOT_INVARIANTS_BODY);
+    const fixed = await this.spliceOne(path, content, ROOT_INVARIANTS_BODY);
     if (fixed === content) {
-      await this.refreshState(path);
+      await this.refreshState(path, { invariants: ROOT_INVARIANTS_BODY });
       await this.noteSeedState(path, content);
       return;
     }
     await this.write(path, fixed);
-    await this.refreshState(path);
+    await this.refreshState(path, { invariants: ROOT_INVARIANTS_BODY });
     await this.noteSeedState(path, fixed);
   }
 
@@ -469,22 +488,57 @@ export default class GitignoreInvariants {
     await this.seeds.set(path, sha);
   }
 
+  // Splice ONE section of `path`, feeding the repair its recorded
+  // fingerprint and reporting whatever the splice found wrong.
+  private async spliceOne(
+    path: string,
+    existing: string,
+    body: string | null,
+    markers: SectionMarkers = INVARIANTS_SECTION,
+  ): Promise<string> {
+    const sectionId = markers === INVARIANTS_SECTION ? "invariants" : "final";
+    const { content, anomalies } = await spliceSection({
+      existing,
+      markers,
+      body,
+      recorded: this.state.getFor(path)?.[sectionId],
+    });
+    for (const anomaly of anomalies) {
+      this.onAnomaly({ path, section: sectionId, anomaly });
+    }
+    return content;
+  }
+
   // Record what the file looks like NOW, keyed by its path.
   //
   // ⚠️ The stat MUST happen after the write, never before — a pre-write
   // mtime makes the next pass see "changed", rewrite, and record another
   // pre-write mtime, forever (DOT-FILES §3.1.2).
   //
-  // Section fingerprints are not written yet: their producer is the
-  // restore pass (A-5), which is the only place that knows which bodies
-  // it just composed. Until then a record carries {mtime, size} alone
-  // and every pass takes the full read+splice+compare route — which is
-  // exactly today's behaviour, since the short-circuit has been off
-  // (`void recorded`) ever since it was found to swallow plugin upgrades.
-  private async refreshState(path: string): Promise<void> {
+  // `bodies` carries the section bodies we just composed, and only
+  // those: a section not named here keeps whatever fingerprint was on
+  // file. That matters for notePathSelfWritten, which fires after a PULL
+  // — we did not author those bytes, so we must not claim we did, and a
+  // stale fingerprint is harmless because it can only ever decline a
+  // repair by failing to match.
+  private async refreshState(
+    path: string,
+    bodies?: Partial<Record<SectionId, string>>,
+  ): Promise<void> {
     const stat = await this.vault.adapter.stat(path);
     if (!stat) return;
-    await this.state.set(path, { mtime: stat.mtime, size: stat.size });
+    const previous = this.state.getFor(path);
+    const record: InvariantFileState = {
+      mtime: stat.mtime,
+      size: stat.size,
+      ...(previous?.invariants ? { invariants: previous.invariants } : {}),
+      ...(previous?.final ? { final: previous.final } : {}),
+    };
+    for (const id of ["invariants", "final"] as const) {
+      const body = bodies?.[id];
+      if (body !== undefined) record[id] = await fingerprintOf(body);
+    }
+    await this.state.set(path, record);
   }
 
   private async write(path: string, content: string): Promise<void> {
@@ -508,27 +562,203 @@ export default class GitignoreInvariants {
   }
 }
 
-// Replace the existing invariants section (between the BEGIN/END markers)
-// with `body`, composing the markers here — the write site — so the frozen
-// half and the mutable half never share a template. If markers aren't both
-// present, prepend the section at the top of the file with a blank-line
-// separator. Pure function for testability.
-export function spliceInvariantBlock(
+// ── section splicing (DOT-FILES §3.1.3) ─────────────────────────────
+
+// Where a section is allowed to live. In gitignore the POSITION of a
+// line IS its strength (last-match-wins), so this is semantics, not
+// layout: "top" means the user may override us below, "bottom" means
+// nothing can.
+export type SectionPlacement = "top" | "bottom";
+
+export interface SectionMarkers {
+  begin: string;
+  end: string;
+  placement: SectionPlacement;
+}
+
+export const INVARIANTS_SECTION: SectionMarkers = {
+  begin: INVARIANTS_BEGIN,
+  end: INVARIANTS_END,
+  placement: "top",
+};
+
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+// Trim the seam left by cutting, then guarantee exactly one trailing
+// newline. Load-bearing for IDEMPOTENCE: without it every pass would
+// add another blank line at the cut, and the file would never settle —
+// and a file that never settles is a diff on every sync.
+function normalizeBody(text: string): string {
+  const trimmed = text.replace(/^\n+/, "").replace(/\n+$/, "");
+  return trimmed === "" ? "" : `${trimmed}\n`;
+}
+
+// A section occupies WHOLE LINES, so cutting it must take its own line
+// terminator with it. Without this the cut leaves a blank line behind at
+// the seam — stable, but it means every removed section quietly donates
+// an empty line to the user's file.
+function dropLeadingNewline(text: string): string {
+  if (text.startsWith("\r\n")) return text.slice(2);
+  if (text.startsWith("\n")) return text.slice(1);
+  return text;
+}
+
+// Cut EVERY well-formed BEGIN..END pair. Returns the remaining text and
+// how many pairs were removed.
+//
+// "Every", not "the first", is a deliberate inversion of the older rule
+// ("cut the first, leave the rest, report"). That was safer when the
+// section was replaced IN PLACE; now the section is PLACED, so a pair we
+// left behind could sit below ours and override it by last-match. Extra
+// pairs still get reported by the caller — they mean manual editing.
+function cutAllPairs(
   existing: string,
-  body: string,
-): string {
-  const block = composeSection(INVARIANTS_BEGIN, body, INVARIANTS_END);
-  const beginIdx = existing.indexOf(INVARIANTS_BEGIN);
-  const endIdx = existing.indexOf(INVARIANTS_END);
-  if (beginIdx === -1 || endIdx === -1 || endIdx < beginIdx) {
-    // Markers missing or malformed — prepend canonical section.
-    if (existing.length === 0) return `${block}\n`;
-    return `${block}\n\n${existing}`;
+  markers: SectionMarkers,
+): { rest: string; cut: number } {
+  let rest = existing;
+  let cut = 0;
+  for (;;) {
+    const b = rest.indexOf(markers.begin);
+    if (b === -1) break;
+    const e = rest.indexOf(markers.end, b + markers.begin.length);
+    if (e === -1) break; // orphan BEGIN — not ours to guess at here
+    rest =
+      rest.slice(0, b) +
+      dropLeadingNewline(rest.slice(e + markers.end.length));
+    cut++;
   }
-  const before = existing.substring(0, beginIdx);
-  const afterStart = endIdx + INVARIANTS_END.length;
-  const after = existing.substring(afterStart);
-  return `${before}${block}${after}`;
+  return { rest, cut };
+}
+
+// Why the section was not brought to canonical cleanly. The caller logs
+// loudly and shows the user a notice: we will NOT guess where a damaged
+// section ended, because the text below a marker is the user's.
+export type SpliceAnomaly =
+  | "orphan-repaired"
+  | "orphan-unrepairable"
+  | "multiple-pairs";
+
+export interface SpliceResult {
+  content: string;
+  anomalies: SpliceAnomaly[];
+}
+
+// Bring one managed section to canonical:
+//   - cut every well-formed pair, wherever it sits in the file;
+//   - if a marker is orphaned, try to cut the old body by the recorded
+//     {len, sha} (§3.1.3) — and if that does not match, leave it alone
+//     and report;
+//   - place `body` at the section's assigned position (null = delete).
+//
+// Async because the repair hashes a candidate span with the same
+// calculateGitBlobSHA the fingerprints were written with.
+export async function spliceSection(args: {
+  existing: string;
+  markers: SectionMarkers;
+  // null deletes the section — e.g. a foreign plugin's file at
+  // syncConfigDir=ON, where our section must go away entirely rather
+  // than linger empty.
+  body: string | null;
+  // Fingerprint of the body WE last wrote, from the freshness store.
+  // Absent on a first run, after a state loss, or on the very first
+  // upgrade to this shape — in which case orphan repair cannot run and
+  // the damaged text is left for the user.
+  recorded?: { sha: string; len: number };
+}): Promise<SpliceResult> {
+  const { markers, body, recorded } = args;
+  const anomalies: SpliceAnomaly[] = [];
+
+  const { rest: afterPairs, cut } = cutAllPairs(args.existing, markers);
+  if (cut > 1) anomalies.push("multiple-pairs");
+
+  let rest = afterPairs;
+  if (cut === 0 && rest.includes(markers.begin)) {
+    const repaired = await repairOrphanBegin(rest, markers, recorded);
+    rest = repaired.text;
+    anomalies.push(
+      repaired.ok ? "orphan-repaired" : "orphan-unrepairable",
+    );
+  }
+
+  const user = normalizeBody(rest);
+  if (body === null) return { content: user, anomalies };
+
+  const block = composeSection(markers.begin, body, markers.end);
+  if (user === "") return { content: `${block}\n`, anomalies };
+  return {
+    content:
+      markers.placement === "top"
+        ? `${block}\n\n${user}`
+        : `${user}\n${block}\n`,
+    anomalies,
+  };
+}
+
+// Fingerprint of one section BODY: the git blob SHA over its bytes and
+// that byte count. They travel together because calculateGitBlobSHA
+// binds the length into its preimage (`blob <len>\0`), so `len` cannot
+// be forged apart from `sha`. UTF-8 bytes, deliberately — see the note
+// in invariant-state.ts.
+export async function fingerprintOf(
+  body: string,
+): Promise<{ sha: string; len: number }> {
+  const bytes = enc.encode(body);
+  const sha = await calculateGitBlobSHA(
+    bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength,
+    ) as ArrayBuffer,
+  );
+  return { sha, len: bytes.byteLength };
+}
+
+// An orphaned BEGIN (the user deleted END, or a crash truncated the
+// file) is NOT a harmless "we'll just write a fresh section": the stale
+// body stays in the file, and after we place the new section it can end
+// up overriding it. So we identify the old body by the ONE thing we
+// recorded about it — its byte length and its blob SHA — and cut exactly
+// that span.
+//
+// The measurement is over the body WITHOUT markers, which is what makes
+// this work at all: a missing END simply never enters the span.
+async function repairOrphanBegin(
+  text: string,
+  markers: SectionMarkers,
+  recorded: { sha: string; len: number } | undefined,
+): Promise<{ text: string; ok: boolean }> {
+  if (!recorded) return { text, ok: false };
+  const b = text.indexOf(markers.begin);
+  // The body starts right after the BEGIN line, i.e. past its newline.
+  const bodyStart = b + markers.begin.length + 1;
+  if (text[b + markers.begin.length] !== "\n") return { text, ok: false };
+
+  // Slice `len` UTF-8 BYTES, not characters. If the span straddles a
+  // multi-byte character the decode yields U+FFFD and the SHA will not
+  // match — which is the right answer: it was not our body.
+  const tailBytes = enc.encode(text.slice(bodyStart));
+  if (tailBytes.byteLength < recorded.len) return { text, ok: false };
+  const candidateBytes = tailBytes.slice(0, recorded.len);
+  const sha = await calculateGitBlobSHA(
+    candidateBytes.buffer.slice(
+      candidateBytes.byteOffset,
+      candidateBytes.byteOffset + candidateBytes.byteLength,
+    ) as ArrayBuffer,
+  );
+  if (sha !== recorded.sha) return { text, ok: false };
+
+  const candidate = dec.decode(candidateBytes);
+  let cutEnd = bodyStart + candidate.length;
+  // Take a trailing END too when it sits immediately after the body,
+  // which is the shape a half-written file leaves behind.
+  const afterBody = text.slice(cutEnd);
+  if (afterBody.startsWith(`\n${markers.end}`)) {
+    cutEnd += 1 + markers.end.length;
+  }
+  return {
+    text: text.slice(0, b) + dropLeadingNewline(text.slice(cutEnd)),
+    ok: true,
+  };
 }
 
 // Pure helpers for the "Push plugins data.json" toggle. Both work

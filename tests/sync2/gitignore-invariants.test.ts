@@ -12,7 +12,11 @@ import * as crypto from "crypto";
 import GitignoreInvariants, {
   INVARIANTS_BEGIN,
   INVARIANTS_END,
-  spliceInvariantBlock,
+  spliceSection,
+  fingerprintOf,
+  INVARIANTS_SECTION,
+  type SectionMarkers,
+  type SectionAnomalyReport,
   extractInvariantBlock,
   blockHasAllowLine,
 } from "../../src/sync2/gitignore-invariants";
@@ -38,6 +42,7 @@ function fixture() {
     vault: vault as unknown as import("obsidian").Vault,
     selfPluginId: SELF,
   });
+  const anomalies: SectionAnomalyReport[] = [];
   const seeds = new GitignoreSeedStore({
     vault: vault as unknown as import("obsidian").Vault,
     selfPluginId: SELF,
@@ -48,8 +53,9 @@ function fixture() {
     configDir: CONFIG_DIR,
     selfPluginId: SELF,
     seeds,
+    onAnomaly: (report) => anomalies.push(report),
   });
-  return { root, vault, state, seeds, inv };
+  return { root, vault, state, seeds, inv, anomalies };
 }
 
 const cdGitignore = (root: string) =>
@@ -64,27 +70,45 @@ const selfGitignore = (root: string) =>
 const sect = (body: string) =>
   `${INVARIANTS_BEGIN}\n${body}\n${INVARIANTS_END}`;
 
-describe("spliceInvariantBlock (pure)", () => {
-  it("replaces an existing block in place", () => {
-    const existing = `prefix\n${sect("OLD")}\nsuffix`;
-    expect(spliceInvariantBlock(existing, "NEW")).toBe(
-      `prefix\n${sect("NEW")}\nsuffix`,
-    );
+// A `final`-shaped section for the placement cases. The real FINAL
+// markers arrive with their content in A-6; what is under test here is
+// that placement is a parameter and BOTTOM works, not the rule text.
+const BOTTOM: SectionMarkers = {
+  begin: "# ===== test tail - DO NOT EDIT =====",
+  end: "# ===== end of test tail =====",
+  placement: "bottom",
+};
+const tail = (body: string) => `${BOTTOM.begin}\n${body}\n${BOTTOM.end}`;
+
+const splice = async (
+  existing: string,
+  body: string | null,
+  extra: {
+    markers?: SectionMarkers;
+    recorded?: { sha: string; len: number };
+  } = {},
+) =>
+  spliceSection({
+    existing,
+    markers: extra.markers ?? INVARIANTS_SECTION,
+    body,
+    recorded: extra.recorded,
   });
 
-  it("prepends when markers are missing", () => {
-    expect(spliceInvariantBlock("user content\n", "X")).toBe(
+describe("spliceSection (pure)", () => {
+  it("prepends when markers are missing", async () => {
+    expect((await splice("user content\n", "X")).content).toBe(
       `${sect("X")}\n\nuser content\n`,
     );
   });
 
-  it("creates fresh content when input is empty", () => {
-    expect(spliceInvariantBlock("", "Y")).toBe(`${sect("Y")}\n`);
+  it("creates fresh content when input is empty", async () => {
+    expect((await splice("", "Y")).content).toBe(`${sect("Y")}\n`);
   });
 
-  it("leaves user content above and below the block alone", () => {
+  it("leaves user content above and below the section alone", async () => {
     const existing = `# header\n\n${sect("OLD")}\n\n# footer\n*.log\n`;
-    const out = spliceInvariantBlock(existing, "NEW");
+    const out = (await splice(existing, "NEW")).content;
     expect(out).toContain("# header");
     expect(out).toContain("# footer");
     expect(out).toContain("*.log");
@@ -92,10 +116,111 @@ describe("spliceInvariantBlock (pure)", () => {
     expect(out).not.toContain("OLD");
   });
 
+  it("FORCES the placement: a section found mid-file moves to the top", async () => {
+    // The old splice replaced in place, so a section could sit anywhere.
+    // Position is now semantics (last-match-wins), so it is re-asserted
+    // every pass — which also migrates a file laid out by an older
+    // version without any dedicated migration step.
+    const existing = `prefix\n${sect("OLD")}\nsuffix\n`;
+    expect((await splice(existing, "NEW")).content).toBe(
+      `${sect("NEW")}\n\nprefix\nsuffix\n`,
+    );
+  });
+
+  it("placement bottom puts the section last, below every user rule", async () => {
+    const out = (
+      await splice(`*.log\n!keep.log\n`, "FINAL", { markers: BOTTOM })
+    ).content;
+    expect(out).toBe(`*.log\n!keep.log\n\n${tail("FINAL")}\n`);
+    expect(out.indexOf("!keep.log")).toBeLessThan(out.indexOf(BOTTOM.begin));
+  });
+
+  it("body=null deletes the section and leaves nothing behind", async () => {
+    const existing = `user\n\n${tail("*")}\n`;
+    const out = (await splice(existing, null, { markers: BOTTOM })).content;
+    expect(out).toBe("user\n");
+    expect(out).not.toContain(BOTTOM.begin);
+  });
+
+  it("is idempotent — a second pass changes nothing", async () => {
+    const once = (await splice("*.log\n", "B", { markers: BOTTOM })).content;
+    const twice = (await splice(once, "B", { markers: BOTTOM })).content;
+    expect(twice).toBe(once);
+    // ...and so is the top placement, where the seam is above.
+    const t1 = (await splice("*.log\n", "B")).content;
+    expect((await splice(t1, "B")).content).toBe(t1);
+  });
+
+  it("cuts EVERY pair, not just the first, and says so", async () => {
+    // A leftover pair would sit below ours and override it — the exact
+    // failure the old "cut the first, report the rest" rule allowed once
+    // the section became placed rather than replaced in place.
+    const existing = `${sect("ONE")}\nmiddle\n${sect("TWO")}\ntail\n`;
+    const out = await splice(existing, "NEW");
+    expect(out.content).toBe(`${sect("NEW")}\n\nmiddle\ntail\n`);
+    expect(out.content).not.toContain("ONE");
+    expect(out.content).not.toContain("TWO");
+    expect(out.anomalies).toContain("multiple-pairs");
+  });
+
+  it("END before BEGIN is treated as broken markers, user text intact", async () => {
+    const existing = `${INVARIANTS_END}\nstray\n*.user\n`;
+    const out = await splice(existing, "NEW");
+    expect(out.content).toContain("*.user");
+    expect(out.content).toContain("stray");
+    expect(out.content.indexOf(INVARIANTS_BEGIN)).toBe(0);
+  });
+
+  describe("orphaned BEGIN (END deleted or truncated away)", () => {
+    // Prepending a fresh section is NOT a safe default here: the stale
+    // body stays in the file and, once the new section is placed, can
+    // override it. So the old body is identified by the one thing we
+    // recorded about it — byte length + blob SHA — and cut exactly.
+    const OLD = "# old\n*.stale";
+
+    it("with a recorded fingerprint: the stale body is cut, no duplicates", async () => {
+      const recorded = await fingerprintOf(OLD);
+      const existing = `${INVARIANTS_BEGIN}\n${OLD}\n# user keeps this\n`;
+      const out = await splice(existing, "NEW", { recorded });
+      expect(out.content).toBe(`${sect("NEW")}\n\n# user keeps this\n`);
+      expect(out.content).not.toContain("*.stale");
+      expect(out.anomalies).toContain("orphan-repaired");
+    });
+
+    it("without a fingerprint: we do NOT guess — user text and the damage both stay", async () => {
+      const existing = `${INVARIANTS_BEGIN}\n${OLD}\n# user keeps this\n`;
+      const out = await splice(existing, "NEW");
+      expect(out.content).toContain("# user keeps this");
+      expect(out.content).toContain("*.stale"); // untouched, reported instead
+      expect(out.anomalies).toContain("orphan-unrepairable");
+    });
+
+    it("a fingerprint that does not match declines the repair", async () => {
+      const recorded = await fingerprintOf("# something else entirely");
+      const existing = `${INVARIANTS_BEGIN}\n${OLD}\n# user keeps this\n`;
+      const out = await splice(existing, "NEW", { recorded });
+      expect(out.content).toContain("*.stale");
+      expect(out.anomalies).toContain("orphan-unrepairable");
+    });
+
+    it("the span is measured in UTF-8 BYTES, not characters", async () => {
+      // The reason this is pinned even though our own content is ASCII:
+      // the body is adjacent to the USER's content, which is not. Under
+      // a character-based length the span would end early, the SHA would
+      // never match, and the repair would silently never fire.
+      const body = "# наш блок\n*.stale";
+      const recorded = await fingerprintOf(body);
+      expect(recorded.len).toBeGreaterThan(body.length); // multi-byte
+      const existing = `${INVARIANTS_BEGIN}\n${body}\n# user keeps this\n`;
+      const out = await splice(existing, "NEW", { recorded });
+      expect(out.content).toBe(`${sect("NEW")}\n\n# user keeps this\n`);
+      expect(out.anomalies).toContain("orphan-repaired");
+    });
+  });
+
   it("the markers are ASCII — no em dash can creep back in", () => {
-    // DOT-FILES §3.1.3: the four marker lines are frozen, and since
-    // 2026-09-21 they are ASCII. A non-ASCII character here would also
-    // put UTF-8 bytes back into the length the repair path measures.
+    // DOT-FILES §3.1.3: the marker lines are frozen, and since
+    // 2026-09-21 they are ASCII.
     for (const m of [INVARIANTS_BEGIN, INVARIANTS_END]) {
       expect(m).toMatch(/^[\x20-\x7e]+$/);
       expect(m).toContain("git-easy-sync");

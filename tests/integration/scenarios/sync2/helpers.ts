@@ -206,6 +206,9 @@ export async function createSync2Client(
     configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
     seeds: gitignoreSeeds,
+    // Anomalies are not the subject here; surfacing them would only
+    // add noise. A real reporter lives in main.ts (DOT-FILES §3.1.3).
+    onAnomaly: () => {},
   });
 
   // The Deleted bin — always wired into the fixture so a delete
