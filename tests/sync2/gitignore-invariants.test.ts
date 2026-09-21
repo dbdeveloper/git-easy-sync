@@ -22,6 +22,11 @@ import GitignoreInvariants, {
 } from "../../src/sync2/gitignore-invariants";
 import InvariantStateStore from "../../src/sync2/invariant-state";
 import GitignoreSeedStore from "../../src/sync2/gitignore-seeds";
+import FileBaselinesStore from "../../src/sync2/file-baselines";
+import {
+  AtomicWriteRecovery,
+  stagingPathFor,
+} from "../../src/sync2/atomic-write";
 import { Vault } from "../../mock-obsidian";
 import { calculateGitBlobSHA } from "../../src/utils";
 
@@ -633,5 +638,86 @@ describe("§8.0 seed markers", () => {
     expect(reopened.get(".gitignore")).toBe(sha);
     expect(reopened.matches(".gitignore", sha!)).toBe(true);
     expect(reopened.matches(".gitignore", "deadbeef")).toBe(false);
+  });
+});
+
+describe("managed .gitignore writes are crash-safe (DOT-FILES §3.1.3)", () => {
+  // A .gitignore is not an ordinary data file: a truncated one DEFINES
+  // SCOPE. Lose the tail of the root file and the user's `!` opt-ins go
+  // with it, so paths silently leave sync. Hence the write goes through
+  // atomicWriteFile, and an interrupted one is forward-completed by the
+  // onload sweep BEFORE the first enforce() ever reads the file.
+  let f: ReturnType<typeof fixture>;
+
+  beforeEach(async () => {
+    f = fixture();
+    await f.state.load();
+  });
+
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  it("no raw adapter.write is left behind: staging appears and is cleaned up", async () => {
+    // mock-obsidian exposes `adapter` as a GETTER that builds a fresh
+    // object each access, so assigning onto it is lost. Shadow the
+    // getter with an own property returning one wrapped adapter.
+    const seen: string[] = [];
+    const real = f.vault.adapter;
+    const wrapped = {
+      ...real,
+      writeBinary: async (p: string, b: ArrayBuffer) => {
+        seen.push(p);
+        return real.writeBinary(p, b);
+      },
+    };
+    Object.defineProperty(f.vault, "adapter", { get: () => wrapped });
+
+    await f.inv.enforce();
+
+    // The root file was staged under .ges-tmp before being renamed into
+    // place — the proof the crash-safe path ran at all.
+    expect(seen).toContain(stagingPathFor(".gitignore", "tmp"));
+    // ...and nothing was left lying around.
+    expect(fs.existsSync(path.join(f.root, ".gitignore.ges-tmp"))).toBe(false);
+    expect(fs.existsSync(path.join(f.root, ".gitignore.ges-bak"))).toBe(false);
+  });
+
+  it("a write interrupted mid-flight is forward-completed, and enforce() then sees a WHOLE file", async () => {
+    await f.inv.enforce();
+    const rootPath = path.join(f.root, ".gitignore");
+    const canonical = fs.readFileSync(rootPath, "utf8");
+    const withUserRule = `${canonical}\n!.editorconfig\n`;
+
+    // Simulate a crash between "rename original → .ges-bak" and
+    // "rename .ges-tmp → original": the target path does not exist at
+    // all, and the two halves of the write sit beside it.
+    fs.writeFileSync(path.join(f.root, ".gitignore.ges-bak"), canonical);
+    fs.writeFileSync(path.join(f.root, ".gitignore.ges-tmp"), withUserRule);
+    fs.rmSync(rootPath);
+
+    const baselines = new FileBaselinesStore({
+      vault: f.vault as unknown as import("obsidian").Vault,
+      selfPluginId: SELF,
+    });
+    await new AtomicWriteRecovery(
+      f.vault as unknown as import("obsidian").Vault,
+      baselines,
+    ).sweep();
+
+    // Whatever the sweep chose, the file exists and is not truncated:
+    // the invariant section is intact, markers and all.
+    const recovered = fs.readFileSync(rootPath, "utf8");
+    expect(recovered).toContain(INVARIANTS_BEGIN);
+    expect(recovered).toContain(INVARIANTS_END);
+    expect(recovered).toContain("*.conflict-from-*");
+
+    // And the pass that follows reads a whole file, so the user's rule
+    // below our section survives rather than being re-seeded over.
+    await f.inv.enforce();
+    const after = fs.readFileSync(rootPath, "utf8");
+    expect(after).toContain(INVARIANTS_BEGIN);
+    expect(after).toContain("*.log"); // recommended defaults still there
+    expect(fs.existsSync(path.join(f.root, ".gitignore.ges-tmp"))).toBe(false);
   });
 });

@@ -9,6 +9,7 @@ import InvariantStateStore, {
   SectionId,
 } from "./invariant-state";
 import GitignoreSeedStore from "./gitignore-seeds";
+import { atomicWriteFile } from "./atomic-write";
 
 // Markers of the managed `invariants` section. Editing anything between
 // BEGIN and END on disk triggers a rewrite back to canonical on the next
@@ -541,9 +542,39 @@ export default class GitignoreInvariants {
     await this.state.set(path, record);
   }
 
+  // Every write to a managed .gitignore goes through the crash-safe
+  // protocol (DOT-FILES §3.1.3). These are not ordinary data files:
+  // a truncated one DEFINES SCOPE. A cut-short root file loses the
+  // user's `!` opt-ins, so paths silently leave sync; a cut-short
+  // configDir file loses the kill-switch. Nothing is destroyed (Pass 2
+  // does store.remove, not a delete), but the engine behaves
+  // unpredictably until the next enforce() — and that class of risk has
+  // no business being here for the sake of one call.
+  //
+  // In practice this always takes the rename strategy: atomicWriteFile's
+  // modify-in-place fast path needs a TFile, and Obsidian does not index
+  // dotfiles — the same blindness that makes a separate dot-space walk
+  // necessary at all. So there is also no interaction with open editors.
+  //
+  // Recovery ordering is already right and must stay that way:
+  // AtomicWriteRecovery.sweep (main.ts) runs before any sync operation,
+  // hence before the first enforce(), so an interrupted write is
+  // forward-completed rather than read as "the user damaged the block".
+  //
+  // ⚠️ NOT the state file in .runtime/ — that one stays a plain write
+  // on purpose (§3.1.2): an unreadable state file already reads as
+  // empty, so atomicity buys nothing there.
   private async write(path: string, content: string): Promise<void> {
     await this.ensureParentDir(path);
-    await this.vault.adapter.write(path, content);
+    const bytes = enc.encode(content);
+    await atomicWriteFile(
+      this.vault,
+      path,
+      bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer,
+    );
   }
 
   private async ensureParentDir(filePath: string): Promise<void> {
