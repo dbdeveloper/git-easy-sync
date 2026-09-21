@@ -74,17 +74,47 @@ function composeSection(begin: string, body: string, end: string): string {
 const DATA_JSON_BLOCK_LINE = "plugins/*/data.json";
 const DATA_JSON_ALLOW_LINE = "!plugins/*/data.json";
 
-// BODY (no markers) of the managed section in <configDir>/.gitignore. The
-// section is rewritten by spliceInvariantBlock on every enforce() and on
-// every toggle, so this function is the SINGLE place that decides what the
-// body looks like — no duplication, no per-call drift.
-function configDirInvariantsBody(opts: {
+// BODY (no markers) of the managed `final` section in
+// <configDir>/.gitignore — the SINGLE place that decides what it looks
+// like, so there is no duplication and no per-call drift.
+//
+// There is no `invariants` section in this file at all (DOT-FILES
+// §3.1.1): everything we write here protects data, and nothing in it is
+// a default the user is invited to overrule. Being last is what makes
+// that true — and it is also what closes both pinned toggle defects
+// (§3.4.1), since our data.json line now outranks both the recommended
+// catch-all `plugins/*/*` above it and any relic allow-line from an
+// older install.
+//
+// The two `!` lines re-admit control files at their OWN node: root `.*`
+// catches `.gitignore` by basename at any depth, and re-admitting the
+// DIRECTORY does not rescue a dot-FILE inside it (measured — §10 probe
+// 4). Both are ANCHORED: bare `!.gitignore` would also resurrect
+// `<configDir>/snippets/.gitignore`, a direct D6 violation.
+function configDirFinalBody(opts: {
   pushPluginsDataJson: boolean;
+  syncConfigDir: boolean;
 }): string {
+  if (!opts.syncConfigDir) {
+    // syncConfigDir=OFF. `/.gitignore` takes this file itself out of
+    // sync (so the OFF decision does not travel), `*` silences the whole
+    // subtree. Purely for git consistency: the hardcoded configDir gate
+    // in isSyncable cuts all of <configDir>/ regardless of this text.
+    return `# Editing this block triggers a rewrite to canonical on next load.
+
+# syncConfigDir is OFF on this device.
+/.gitignore
+*`;
+  }
   const dataJsonLine = opts.pushPluginsDataJson
     ? DATA_JSON_ALLOW_LINE
     : DATA_JSON_BLOCK_LINE;
   return `# Editing this block triggers a rewrite to canonical on next load.
+
+# Control files, re-admitted at their own node (anchored - bare forms
+# would also resurrect nested ones).
+!/.gitignore
+!/plugins/*/.gitignore
 
 # Per-device state - never propagate between machines.
 workspace.json
@@ -93,15 +123,27 @@ community-plugins.json
 ${dataJsonLine}`;
 }
 
+// BODY of our `final` section inside a THIRD-PARTY plugin's .gitignore.
+// null = the section must not be there at all.
+//
+// Only the OFF silencer ever goes here. Their node speaks last for
+// everything under their folder, so an allowlist of theirs (`!main.js`
+// and friends) would otherwise survive the `*` we put in <configDir>.
+function foreignPluginFinalBodyFor(syncConfigDir: boolean): string | null {
+  if (syncConfigDir) return null;
+  return `# syncConfigDir is OFF on this device (git-easy-sync).
+*`;
+}
+
 // Recommended defaults seeded ONLY when sync2 first creates
 // <configDir>/.gitignore. Pre-existing files keep the user's content
-// untouched below the invariant block.
+// untouched; our managed section goes at the END, below all of it.
 const CONFIG_DIR_RECOMMENDED_DEFAULTS = `# Recommended defaults - feel free to edit.
 
 # Plugin folder allowlist - by default sync only the four canonical
 # files (main.js, manifest.json, styles.css; data.json is governed
 # by the settings-tab toggle "Push plugins data.json to GitHub",
-# which lives in the invariant block above).
+# which lives in the managed block at the END of this file).
 plugins/*/*
 !plugins/*/
 !plugins/*/main.js
@@ -111,20 +153,72 @@ plugins/*/*
 // Canonical content of <configDir>/plugins/<self>/.gitignore. Unlike
 // the configDir gitignore, the plugin owns this file outright — full
 // rewrite each time, no user content carried over.
-const SELF_PLUGIN_GITIGNORE = `*
+function selfPluginGitignore(syncConfigDir: boolean): string {
+  const allowlist = `*
 !main.js
 !manifest.json
 !styles.css
 !.gitignore
 `;
+  if (syncConfigDir) return allowlist;
+  // Our own node speaks last for our own folder, so without this the
+  // allowlist above keeps main.js visible to the matcher even with `*`
+  // in <configDir> (§3.1.1). Same silencer the third-party files get,
+  // but here it is simply part of the constant we own outright.
+  return `${allowlist}${composeSection(
+    FINAL_BEGIN,
+    foreignPluginFinalBodyFor(false) as string,
+    FINAL_END,
+  )}\n`;
+}
 
-// BODY (no markers) of the managed section in the ROOT <vault>/.gitignore
-// (Stage 6.5). Forces conflict-sibling files (`<base>.conflict-from-<label>-
-// <iso-no-colons>.<ext>`) to never be pushed: they're per-device
-// markers, propagating them across devices would create feedback
-// loops where one device's deferred state shows up on others as
-// unrelated user files. Splice-on-edit semantics, same as configDir.
+// BODY of the `invariants` section at the TOP of <vault>/.gitignore:
+// the dot-hide policy (DOT-FILES §3.1, D1).
+//
+// ⚠️ This section is OVERRIDABLE ON PURPOSE, and its position is what
+// makes it so. `!`-rules the user writes BELOW it win by last-match —
+// that is the entire opt-in mechanism for dot-space (D2 source 3), the
+// set §4.2 builds from, and the per-device control file of D6a.
+// Measured 2026-09-21: moving these three lines to the bottom silently
+// kills all three at once.
+//
+//   `.*`  hides any dot-BASENAME at any depth
+//   `.*/` hides dot-DIRECTORIES (redundant - `.*` catches those too;
+//         kept for explicitness, §10 probe 5-E)
+//   `!/.gitignore` ANCHORED to root, so only the root control file
+//         comes back. NOT `!.gitignore` (would un-hide `notes/.gitignore`
+//         and break D6) and NOT `!./.gitignore` (matches nothing at all).
 const ROOT_INVARIANTS_BODY = `# Editing this block triggers a rewrite to canonical on next load.
+# Rules BELOW this block override it - that is how you opt a dot-file
+# or an anchored dot-directory back into sync.
+
+# Everything starting with a dot is invisible to sync by default.
+.*
+.*/
+
+# ...except this file, the one that decides the rest.
+!/.gitignore`;
+
+// BODY of the `final` section at the END of <vault>/.gitignore: the
+// rules that are NOT up for discussion (DOT-FILES §3.1).
+//
+// A `!`-rule of the user's must not be able to resurrect any of these,
+// which is precisely why they live at the bottom rather than beside the
+// dot-hide policy above. Conflict siblings are per-device markers, and
+// propagating them creates feedback loops where one device's deferred
+// state lands on the others as unrelated files; the staging artifacts
+// are transient files of the crash-safe write protocol.
+//
+// `!<configDir>/` re-admits the config subtree UNCONDITIONALLY — it does
+// NOT follow the syncConfigDir toggle. Switching that off acts one level
+// down, inside <configDir>/.gitignore and the plugin files, so both root
+// sections stay constants and all the state lives in one place.
+function rootFinalBody(configDir: string): string {
+  return `# Editing this block triggers a rewrite to canonical on next load.
+# These rules are final - nothing below or above overrides them.
+
+# The config subtree, governed by its own .gitignore files from here on.
+!${configDir}/
 
 # Conflict-resolver sibling files - per-device markers that must
 # never propagate via sync.
@@ -135,10 +229,11 @@ const ROOT_INVARIANTS_BODY = `# Editing this block triggers a rewrite to canonic
 # onload recovery sweep cleans them up. Must never reach GitHub.
 *.ges-tmp*
 *.ges-bak*`;
+}
 
 // Recommended root-level defaults seeded ONLY when sync2 first
-// creates <vault>/.gitignore. Pre-existing files keep user content
-// untouched below the invariant block.
+// creates <vault>/.gitignore. They sit BETWEEN the two managed
+// sections: overridable like everything in the user's zone.
 const ROOT_RECOMMENDED_DEFAULTS = `# Recommended defaults - feel free to edit.
 
 # Logs (covers the plugin's own <plugin-id>.log at the vault root
@@ -199,6 +294,10 @@ export interface GitignoreInvariantsDeps {
   // FOLLOW this pass, inside the same commit or drain, would answer from
   // the rules we just replaced.
   gi: GitignoreMatcherCache;
+  // Per-device configDir gate, read LIVE (a getter, not a boolean) so
+  // flipping the settings checkbox takes effect on the very next pass
+  // without re-instantiating anything. Same shape ChangeDetector uses.
+  syncConfigDir: () => boolean;
 }
 
 export interface GitignoreMatcherCache {
@@ -228,6 +327,8 @@ export default class GitignoreInvariants {
   private readonly onAnomaly: (report: SectionAnomalyReport) => void;
   private readonly gi: GitignoreMatcherCache;
   private readonly pluginsDir: string;
+  private readonly syncConfigDir: () => boolean;
+  private readonly configDir: string;
 
   constructor(deps: GitignoreInvariantsDeps) {
     this.vault = deps.vault;
@@ -235,6 +336,8 @@ export default class GitignoreInvariants {
     this.seeds = deps.seeds;
     this.onAnomaly = deps.onAnomaly;
     this.gi = deps.gi;
+    this.syncConfigDir = deps.syncConfigDir;
+    this.configDir = deps.configDir;
     this.configDirGitignorePath = `${deps.configDir}/.gitignore`;
     this.pluginsDir = `${deps.configDir}/plugins`;
     this.selfPluginGitignorePath = `${this.pluginsDir}/${deps.selfPluginId}/.gitignore`;
@@ -319,8 +422,8 @@ export default class GitignoreInvariants {
     }
   }
 
-  // True iff the allow line is currently inside the invariant
-  // block of <configDir>/.gitignore. The block is the only place
+  // True iff the allow line is currently inside the managed `final`
+  // section of <configDir>/.gitignore. That section is the only place
   // we ever write that line — anywhere else in the file would be
   // user-territory the toggle deliberately ignores. Returns false
   // on missing file (safe-by-default position).
@@ -332,7 +435,7 @@ export default class GitignoreInvariants {
     const content = await this.vault.adapter.read(
       this.configDirGitignorePath,
     );
-    const block = extractInvariantBlock(content);
+    const block = extractSection(content, FINAL_SECTION);
     if (block === null) return false;
     return blockHasAllowLine(block);
   }
@@ -354,11 +457,14 @@ export default class GitignoreInvariants {
     }
     const path = this.configDirGitignorePath;
     const before = await this.vault.adapter.read(path);
-    const body = configDirInvariantsBody({ pushPluginsDataJson: enabled });
-    const after = await this.spliceOne(path, before, body);
+    const body = configDirFinalBody({
+      pushPluginsDataJson: enabled,
+      syncConfigDir: this.syncConfigDir(),
+    });
+    const after = await this.spliceOne(path, before, body, FINAL_SECTION);
     if (after === before) return;
     await this.write(path, after);
-    await this.refreshState(path, { invariants: body });
+    await this.refreshState(path, { final: body });
   }
 
   // Called by Sync2Manager.recordSync after a successful self-push of
@@ -397,22 +503,24 @@ export default class GitignoreInvariants {
   ): Promise<void> {
     const path = this.configDirGitignorePath;
 
+    const finalBodyFor = (pushPluginsDataJson: boolean) =>
+      configDirFinalBody({
+        pushPluginsDataJson,
+        syncConfigDir: this.syncConfigDir(),
+      });
+
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
-      // Fresh install: file doesn't exist. Seed the full template
-      // with the requested toggle state (defaults to OFF when the
-      // caller didn't supply one).
+      // Fresh install: file doesn't exist. Seed the recommended
+      // defaults, then our section BELOW them — the order that makes
+      // our data.json line outrank the catch-all they contain.
       const seedPush = desiredPushPluginsDataJson ?? false;
-      const block = composeSection(
-        INVARIANTS_BEGIN,
-        configDirInvariantsBody({ pushPluginsDataJson: seedPush }),
-        INVARIANTS_END,
-      );
-      const content = `${block}\n\n${CONFIG_DIR_RECOMMENDED_DEFAULTS}\n`;
+      const body = finalBodyFor(seedPush);
+      const content =
+        `${CONFIG_DIR_RECOMMENDED_DEFAULTS}\n\n` +
+        `${composeSection(FINAL_BEGIN, body, FINAL_END)}\n`;
       await this.write(path, content);
-      await this.refreshState(path, {
-        invariants: configDirInvariantsBody({ pushPluginsDataJson: seedPush }),
-      });
+      await this.refreshState(path, { final: body });
       await this.noteSeedState(path, content);
       return;
     }
@@ -432,44 +540,48 @@ export default class GitignoreInvariants {
     // is still the right one.
     const wanted =
       desiredPushPluginsDataJson === undefined
-        ? [true, false].map((pushPluginsDataJson) =>
-            configDirInvariantsBody({ pushPluginsDataJson }),
-          )
-        : [
-            configDirInvariantsBody({
-              pushPluginsDataJson: desiredPushPluginsDataJson,
-            }),
-          ];
+        ? [true, false].map(finalBodyFor)
+        : [finalBodyFor(desiredPushPluginsDataJson)];
     for (const candidate of wanted) {
-      if (await this.isFresh(path, stat, { invariants: candidate })) return;
+      if (await this.isFresh(path, stat, { final: candidate })) return;
     }
 
     const content = await this.vault.adapter.read(path);
 
-    // The block's "push plugins data.json" toggle survives this
-    // rewrite. If the caller asked for a specific state, use it;
-    // otherwise read whatever the user (or a peer device, via a
-    // synced gitignore) put in the existing block. This is the
-    // mechanism that lets the toggle stay shared cross-device:
-    // the gitignore is the only source of truth.
+    // The "push plugins data.json" toggle survives this rewrite. If the
+    // caller asked for a specific state, use it; otherwise read whatever
+    // the user (or a peer device, via a synced gitignore) put in the
+    // existing section. This is the mechanism that keeps the toggle
+    // shared cross-device: the gitignore is the only source of truth.
     let pushPluginsDataJson: boolean;
     if (desiredPushPluginsDataJson !== undefined) {
       pushPluginsDataJson = desiredPushPluginsDataJson;
     } else {
-      const existingBlock = extractInvariantBlock(content);
-      pushPluginsDataJson =
-        existingBlock !== null && blockHasAllowLine(existingBlock);
+      const existing = extractSection(content, FINAL_SECTION);
+      pushPluginsDataJson = existing !== null && blockHasAllowLine(existing);
     }
-    const body = configDirInvariantsBody({ pushPluginsDataJson });
-    const fixed = await this.spliceOne(path, content, body);
+    const body = finalBodyFor(pushPluginsDataJson);
+
+    // Two splices, and the order matters: drop any `invariants` section
+    // an older version left at the TOP of this file first, then place
+    // ours at the bottom. Leaving the old one would be worse than
+    // useless — its per-device lines would still be in force, above the
+    // section that is supposed to be the only authority here.
+    const withoutOld = await this.spliceOne(path, content, null);
+    const fixed = await this.spliceOne(
+      path,
+      withoutOld,
+      body,
+      FINAL_SECTION,
+    );
     if (fixed === content) {
       // Nothing to change on disk; just refresh the cache.
-      await this.refreshState(path, { invariants: body });
+      await this.refreshState(path, { final: body });
       await this.noteSeedState(path, content);
       return;
     }
     await this.write(path, fixed);
-    await this.refreshState(path, { invariants: body });
+    await this.refreshState(path, { final: body });
     await this.noteSeedState(path, fixed);
   }
 
@@ -479,55 +591,72 @@ export default class GitignoreInvariants {
   private async enforceRootGitignore(): Promise<void> {
     const path = this.rootGitignorePath;
 
+    const finalBody = rootFinalBody(this.configDir);
+    const sections = {
+      invariants: ROOT_INVARIANTS_BODY,
+      final: finalBody,
+    };
+
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
-      // Fresh install: file doesn't exist. Seed invariant block + a
-      // small set of recommended OS/editor noise defaults so the user
-      // gets a sensible starting point. Pre-existing root gitignores
-      // (e.g. user already had one) skip this branch entirely.
-      const content = `${composeSection(INVARIANTS_BEGIN, ROOT_INVARIANTS_BODY, INVARIANTS_END)}\n\n${ROOT_RECOMMENDED_DEFAULTS}\n`;
+      // Fresh install: dot-hide policy on top, recommended OS/editor
+      // noise defaults in the middle (the user's zone), the final rules
+      // at the bottom.
+      const content =
+        `${composeSection(INVARIANTS_BEGIN, ROOT_INVARIANTS_BODY, INVARIANTS_END)}\n\n` +
+        `${ROOT_RECOMMENDED_DEFAULTS}\n\n` +
+        `${composeSection(FINAL_BEGIN, finalBody, FINAL_END)}\n`;
       await this.write(path, content);
-      await this.refreshState(path, { invariants: ROOT_INVARIANTS_BODY });
+      await this.refreshState(path, sections);
       await this.noteSeedState(path, content);
       return;
     }
 
     // Same freshness gate as configDir — see the comment there for why
-    // the fingerprint half is load-bearing (a plugin upgrade changes
-    // ROOT_INVARIANTS_BODY while the file on disk never moves).
-    if (await this.isFresh(path, stat, { invariants: ROOT_INVARIANTS_BODY })) {
-      return;
-    }
+    // the fingerprint half is load-bearing (a plugin upgrade changes a
+    // body while the file on disk never moves).
+    if (await this.isFresh(path, stat, sections)) return;
 
     const content = await this.vault.adapter.read(path);
 
-    const fixed = await this.spliceOne(path, content, ROOT_INVARIANTS_BODY);
+    // Top section first, then bottom. The user's rules end up between
+    // them, which is exactly the point: they override the dot-hide
+    // policy above and cannot touch the final rules below.
+    const withTop = await this.spliceOne(path, content, ROOT_INVARIANTS_BODY);
+    const fixed = await this.spliceOne(
+      path,
+      withTop,
+      finalBody,
+      FINAL_SECTION,
+    );
     if (fixed === content) {
-      await this.refreshState(path, { invariants: ROOT_INVARIANTS_BODY });
+      await this.refreshState(path, sections);
       await this.noteSeedState(path, content);
       return;
     }
     await this.write(path, fixed);
-    await this.refreshState(path, { invariants: ROOT_INVARIANTS_BODY });
+    await this.refreshState(path, sections);
     await this.noteSeedState(path, fixed);
   }
 
   private async enforceSelfPluginGitignore(): Promise<void> {
     const path = this.selfPluginGitignorePath;
+    const canonical = selfPluginGitignore(this.syncConfigDir());
 
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
-      await this.write(path, SELF_PLUGIN_GITIGNORE);
+      await this.write(path, canonical);
       await this.refreshState(path);
       return;
     }
 
-    // Always read+compare against the canonical constant. No mtime
-    // short-circuit, so plugin upgrades that change
-    // SELF_PLUGIN_GITIGNORE reach disk even when the file mtime
-    // hasn't moved.
+    // Always read+compare against the canonical constant. No freshness
+    // short-circuit here: the file is ~80 bytes, so the read costs
+    // nothing, and skipping it would need a fingerprint of the WHOLE
+    // file rather than of a section — a different shape than the record
+    // holds, for no gain.
     const content = await this.vault.adapter.read(path);
-    if (content === SELF_PLUGIN_GITIGNORE) {
+    if (content === canonical) {
       // Already canonical — refresh cache only.
       await this.refreshState(path);
       return;
@@ -535,7 +664,7 @@ export default class GitignoreInvariants {
 
     // Sync2 owns this file outright — overwrite anything the user (or
     // anything else) wrote into it.
-    await this.write(path, SELF_PLUGIN_GITIGNORE);
+    await this.write(path, canonical);
     await this.refreshState(path);
   }
 
@@ -553,18 +682,27 @@ export default class GitignoreInvariants {
   // data.json toggle line, and EMPTY for anything we do not seed
   // (notably <self>/.gitignore, a constant that never negotiates).
   private canonicalSeeds(path: string): string[] {
-    const section = (body: string) =>
+    const top = (body: string) =>
       composeSection(INVARIANTS_BEGIN, body, INVARIANTS_END);
+    const bottom = (body: string) =>
+      composeSection(FINAL_BEGIN, body, FINAL_END);
     if (path === this.rootGitignorePath) {
       return [
-        `${section(ROOT_INVARIANTS_BODY)}\n\n${ROOT_RECOMMENDED_DEFAULTS}\n`,
+        `${top(ROOT_INVARIANTS_BODY)}\n\n` +
+          `${ROOT_RECOMMENDED_DEFAULTS}\n\n` +
+          `${bottom(rootFinalBody(this.configDir))}\n`,
       ];
     }
     if (path === this.configDirGitignorePath) {
       return [true, false].map(
         (pushPluginsDataJson) =>
-          `${section(configDirInvariantsBody({ pushPluginsDataJson }))}` +
-          `\n\n${CONFIG_DIR_RECOMMENDED_DEFAULTS}\n`,
+          `${CONFIG_DIR_RECOMMENDED_DEFAULTS}\n\n` +
+          `${bottom(
+            configDirFinalBody({
+              pushPluginsDataJson,
+              syncConfigDir: this.syncConfigDir(),
+            }),
+          )}\n`,
       );
     }
     return [];
@@ -613,10 +751,9 @@ export default class GitignoreInvariants {
   }
 
   // Desired body of our section inside a FOREIGN plugin's .gitignore.
-  // null = the section must not be there at all. A-6 gives this the
-  // syncConfigDir=OFF silencer.
+  // null = the section must not be there at all.
   private foreignPluginFinalBody(): string | null {
-    return null;
+    return foreignPluginFinalBodyFor(this.syncConfigDir());
   }
 
   // Cheap freshness gate (§3.1.2): skip the read and the hashing when
@@ -980,16 +1117,19 @@ async function repairOrphanBegin(
 // the user wrote in their recommended-defaults area or below is
 // theirs to keep.
 
-// Extract the body of the invariant block from `fileContent`
-// (everything between INVARIANTS_BEGIN and INVARIANTS_END,
-// markers excluded). Returns null when the markers are missing or
-// malformed — the caller treats that as "toggle is OFF, the file
-// will be re-seeded with the canonical block on the next enforce".
-export function extractInvariantBlock(fileContent: string): string | null {
-  const beginIdx = fileContent.indexOf(INVARIANTS_BEGIN);
-  const endIdx = fileContent.indexOf(INVARIANTS_END);
+// Extract the body of one managed section from `fileContent`
+// (everything between its BEGIN and END, markers excluded). Returns
+// null when the markers are missing or malformed — the caller treats
+// that as "toggle is OFF, the file will be re-seeded with the canonical
+// section on the next enforce".
+export function extractSection(
+  fileContent: string,
+  markers: SectionMarkers,
+): string | null {
+  const beginIdx = fileContent.indexOf(markers.begin);
+  const endIdx = fileContent.indexOf(markers.end);
   if (beginIdx === -1 || endIdx === -1 || endIdx < beginIdx) return null;
-  return fileContent.substring(beginIdx + INVARIANTS_BEGIN.length, endIdx);
+  return fileContent.substring(beginIdx + markers.begin.length, endIdx);
 }
 
 // Returns the toggle state encoded in `blockContent`:

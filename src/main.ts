@@ -1022,6 +1022,10 @@ export default class GitHubSyncPlugin extends Plugin {
       // after each write, so the isSyncable calls that follow in the
       // SAME commit/drain do not answer from the rules we replaced.
       gi,
+      // Per-device gate, read live: the managed section's content
+      // depends on it (DOT-FILES §3.1.1), so flipping the checkbox has
+      // to change what the next pass writes.
+      syncConfigDir: () => this.settings.syncConfigDir ?? true,
       // DOT-FILES §3.1.3. Everything here is logged; only the case we
       // cannot fix ourselves reaches the user, because only they can
       // finish it — we refuse to guess where a damaged section ended,

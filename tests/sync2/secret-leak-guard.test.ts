@@ -128,6 +128,7 @@ function makeFixture(): Fixture {
     }),
     // Anomalies are not the subject here; a real reporter lives in
     // main.ts (DOT-FILES §3.1.3).
+    syncConfigDir: () => true,
     gi: { invalidate: () => {} },
     onAnomaly: () => {},
   });
@@ -416,8 +417,8 @@ describe("L2/L5 — the configDir default for OTHER plugins is a user-flippable 
     ).toBe(true);
   });
 
-  it.fails(
-    "DEFECT (pinned): ON is a NO-OP whenever the recommended catch-all is present",
+  it(
+    "ON is honoured even with the recommended catch-all present (was: DEFECT, closed 2026-09-22)",
     async () => {
       // The settings toggle writes `!plugins/*/data.json` INSIDE the
       // invariant block at the top of the file. The recommended
@@ -609,8 +610,8 @@ plugins/*/*
     ).toBe(false);
   });
 
-  it.fails(
-    "WART (pinned): relic WITHOUT the catch-all resurrects the ON state for third-party data.json",
+  it(
+    "a relic allow-line no longer resurrects the ON state (was: WART, closed 2026-09-22)",
     async () => {
       // A vault whose <configDir>/.gitignore pre-existed when the OLD
       // plugin first ran got only the invariant block prepended — the

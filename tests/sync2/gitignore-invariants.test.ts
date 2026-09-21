@@ -19,7 +19,8 @@ import GitignoreInvariants, {
   FINAL_END,
   type SectionMarkers,
   type SectionAnomalyReport,
-  extractInvariantBlock,
+  extractSection,
+  FINAL_SECTION,
   blockHasAllowLine,
 } from "../../src/sync2/gitignore-invariants";
 import InvariantStateStore from "../../src/sync2/invariant-state";
@@ -30,12 +31,13 @@ import {
   stagingPathFor,
 } from "../../src/sync2/atomic-write";
 import { Vault } from "../../mock-obsidian";
+import GI from "../../src/gi";
 import { calculateGitBlobSHA } from "../../src/utils";
 
 const CONFIG_DIR = ".obsidian";
 const SELF = "git-easy-sync";
 
-function fixture() {
+function fixture(syncConfigDir = true) {
   const root = path.join(
     os.tmpdir(),
     `gi-inv-test-${crypto.randomBytes(4).toString("hex")}`,
@@ -60,6 +62,7 @@ function fixture() {
     configDir: CONFIG_DIR,
     selfPluginId: SELF,
     seeds,
+    syncConfigDir: () => syncConfigDir,
     gi: { invalidate: () => {} },
     onAnomaly: (report) => anomalies.push(report),
   });
@@ -75,6 +78,11 @@ const selfGitignore = (root: string) =>
 // frozen half and the mutable half stopped sharing a template
 // (DOT-FILES §3.1.3). `sect` mirrors that composition so the expectations
 // below still read as "what lands on disk".
+// The toggle now lives in the FINAL section, so the pure-helper tests
+// read from there.
+const extractSection2 = (content: string) =>
+  extractSection(content, FINAL_SECTION);
+
 const sect = (body: string) =>
   `${INVARIANTS_BEGIN}\n${body}\n${INVARIANTS_END}`;
 
@@ -249,15 +257,24 @@ describe("GitignoreInvariants.enforce", () => {
     fs.rmSync(f.root, { recursive: true, force: true });
   });
 
-  it("creates configDir/.gitignore with invariant block + recommended defaults when absent", async () => {
+  it("creates configDir/.gitignore with recommended defaults ABOVE the final section when absent", async () => {
     expect(fs.existsSync(cdGitignore(f.root))).toBe(false);
     await f.inv.enforce();
     const content = fs.readFileSync(cdGitignore(f.root), "utf8");
-    expect(content).toContain(INVARIANTS_BEGIN);
-    expect(content).toContain(INVARIANTS_END);
+    // Only a `final` section here — nothing we write into configDir is
+    // a default the user may overrule (DOT-FILES §3.1.1).
+    expect(content).toContain(FINAL_BEGIN);
+    expect(content).toContain(FINAL_END);
+    expect(content).not.toContain(INVARIANTS_BEGIN);
     expect(content).toContain("workspace.json");
     expect(content).toContain("Recommended defaults");
     expect(content).toContain("plugins/*/*");
+    // ...and it is LAST, which is what makes the data.json line outrank
+    // the catch-all in those defaults. This ordering is the whole fix
+    // for the two formerly-pinned toggle defects (§3.4.1).
+    expect(content.indexOf("plugins/*/*")).toBeLessThan(
+      content.indexOf(FINAL_BEGIN),
+    );
     // `*.log` rule moved from configDir to root .gitignore — the
     // plugin's log lives at the vault root now, so the matching
     // gitignore rule lives there too.
@@ -310,13 +327,16 @@ describe("GitignoreInvariants.enforce", () => {
     expect(content).not.toContain("tampered");
   });
 
-  it("prepends the invariant block when user file lacks markers", async () => {
+  it("appends the final section BELOW a pre-existing user file", async () => {
     const cdPath = cdGitignore(f.root);
     fs.writeFileSync(cdPath, "*.user-rule\n");
     await f.inv.enforce();
     const content = fs.readFileSync(cdPath, "utf8");
-    expect(content).toContain(INVARIANTS_BEGIN);
+    expect(content).toContain(FINAL_BEGIN);
     expect(content).toContain("*.user-rule");
+    expect(content.indexOf("*.user-rule")).toBeLessThan(
+      content.indexOf(FINAL_BEGIN),
+    );
     // Recommended defaults should NOT appear — file existed beforehand.
     expect(content).not.toContain("Recommended defaults");
   });
@@ -468,48 +488,48 @@ describe("GitignoreInvariants.enforce", () => {
   });
 });
 
-describe("extractInvariantBlock / blockHasAllowLine (pure)", () => {
+describe("extractSection / blockHasAllowLine (pure)", () => {
   // Canonical OFF block: data.json line present WITHOUT leading `!`
   // → block rule. Canonical ON block: same line WITH leading `!`
   // → allow rule. The line is ALWAYS in our block; only the
   // prefix flips.
   const blockOff = [
-    INVARIANTS_BEGIN,
+    FINAL_BEGIN,
     "# stuff",
     "git-easy-sync-metadata.json",
     "plugins/*/data.json",
-    INVARIANTS_END,
+    FINAL_END,
   ].join("\n");
   const blockOn = [
-    INVARIANTS_BEGIN,
+    FINAL_BEGIN,
     "# stuff",
     "git-easy-sync-metadata.json",
     "!plugins/*/data.json",
-    INVARIANTS_END,
+    FINAL_END,
   ].join("\n");
 
-  it("extractInvariantBlock: returns body between markers, exclusive", () => {
-    const body = extractInvariantBlock(blockOff);
+  it("extractSection: returns body between markers, exclusive", () => {
+    const body = extractSection2(blockOff);
     expect(body).not.toBeNull();
     expect(body).toContain("git-easy-sync-metadata.json");
-    expect(body).not.toContain(INVARIANTS_BEGIN);
-    expect(body).not.toContain(INVARIANTS_END);
+    expect(body).not.toContain(FINAL_BEGIN);
+    expect(body).not.toContain(FINAL_END);
   });
 
-  it("extractInvariantBlock: returns null when markers missing or out-of-order", () => {
-    expect(extractInvariantBlock("no markers anywhere")).toBeNull();
-    expect(extractInvariantBlock(INVARIANTS_BEGIN + "\nno end")).toBeNull();
+  it("extractSection: returns null when markers missing or out-of-order", () => {
+    expect(extractSection2("no markers anywhere")).toBeNull();
+    expect(extractSection2(FINAL_BEGIN + "\nno end")).toBeNull();
     expect(
-      extractInvariantBlock(INVARIANTS_END + "\nmiddle\n" + INVARIANTS_BEGIN),
+      extractSection2(FINAL_END + "\nmiddle\n" + FINAL_BEGIN),
     ).toBeNull();
   });
 
   it("blockHasAllowLine: true for ON block (with !)", () => {
-    expect(blockHasAllowLine(extractInvariantBlock(blockOn)!)).toBe(true);
+    expect(blockHasAllowLine(extractSection2(blockOn)!)).toBe(true);
   });
 
   it("blockHasAllowLine: false for OFF block (without !)", () => {
-    expect(blockHasAllowLine(extractInvariantBlock(blockOff)!)).toBe(false);
+    expect(blockHasAllowLine(extractSection2(blockOff)!)).toBe(false);
   });
 
   it("blockHasAllowLine: variants are NOT matched (toggle owns the exact line)", () => {
@@ -517,11 +537,11 @@ describe("extractInvariantBlock / blockHasAllowLine (pure)", () => {
     // as "not ON"; the next enforce() rewrites the block back to
     // canonical and clobbers it.
     const fancier = [
-      INVARIANTS_BEGIN,
+      FINAL_BEGIN,
       "!plugins/**/data.json",
-      INVARIANTS_END,
+      FINAL_END,
     ].join("\n");
-    expect(blockHasAllowLine(extractInvariantBlock(fancier)!)).toBe(false);
+    expect(blockHasAllowLine(extractSection2(fancier)!)).toBe(false);
   });
 
   it("blockHasAllowLine: matching line OUTSIDE the block is irrelevant", () => {
@@ -529,7 +549,7 @@ describe("extractInvariantBlock / blockHasAllowLine (pure)", () => {
     // our block is user territory and stays untouched.
     const fileWithOutsideMatch =
       blockOff + "\n\nplugins/*/*\n!plugins/*/data.json\n";
-    const body = extractInvariantBlock(fileWithOutsideMatch);
+    const body = extractSection2(fileWithOutsideMatch);
     expect(blockHasAllowLine(body!)).toBe(false);
   });
 });
@@ -786,6 +806,7 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
       configDir: CONFIG_DIR,
       selfPluginId: SELF,
       seeds: f.seeds,
+      syncConfigDir: () => true,
       gi: { invalidate: (dir) => invalidated.push(dir) },
       onAnomaly: () => {},
     });
@@ -841,5 +862,159 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
     await f.inv.enforce();
     expect(f.state.getFor(FOREIGN_REL)).toBeUndefined();
     expect(fs.existsSync(foreign(f.root))).toBe(false);
+  });
+});
+
+describe("section CONTENT: two strengths in the root file (DOT-FILES §3.1)", () => {
+  let f: ReturnType<typeof fixture>;
+
+  beforeEach(async () => {
+    f = fixture();
+    await f.state.load();
+  });
+
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  const rootFile = () => fs.readFileSync(path.join(f.root, ".gitignore"), "utf8");
+
+  it("lays the root file out as policy / user zone / final", async () => {
+    await f.inv.enforce();
+    const c = rootFile();
+    expect(c.indexOf(INVARIANTS_BEGIN)).toBe(0);
+    expect(c).toContain(".*\n");
+    expect(c).toContain("!/.gitignore");
+    // The user's zone sits between the two sections.
+    expect(c.indexOf("Recommended defaults")).toBeGreaterThan(
+      c.indexOf(INVARIANTS_END),
+    );
+    expect(c.indexOf(FINAL_BEGIN)).toBeGreaterThan(
+      c.indexOf("Recommended defaults"),
+    );
+    // The final rules, and nothing of them left up top.
+    expect(c).toContain(`!${CONFIG_DIR}/`);
+    expect(c).toContain("*.conflict-from-*");
+    expect(c.indexOf("*.conflict-from-*")).toBeGreaterThan(
+      c.indexOf(FINAL_BEGIN),
+    );
+    expect(c.trimEnd().endsWith(FINAL_END)).toBe(true);
+  });
+
+  it("a user rule between the sections overrides the policy but NOT the final rules", async () => {
+    // This is the asymmetry the whole two-section split exists for, and
+    // it is checked through the REAL matcher over the REAL file we just
+    // wrote — not against our idea of what the file says.
+    await f.inv.enforce();
+    const rootPath = path.join(f.root, ".gitignore");
+    const c = rootFile();
+    fs.writeFileSync(
+      rootPath,
+      c.replace(
+        FINAL_BEGIN,
+        `!.editorconfig\n!*.conflict-from-*\n\n${FINAL_BEGIN}`,
+      ),
+    );
+
+    const gi = new GI(f.root);
+    // Overrides the dot-hide policy above: opt-in works.
+    expect(gi.ignored(".editorconfig")).toBe(false);
+    // Cannot touch the final rules below: the sibling stays hidden.
+    expect(
+      gi.ignored("note.conflict-from-Mac-2026-01-01T00-00-00Z.md"),
+    ).toBe(true);
+  });
+
+  it("the dot-hide policy actually hides dot-space, and configDir survives it", async () => {
+    await f.inv.enforce();
+    const gi = new GI(f.root);
+    expect(gi.ignored(".editorconfig")).toBe(true);
+    expect(gi.ignored("notes/.hidden/x.md")).toBe(true);
+    expect(gi.ignored("notes/.gitignore")).toBe(true); // D6, natively
+    expect(gi.ignored(".gitignore")).toBe(false);
+    expect(gi.ignored("note.md")).toBe(false);
+    // `!<configDir>/` in the final section keeps the config subtree in
+    // play; its own files decide the rest from there.
+    expect(gi.ignored(`${CONFIG_DIR}/app.json`)).toBe(false);
+    expect(gi.ignored(`${CONFIG_DIR}/.gitignore`)).toBe(false);
+    expect(gi.ignored(`${CONFIG_DIR}/plugins/${SELF}/main.js`)).toBe(false);
+    expect(gi.ignored(`${CONFIG_DIR}/plugins/${SELF}/data.json`)).toBe(true);
+  });
+});
+
+describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () => {
+  let f: ReturnType<typeof fixture>;
+  const foreignDir = () => path.join(f.root, CONFIG_DIR, "plugins", "brat");
+
+  beforeEach(async () => {
+    f = fixture(false); // syncConfigDir OFF
+    await f.state.load();
+    fs.mkdirSync(foreignDir(), { recursive: true });
+    fs.writeFileSync(path.join(foreignDir(), ".gitignore"), "*.map\n");
+    fs.writeFileSync(path.join(foreignDir(), "main.js"), "//");
+  });
+
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  it("writes the silencer into configDir, our own file, and every foreign one that exists", async () => {
+    await f.inv.enforce();
+    const cd = fs.readFileSync(cdGitignore(f.root), "utf8");
+    expect(cd).toContain("/.gitignore"); // this file stops syncing too
+    expect(cd).toContain("\n*");
+
+    // Our own file: the silencer is part of the constant we own, and it
+    // is needed because our node speaks LAST for our own folder — the
+    // allowlist would otherwise keep main.js visible.
+    const self = fs.readFileSync(selfGitignore(f.root), "utf8");
+    expect(self).toContain("!main.js");
+    expect(self).toContain(FINAL_BEGIN);
+    expect(self.indexOf("!main.js")).toBeLessThan(self.indexOf(FINAL_BEGIN));
+
+    // A third party's file: our section only, their rules untouched.
+    const foreign = fs.readFileSync(
+      path.join(foreignDir(), ".gitignore"),
+      "utf8",
+    );
+    expect(foreign).toContain("*.map");
+    expect(foreign).toContain(FINAL_BEGIN);
+  });
+
+  it("and the matcher agrees: nothing under configDir is visible", async () => {
+    await f.inv.enforce();
+    const gi = new GI(f.root);
+    expect(gi.ignored(`${CONFIG_DIR}/app.json`)).toBe(true);
+    expect(gi.ignored(`${CONFIG_DIR}/plugins/${SELF}/main.js`)).toBe(true);
+    expect(gi.ignored(`${CONFIG_DIR}/plugins/brat/main.js`)).toBe(true);
+    // ...while the rest of the vault is unaffected.
+    expect(gi.ignored("note.md")).toBe(false);
+  });
+
+  it("turning it back ON removes the silencer everywhere, including third-party files", async () => {
+    await f.inv.enforce();
+    // Same vault and same state store, only the toggle flipped — the
+    // pass has to converge from the OFF layout to the ON one.
+    const inv = new GitignoreInvariants({
+      vault: f.vault as unknown as import("obsidian").Vault,
+      state: f.state,
+      configDir: CONFIG_DIR,
+      selfPluginId: SELF,
+      seeds: f.seeds,
+      syncConfigDir: () => true,
+      gi: { invalidate: () => {} },
+      onAnomaly: () => {},
+    });
+    await inv.enforce();
+
+    const foreign = fs.readFileSync(
+      path.join(foreignDir(), ".gitignore"),
+      "utf8",
+    );
+    expect(foreign).toBe("*.map\n"); // section gone, not left empty
+    expect(fs.readFileSync(selfGitignore(f.root), "utf8")).not.toContain(
+      FINAL_BEGIN,
+    );
+    expect(new GI(f.root).ignored(`${CONFIG_DIR}/app.json`)).toBe(false);
   });
 });

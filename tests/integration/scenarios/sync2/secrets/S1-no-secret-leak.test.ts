@@ -156,6 +156,7 @@ describe.skipIf(!integrationEnabled())("sync2 S1 — no secret leak", () => {
         vault: c.vault,
         selfPluginId: SELF,
       }),
+      syncConfigDir: () => true,
       gi: { invalidate: () => {} },
       onAnomaly: () => {},
     });
