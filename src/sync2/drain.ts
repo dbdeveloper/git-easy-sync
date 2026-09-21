@@ -274,13 +274,11 @@ export interface DrainDeps {
   // records the EDIT moment — §III annotation); conflict pushes and
   // the FINALIZE merge stamp now(). null/undefined → GitHub identity.
   gitAuthor?: () => { name: string; email: string } | null;
-  // Optional trash seam: confirmResolved fires on the process_conflicts
-  // prune transition (R3.5 layer 1b); confirmDeleted fires at batch
-  // completion for deletion entries whose final remote state is
-  // DELETED (layer 1a — the old manager:3891 site dies at THE SWITCH).
+  // The Deleted bin's one engine-side touchpoint: capture the bytes
+  // just before the Vault-step removes a file (R3.4 / §5.2.1). The
+  // other three hooks died with the re-platform — see trash-hooks.ts.
   trashHooks?: {
-    confirmResolved(basePath: string): Promise<void>;
-    confirmDeleted?(paths: string[]): Promise<void>;
+    captureForDelete(path: string): Promise<void>;
   } | null;
   vaultFiles: VaultFileReader;
   mergeBlobs: Diff3Deps["mergeBlobs"];
@@ -449,7 +447,6 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           vault: deps.vault,
           store: deps.conflictStore,
           computeSha: deps.computeSha,
-          trashHooks: deps.trashHooks,
           logger: deps.logger,
         },
         conflicts,
@@ -1133,34 +1130,6 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     // FINALIZE deliberately NOT here (per-batch merge would move the
     // main head under the next push) — it lives after the loop.
 
-    // S1 — trash R3.5 layer 1a: deletion entries whose FINAL remote
-    // state is DELETED are now published (pushed by us, or dropped as
-    // already-deleted — either way the remote agrees). A deletion that
-    // LOST (remote modified → resurrect/conflict) is excluded: nothing
-    // was published. Best-effort per the TrashHooks contract.
-    if (deps.trashHooks?.confirmDeleted) {
-      const published = claimed.meta.entries
-        .filter((e) => e.sha === null)
-        .map((e) => e.path)
-        .filter((p) => {
-          const t = state.trackedFiles.get(p);
-          return (
-            t !== undefined &&
-            (t.remote.mode === DELETED || t.remote.sha === DELETED_SHA_HASH)
-          );
-        });
-      if (published.length > 0) {
-        try {
-          await deps.trashHooks.confirmDeleted(published);
-        } catch (err) {
-          deps.logger?.warn(
-            "drain: confirmDeleted hook failed (trash is best-effort)",
-            { paths: published, err: `${err}` },
-          );
-        }
-      }
-    }
-
     // BATCH ОБРОБЛЕНО! The durable conflicts FIRST, the journal
     // second, then the dir.
     //
@@ -1808,7 +1777,6 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       vault: deps.vault,
       store: deps.conflictStore,
       computeSha: deps.computeSha,
-      trashHooks: deps.trashHooks,
       logger: deps.logger,
     },
     conflicts,

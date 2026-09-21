@@ -23,7 +23,7 @@ import {
 
 // n04b — R3.4 "Design boundary" documentation test.
 //
-// TrashStore captures only the two expected channels:
+// The bin captures only the two expected channels:
 //   (a) vault.delete / vault.trash via the trash-watcher monkey-patch
 //       (user-driven UI deletes), and
 //   (b) sync2.applyRemoteDeletion via the captureForDelete hook
@@ -78,7 +78,7 @@ describe.skipIf(!integrationEnabled())(
         // entry exists at any point for this path.
         await sync2AllAndAssertNoErrors(client);
 
-        const trashState = await client.trashStore.list();
+        const trashState = client.deletedStore.list();
         expect(trashState).toEqual([]);
         expect(await listRemoteFiles(branch)).not.toContain(filePath);
       },

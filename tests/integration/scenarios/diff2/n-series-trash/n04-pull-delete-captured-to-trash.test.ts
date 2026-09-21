@@ -29,8 +29,8 @@ import {
 // Sequence:
 //   1. Remote has a file. Local syncs → file lands in vault.
 //   2. Remote deletes the file.
-//   3. Local syncs → applyRemoteDeletion fires trashHooks.captureForDelete
-//      BEFORE adapter.remove → trash entry created with the file's
+//   3. Local syncs → the Vault-step fires trashHooks.captureForDelete
+//      BEFORE adapter.remove → the bin records the file's
 //      original bytes. File then removed from vault.
 //   4. The entry's id is GREATER than this drain's drain.startedAt
 //      (capture happened mid-drain). Layer 2 sweep at end of THIS
@@ -83,25 +83,24 @@ describe.skipIf(!integrationEnabled())(
         await sync2AllAndAssertNoErrors(client);
 
         expect(fs.existsSync(localAbs)).toBe(false);
-        const captured = await client.trashStore.list();
-        expect(captured.map((r) => r.originalPath)).toEqual([filePath]);
-        // Bytes preserved — user could [Restore] within the window.
-        const trashCopy = path.join(
+        const captured = client.deletedStore.list();
+        expect(captured.map((r) => r.path)).toEqual([filePath]);
+        // Bytes preserved in the content-addressed store — the user
+        // could restore within the window.
+        const blob = path.join(
           client.vaultPath,
-          ".obsidian/plugins/git-easy-sync/.runtime/trash",
-          captured[0].id,
-          "vault",
-          filePath,
+          ".obsidian/plugins/git-easy-sync/.runtime/sync_store",
+          captured[0].sha,
         );
-        expect(fs.existsSync(trashCopy)).toBe(true);
-        expect(fs.readFileSync(trashCopy, "utf8")).toBe(content);
+        expect(fs.existsSync(blob)).toBe(true);
+        expect(fs.readFileSync(blob, "utf8")).toBe(content);
 
-        // A second sync starts with drain.startedAt > captured.id →
-        // layer 2 wipes. (Nothing changes on remote between syncs;
-        // the second drain just runs the sweep at end.)
+        // A second sync: its drain starts AFTER the capture, so the
+        // §5.2.1 retention prune takes the record. A remote-originated
+        // delete never reaches a commit, so nothing else would ever
+        // release it — this is exactly the class the prune exists for.
         await sync2AllAndAssertNoErrors(client);
-        const afterSecondSync = await client.trashStore.list();
-        expect(afterSecondSync).toEqual([]);
+        expect(client.deletedStore.list()).toEqual([]);
       },
       300_000,
     );

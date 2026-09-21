@@ -4,7 +4,8 @@ import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
 import { TFile, TFolder, Vault as MockVault } from "../../mock-obsidian";
-import { TrashStore } from "../../src/diff2/trash-store";
+import DeletedStore from "../../src/diff2/deleted-store";
+import SyncStore from "../../src/sync2/sync-store";
 import { TrashWatcher } from "../../src/diff2/trash-watcher";
 
 // trash-watcher unit tests: verify the monkey-patch wrapper behaviour
@@ -42,11 +43,14 @@ function fixture() {
     return t;
   };
 
-  const trashStore = new TrashStore({
+  const syncStore = new SyncStore({
     vault: mockVault as never,
-    configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
-    now,
+  });
+  const trashStore = new DeletedStore({
+    vault: mockVault as never,
+    selfPluginId: SELF_PLUGIN_ID,
+    syncStore,
   });
 
   // Fake vault that the watcher patches. delete/trash are vi.fn() so we
@@ -72,11 +76,8 @@ function fixture() {
   };
 
   // §5.2.1: the watcher now takes a narrow capture surface. The old
-  // store's `intercept` IS that surface — adapted here so this suite
   // keeps pinning the monkey-patch itself, not the bin's storage.
-  const watcher = new TrashWatcher(fakeVault as never, {
-    captureForDelete: (p: string) => trashStore.intercept(p),
-  });
+  const watcher = new TrashWatcher(fakeVault as never, trashStore);
 
   return {
     root,
@@ -108,7 +109,7 @@ describe("TrashWatcher", () => {
 
   beforeEach(async () => {
     fx = fixture();
-    await fx.trashStore.init();
+    await fx.trashStore.load();
   });
 
   afterEach(() => {
@@ -166,17 +167,16 @@ describe("TrashWatcher", () => {
       expect(fx.fakeDelete).toHaveBeenCalledTimes(1);
       expect(fx.fakeDelete).toHaveBeenCalledWith(file);
 
-      // trash has the byte-copy.
-      const records = await fx.trashStore.list();
+      // the bin has the bytes, under their own sha.
+      const records = fx.trashStore.list();
       expect(records).toHaveLength(1);
-      expect(records[0].originalPath).toBe("note.md");
-      const trashCopy = path.join(
+      expect(records[0].path).toBe("note.md");
+      const blob = path.join(
         fx.root,
-        fx.trashRoot,
-        records[0].id,
-        "vault/note.md",
+        `${CONFIG_DIR}/plugins/${SELF_PLUGIN_ID}/.runtime/sync_store`,
+        records[0].sha,
       );
-      expect(fs.readFileSync(trashCopy, "utf8")).toBe(content);
+      expect(fs.readFileSync(blob, "utf8")).toBe(content);
 
       // Original-vault file is gone (the fake original unlinks it).
       expect(fs.existsSync(path.join(fx.root, "note.md"))).toBe(false);
@@ -191,9 +191,9 @@ describe("TrashWatcher", () => {
       await fx.fakeVault.trash(file);
 
       expect(fx.fakeTrash).toHaveBeenCalledTimes(1);
-      const records = await fx.trashStore.list();
+      const records = fx.trashStore.list();
       expect(records).toHaveLength(1);
-      expect(records[0].originalPath).toBe("note.md");
+      expect(records[0].path).toBe("note.md");
     });
 
     it("forwards additional arguments (force / system flag) to original", async () => {
@@ -215,14 +215,16 @@ describe("TrashWatcher", () => {
       });
       fx.fakeVault.delete = orderedDelete;
 
-      // Wrap intercept to record its invocation as well.
-      const realIntercept = fx.trashStore.intercept.bind(fx.trashStore);
-      vi.spyOn(fx.trashStore, "intercept").mockImplementation(async (p) => {
-        events.push("intercept-start");
-        const r = await realIntercept(p);
-        events.push("intercept-end");
-        return r;
-      });
+      // Wrap the capture to record its invocation as well.
+      const realCapture = fx.trashStore.captureForDelete.bind(fx.trashStore);
+      vi.spyOn(fx.trashStore, "captureForDelete").mockImplementation(
+        async (p: string) => {
+          events.push("intercept-start");
+          const r = await realCapture(p);
+          events.push("intercept-end");
+          return r;
+        },
+      );
 
       fx.watcher.install();
       await fx.fakeVault.delete(makeFile("note.md"));
@@ -236,10 +238,10 @@ describe("TrashWatcher", () => {
   });
 
   describe("folder deletion (v1: not captured)", () => {
-    it("vault.delete on TFolder does NOT call intercept", async () => {
+    it("vault.delete on TFolder does NOT capture", async () => {
       fs.mkdirSync(path.join(fx.root, "Folder"));
 
-      const interceptSpy = vi.spyOn(fx.trashStore, "intercept");
+      const interceptSpy = vi.spyOn(fx.trashStore, "captureForDelete");
       fx.watcher.install();
 
       await fx.fakeVault.delete(makeFolder("Folder"));
@@ -251,10 +253,10 @@ describe("TrashWatcher", () => {
   });
 
   describe("best-effort capture (failure does not block delete)", () => {
-    it("intercept throwing does not prevent the original delete from running", async () => {
+    it("a capture that throws does not prevent the original delete", async () => {
       fs.writeFileSync(path.join(fx.root, "note.md"), "x");
 
-      vi.spyOn(fx.trashStore, "intercept").mockRejectedValueOnce(
+      vi.spyOn(fx.trashStore, "captureForDelete").mockRejectedValueOnce(
         new Error("simulated disk error"),
       );
       fx.watcher.install();

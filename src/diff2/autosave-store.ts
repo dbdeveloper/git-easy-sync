@@ -5,7 +5,7 @@
 //
 // Location: `<configDir>/plugins/<pluginId>/.diff2-autosave/` in production
 // (set at onload via setAutosaveRoot, so the autosave lives WITH the plugin's
-// other data — TrashStore, .token_expired — not cluttering the vault root, and
+// other data — the Deleted bin, .token_expired — not cluttering the vault root, and
 // inside the plugin's gitignored area so it never syncs). The default below is
 // a vault-root path used by the unit tests (and as back-compat).
 //

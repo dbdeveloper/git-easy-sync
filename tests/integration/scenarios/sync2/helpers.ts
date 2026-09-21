@@ -40,7 +40,7 @@ import { buildSiblingFilePath } from "../../../../src/sync2/conflict-siblings";
 import * as crypto from "crypto";
 import { ConflictWatcher } from "../../../../src/sync2/conflict-watcher";
 import { ConflictCounter } from "../../../../src/sync2/conflict-counter";
-import { TrashStore } from "../../../../src/diff2/trash-store";
+import DeletedStore from "../../../../src/diff2/deleted-store";
 import {
   GitHubSyncSettings,
   DEFAULT_SETTINGS,
@@ -106,9 +106,9 @@ export interface Sync2TestClient {
   // .trash state directly. Wired into Sync2Manager via trashHooks so
   // pull-delete capture (R3.4) + the three R3.5 cleanup layers fire
   // end-to-end. For tests that don't exercise trash, the store is
-  // simply unused — TrashStore.init() creates an empty .trash/ dir
-  // which has no effect on assertions about remote/vault state.
-  trashStore: TrashStore;
+  // The re-platformed Deleted bin (§5.2.1) — exposed so a test can
+  // inspect what a delete captured.
+  deletedStore: DeletedStore;
   branch: string;
   // Live settings reference — same object the detector reads
   // through. I-series tests mutate fields here (e.g. syncConfigDir,
@@ -208,16 +208,14 @@ export async function createSync2Client(
     seeds: gitignoreSeeds,
   });
 
-  // TrashStore — always wired into the integration fixture so trash
-  // hooks fire end-to-end in any test that pull-deletes or pushes
-  // batches. Tests that don't care about trash get an empty .trash/
-  // dir which doesn't affect any remote/vault assertion.
-  const trashStore = new TrashStore({
+  // The Deleted bin — always wired into the fixture so a delete
+  // captures exactly as it does in the product.
+  const deletedStore = new DeletedStore({
     vault,
-    configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
+    syncStore,
   });
-  await trashStore.init();
+  await deletedStore.load();
   // ConflictCounter + counter-only ConflictWatcher. The watcher's
   // only side effect is `counter.markDirty()` on relevant vault
   // events. Production main.ts wires identically.
@@ -282,7 +280,15 @@ export async function createSync2Client(
     accumulateOfflineSyncs: () => opts.consolidateCommits ?? false,
     autoCanonicalize: () => opts.autoCanonicalize ?? true,
     tokenExpired: async () => false,
-    trashHooks: trashStore.asHooks(),
+    trashHooks: {
+      captureForDelete: async (p: string) => {
+        await deletedStore.captureForDelete(p);
+      },
+    },
+    deletedBin: {
+      referencedShas: () => deletedStore.referencedShas(),
+      pruneBefore: (iso: string) => deletedStore.pruneBefore(iso),
+    },
     // POSIX-flavoured rename via mock-obsidian's adapter — no wiki-link
     // updates (no real `app.fileManager`), but adequate for integration
     // tests that just need the file to move.
@@ -314,7 +320,7 @@ export async function createSync2Client(
     logger,
     conflictStore: conflictStoreV2,
     conflictWatcher,
-    trashStore,
+    deletedStore,
     branch: opts.branch,
     settings,
     cleanup() {

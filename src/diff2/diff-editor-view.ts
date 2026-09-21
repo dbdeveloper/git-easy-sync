@@ -355,7 +355,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     // is where resolutions land on disk (base rewritten, sibling
     // deleted) — reconcile conflicts.json with that reality so the
     // resolved entry prunes (and, via the prune seam, trash's
-    // confirmResolved fires) without waiting for the next drain.
+    // the record is pruned) without waiting for the next drain.
     void this.deps.reconcileConflicts?.();
   }
 

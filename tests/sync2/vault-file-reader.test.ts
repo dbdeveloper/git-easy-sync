@@ -37,9 +37,6 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
             if (opts?.explodingCapture) throw new Error("capture boom");
             captured.push(p);
           },
-          confirmDeleted: async () => {},
-          confirmResolved: async () => {},
-          sweepOlderThan: async () => {},
         },
         logger: { warn: (m) => warnings.push(m) },
       });

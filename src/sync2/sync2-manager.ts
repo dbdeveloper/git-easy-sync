@@ -500,19 +500,6 @@ export class Sync2Manager {
               });
             }
           }
-          // R3.5 layer 2 — the OLD bin's backstop, still running until
-          // TrashStore itself is removed (nothing writes to it now).
-          if (this.deps.trashHooks) {
-            try {
-              await this.deps.trashHooks.sweepOlderThan(
-                newBatchId(new Date(startedAtMs)),
-              );
-            } catch (err) {
-              this.deps.logger.warn("Sync2 drain: trash sweep failed", {
-                err: `${err}`,
-              });
-            }
-          }
           this.logDrainSummary(r);
           return;
         }

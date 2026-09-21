@@ -1118,37 +1118,6 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(paths).toEqual(["other.md"]); // per-file progress names the file
   });
 
-  it("S1 confirmDeleted (R3.5 layer 1a): fires with PUBLISHED deletions only; a deletion that lost to a remote edit is excluded", async () => {
-    await setupAligned();
-    baseCommit = await world.commitFiles({ "gone.md": "bye\n" });
-    vaultFiles.files.set("gone.md", { content: "bye\n", mtime: 50 });
-    baselines.set("gone.md", {
-      baselineSha: await sha("bye\n"),
-      mtime: 50,
-      size: 4,
-    });
-    // Batch deletes gone.md (publishes) AND note.md — but remote
-    // EDITED note.md meanwhile → that deletion loses (not published).
-    await world.commitFiles({ "note.md": "REMOTE-EDIT\n" });
-    await stageBatch({ "gone.md": null, "note.md": null });
-    vaultFiles.files.delete("gone.md");
-    vaultFiles.files.delete("note.md");
-
-    const confirmed: string[][] = [];
-    const r = await drainOnce(
-      makeDeps({
-        trashHooks: {
-          confirmResolved: async () => {},
-          confirmDeleted: async (paths) => {
-            confirmed.push(paths);
-          },
-        },
-      }),
-    );
-    expect(r.status).toBe("ok");
-    expect(confirmed).toEqual([["gone.md"]]); // note.md excluded
-    expect(world.headFiles().has("gone.md")).toBe(false);
-  });
 
   it("S1 forbidden-name port: a remote path the platform can't materialise is written CANONICALLY; the baseline stays the honest remote truth", async () => {
     await setupAligned();

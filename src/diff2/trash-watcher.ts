@@ -1,6 +1,6 @@
 // User-driven-delete interception via monkey-patch of Vault.delete and
 // Vault.trash. On plugin onload we wrap both methods so they call
-// TrashStore.intercept(file.path) BEFORE invoking the original (file
+// the bin's captureForDelete(path) BEFORE invoking the original (file
 // bytes are still on disk at that point — adapter.readBinary works).
 // On plugin unload we restore the originals so the plugin leaves the
 // vault in the state it found it.
@@ -36,12 +36,11 @@
 //
 //   - Capture is best-effort. If intercept throws (disk full, permission
 //     error, ...) we log and proceed with the original delete anyway.
-//     TrashStore is a safety net for the common case, not a hard
+//     the bin is a safety net for the common case, not a hard
 //     dependency for delete itself.
 
 import { TAbstractFile, TFile, Vault } from "obsidian";
 import Logger from "../logger";
-import { TrashStore } from "./trash-store";
 
 // The shape of vault.delete / vault.trash we monkey-patch. Real
 // Obsidian's signature is (file, force?: boolean) / (file, system?:
@@ -115,7 +114,7 @@ export class TrashWatcher {
     this.installed = false;
   }
 
-  // Best-effort capture: read the file's bytes through TrashStore.
+  // Best-effort capture: the bin parks the bytes and records them.
   // We only intercept TFile (not TFolder) — see the file-level comment
   // on folder-deletion semantics. Failure is logged and swallowed so
   // the underlying delete proceeds either way.

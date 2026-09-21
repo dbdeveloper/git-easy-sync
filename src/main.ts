@@ -55,9 +55,7 @@ import {
 } from "./status-bar-model";
 import WorkerClient from "./worker/worker-client";
 import { PreSyncConflictModal } from "./sync2/views/pre-sync-conflict-modal";
-import { TrashStore } from "./diff2/trash-store";
 import { TrashWatcher } from "./diff2/trash-watcher";
-import { sweepOnload as trashSweepOnload } from "./diff2/trash-recovery";
 import { recoverAutosaveDirs } from "./diff2/onload-recovery";
 import { setAutosaveRoot, AUTOSAVE_ROOT, autosaveDir } from "./diff2/autosave-store";
 import {
@@ -201,11 +199,6 @@ export default class GitHubSyncPlugin extends Plugin {
   conflictWatcher!: ConflictWatcher;
   conflictCounter!: ConflictCounter;
   // diff2 trash subsystem (see docs/DIFF2_IMPLEMENTATION_PLAN.md §R3).
-  // TrashStore is the data layer; TrashWatcher monkey-patches
-  // vault.delete/trash to feed user-driven deletes into the store.
-  // Both live for the plugin's lifetime; the watcher is uninstalled
-  // in onunload to restore the original vault methods.
-  trashStore!: TrashStore;
   private trashWatcher: TrashWatcher | null = null;
   logger!: Logger;
   // E1 (TODO §5) — persistent ".token_expired" marker; in-memory authoritative,
@@ -843,11 +836,11 @@ export default class GitHubSyncPlugin extends Plugin {
         // Every store that caches runtime state re-reads the (now
         // empty) disk — without this, write-through would resurrect
         // pre-reset ghosts from RAM (RESET-PLUGIN §1's motivating
-        // bug). TrashStore keeps no in-memory index and its writes
-        // ensureDir lazily (O4), so it needs no re-init.
+        // bug). The Deleted bin re-reads below for the same reason.
         await this.hotMeta?.load();
         await this.baselines?.clear();
         await this.invariantState?.load();
+        await this.deletedStore?.load();
         // THE SWITCH: conflicts.json cache must also re-read the now-
         // empty disk, or the UI would resurrect pre-reset conflicts.
         await this.conflictStoreV2?.load();
@@ -1057,27 +1050,6 @@ export default class GitHubSyncPlugin extends Plugin {
     // with the blank-slate cutover — the new baseline store can never
     // contain monolith-era phantom rows.)
 
-    // diff2 TrashStore — captures user-driven deletes for one-drain-
-    // cycle recovery (R3.4 + R3.5). Instantiated and recovery-swept
-    // BEFORE Sync2Manager so the engine starts on a consistent trash
-    // state. See docs/DIFF2_IMPLEMENTATION_PLAN.md §R3.8–R3.11.
-    const trashStore = new TrashStore({
-      vault: this.app.vault,
-      configDir: this.app.vault.configDir,
-      selfPluginId: manifest.id,
-    });
-    this.trashStore = trashStore;
-    try {
-      await trashSweepOnload({
-        vault: this.app.vault,
-        configDir: this.app.vault.configDir,
-        selfPluginId: manifest.id,
-        trashStore,
-        logger: this.logger,
-      });
-    } catch (err) {
-      this.logger.error("Trash recovery sweep failed", `${err}`);
-    }
     // diff2 [←]-commit recovery (DIFF-EDITOR.md §5.0.a / §4.2). MUST run
     // BEFORE AtomicWriteRecovery.sweep below: commit7Step stages the resolved
     // base+sibling via the SAME .ges-tmp/.ges-bak suffixes the naive sweep
@@ -1217,13 +1189,9 @@ export default class GitHubSyncPlugin extends Plugin {
       onTokenExpired: (status) =>
         this.tokenExpiredFlag?.set(status === 403 ? "scope" : "invalid"),
       // diff2 trash hooks (R3.4 + R3.5): captureForDelete inside the
-      // vault-step remove, confirmDeleted at batch completion,
-      // confirmResolved on the process_conflicts prune, sweepOlderThan
-      // at drain end on success.
+
+      // §5.2.1 — the bin's one engine-side touchpoint.
       trashHooks: {
-        ...trashStore.asHooks(),
-        // §5.2.1: capture moves to the new bin. The remaining hooks
-        // still belong to the old store until its own removal step.
         captureForDelete: async (path: string) => {
           await deletedStore.captureForDelete(path);
         },
@@ -1291,7 +1259,7 @@ export default class GitHubSyncPlugin extends Plugin {
     // Neither path startles the user on enable.
 
     // diff2 TrashWatcher — monkey-patches vault.delete/trash so
-    // user-driven UI deletes route through TrashStore.intercept.
+    // user-driven UI deletes route through the bin's capture.
     // Installed AFTER Sync2Manager wire-up so any throw during
     // engine init doesn't leave the vault with patched methods.
     // The watcher's uninstall (run from onunload) restores the
@@ -1473,10 +1441,6 @@ export default class GitHubSyncPlugin extends Plugin {
           vault: this.app.vault,
           store: this.conflictStoreV2,
           computeSha: (bytes) => this.workerClient.computeGitBlobSHA(bytes),
-          // R3.5 layer 1b (v2): "conflict closed" IS the prune this
-          // reconcile makes — the trash keeps its one-drain-cycle
-          // recovery window for resolved conflicts.
-          trashHooks: this.trashStore?.asHooks() ?? null,
           logger: this.logger,
         },
         null,
