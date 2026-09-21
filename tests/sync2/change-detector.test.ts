@@ -15,6 +15,7 @@ import HotMetadataStore from "../../src/sync2/hot-metadata";
 import FileBaselinesStore from "../../src/sync2/file-baselines";
 import ChangeDetector, {
   isUnhonouredGitignore,
+  isSyncable,
 } from "../../src/sync2/change-detector";
 import { Vault } from "../../mock-obsidian";
 import { calculateGitBlobSHA } from "../../src/utils";
@@ -853,5 +854,45 @@ describe("D6 backstop — a .gitignore syncs only where it is honoured", () => {
   it("only exact basenames — a file merely ending in .gitignore is not one", () => {
     expect(isUnhonouredGitignore("notes/my.gitignore", CD)).toBe(false);
     expect(isUnhonouredGitignore("notes/.gitignore.bak", CD)).toBe(false);
+  });
+});
+
+describe("conflict siblings: the device label is NOT restricted to [A-Za-z0-9_-]", () => {
+  // buildSiblingFilePath only swaps parentheses for brackets — a space,
+  // an apostrophe, Cyrillic, all pass through into the filename. The
+  // hardcoded belt in isSyncable used to demand [A-Za-z0-9_-] for the
+  // label, so any such sibling was invisible to it and rode on the
+  // `*.conflict-from-*` gitignore rule alone. Two layers, one broken.
+  const syncable = async (p: string) => {
+    const gi = new GI("");
+    return isSyncable(p, ".obsidian", "git-easy-sync", true, gi, async () =>
+      null,
+    );
+  };
+  const TS = "2026-01-01T00-00-00Z";
+
+  it.each([
+    ["Home iMac", "a space — the case that started this"],
+    ["Вовин ноут", "Cyrillic"],
+    ["Bob's Mac", "an apostrophe"],
+    ["[work]", "brackets, what parentheses become"],
+    ["plain-Label_1", "the alphabet the old pattern allowed"],
+  ])("label %j (%s) → sibling is NOT syncable", async (label) => {
+    expect(await syncable(`note.conflict-from-${label}-${TS}.md`)).toBe(false);
+    // ...at any depth, and with no extension either.
+    expect(await syncable(`deep/dir/note.conflict-from-${label}-${TS}`)).toBe(
+      false,
+    );
+  });
+
+  it("still does not swallow ordinary files that merely look similar", async () => {
+    // What makes the shape unambiguous is the trailing ISO timestamp,
+    // not the label's alphabet — so widening the label cannot widen the
+    // false-positive surface.
+    expect(await syncable("notes/conflict-from-someone.md")).toBe(true);
+    expect(await syncable(`notes/a.conflict-from-x-2026-01-01.md`)).toBe(true);
+    expect(await syncable(`notes/a.conflict-from-x-${TS}/inside.md`)).toBe(
+      true,
+    );
   });
 });

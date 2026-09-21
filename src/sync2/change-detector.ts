@@ -87,13 +87,6 @@ export function isUnhonouredGitignore(
   return true;
 }
 
-// Sibling files written by ConflictStore look like
-//   `<base>.conflict-from-<safe-label>-<iso-no-colons>Z<ext>`
-// (extension preserved when the original had one, missing otherwise).
-// The label is sanitized to [a-zA-Z0-9_-]+ so no clever Unicode
-// trickery here; the date marker `Z` plus the digit-and-dash pattern
-// after `-from-` is structurally unambiguous and unlikely to clash
-// with a real user filename.
 // True for a "file vanished" adapter error — Capacitor surfaces ENOENT with
 // message "File does not exist"; Node/desktop uses code "ENOENT". Path-agnostic
 // (the error rarely names the path). Used to make a mid-walk read fail-soft.
@@ -103,8 +96,26 @@ function isMissingFileError(err: unknown): boolean {
   return /does not exist|no such file|enoent/i.test(msg);
 }
 
+// Sibling files written by ConflictStore look like
+//   `<base>.conflict-from-<safe-label>-<iso-no-colons>Z<ext>`
+// (extension preserved when the original had one, missing otherwise).
+//
+// ⚠️ The label is NOT restricted to [A-Za-z0-9_-]. An earlier version of
+// this comment claimed it was, and the pattern below was written to
+// match that claim — but `buildSiblingFilePath` (conflict-siblings.ts)
+// only swaps parentheses for brackets and passes everything else
+// through, spaces included. The [A-Za-z0-9_-] sanitiser lives in
+// conflict-branch.ts and applies to BRANCH names, not to filenames. So
+// a device labelled "Home iMac" produced a sibling this belt could not
+// see, and only the `*.conflict-from-*` gitignore rule kept it from
+// being pushed — two layers, one of them broken. Fixed 2026-09-22.
+//
+// `[^/]+` is the right width: a label can hold anything the user typed
+// except a path separator. It does not widen the false-positive surface
+// either — what makes the shape unambiguous is the trailing
+// `-<iso-timestamp>Z`, not the label's alphabet.
 const CONFLICT_SIBLING_PATTERN =
-  /\.conflict-from-[A-Za-z0-9_-]+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(\.[^./]+)?$/;
+  /\.conflict-from-[^/]+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(\.[^./]+)?$/;
 // (The trailing-extension group stays optional — files without a
 // dotted extension produce no .ext segment, see buildSiblingPath.)
 
