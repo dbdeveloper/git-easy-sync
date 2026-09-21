@@ -58,7 +58,7 @@ sync2/
 
 Tests use **branch-per-test** on the persistent private int-test repo. Bootstrap is the exception — it needs delete+recreate, so uses the public ephemeral repo.
 
-On the `diff2` branch, additional buckets exist: `tests/diff2/` (unit + crash-resilience for the trash subsystem) and `tests/integration/scenarios/diff2/n-series-trash/` (end-to-end against real GitHub). They run automatically under `pnpm test` / `pnpm test:integration`.
+On the `diff2` branch, additional buckets exist: `tests/diff2/` (unit + crash-resilience for the diff-editor and the Deleted bin) and `tests/integration/scenarios/diff2/` (end-to-end against real GitHub). They run automatically under `pnpm test` / `pnpm test:integration`. ⚠️ The bin's storage was re-platformed 2026-09-21 — `deleted-store.test.ts` is its suite; the old `trash-store*` / `trash-recovery` suites and the n01-n03 layer tests were deleted with the mechanism they pinned (n04/n04b survive, retargeted).
 
 ### Single-spec runs
 

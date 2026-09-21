@@ -1205,8 +1205,9 @@ fetch-ем існує саме щоб не платити мережею за р
 технічна причина: пошук спирається на `readRootGitignore` + `walkDotDir`, яких до
 DOT-FILES не існує; у самій DOT-FILES-спеці він і стоїть Кроком C після ядра A-D):
 
-1. **Re-platform Deleted-кошика** (TrashStore → `sync_store` + `deleted.json`,
-   `deletedSha` у deletion-запис батчу) — [`DIFF-EDITOR-HISTORY-DELETED.md`](./DIFF-EDITOR-HISTORY-DELETED.md) §5.2.1.
+1. ✅ **Re-platform Deleted-кошика — ЗРОБЛЕНО 2026-09-21** (`d833221`…`9b0f129`, п'ять
+   кроків: контракт метафайлу → сховище → передача в батч → retention+щит → видалення
+   старого). Деталі й ухвалені рішення — [`DIFF-EDITOR-HISTORY-DELETED.md`](./DIFF-EDITOR-HISTORY-DELETED.md) §5.2.1.
    ⚠️ **Звірено з кодом 2026-09-20:** дизайн чинний, але ПЕРШИЙ коміт — не кошик, а
    розширення контракту метафайлу: `deletedSha` НЕ адитивне (парсер збирає записи
    заново, а `consolidateIntoTail` переписує метафайл на штатному шляху, тож поле

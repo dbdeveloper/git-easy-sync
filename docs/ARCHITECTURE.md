@@ -29,8 +29,9 @@ it) — it is not source.
 - **Diff2 widget design** (the conflict-resolution UI/UX on top of pseudo-merge mode; `src/diff2/`). The canonical specs:
   - [`docs/tasks/DIFF-EDITOR-V2.md`](./tasks/DIFF-EDITOR-V2.md) — **the diff-edit MODEL + interaction**. The model is a CM6 document with a protected terminal `\n` per ver-block (an empty ver is a real `"\n"`, rendered `height:0` off-focus) + an Inclusive RangeSet `{ver,group}` (`diff-structure.ts`). It is a **"text + Ranges"** model: a live `transactionFilter` computes the resolve / merge / auto-resolve cascade ONCE and records `(change, structure, caret)`, so undo/redo + replay just re-APPLY the recorded change and never re-run the diff (this is what keeps undo/redo balanced and replay deterministic).
   - [`docs/tasks/DIFF-EDITOR.md`](./tasks/DIFF-EDITOR.md) — **the representation-independent commit / recovery / autosave layer**: append-log REDO autosave (`history.jsonl` + snapshots + `cursor.json` + `meta.json`), the **7-step pair-atomic `[←]` `commit7Step`** (a `done.json` barrier hashing the staged bytes + the A–K recovery matrix), and the keyboard hotkeys + byte-match rule the model relies on.
-  - [`docs/DIFF2_IMPLEMENTATION_PLAN.md`](./DIFF2_IMPLEMENTATION_PLAN.md) — the surrounding UX architecture: conflict / history / deleted views (R2.2–R2.4), `TrashStore` (R3), external-tool integration (R6), the R7.11 exit protocol with proactive sibling cleanup, crash resilience (R8).
-  - [`docs/tasks/HISTORY-DELETED.md`](tasks/DIFF-EDITOR-HISTORY-DELETED.md) — **the CANONICAL spec for the History mode (Phase 7) and Deleted mode (Phase 9b)** — the two still-unbuilt diff2 modes. Consolidates + SUPERSEDES the scattered sources for these two modes: PLAN R2.3/R2.4 + feasibility §10/§11 (those now carry a one-line pointer here). Covers the data-source model (`.push-queue` / `.trash` / GitHub `listCommitsForPath`), the History↔Deleted mirror (base/sibling roles), shared machinery (one-sided recovery, `resolveOrDeleteUnchangedSide` factoring, write-set open-guard), verified code-state (what's built vs. stub), sequencing, and open decisions. **Read this FIRST when working on History/Deleted.** (R3/`TrashStore` data-layer remains live in the PLAN.)
+  - [`docs/DIFF2_IMPLEMENTATION_PLAN.md`](./DIFF2_IMPLEMENTATION_PLAN.md) — the surrounding UX architecture: conflict / history / deleted views (R2.2–R2.4), the Deleted bin (R3 — its storage was re-platformed onto
+    `sync_store` + `deleted.json` in 2026-09, see HISTORY-DELETED §5.2.1), external-tool integration (R6), the R7.11 exit protocol with proactive sibling cleanup, crash resilience (R8).
+  - [`docs/tasks/HISTORY-DELETED.md`](tasks/DIFF-EDITOR-HISTORY-DELETED.md) — **the CANONICAL spec for the History mode (Phase 7) and Deleted mode (Phase 9b)** — the two still-unbuilt diff2 modes. Consolidates + SUPERSEDES the scattered sources for these two modes: PLAN R2.3/R2.4 + feasibility §10/§11 (those now carry a one-line pointer here). Covers the data-source model (`.push-queue` / the Deleted bin / GitHub `listCommitsForPath`), the History↔Deleted mirror (base/sibling roles), shared machinery (one-sided recovery, `resolveOrDeleteUnchangedSide` factoring, write-set open-guard), verified code-state (what's built vs. stub), sequencing, and open decisions. **Read this FIRST when working on History/Deleted.** ⚠️ §5.2.1 is the CURRENT bin design — `.trash/<id>/vault/` + `TrashStore` + `trash-recovery` were deleted 2026-09-21; bytes now live in `sync_store`, the index in `.runtime/deleted.json` (`src/diff2/deleted-store.ts`), retention is a prune at the end of a successful drain, and an open diff-editor holds its subject. The PLAN's R3 prose describes the REMOVED storage.
   - [`docs/tasks/done/DIFF-EDITOR-TODO.md`](./tasks/done/DIFF-EDITOR-TODO.md) — the live bug/improvement backlog (**read FIRST** when fixing a diff-editor bug). [`docs/tasks/DIFF-EDITOR-V2-ANALYSIS.md`](./tasks/DIFF-EDITOR-V2-ANALYSIS.md) — the architecture analysis.
 
   When working on `src/diff2/`, read these together with [`docs/PSEUDO-MERGE-MODE.md`](./PSEUDO-MERGE-MODE.md) (the conflict-resolution algorithm diff2 renders) and [`docs/SYNC2.md`](./SYNC2.md) (the sync engine), which the specs cross-reference for Phase A/B, the byte-match rule, staging protocols, filesystem-authoritative resolution, scenarios, cross-platform contracts, and the push pipeline.
@@ -113,7 +114,7 @@ src/
     ├── sibling-tx.ts                # §II.11 crash-safe sibling replace (mark transaction)
     ├── conflict-siblings.ts         # buildSiblingFilePath / scan / extensionOf (the ONE naming truth)
     ├── vault-file-reader.ts         # The drain's live vault surface: stat/readBinary/atomicWriteFile
-    │                                #  (+ pull-side canonicalize) / trash-capturing remove
+    │                                #  (+ pull-side canonicalize) / bin-capturing remove
     ├── retry-network.ts             # §II.10 bounded backoff + the .sync_network_error mark
     ├── reset.ts                     # RESET-PLUGIN core: drain guard → marker → rmdir .runtime
     ├── hot-metadata.ts              # 2-slot ping-pong metadata-{a,b}.json (monotonic seq)
@@ -123,7 +124,8 @@ src/
     ├── change-detector.ts           # Vault walk + findChanges + the queue-dedup bridge
     ├── cross-platform.ts            # sanitizeFilename (12 forbidden ASCII → Unicode),
     │                                #  encodePathForGithub, safeRename. SYNC2 §3.
-    ├── gitignore-invariants.ts      # Invariant .gitignore blocks; always-write enforce
+    ├── gitignore-invariants.ts      # Invariant .gitignore blocks; always-write enforce;
+    │                                #  maintains the §8.0 seed markers; runs before commit AND drain
     ├── commit-message.ts            # Hardcoded format* helpers (Sync/Conflict/Merge/Init at …)
     ├── atomic-write.ts              # 5-step atomicWriteFile + stagingPathFor + AtomicWriteRecovery
     │                                #  (modify-in-place fast path preserves editor cursor/scroll)
@@ -134,8 +136,12 @@ src/
     ├── three-way-merge.ts           # mergeText (diff3-style, restores local's own EOL)
     ├── text-normalize.ts            # CRLF→LF, BOM strip, trailing-NL; shouldCanonicalize;
     │                                #  utf8RoundTrip + utf8RoundTripKeepBom (canonicalize sites)
-    ├── timestamp-id.ts              # 17-digit sortable ids for queue + trash dirs
-    ├── trash-hooks.ts               # sync2-owned interface diff2's TrashStore implements
+    ├── timestamp-id.ts              # 17-digit sortable ids for queue dirs
+    ├── gitignore-seeds.ts           # DOT-FILES §8.0: .runtime/gitignore-seeds.json —
+    │                                #  "this managed .gitignore is byte-identical to our seed",
+    │                                #  the fake-ancestor claim the drain uses on a cold start
+    ├── trash-hooks.ts               # sync2-owned interface the Deleted bin implements —
+    │                                #  ONE hook (captureForDelete) since the §5.2.1 re-platform
     ├── types.ts                     # FileChange + shared shapes
     └── views/
         ├── pre-sync-conflict-modal.ts     # Pre-Sync confirmation modal
