@@ -63,8 +63,8 @@ function splitPath(vaultPath: string): {
 
 // The extension split rule (leading dot = hidden file, not an
 // extension) — v1 conflict-store's extensionOf, re-homed here for the
-// Phase 5.5 port (v1 dies at THE SWITCH; trash-recovery keeps using
-// this).
+// Phase 5.5 port (v1 died at THE SWITCH; trash-recovery, its other
+// consumer, died with the §5.2.1 re-platform).
 export function extensionOf(vaultPath: string): string {
   return splitPath(vaultPath).ext;
 }

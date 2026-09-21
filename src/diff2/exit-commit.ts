@@ -311,7 +311,8 @@ export async function commit7Step(
   // Step 6.5 — R7.11 proactive sibling cleanup. Only when we committed onto
   // the REAL conflict sibling (not a save-to-alt fresh path) AND both sides
   // resolved to identical bytes: the sibling is now redundant. adapter-level
-  // remove (not vault.delete) so it covers .obsidian/* and bypasses TrashStore.
+  // remove (not vault.delete) so it covers .obsidian/* and bypasses the
+  // Deleted bin's capture (which rides the vault.delete monkey-patch).
   let siblingRemoved = false;
   if (
     targetSibling === meta.siblingPath &&

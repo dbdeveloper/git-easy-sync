@@ -2,7 +2,7 @@
 // .conflicts/, and .trash/. Format: YYYYMMDDhhmmssfff in UTC.
 // Lexicographic order equals chronological order, so list-style scans
 // can sort cheaply by name (used by push-queue's list() and trash's
-// sweepOlderThan layer 2 in R3.5).
+// the old bin's layer-2 sweep, removed 2026-09-21).
 
 // Extracted from push-queue.ts so the helpers are reachable from other
 // stores (TrashStore in src/diff2/) without crossing module boundaries

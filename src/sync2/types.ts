@@ -100,13 +100,5 @@ export type QueueBatch = {
   // time canonicalization rewrote the file. Empty for batches that
   // predate this field (defensive — caller falls back to 0).
   fileMtimes: Record<string, number>;
-  // For Phase B synthetic batches: the base-path whose conflict this
-  // batch's push closes. After successful push, sync2 fires
-  // trashHooks.confirmResolved(basePath) — TrashStore R3.5 layer 1b
-  // wipes sibling-trash entries for that path. Undefined for non-
-  // synthetic batches AND for synthetic batches written by code that
-  // predates this field (defensive — caller treats undefined as
-  // "no layer-1b sweep needed"). See docs/DIFF2_IMPLEMENTATION_PLAN.md §R3.5.
-  resolvesConflictForBasePath?: string;
 };
 

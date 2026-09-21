@@ -9,7 +9,8 @@
 //
 // Two helpers, two use cases:
 //   - stripConflictSuffix(path) → base path "<dir>/<stem>.<ext>" only.
-//     Used by TrashStore.confirmResolved (layer 1b of R3.5) to match
+//     Was used by the old bin's confirmResolved (R3.5 layer 1b, removed
+//     2026-09-21); kept because the same rule matches
 //     sibling-trash entries by base path.
 //   - parseSiblingFilename(path) → full structured tuple
 //     { basePath, deviceLabel, isoTimestamp }. Used by the conflicts
