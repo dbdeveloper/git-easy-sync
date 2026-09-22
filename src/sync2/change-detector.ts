@@ -206,6 +206,10 @@ export interface ChangeDetectorDeps {
   // (routed to the branch). Same source as the split-push router's
   // `hasPending`, so the two can't diverge. Wired from ConflictStore.
   conflictBaseSha?: (path: string) => string | null | undefined;
+  // Called when a walk target could not be fully enumerated. Optional
+  // because it is diagnostics — the BELT that protects the data does
+  // not depend on anyone listening (§3.3).
+  logWalkIncomplete?: (target: string) => void;
 }
 
 // Minimal surface ChangeDetector consumes from PushQueue. Lets
@@ -240,6 +244,9 @@ export default class ChangeDetector {
   private readonly conflictBaseSha:
     | ((path: string) => string | null | undefined)
     | undefined;
+  private readonly logWalkIncomplete:
+    | ((target: string) => void)
+    | undefined;
   // The opt-in set for the CURRENT operation (DOT-FILES §5). Null until
   // beginScan() runs, and deliberately not lazily filled: "not computed
   // yet" and "lifecycle bug" have to stay distinguishable, or the
@@ -259,6 +266,7 @@ export default class ChangeDetector {
     this.syncConfigDir = deps.syncConfigDir;
     this.queue = deps.queue;
     this.conflictBaseSha = deps.conflictBaseSha;
+    this.logWalkIncomplete = deps.logWalkIncomplete;
   }
 
   // Compute the dot-space opt-in set for the operation about to run.
@@ -321,9 +329,18 @@ export default class ChangeDetector {
     // set, so there is no way to be permitted here and unreachable.
     const optIn = this.optIn as OptInSet;
     allFiles.push(...(await this.statOptInDotFiles(optIn.dotFiles)));
+    // Targets whose walk did NOT finish. Tracked PER TARGET, never as
+    // one flag: if `.myconfig` walked cleanly and `<configDir>` threw,
+    // a single boolean would protect both — masking real deletions
+    // under the target that was fine (§3.3).
+    const incompleteTargets = new Set<string>();
     for (const target of optIn.walkTargets) {
       const walked = await this.walkDotDir(target);
       allFiles.push(...walked.files);
+      if (!walked.completed) {
+        incompleteTargets.add(target);
+        this.logWalkIncomplete?.(target);
+      }
     }
     // §2.2.1 — Pass 1 walks the files GROUPED BY BASELINE BUCKET, so
     // every bucket is opened exactly once per scan. An unordered walk
@@ -515,6 +532,15 @@ export default class ChangeDetector {
           removals.push(path);
           continue;
         }
+        // BELT (§3.3), separate from D7 and doing a different job. D7
+        // answers "is this path reachable in principle"; this answers
+        // "did we actually manage to look, THIS pass". A configured
+        // walk target whose walk died half-way leaves its subtree
+        // unvisited, and unvisited is indistinguishable from deleted
+        // from here — so we conclude NOTHING: no delete, and no
+        // baseline removal either, because the row is still true as far
+        // as we know. The next pass looks again.
+        if (underWalkTarget(path, incompleteTargets)) continue;
         // Path not in vault at all. Could be deleted, or could have
         // become ignored at a path that no longer exists. Re-check
         // syncability one more time: if ignored, drop silently;

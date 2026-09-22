@@ -1113,3 +1113,98 @@ describe("TD4.3 — a root dotfile that is no longer opted in leaves scope SILEN
     expect(out.map((c) => c.path)).toContain(".editorconfig");
   });
 });
+
+describe("Pass 2 belt — an interrupted walk is not a mass deletion (§3.3)", () => {
+  // D7 answers "is this path reachable in principle". The belt answers
+  // a different question: "did we actually manage to look, this pass".
+  // A configured target whose walk dies half-way leaves its subtree
+  // unvisited, and from Pass 2's seat unvisited is indistinguishable
+  // from deleted — so the belt makes it conclude nothing at all.
+  let f: ReturnType<typeof fixture>;
+
+  beforeEach(() => {
+    f = fixture();
+  });
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  // Make ONE directory's listing throw, leaving the rest of the vault
+  // enumerable — the shape of a folder vanishing mid-walk on Android.
+  const breakListingOf = (dir: string) => {
+    const real = f.vault.adapter;
+    const wrapped = {
+      ...real,
+      list: async (p: string) => {
+        if (p === dir) throw new Error("EPERM: simulated mid-walk failure");
+        return real.list(p);
+      },
+    };
+    Object.defineProperty(f.vault, "adapter", { get: () => wrapped });
+  };
+
+  it("a failed target's snapshot paths are neither deleted nor forgotten", async () => {
+    writeFile(f.root, ".myconfig/note.md", "a");
+    writeFile(f.root, ".gitignore", "!/.myconfig/\n");
+    await f.store.set(".myconfig/note.md", {
+      baselineSha: await shaOf("a"),
+      mtime: 1,
+      size: 1,
+    });
+
+    breakListingOf(".myconfig");
+    const out = await f.detector.findChanges();
+
+    expect(out.some((c) => c.path === ".myconfig/note.md")).toBe(false);
+    expect(out.some((c) => c.kind === "deleted")).toBe(false);
+    // The row survives: it is still true as far as we know, and the
+    // next pass looks again.
+    expect(await f.store.get(".myconfig/note.md")).toBeTruthy();
+  });
+
+  it("PER TARGET: a healthy target still reports its real deletions", async () => {
+    // A single boolean would have protected both targets, masking a
+    // genuine delete under the one that walked fine. That is why the
+    // belt is keyed by target.
+    writeFile(f.root, ".myconfig/note.md", "a");
+    writeFile(f.root, ".other/gone.md", "b");
+    writeFile(f.root, ".gitignore", "!/.myconfig/\n!/.other/\n");
+    await f.store.set(".myconfig/note.md", {
+      baselineSha: await shaOf("a"),
+      mtime: 1,
+      size: 1,
+    });
+    await f.store.set(".other/gone.md", {
+      baselineSha: await shaOf("b"),
+      mtime: 1,
+      size: 1,
+    });
+    // `.other` walks fine, and its file really is gone from disk.
+    fs.rmSync(path.join(f.root, ".other/gone.md"));
+    breakListingOf(".myconfig");
+
+    const out = await f.detector.findChanges();
+    const deleted = out.filter((c) => c.kind === "deleted").map((c) => c.path);
+    expect(deleted).toEqual([".other/gone.md"]);
+  });
+
+  it("reports the incomplete target, so a persistent failure is visible", async () => {
+    const seen: string[] = [];
+    const detector = new ChangeDetector({
+      vault: f.vault as unknown as import("obsidian").Vault,
+      hotMeta: f.hot,
+      baselines: f.store,
+      gi: f.gi,
+      configDir: CONFIG_DIR,
+      selfPluginId: SELF_PLUGIN_ID,
+      vaultRoot: f.root,
+      syncConfigDir: () => true,
+      logWalkIncomplete: (t) => seen.push(t),
+    });
+    writeFile(f.root, ".myconfig/note.md", "a");
+    writeFile(f.root, ".gitignore", "!/.myconfig/\n");
+    breakListingOf(".myconfig");
+    await detector.findChanges();
+    expect(seen).toEqual([".myconfig"]);
+  });
+});

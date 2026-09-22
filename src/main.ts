@@ -981,6 +981,11 @@ export default class GitHubSyncPlugin extends Plugin {
       selfPluginId: manifest.id,
       vaultRoot,
       syncConfigDir: () => this.settings.syncConfigDir ?? true,
+      // DOT-FILES §3.3: a walk target we could not fully enumerate is
+      // protected from Pass 2 silently, so the only way anyone learns a
+      // target keeps failing is this line.
+      logWalkIncomplete: (target) =>
+        this.logger.warn("dot-space walk did not complete", { target }),
       // THE SWITCH: the dedup reference is the manager's per-pass
       // queue-sha index over the new metafiles (deletion entries
       // answer the DELETED sentinel — §40 revert class). Lazy thunk:
