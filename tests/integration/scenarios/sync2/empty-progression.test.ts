@@ -52,13 +52,19 @@ describe.skipIf(!integrationEnabled())(
         client = await createSync2Client({ branch });
 
         // Step 1: first syncAll runs bootstrap + invariant-gitignore
-        // enforce. The two managed gitignores are created locally and
+        // enforce. All THREE managed gitignores are created locally and
         // pushed; everything else on the branch stays as-is.
+        //
+        // The root one used to be invisible here only because the
+        // int-test repo's baseline already carried a (stale) copy, so
+        // it never showed up as NEW. That baseline was removed on
+        // 2026-09-22; listing it explicitly is the honest expectation.
         const initialFiles = await listRemoteFiles(branch);
         await sync2AllAndAssertNoErrors(client);
         const afterFirst = (await listRemoteFiles(branch)).sort();
         const expectedAfter = [
           ...initialFiles,
+          ".gitignore",
           ".obsidian/.gitignore",
           ".obsidian/plugins/git-easy-sync/.gitignore",
         ]
