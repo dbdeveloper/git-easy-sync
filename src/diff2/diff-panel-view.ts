@@ -33,6 +33,7 @@ import { nextHistorySelection } from "./diff-history-view";
 import { DiffEditSubTab } from "./events";
 import type Logger from "../logger";
 import {
+  assembleResult,
   findAllConflicts,
   type ConflictEntry,
 } from "./synthetic-detector";
@@ -114,6 +115,21 @@ export class DiffPanelView extends ItemView {
   // ref list (file-name group headers aren't refs → skipped). selectedKey persists across
   // re-renders + tab-return so [←] back lands you on the row you opened.
   private conflictRefs: ConflictRowRef[] = [];
+  // The list the panel RENDERS, kept in memory and refreshed
+  // asynchronously (DOT-FILES §4.3: "async/eventual"). render() stays
+  // synchronous and paints whatever is here right now; a refresh that
+  // finds more — the dot-space branch especially, which costs a real
+  // walk — tops this up and repaints.
+  //
+  // ⚠️ Synthetic findings live HERE and NOWHERE ELSE (§4.3.1 п.3).
+  // conflicts.json holds only what the engine created; scan results are
+  // view state, and a future dot-branch must not be tempted to cache
+  // them to disk.
+  private conflictEntries: ConflictEntry[] = [];
+  // Set while a refresh is in flight, so repeated triggers coalesce
+  // instead of stacking walks.
+  private refreshing = false;
+  private refreshAgain = false;
   private conflictSelectedIndex = 0;
   private conflictSelectedKey: string | null = null;
   // The conflict LAST OPENED from this list (the "launch position"). [←] returns the cursor
@@ -168,7 +184,7 @@ export class DiffPanelView extends ItemView {
     // ConflictCounter notifies on any sibling-event vault change → re-render the list.
     // Deferred to a microtask so multiple rapid changes collapse into one re-render.
     this.unsubscribeCounter = this.deps.conflictCounter.subscribe(() => {
-      queueMicrotask(() => this.render());
+      queueMicrotask(() => void this.refreshConflicts());
     });
 
     // Re-focus the conflict list when this tab becomes active again (e.g. after opening an
@@ -186,6 +202,36 @@ export class DiffPanelView extends ItemView {
 
     this.viewState = initialState();
     this.render();
+    void this.refreshConflicts();
+  }
+
+  // Rebuild the conflict list. Paints the cheap half immediately
+  // (tracked from the store, synthetic from Obsidian's index), so the
+  // panel is never blank while a slower pass runs.
+  //
+  // Re-entrant-safe by coalescing rather than queueing: a second
+  // trigger during a running refresh sets a flag and the current run
+  // repeats once at the end. Stacking them would let a few impatient
+  // refreshes queue several walks.
+  async refreshConflicts(): Promise<void> {
+    if (this.refreshing) {
+      this.refreshAgain = true;
+      return;
+    }
+    this.refreshing = true;
+    try {
+      do {
+        this.refreshAgain = false;
+        const { entries } = await findAllConflicts(
+          this.deps.vault,
+          this.deps.conflictStore,
+        );
+        this.conflictEntries = entries;
+        this.render();
+      } while (this.refreshAgain);
+    } finally {
+      this.refreshing = false;
+    }
   }
 
   async onClose(): Promise<void> {
@@ -258,10 +304,7 @@ export class DiffPanelView extends ItemView {
     const body = parent.createDiv({ cls: "diff2-view-body" });
 
     if (tab === "conflicts") {
-      const { entries } = findAllConflicts(
-        this.deps.vault,
-        this.deps.conflictStore,
-      );
+      const { entries } = assembleResult(this.conflictEntries);
       this.conflictRefs = renderConflictsList(
         body,
         entries,

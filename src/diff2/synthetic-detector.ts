@@ -30,6 +30,11 @@
 import type { Vault } from "obsidian";
 import type ConflictStoreV2 from "../sync2/conflict-store-v2";
 import { parseSiblingFilename } from "./strip-conflict-suffix";
+import {
+  buildSiblingFilePath,
+  formatTimestampForFilename,
+  UNKNOWN_DEVICE_LABEL,
+} from "../sync2/conflict-siblings";
 import { deriveAutosaveId } from "./autosave-store";
 
 export type ConflictEntryKind = "tracked" | "synthetic";
@@ -112,44 +117,106 @@ export interface DetectionResult {
   byBasePath: Map<string, ConflictEntry[]>;
 }
 
-// Find every (base, sibling) pair currently in the vault and classify
-// it. Empty result is a valid outcome (vault has no conflicts).
-export function findAllConflicts(
+// TRACKED entries, enumerated from the STORE (§4.3.1 п.2).
+//
+// ⚠️ This INVERTS the original flow, and the inversion is the point.
+// `findAllConflicts` used to derive tracked entries from the
+// `vault.getFiles()` scan — the scan found a file, the store merely
+// classified it. Obsidian's index does not contain dot-paths, so a
+// TRACKED conflict on `.myconfig/note.md` was invisible to the panel
+// even with a live record in conflicts.json: the engine knew about it,
+// the user could not see it, and nothing said why.
+//
+// Now the store is the source and the disk is only asked one question
+// per sibling: does its derived name still exist? That check preserves
+// the standing guarantee that a RESOLVED conflict with a lingering
+// record is not shown — the same check the counter's default formula
+// makes. Pruning the record itself stays process_conflicts' job at the
+// reconcile sites.
+export async function trackedEntries(
   vault: Vault,
   conflictStore: ConflictStoreV2,
-): DetectionResult {
-  const entries: ConflictEntry[] = [];
-  const files = vault.getFiles();
+): Promise<ConflictEntry[]> {
+  const out: ConflictEntry[] = [];
+  for (const [basePath, entry] of conflictStore.getCachedState().entries) {
+    for (const sibling of entry.siblings) {
+      const mtime = sibling.mtime ?? 0;
+      const siblingPath = buildSiblingFilePath(
+        basePath,
+        mtime,
+        sibling.deviceLabel,
+      );
+      if (!(await vault.adapter.exists(siblingPath))) continue;
+      out.push({
+        basePath,
+        siblingPath,
+        deviceLabel: sibling.deviceLabel ?? UNKNOWN_DEVICE_LABEL,
+        // Derived from the SAME mtime the name is derived from, so a
+        // tracked row sorts beside its synthetic twins instead of
+        // drifting to the wrong end of the list.
+        isoTimestamp: formatTimestampForFilename(mtime),
+        kind: "tracked",
+      });
+    }
+  }
+  return out;
+}
 
-  for (const file of files) {
-    // NOTE (2026-06-18): an ABSENT base is NO LONGER skipped. A sibling whose base
+// SYNTHETIC entries from Obsidian's in-memory index — the FAST branch
+// (§4.3.1 п.1). No disk I/O, covers the whole non-dot space instantly,
+// and runs on every list refresh.
+//
+// Tracked hits are DROPPED here rather than listed: the store branch
+// above already lists them, and returning them from both would show
+// every tracked conflict twice.
+//
+// It cannot see dot-space at all — `vault.getFiles()` excludes it —
+// which is exactly why the slow branch exists.
+export function syntheticFromIndex(
+  vault: Vault,
+  conflictStore: ConflictStoreV2,
+): ConflictEntry[] {
+  const out: ConflictEntry[] = [];
+  for (const file of vault.getFiles()) {
+    // NOTE (2026-06-18): an ABSENT base is NOT skipped. A sibling whose base
     // file is missing is a delete-vs-modify conflict (base deleted, sibling holds
     // the other side) — both TRACKED (R2.5) and SYNTHETIC. It is LISTED so the user
     // can resolve it via the panel (delete the sibling → deletion wins; or keep its
-    // content). This reverses the old R3.3-rule-3 "orphan sibling without base has
-    // nothing to diff against — skip it"; the diff editor renders the ours side
-    // empty (mountDiffPane reads "" when basePath is absent). Genuine leftover
-    // siblings now surface too, by design — the user clears them from the panel.
+    // content). The diff editor renders the ours side empty (mountDiffPane reads ""
+    // when basePath is absent). Genuine leftover siblings surface too, by design.
     const entry = entryFromSibling(conflictStore, file.path);
     if (!entry) continue; // not a sibling
-    entries.push(entry);
+    if (entry.kind === "tracked") continue; // the store branch owns these
+    out.push(entry);
   }
+  return out;
+}
 
+// Sort newest-first and build the group-by-base index. Pure, so a
+// caller that has topped its list up with late dot-space findings can
+// re-assemble without re-scanning anything.
+export function assembleResult(entries: ConflictEntry[]): DetectionResult {
   // Newest-first by isoTimestamp. The string itself is lex-sortable
   // (YYYY-MM-DDTHH-MM-SSZ); reverse for descending order.
-  entries.sort((a, b) => b.isoTimestamp.localeCompare(a.isoTimestamp));
+  const sorted = [...entries].sort((a, b) =>
+    b.isoTimestamp.localeCompare(a.isoTimestamp),
+  );
+  return { entries: sorted, byBasePath: groupByBasePath(sorted) };
+}
 
-  // Group-by-base index for R2.2 multi-sibling expandable rows.
-  // Entries inside each group preserve the newest-first ordering
-  // from the global sort.
-  const byBasePath = new Map<string, ConflictEntry[]>();
-  for (const entry of entries) {
-    const bucket = byBasePath.get(entry.basePath);
-    if (bucket) bucket.push(entry);
-    else byBasePath.set(entry.basePath, [entry]);
-  }
-
-  return { entries, byBasePath };
+// The panel's list WITHOUT the slow dot-space branch: tracked from the
+// store, synthetic from the index. This is what a refresh shows
+// immediately; the dot-space findings are topped up afterwards
+// (§4.3, "async/eventual").
+export async function findAllConflicts(
+  vault: Vault,
+  conflictStore: ConflictStoreV2,
+): Promise<DetectionResult> {
+  const tracked = await trackedEntries(vault, conflictStore);
+  return assembleResult([
+    ...tracked,
+    ...syntheticFromIndex(vault, conflictStore),
+  ]);
 }
 
 // The pre-sync conflict gate's summary (main.ts confirmPendingConflictsBeforeSync).
@@ -181,22 +248,23 @@ export function findAllConflicts(
 // file + N conflicts → "…tracked conflicts…resolve them" (else the user is told "1 conflict"
 // but the panel shows several). With >1 files the copy is uniformly plural, so the exact
 // count is not consulted there.
-export function pendingConflictSummary(
+export async function pendingConflictSummary(
   vault: Vault,
   conflictStore: ConflictStoreV2,
-): { trackedPaths: string[]; trackedConflictCount: number } | null {
-  const { byBasePath } = findAllConflicts(vault, conflictStore);
-  const trackedPaths: string[] = [];
-  let trackedConflictCount = 0;
-  for (const [base, siblings] of byBasePath) {
-    const tracked = siblings.filter((s) => s.kind === "tracked").length;
-    if (tracked > 0) {
-      trackedPaths.push(base);
-      trackedConflictCount += tracked;
-    }
+): Promise<{ trackedPaths: string[]; trackedConflictCount: number } | null> {
+  // Tracked-only, and tracked now comes straight from the store — so
+  // this no longer walks the vault index at all. It also means the gate
+  // sees a tracked conflict in dot-space, which the scan-derived
+  // version could not (§4.3.1 п.2).
+  const tracked = await trackedEntries(vault, conflictStore);
+  const perBase = new Map<string, number>();
+  for (const e of tracked) {
+    perBase.set(e.basePath, (perBase.get(e.basePath) ?? 0) + 1);
   }
-  if (trackedPaths.length === 0) return null; // synthetic-only (or none) → no gate
-  return { trackedPaths: trackedPaths.sort(), trackedConflictCount };
+  if (perBase.size === 0) return null; // synthetic-only (or none) → no gate
+  let trackedConflictCount = 0;
+  for (const n of perBase.values()) trackedConflictCount += n;
+  return { trackedPaths: [...perBase.keys()].sort(), trackedConflictCount };
 }
 
 // Convenience: shape that excludes the file-iteration / vault-walking

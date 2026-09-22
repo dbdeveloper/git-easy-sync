@@ -104,10 +104,10 @@ describe("findAllConflicts", () => {
     cleanup(fx.root);
   });
 
-  it("returns empty result when vault has no sibling files", () => {
+  it("returns empty result when vault has no sibling files", async () => {
     writeFile(fx.root, "note.md", "regular content");
 
-    const { entries, byBasePath } = findAllConflicts(
+    const { entries, byBasePath } = await findAllConflicts(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
@@ -124,7 +124,7 @@ describe("findAllConflicts", () => {
       Date.UTC(2026, 4, 26, 10, 30, 0),
     );
 
-    const { entries, byBasePath } = findAllConflicts(
+    const { entries, byBasePath } = await findAllConflicts(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
@@ -139,14 +139,14 @@ describe("findAllConflicts", () => {
     expect(byBasePath.get("note.md")).toHaveLength(1);
   });
 
-  it("classifies a sibling WITHOUT an entry but WITH base in vault as synthetic", () => {
+  it("classifies a sibling WITHOUT an entry but WITH base in vault as synthetic", async () => {
     // Synthetic conflict per R3.3 rule 3: base + sibling co-exist in
     // vault, but no conflicts.json entry.
     writeFile(fx.root, "note.md", "ours bytes");
     const sibPath = siblingPathFor("note.md", "Phone", Date.UTC(2026, 4, 26));
     writeFile(fx.root, sibPath, "theirs bytes");
 
-    const { entries } = findAllConflicts(
+    const { entries } = await findAllConflicts(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
@@ -155,7 +155,7 @@ describe("findAllConflicts", () => {
     expect(entries[0].basePath).toBe("note.md");
   });
 
-  it("LISTS an absent-base sibling as a synthetic delete-vs-modify conflict (2026-06-18)", () => {
+  it("LISTS an absent-base sibling as a synthetic delete-vs-modify conflict (2026-06-18)", async () => {
     // A sibling whose base file is absent is a delete-vs-modify conflict (base
     // deleted, sibling holds the other side) — now LISTED (reverses the old R3.3
     // rule-3 "orphan without base → skip") so it's resolvable via the panel; the
@@ -164,7 +164,7 @@ describe("findAllConflicts", () => {
     const sibPath = siblingPathFor("missing.md", "Phone", Date.UTC(2026, 4, 26));
     writeFile(fx.root, sibPath, "orphan");
 
-    const { entries, byBasePath } = findAllConflicts(
+    const { entries, byBasePath } = await findAllConflicts(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
@@ -193,7 +193,7 @@ describe("findAllConflicts", () => {
       "theirs3",
     );
 
-    const { entries, byBasePath } = findAllConflicts(
+    const { entries, byBasePath } = await findAllConflicts(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
@@ -233,7 +233,7 @@ describe("findAllConflicts", () => {
       "resolved.md",
     ]);
 
-    const summary = pendingConflictSummary(
+    const summary = await pendingConflictSummary(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
@@ -244,14 +244,14 @@ describe("findAllConflicts", () => {
   // §24 — the gate/modal is TRACKED-only. A synthetic conflict (a *.conflict-from-*
   // sibling with NO conflicts.json entry — a local leftover) carries no cross-device
   // consequence, so pendingConflictSummary excludes it.
-  it("§24 synthetic-only vault → summary is null (gate lets sync proceed, no modal)", () => {
+  it("§24 synthetic-only vault → summary is null (gate lets sync proceed, no modal)", async () => {
     writeFile(fx.root, "note.md", "ours");
     writeFile(
       fx.root,
       "note.conflict-from-Phone-2026-05-26T10-30-00Z.md",
       "theirs",
     );
-    const summary = pendingConflictSummary(
+    const summary = await pendingConflictSummary(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
@@ -268,7 +268,7 @@ describe("findAllConflicts", () => {
     writeFile(fx.root, "real.md", "ours");
     await track(fx, "real.md", "Laptop", Date.UTC(2026, 4, 26, 11, 0, 0));
 
-    const summary = pendingConflictSummary(
+    const summary = await pendingConflictSummary(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
@@ -282,7 +282,7 @@ describe("findAllConflicts", () => {
     await track(fx, "busy.md", "Phone", Date.UTC(2026, 4, 26, 10, 0, 0));
     await track(fx, "busy.md", "Laptop", Date.UTC(2026, 4, 26, 11, 0, 0));
 
-    const summary = pendingConflictSummary(
+    const summary = await pendingConflictSummary(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
@@ -299,7 +299,7 @@ describe("findAllConflicts", () => {
     );
     await track(fx, "mix.md", "Tablet", Date.UTC(2026, 4, 26, 12, 0, 0));
 
-    const summary = pendingConflictSummary(
+    const summary = await pendingConflictSummary(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
@@ -319,7 +319,7 @@ describe("findAllConflicts", () => {
       "from laptop",
     );
 
-    const { entries, byBasePath } = findAllConflicts(
+    const { entries, byBasePath } = await findAllConflicts(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
@@ -330,7 +330,7 @@ describe("findAllConflicts", () => {
     ).toBe(true);
   });
 
-  it("sorts entries newest-first by isoTimestamp", () => {
+  it("sorts entries newest-first by isoTimestamp", async () => {
     writeFile(fx.root, "a.md", "x");
     writeFile(fx.root, "b.md", "x");
     writeFile(fx.root, "c.md", "x");
@@ -350,14 +350,14 @@ describe("findAllConflicts", () => {
       "t3",
     );
 
-    const { entries } = findAllConflicts(
+    const { entries } = await findAllConflicts(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
     expect(entries.map((e) => e.basePath)).toEqual(["c.md", "b.md", "a.md"]);
   });
 
-  it("preserves newest-first order within each group", () => {
+  it("preserves newest-first order within each group", async () => {
     writeFile(fx.root, "note.md", "ours");
     writeFile(
       fx.root,
@@ -370,7 +370,7 @@ describe("findAllConflicts", () => {
       "newer",
     );
 
-    const { byBasePath } = findAllConflicts(
+    const { byBasePath } = await findAllConflicts(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
@@ -380,18 +380,18 @@ describe("findAllConflicts", () => {
     expect(bucket[1].deviceLabel).toBe("Phone");
   });
 
-  it("ignores files in nested folders that are not siblings", () => {
+  it("ignores files in nested folders that are not siblings", async () => {
     writeFile(fx.root, "Folder/regular.md", "x");
     writeFile(fx.root, "Folder/Sub/other.md", "x");
 
-    const { entries } = findAllConflicts(
+    const { entries } = await findAllConflicts(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
     expect(entries).toEqual([]);
   });
 
-  it("handles nested-folder siblings correctly", () => {
+  it("handles nested-folder siblings correctly", async () => {
     writeFile(fx.root, "Folder/Sub/note.md", "ours");
     writeFile(
       fx.root,
@@ -403,7 +403,7 @@ describe("findAllConflicts", () => {
       "theirs",
     );
 
-    const { entries } = findAllConflicts(
+    const { entries } = await findAllConflicts(
       fx.vault as unknown as import("obsidian").Vault,
       fx.store,
     );
@@ -414,7 +414,7 @@ describe("findAllConflicts", () => {
 });
 
 describe("groupByBasePath", () => {
-  it("groups entries by basePath, preserving input order within group", () => {
+  it("groups entries by basePath, preserving input order within group", async () => {
     const make = (basePath: string, ts: string): ConflictEntry => ({
       basePath,
       siblingPath: `${basePath}.conflict-from-X-${ts}`,
@@ -432,7 +432,7 @@ describe("groupByBasePath", () => {
     expect(grouped.get("b.md")).toEqual([b1]);
   });
 
-  it("returns empty map on empty input", () => {
+  it("returns empty map on empty input", async () => {
     expect(groupByBasePath([]).size).toBe(0);
   });
 });
@@ -453,7 +453,7 @@ describe("entryFromSibling", () => {
     cleanup(fx.root);
   });
 
-  it("returns null for a path that is not a *.conflict-from-* sibling", () => {
+  it("returns null for a path that is not a *.conflict-from-* sibling", async () => {
     expect(entryFromSibling(fx.store, "note.md")).toBeNull();
     expect(entryFromSibling(fx.store, "Folder/regular.md")).toBeNull();
   });
@@ -478,7 +478,7 @@ describe("entryFromSibling", () => {
     );
   });
 
-  it("classifies an unregistered sibling as synthetic (no vault walk needed)", () => {
+  it("classifies an unregistered sibling as synthetic (no vault walk needed)", async () => {
     // No entry + no base file on disk: entryFromSibling only parses the path +
     // checks the store's cached index, so an absent base is irrelevant here
     // (matches the absent-base-is-listed rule).
@@ -488,5 +488,119 @@ describe("entryFromSibling", () => {
     expect(entry!.kind).toBe("synthetic");
     expect(entry!.basePath).toBe("note.md");
     expect(entry!.deviceLabel).toBe("Laptop");
+  });
+});
+
+describe("§4.3.1 п.2 — tracked comes from the STORE, not from the index scan", () => {
+  let fx: ReturnType<typeof fixture>;
+
+  beforeEach(async () => {
+    fx = fixture();
+    await fx.store.load();
+  });
+  afterEach(() => cleanup(fx.root));
+
+  it("a TRACKED conflict in dot-space is listed — the whole point of the inversion", async () => {
+    // THE headline case. Obsidian's file index contains no dot-paths,
+    // so while tracked entries were derived from `vault.getFiles()` a
+    // real conflict on `.myconfig/note.md` was invisible to the panel
+    // even with a live record in conflicts.json: the engine knew, the
+    // user could not see it, and nothing explained why.
+    writeFile(fx.root, ".myconfig/note.md", "ours");
+    const sib = await track(fx, ".myconfig/note.md", "Phone", 1_700_000_000_000);
+
+    const { entries } = await findAllConflicts(
+      fx.vault as unknown as import("obsidian").Vault,
+      fx.store,
+    );
+    expect(entries.map((e) => e.siblingPath)).toEqual([sib]);
+    expect(entries[0].kind).toBe("tracked");
+    expect(entries[0].basePath).toBe(".myconfig/note.md");
+  });
+
+  it("a tracked record whose sibling file is gone is NOT listed", async () => {
+    // The standing guarantee: a conflict the user already resolved, whose
+    // record lingers until the next reconcile, must not reappear. The
+    // store branch keeps it by asking the disk one question per sibling.
+    writeFile(fx.root, "note.md", "ours");
+    const sib = await track(fx, "note.md", "Phone", 1_700_000_000_000);
+    fs.rmSync(path.join(fx.root, sib));
+
+    const { entries } = await findAllConflicts(
+      fx.vault as unknown as import("obsidian").Vault,
+      fx.store,
+    );
+    expect(entries).toEqual([]);
+  });
+
+  it("a tracked sibling is listed ONCE, not twice", async () => {
+    // Both branches can see a non-dot tracked sibling: the store lists
+    // it, and the index scan would too. The fast branch drops tracked
+    // hits so the row does not double up.
+    writeFile(fx.root, "note.md", "ours");
+    // The sibling is a non-dot root file, so Obsidian's index returns
+    // it too — both branches really do see this one.
+    const sib = await track(fx, "note.md", "Phone", 1_700_000_000_000);
+    expect(fx.vault.getFiles().map((f) => f.path)).toContain(sib);
+
+    const { entries } = await findAllConflicts(
+      fx.vault as unknown as import("obsidian").Vault,
+      fx.store,
+    );
+    expect(entries.filter((e) => e.siblingPath === sib)).toHaveLength(1);
+  });
+
+  it("tracked rows sort beside synthetic ones, not at the wrong end", async () => {
+    // The timestamp of a tracked row is derived from the SAME mtime its
+    // filename is derived from. Take it from anywhere else and tracked
+    // rows drift away from their synthetic twins in the list.
+    writeFile(fx.root, "note.md", "ours");
+    const older = await track(fx, "note.md", "Phone", 1_600_000_000_000);
+    const newer = await track(fx, "note.md", "Tablet", 1_700_000_000_000);
+
+    const { entries } = await findAllConflicts(
+      fx.vault as unknown as import("obsidian").Vault,
+      fx.store,
+    );
+    expect(entries.map((e) => e.siblingPath)).toEqual([newer, older]);
+  });
+});
+
+describe("§24 + §4.3 — the gate and the badge are TRACKED-only", () => {
+  let fx: ReturnType<typeof fixture>;
+
+  beforeEach(async () => {
+    fx = fixture();
+    await fx.store.load();
+  });
+  afterEach(() => cleanup(fx.root));
+
+  it("a synthetic-only vault does not open the gate", async () => {
+    // A synthetic conflict is a purely local echo of something already
+    // resolved — GitHub knows nothing about it, so it carries no
+    // cross-device consequence and must not block a sync.
+    writeFile(fx.root, "note.md", "ours");
+    writeFile(
+      fx.root,
+      siblingPathFor("note.md", "Phone", 1_700_000_000_000),
+      "theirs",
+    );
+    expect(
+      await pendingConflictSummary(
+        fx.vault as unknown as import("obsidian").Vault,
+        fx.store,
+      ),
+    ).toBeNull();
+  });
+
+  it("a tracked conflict in DOT-SPACE now opens it — the scan-derived gate could not see one", async () => {
+    writeFile(fx.root, ".myconfig/note.md", "ours");
+    await track(fx, ".myconfig/note.md", "Phone", 1_700_000_000_000);
+    const summary = await pendingConflictSummary(
+      fx.vault as unknown as import("obsidian").Vault,
+      fx.store,
+    );
+    expect(summary?.trackedPaths).toEqual([".myconfig/note.md"]);
+    expect(summary?.trackedConflictCount).toBe(1);
   });
 });

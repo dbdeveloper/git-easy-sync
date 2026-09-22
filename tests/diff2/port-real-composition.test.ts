@@ -236,7 +236,7 @@ describe("diff2 port real composition (drainOnce → conflicts.json → findAllC
     fs.writeFileSync(path.join(dir, ghostName), "ghost");
 
     // ── the PORTED UI reads the SAME store instance the drain wrote ──
-    const { entries, byBasePath } = findAllConflicts(
+    const { entries, byBasePath } = await findAllConflicts(
       vault as unknown as import("obsidian").Vault,
       conflictStore,
     );
@@ -252,7 +252,7 @@ describe("diff2 port real composition (drainOnce → conflicts.json → findAllC
 
     // The §24 gate lists ONLY the tracked base — the ghost is a
     // local-only leftover with no cross-device consequence.
-    const summary = pendingConflictSummary(
+    const summary = await pendingConflictSummary(
       vault as unknown as import("obsidian").Vault,
       conflictStore,
     );

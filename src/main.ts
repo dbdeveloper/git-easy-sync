@@ -1128,12 +1128,16 @@ export default class GitHubSyncPlugin extends Plugin {
     const conflictCounter = new ConflictCounter({
       vault: this.app.vault,
       store: conflictStoreV2,
-      // TODO #7 — count EXACTLY what the diff-panel lists (tracked + synthetic
-      // siblings) so the ribbon badge / status bar / menu can't undercount. Same
-      // source as the panel (findAllConflicts); main.ts bridges sync2's counter
-      // to diff2's detector so neither module imports across the layer boundary.
-      countConflicts: () =>
-        findAllConflicts(this.app.vault, conflictStoreV2).entries.length,
+      // ✅ TODO #7 CLOSED the other way (DOT-FILES §4.3, owner decision): the
+      // badge counts TRACKED conflicts only, using the store-only default
+      // formula. Counting what the panel lists would now mean paying for the
+      // dot-space walk (~22 s on Android, §14) on every badge recompute — and
+      // the badge has to be cheap and synchronous-ish. The pre-sync gate was
+      // already tracked-only (§24), so the badge now agrees with it.
+      //
+      // Accepted trade-off, stated plainly: the badge no longer hints at
+      // synthetic-only leftovers. Those surface in the panel, which is where
+      // they can actually be acted on.
     });
     conflictCounter.subscribe(() => this.refreshConflictUI());
     this.conflictCounter = conflictCounter;
@@ -1482,7 +1486,10 @@ export default class GitHubSyncPlugin extends Plugin {
     // the panel no longer listed it. Read-only: record cleanup stays the drain's job.
     // §24 — summary is TRACKED-only: null means no tracked conflicts (none, or only
     // synthetic leftovers) → let the sync proceed silently, no modal over local-only echoes.
-    const summary = pendingConflictSummary(this.app.vault, this.conflictStoreV2);
+    const summary = await pendingConflictSummary(
+      this.app.vault,
+      this.conflictStoreV2,
+    );
     if (!summary) return true;
     const decision = await new PreSyncConflictModal(
       this.app,
@@ -2572,9 +2579,9 @@ export default class GitHubSyncPlugin extends Plugin {
     origin: DiffEditorOrigin,
     anchorPath: string,
   ): Promise<void> {
-    const baseHasConflicts = findAllConflicts(this.app.vault, this.conflictStoreV2).byBasePath.has(
-      anchorPath,
-    );
+    const baseHasConflicts = (
+      await findAllConflicts(this.app.vault, this.conflictStoreV2)
+    ).byBasePath.has(anchorPath);
     const nav = planBackNav(origin, anchorPath, baseHasConflicts);
     // 7a.3 — a history `[←]` returns to the per-file diff2-history list (reveal existing
     // via the per-file dup-guard, or open a fresh one — the origin tab may be closed).
