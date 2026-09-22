@@ -166,6 +166,10 @@ function makeFixture(initialPushDataJson = false): Fixture {
         opts?.syncConfigDir ?? true,
         new GI(root, undefined, whitelistedGitignoreDirs(CONFIG_DIR)),
         reader,
+        // These tests are about configDir and the plugin folders, which
+        // step 3 governs; the set only has to be non-null so the D7
+        // fail-loud does not fire.
+        { dotFiles: new Set([".gitignore"]), walkTargets: new Set([CONFIG_DIR]) },
       ),
   };
 }

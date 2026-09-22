@@ -150,26 +150,39 @@ describe("ChangeDetector", () => {
       expect(paths).toEqual([".gitignore", "x.md"]);
     });
 
-    it("picks up root-level dotfiles that vault.getFiles() omits", async () => {
+    it("root `.gitignore` is picked up — the control file always is", async () => {
       // Real bug from production: desktop and mobile root `.gitignore`
-      // drifted apart for weeks because findChanges never saw edits
-      // to it. vault.getFiles() in production Obsidian doesn't index
-      // root dotfiles; walkRootDotfiles compensates. The mock mirrors
-      // the production gap (root dotfiles are NOT returned by
-      // mock's getFiles), so this test fails the moment the
-      // compensation breaks.
+      // drifted apart for weeks because findChanges never saw edits to
+      // it. vault.getFiles() in production Obsidian does not index root
+      // dotfiles, and the mock mirrors that gap, so this fails the
+      // moment the compensation breaks.
+      //
+      // ⚠️ INVERTED at Крок B2 for its NEIGHBOURS. It used to assert
+      // that EVERY root dotfile syncs — which was D1 turned inside out.
+      // Dot-space is invisible by default now; only the control file is
+      // structurally a member, and the rest need a `!`-rule (D2/D7).
       writeFile(f.root, ".gitignore", "rule\n");
       writeFile(f.root, ".gitattributes", "* text=auto\n");
       writeFile(f.root, ".editorconfig", "root = true\n");
       writeFile(f.root, "regular.md", "body");
       const out = await f.detector.findChanges();
-      const paths = out.map((c) => c.path).sort();
-      expect(paths).toEqual([
-        ".editorconfig",
-        ".gitattributes",
-        ".gitignore",
-        "regular.md",
-      ]);
+      expect(out.map((c) => c.path).sort()).toEqual([".gitignore", "regular.md"]);
+    });
+
+    it("a root dotfile syncs once a `!`-rule names it, and not before", async () => {
+      // D2 source 3 end to end: the opt-in mechanism the whole dot-space
+      // design rests on. Without the rule the file is simply invisible —
+      // not an error, not a warning, just not ours to carry.
+      writeFile(f.root, ".editorconfig", "root = true\n");
+      writeFile(f.root, ".gitignore", "rule\n");
+      expect((await f.detector.findChanges()).map((c) => c.path).sort()).toEqual(
+        [".gitignore"],
+      );
+
+      writeFile(f.root, ".gitignore", "rule\n!.editorconfig\n");
+      expect((await f.detector.findChanges()).map((c) => c.path).sort()).toEqual(
+        [".editorconfig", ".gitignore"],
+      );
     });
 
     it("dotfile coverage: .gitignore, .gitkeep, .blabla sync; .git blocked", async () => {
@@ -188,14 +201,23 @@ describe("ChangeDetector", () => {
       const out = await f.detector.findChanges();
       const paths = out.map((c) => c.path).sort();
 
-      // All four user dotfiles flow through; .git is blocked by
-      // isSyncable's hardcoded denylist.
-      expect(paths).toEqual([
-        ".blabla",
-        ".editorconfig",
+      // ⚠️ INVERTED at Крок B2. This used to assert all four flow
+      // through, which is exactly the default-visible behaviour D1
+      // replaces. Now: the control file is a structural member, the
+      // others wait for a `!`-rule, and `.git` stays blocked by the
+      // hardcoded denylist regardless of any rule.
+      expect(paths).toEqual([".gitignore"]);
+
+      // Name two of them and they appear; `.git` still cannot be opted
+      // in, because the denylist is checked before any of this.
+      writeFile(
+        f.root,
         ".gitignore",
-        ".gitkeep",
-      ]);
+        "user rule\n!.gitkeep\n!.blabla\n!.git\n",
+      );
+      expect(
+        (await f.detector.findChanges()).map((c) => c.path).sort(),
+      ).toEqual([".blabla", ".gitignore", ".gitkeep"]);
     });
 
     it("walkRootDotfiles only walks the vault ROOT (no recursion into dotfile-named subdirs)", async () => {
@@ -865,8 +887,16 @@ describe("conflict siblings: the device label is NOT restricted to [A-Za-z0-9_-]
   // `*.conflict-from-*` gitignore rule alone. Two layers, one broken.
   const syncable = async (p: string) => {
     const gi = new GI("");
-    return isSyncable(p, ".obsidian", "git-easy-sync", true, gi, async () =>
-      null,
+    return isSyncable(
+      p,
+      ".obsidian",
+      "git-easy-sync",
+      true,
+      gi,
+      async () => null,
+      // Siblings are ordinary (non-dot) paths, so D7 never looks at the
+      // set here; it only has to exist.
+      { dotFiles: new Set(), walkTargets: new Set() },
     );
   };
   const TS = "2026-01-01T00-00-00Z";
@@ -894,5 +924,81 @@ describe("conflict siblings: the device label is NOT restricted to [A-Za-z0-9_-]
     expect(await syncable(`notes/a.conflict-from-x-${TS}/inside.md`)).toBe(
       true,
     );
+  });
+});
+
+describe("D7 — no permission without discoverability (DOT-FILES §3.2 step 5)", () => {
+  // The most important invariant in the dot-space design, and the one
+  // that is destructive when absent: a path that answers "syncable" but
+  // that no scan ever visits sits in the baselines, misses Pass 1, and
+  // Pass 2 reads it as deleted — propagating the delete to every device.
+  // Losing the anchor off `!/.myconfig/` is a one-character edit.
+  const CD = ".obsidian";
+  const set = (dotFiles: string[], walkTargets: string[]) => ({
+    dotFiles: new Set(dotFiles),
+    walkTargets: new Set(walkTargets),
+  });
+  const ask = (p: string, optIn: ReturnType<typeof set> | null) =>
+    isSyncable(p, CD, "git-easy-sync", true, new GI(""), async () => null, optIn);
+
+  it("TD7.1 — an unanchored dot-dir rule grants nothing", async () => {
+    // `!.myconfig/` would have matched at any depth; the set that comes
+    // out of it is empty, so the path is not permitted either.
+    expect(await ask(".myconfig/foo.md", set([], []))).toBe(false);
+  });
+
+  it("TD7.2 — a glob grants nothing", async () => {
+    expect(await ask(".foo", set([], []))).toBe(false);
+    expect(await ask("notes/.foo/x.md", set([], []))).toBe(false);
+  });
+
+  it("TD7.3 — a dot-file in an ordinary subfolder is not reachable", async () => {
+    expect(await ask("notes/.secret", set([], []))).toBe(false);
+  });
+
+  it("TD7.4 — an anchored dot-dir IS a walk target, so its content is permitted", async () => {
+    const s = set([], [".myconfig"]);
+    expect(await ask(".myconfig/foo.md", s)).toBe(true);
+    expect(await ask(".myconfig/deep/bar.md", s)).toBe(true);
+    // ...and a sibling that merely shares the prefix is not.
+    expect(await ask(".myconfigX/foo.md", s)).toBe(false);
+  });
+
+  it("a named dot-FILE is permitted; its neighbours are not", async () => {
+    const s = set([".editorconfig"], []);
+    expect(await ask(".editorconfig", s)).toBe(true);
+    expect(await ask(".gitattributes", s)).toBe(false);
+  });
+
+  it("ordinal paths never consult the set at all", async () => {
+    expect(await ask("notes/a.md", set([], []))).toBe(true);
+  });
+
+  it("TD7.5 — an unpopulated set THROWS; it does not quietly answer false", async () => {
+    // Fail-loud is the point. Answering "false" would take the whole
+    // dot-space out of scope, Pass 2 would treat every dot-path as
+    // gone, and the cause would be a missing call several layers away.
+    await expect(ask(".editorconfig", null)).rejects.toThrow(/beginScan/);
+    // ...but an ordinal path never reaches the check, so a caller that
+    // only handles ordinary files is not punished for someone else's
+    // lifecycle bug.
+    await expect(ask("notes/a.md", null)).resolves.toBe(true);
+  });
+
+  it("`<configDir>/` is answered by the hardcoded gate, not by the set", async () => {
+    // Step 3 is the real authority there. Keeping step 5's exemption
+    // explicit means it does not depend on how the set was built.
+    expect(await ask(`${CD}/app.json`, set([], []))).toBe(true);
+    expect(
+      await isSyncable(
+        `${CD}/app.json`,
+        CD,
+        "git-easy-sync",
+        false, // syncConfigDir OFF
+        new GI(""),
+        async () => null,
+        set([], []),
+      ),
+    ).toBe(false);
   });
 });

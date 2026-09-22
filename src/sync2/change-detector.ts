@@ -4,6 +4,11 @@
 
 import { TFile, Vault } from "obsidian";
 import GI, { isWhitelistedGitignoreDir } from "../gi";
+import {
+  OptInSet,
+  readRootGitignore,
+  underWalkTarget,
+} from "./dot-space";
 import { calculateGitBlobSHA } from "../utils";
 import HotMetadataStore from "./hot-metadata";
 import FileBaselinesStore, {
@@ -29,6 +34,10 @@ export async function isSyncable(
   asyncReader: (
     abs: string,
   ) => Promise<{ content: string; mtime: number } | null>,
+  // The opt-in set for THIS scan (DOT-FILES §3.2 step 5 / §5). `null`
+  // means nobody computed it, which is a lifecycle bug, not a state —
+  // see the throw below.
+  optIn: OptInSet | null,
 ): Promise<boolean> {
   if (path === `${configDir}/plugins/${selfPluginId}/data.json`) return false;
   // Per-device configDir gate — symmetric: OFF blocks the whole
@@ -67,7 +76,47 @@ export async function isSyncable(
   // where the root file is missing or hand-edited, since it does not
   // depend on any file's contents to be true.
   if (isUnhonouredGitignore(path, configDir)) return false;
+  // D7 (DOT-FILES §3.2 step 5) — THE load-bearing one. A dot-path may
+  // be permitted only if push-discovery can actually reach it.
+  //
+  // Without this, a rule that grants permission without addressing a
+  // concrete path (an unanchored `!.myconfig/`, a glob) would leave the
+  // path in the baselines, answering "syncable", while no scan ever
+  // visits it. Pass 2 reads that as "deleted" and propagates the delete
+  // to every device. Losing the anchor off `!/.myconfig/` — one
+  // character — would wipe the directory everywhere. So "permitted" and
+  // "discoverable" are ONE set.
+  if (isDotPath(path)) {
+    if (optIn === null) {
+      // FAIL LOUD (§5). Silently answering "false" here would be worse
+      // than a crash: the whole dot-space would quietly leave scope,
+      // Pass 2 would treat every dot-path as gone, and the cause would
+      // be a missing call several layers away. A caller that reaches
+      // isSyncable outside a scan is a bug in the caller.
+      throw new Error(
+        `isSyncable(${path}): the dot-space opt-in set was never computed ` +
+          `for this operation — call ChangeDetector.beginScan() first ` +
+          `(DOT-FILES §5)`,
+      );
+    }
+    // `<configDir>/` is answered by step 3 above, which is the real
+    // authority for it; keeping the exemption explicit means step 5 does
+    // not depend on how the set happened to be built.
+    const underConfigDir =
+      path === configDir || path.startsWith(`${configDir}/`);
+    if (!underConfigDir) {
+      const discoverable =
+        optIn.dotFiles.has(path) ||
+        underWalkTarget(path, optIn.walkTargets);
+      if (!discoverable) return false;
+    }
+  }
   return !(await gi.ignoredAsync(path, asyncReader));
+}
+
+// Any segment starting with a dot makes it a dot-path (DOT-FILES §2).
+export function isDotPath(path: string): boolean {
+  return path.split("/").some((seg) => seg.startsWith("."));
 }
 
 // True for a `.gitignore` outside the three locations D5 reads.
@@ -186,6 +235,13 @@ export default class ChangeDetector {
   private readonly conflictBaseSha:
     | ((path: string) => string | null | undefined)
     | undefined;
+  // The opt-in set for the CURRENT operation (DOT-FILES §5). Null until
+  // beginScan() runs, and deliberately not lazily filled: "not computed
+  // yet" and "lifecycle bug" have to stay distinguishable, or the
+  // fail-loud in isSyncable means nothing. It is also why scope is
+  // fixed for the whole pass (§3.3) — a mid-scan recompute could read a
+  // .gitignore this very drain just pulled.
+  private optIn: OptInSet | null = null;
 
   constructor(deps: ChangeDetectorDeps) {
     this.vault = deps.vault;
@@ -198,6 +254,22 @@ export default class ChangeDetector {
     this.syncConfigDir = deps.syncConfigDir;
     this.queue = deps.queue;
     this.conflictBaseSha = deps.conflictBaseSha;
+  }
+
+  // Compute the dot-space opt-in set for the operation about to run.
+  //
+  // Called at the start of EVERY sync operation, not just commit: pull
+  // and bootstrap ask isSyncable too, and a pull whose set was never
+  // built would silently fail to fetch opted-in dot-content — a
+  // one-sided break that only shows up on the second device (§5).
+  // findChanges/findChangeForPath call it themselves; the manager calls
+  // it for the paths it owns (drain, bootstrap).
+  async beginScan(): Promise<void> {
+    this.optIn = await readRootGitignore({
+      vault: this.vault,
+      configDir: this.configDir,
+      syncConfigDir: this.syncConfigDir,
+    });
   }
 
   // Walk the vault, return everything that needs to flow remote-ward,
@@ -224,6 +296,7 @@ export default class ChangeDetector {
   // the narrow candidate set is what actually pays for isSyncable +
   // read+SHA.
   async findChanges(): Promise<FileChange[]> {
+    await this.beginScan();
     const out: FileChange[] = [];
     const watermark = this.hotMeta.getLastCommitMtime();
     const allFiles: FileLike[] = this.vault.getFiles().map((f) => ({
@@ -459,6 +532,10 @@ export default class ChangeDetector {
   // Returns null when the path has no work to push: identical to
   // snapshot, missing on both sides, ignored, or hardcoded-blocked.
   async findChangeForPath(path: string): Promise<FileChange | null> {
+    // syncFile (the one-file ribbon action) is its own operation, so it
+    // establishes its own scope — otherwise it would be the fail-loud's
+    // first victim rather than its beneficiary.
+    await this.beginScan();
     if (!(await this.checkSyncable(path))) return null;
 
     const stat = await this.vault.adapter.stat(path);
@@ -562,6 +639,7 @@ export default class ChangeDetector {
       this.syncConfigDir(),
       this.gi,
       this.giReader,
+      this.optIn,
     );
   }
 

@@ -253,6 +253,10 @@ export class Sync2Manager {
     | { kind: "committed"; count: number }
   > {
     this.deps.logger.info("Sync2 commitFile start", { path });
+    // Establish this operation's dot-space scope before asking about a
+    // path — checkSyncable fails loud without it (DOT-FILES §5), and
+    // this gate runs before runCommitPass gets a chance to do it.
+    await this.deps.detector.beginScan();
     if (!(await this.deps.detector.checkSyncable(path))) {
       return { kind: "ignored" };
     }
@@ -462,6 +466,12 @@ export class Sync2Manager {
         });
       }
     }
+    // DOT-FILES §5: the drain asks isSyncable through discovery (the
+    // pull-side filter), so it needs this operation's opt-in set — and
+    // it needs it AFTER enforce(), which may have just recreated the
+    // root .gitignore the set is read from. Without it an opted-in
+    // dot-directory would silently fail to pull: a one-sided break that
+    // only surfaces on the second device.
     const startedAtMs = this.now();
     this.emitDrainStatus({
       state: "running",
@@ -471,6 +481,12 @@ export class Sync2Manager {
       currentFile: 0,
     });
     try {
+      // Placed INSIDE the try and after the status flip: the UI's
+      // "running" must light up before the first await yields (pinned
+      // by the cancelDrain test), and a failure to read the opt-in set
+      // should surface through the drain's own error path rather than
+      // escaping the status machine.
+      await this.deps.detector.beginScan();
       const r = await (this.deps.drainFn ?? drainOnce)(this.buildDeps());
 
       // Vault-step outcome → UI signals (independent of status: the
