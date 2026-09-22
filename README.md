@@ -594,6 +594,7 @@ difference between them is deliberate:
 ```gitignore
 # ===== git-easy-sync invariants - DO NOT EDIT =====
 .*                       ← hide dot-space
+.*/
 !/.gitignore
 # ===== end of git-easy-sync invariants =====
 
@@ -606,6 +607,9 @@ difference between them is deliberate:
 *.ges-bak*
 # ===== end of git-easy-sync final =====
 ```
+
+*(Abridged — the real blocks carry explanatory comments between these
+lines. The rules themselves are exactly as shown.)*
 
 The **top** block is a default you are invited to change — your
 rules sit below it and win. The **bottom** block is not: it holds

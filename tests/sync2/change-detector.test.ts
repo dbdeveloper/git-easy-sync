@@ -1289,3 +1289,57 @@ describe("scope belongs to the OPERATION, not to the detector", () => {
     );
   });
 });
+
+describe("D6a end to end — keeping the root .gitignore to one machine", () => {
+  // A capability the README documents, so it has to work through the
+  // WHOLE path, not just at the matcher. Two gates stand between the
+  // user's line and the outcome, and they answer different questions:
+  // D7 asks "can discovery reach this?" — and for the root control file
+  // the answer is a structural YES, on purpose (B2-1) — while gi asks
+  // "is it permitted?", which is where the user's `/.gitignore` line
+  // wins by last-match. Only the second one may say no here; if D7 said
+  // it, a deliberate per-device choice would be indistinguishable from
+  // a discovery hole.
+  let f: ReturnType<typeof fixture>;
+
+  beforeEach(() => {
+    f = fixture();
+  });
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  it("the file stops being offered for sync, while everything it governs still is", async () => {
+    writeFile(f.root, "note.md", "hello");
+    writeFile(f.root, ".editorconfig", "root = true\n");
+    writeFile(f.root, ".gitignore", "!/.editorconfig\n");
+
+    // Before: the control file syncs, like any shared rule set.
+    let paths = (await f.detector.findChanges()).map((c) => c.path).sort();
+    expect(paths).toEqual([".editorconfig", ".gitignore", "note.md"]);
+
+    // The user makes it local — the D6a line, written below our
+    // managed section the way the README describes.
+    writeFile(f.root, ".gitignore", "!/.editorconfig\n/.gitignore\n");
+
+    paths = (await f.detector.findChanges()).map((c) => c.path).sort();
+    expect(paths).not.toContain(".gitignore");
+    // ...and it is still GOVERNING: its own `!`-rule keeps working, and
+    // ordinary files are unaffected.
+    expect(paths).toEqual([".editorconfig", "note.md"]);
+  });
+
+  it("leaving scope is silent — no `deleted` reaches the remote", async () => {
+    // The file was shared before, so a baseline exists for it. Dropping
+    // out of scope must not look like the user deleted it.
+    writeFile(f.root, ".gitignore", "/.gitignore\n");
+    await f.store.set(".gitignore", {
+      baselineSha: await shaOf("old"),
+      mtime: 1,
+      size: 1,
+    });
+    const out = await f.detector.findChanges();
+    expect(out.some((c) => c.kind === "deleted")).toBe(false);
+    expect(fs.existsSync(path.join(f.root, ".gitignore"))).toBe(true);
+  });
+});

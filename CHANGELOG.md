@@ -27,6 +27,15 @@ expected to stay private.
   contained `*`, those notes were excluded and **will now sync**.
   Move the rule into the root `.gitignore` with its path in front
   (`notes/private/`) **before** your next sync.
+- **The markers around the managed blocks changed**, so a block
+  written by an earlier version is no longer recognised and is left
+  in place untouched. It does no harm — the new blocks are written
+  alongside it and the bottom one wins — but it is litter, and the
+  plugin will not remove text it no longer recognises as its own.
+  **Delete the old block by hand, once**: it is the section between
+  `# ===== git-easy-sync invariants — DO NOT EDIT =====` (with a
+  long dash) and `# ===== end of invariants =====`. Do this in
+  `<vault>/.gitignore` and in `<vault>/.obsidian/.gitignore`.
 - **Root dot-files other than `.gitignore` stop syncing.** Earlier
   versions picked up every dot-file at the vault root
   (`.gitattributes`, `.editorconfig`, …) whether or not you asked
