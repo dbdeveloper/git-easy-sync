@@ -821,6 +821,61 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     });
   }
 
+  it("W1: a conflict flag never reaches the journal before its record is durable", async () => {
+    // THE ORDER IS THE CONTRACT (§IV.2 / §VIII D). STEP1 raises
+    // `isManualConflict`, and the journal persist is the only place
+    // that flag becomes durable. Of the four crash states between the
+    // two writes exactly ONE is destructive: flag-without-record, where
+    // RECONCILE reads the empty scan as "resolved externally", drops
+    // the flag, FINALIZE merges and deletes the branch, and the next
+    // batch takes rule 4.4 and clobbers theirs on main — silent,
+    // G9-class. Saving the store FIRST makes the only reachable
+    // in-between state the benign one.
+    //
+    // ⚠️ This test exists because a mutation probe (2026-09-23, audit
+    // §IX) swapped the two lines back to the pre-fix order and the
+    // ENTIRE suite stayed green. The fix (`d8018b2`) was real and the
+    // reasoning was written into the code, but nothing would have
+    // caught a refactor undoing it.
+    //
+    // Phrased as the invariant, not as line order, so a future
+    // restructuring that preserves the guarantee some other way still
+    // passes: whenever a state carrying the flag is persisted, the
+    // record for that path must ALREADY be readable from disk by an
+    // independent reader.
+    await setupAligned();
+    await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+
+    const violations: string[] = [];
+    let flagPersists = 0;
+    const realPersist = journal.persist.bind(journal);
+    journal.persist = async (state) => {
+      for (const [path, t] of state.trackedFiles) {
+        if (!t.isManualConflict) continue;
+        flagPersists++;
+        // A SEPARATE store instance: "durable" means on disk, not in
+        // the drain's own cached state.
+        const onDisk = await new ConflictStoreV2({
+          vault: vault as never,
+          selfPluginId: PLUGIN_ID,
+        }).load();
+        if (!onDisk.entries.has(path)) violations.push(path);
+      }
+      return realPersist(state);
+    };
+
+    const r = await drainOnce(makeDeps());
+    journal.persist = realPersist;
+
+    expect(r.status).toBe("ok");
+    // The setup really did raise the flag — otherwise this passes for
+    // the wrong reason.
+    expect(flagPersists).toBeGreaterThan(0);
+    expect(violations).toEqual([]);
+  });
+
   it("J.1: a journal on disk RESUMES the interrupted drain — tracked files and the branch name come back verbatim", async () => {
     // Distinct from B.3 (a 422 restart INSIDE one run): here the
     // process is gone and a brand-new drainOnce has to pick the state
