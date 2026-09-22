@@ -458,14 +458,17 @@ Settings tab layout matches what you'll see in Obsidian under
   multi-device users typically don't want one machine's layout
   overwriting another's. See
   [Bonus: cloning plugins](#bonus-cloning-plugins-and-their-settings-to-the-new-device).
-- **Push plugins data.json to GitHub** — when on, the `data.json`
-  files of *other* community plugins are also synced. Off by
-  default — these files frequently store API tokens, account
-  credentials, and license keys. Our own `data.json` is **always**
-  blocked regardless of this toggle. This setting is stored in
-  `<configDir>/.gitignore` rather than per-device data.json, so
-  toggling it on one device propagates to every other device on
-  the next sync (no per-device drift).
+- **Sync plugins data.json** — when on, the `data.json` files of
+  *other* community plugins are also synced. Off by default —
+  these files frequently store API tokens, account credentials,
+  and license keys. Our own `data.json` is **always** blocked
+  regardless of this toggle.
+  **Per-device**, like *Sync configs*: turning it on here leaves
+  your other machines alone, so you can share plugin settings
+  between two devices out of ten. A plugin can still overrule the
+  switch from a `.gitignore` in its own folder — in either
+  direction — which is the intended escape hatch for "share
+  everything except this one".
 
 ### Interface
 
@@ -527,6 +530,134 @@ time looking for them:
   surface that didn't pull its weight — users with an active
   conflict clicked the status bar or ribbon to open the sibling,
   not the settings tab.
+
+---
+
+## What syncs, and what stays invisible
+
+Everything whose name starts with a dot — `.editorconfig`,
+`.obsidian/`, `notes/.drafts/` — is **invisible to sync by
+default**. Obsidian itself does not show those files, so syncing
+them without being asked would move things you never see; and some
+of them (editor state, caches, credentials dropped by other tools)
+are the last things that should land in a shared repo.
+
+Ordinary files are the opposite: visible by default, unless a
+`.gitignore` rule hides them.
+
+### Three ways to make a dot-path visible
+
+1. **The root `.gitignore` itself** always syncs — it is the file
+   that decides everything else, so both machines need it.
+2. **The config folder**, `.obsidian/`, via the **Sync configs**
+   setting. That one is deliberately **per-device**: "do I share my
+   config" is a decision each machine makes for itself, so it lives
+   in the plugin's own settings rather than in the shared
+   `.gitignore`.
+3. **A `!`-rule you write in the root `.gitignore`**, naming the
+   file or folder you want back:
+
+   ```gitignore
+   !/.editorconfig        # this one file
+   !/.myconfig/           # this folder, and its ordinary contents
+   ```
+
+### Rules that look right but do nothing
+
+These are real gitignore semantics, not plugin quirks — but they
+catch people out, so:
+
+| You write | What happens |
+|---|---|
+| `!/.myconfig/foo.md` | **Nothing.** git cannot re-include a file inside a hidden folder. Un-hide the folder: `!/.myconfig/` |
+| `!.myconfig/` (no leading `/`) | **Nothing here.** It matches a folder of that name at *any* depth, so the plugin cannot tell which one you meant. Anchor it: `!/.myconfig/` |
+| `!.editorconfig` (no leading `/`) | Works, but in git it also matches `sub/.editorconfig`. For the root one only, write `!/.editorconfig` |
+| `!**/.foo`, `!*.conf` | **Nothing.** A pattern is not a path; the plugin only un-hides things it can name |
+| `!notes/.secret` | **Nothing** — a dot-*file* buried in an ordinary folder is not supported (a dot-*folder* there is: `!notes/.secret/`) |
+
+The reason the "nothing" cases are nothing rather than
+half-working: a rule that granted permission without giving the
+plugin a way to *find* the file would leave it looking deleted on
+the next sync, and that delete would travel to your other devices.
+A rule that does nothing is safe; a rule that half-works is not.
+
+**Un-hiding a folder does not un-hide dot-paths inside it.**
+`!/.myconfig/` brings back `.myconfig/note.md` and
+`.myconfig/deep/note.md`, but not `.myconfig/.hidden` — name that
+separately if you want it.
+
+### The two blocks the plugin manages
+
+Your root `.gitignore` gets two managed sections, and the
+difference between them is deliberate:
+
+```gitignore
+# ===== git-easy-sync invariants - DO NOT EDIT =====
+.*                       ← hide dot-space
+!/.gitignore
+# ===== end of git-easy-sync invariants =====
+
+...your rules go here, and they OVERRIDE the block above...
+
+# ===== git-easy-sync final - DO NOT EDIT =====
+!.obsidian/              ← these cannot be overridden
+*.conflict-from-*
+*.ges-tmp*
+*.ges-bak*
+# ===== end of git-easy-sync final =====
+```
+
+The **top** block is a default you are invited to change — your
+rules sit below it and win. The **bottom** block is not: it holds
+conflict-sibling files and the plugin's own temporary files, and a
+rule resurrecting those would break syncing rather than customise
+it. Both blocks are rewritten to their canonical form on every
+sync; everything between them is yours and is never touched.
+
+### Keeping a control file to one machine
+
+Because your rules override the top block, you can write
+`/.gitignore` among them. That takes the root `.gitignore` itself
+out of sync: the machine keeps using it, but stops sharing it.
+Useful when one device needs its own `.editorconfig` while the
+others share one.
+
+The price is real, so decide knowingly: that machine's rules stop
+reaching the others, and if *every* machine does this there is no
+copy of your rules in the repo at all.
+
+### Where the plugin deliberately differs from git
+
+If you ever run `git status` in your vault, expect it to disagree
+with the plugin in one place: **a `.gitignore` in an arbitrary
+subfolder is read by git and ignored by the plugin.** Only three
+locations are honoured — the vault root, `.obsidian/`, and one
+level under `.obsidian/plugins/`.
+
+This is a choice, not an oversight. It keeps what-syncs-where
+answerable by looking at one file, and it keeps the plugin from
+obeying a control file it would then refuse to sync — which would
+leave your other devices governed by rules they never received. A
+`.gitignore` outside those three places is, for the plugin, a file
+you did not write.
+
+### Upgrading from an earlier version
+
+Two changes are worth knowing about, because both are silent:
+
+- **Root dot-files other than `.gitignore` stop syncing.** Earlier
+  versions synced every dot-file at the vault root
+  (`.gitattributes`, `.editorconfig`, …) whether or not you asked.
+  They now wait for a `!`-rule. Nothing is deleted: the files stay
+  on disk, the copies already on GitHub stay there, and the plugin
+  simply stops touching them in either direction. Add
+  `!/.gitattributes` to keep one syncing.
+- ⚠️ **A `.gitignore` in a subfolder stops being obeyed — check
+  what it was hiding.** If `notes/private/.gitignore` contained
+  `*`, those notes were excluded and now **will sync**. Move the
+  rule to the root file with its path in front
+  (`notes/private/`) *before* your next sync if that folder was
+  private.
 
 ---
 
@@ -600,10 +731,12 @@ file**. Those edits flow to a private branch on GitHub that no
 other device sees until you finalise. The conflict doesn't block
 you; other devices stay protected from your half-resolved state.
 
-The `*.conflict-from-*` filename pattern is gitignored by default —
-siblings stay strictly local. If you want them to sync across
-devices, edit `<vault>/.gitignore` and remove the
-`*.conflict-from-*` line.
+Sibling files never sync: the `*.conflict-from-*` pattern sits in
+the plugin's **final** `.gitignore` block, which is restored to
+canonical on every sync, so removing the line does not make them
+travel. That is deliberate — a sibling is one device's unfinished
+business, and copying it to the others would spread a
+half-resolved state instead of a resolution.
 
 ---
 

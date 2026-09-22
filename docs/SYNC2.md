@@ -2367,7 +2367,138 @@ happens automatically when the bootloader schedules
 
 ---
 
-## 13. Glossary
+## 13. Dot-Space Scope (D1–D7)
+
+Which dot-files and dot-directories of a vault take part in sync, and by
+what mechanism. The design document is
+[`docs/tasks/SYNC2-DOT-FILES-REFACTOR.md`](./tasks/SYNC2-DOT-FILES-REFACTOR.md);
+this section is the engineering contract the code targets, and code
+comments reference it as `SYNC2 §13.x`.
+
+### 13.1 The invariants
+
+**D1 — default-invisible.** Every *dot-path* (any vault-relative path
+with at least one segment beginning `.`) is invisible to sync, in both
+directions, unless explicitly permitted. Ordinal paths are visible by
+default, modulo the root `.gitignore`.
+
+**D2 — three permission sources, one set.** A dot-path becomes visible
+through exactly one of: the root `.gitignore` itself (structurally);
+`<configDir>/` when the per-device `syncConfigDir` setting is on; or a
+`!`-rule in the root `.gitignore` that names a *concrete* path. The
+three feed a single opt-in set (`readRootGitignore`, §13.3).
+
+**D2.1 — reading ≠ membership.** Reading a control file is absolute and
+never passes through `isSyncable`; membership in the sync set is
+ordinary and may lapse. A control file that stops being shared does not
+stop governing.
+
+**D3 — recursive hide.** Opting a dot-*directory* in admits its ordinal
+contents at any depth. Dot-paths nested inside it stay hidden until
+named by their own rule.
+
+**D4 — symmetry.** One predicate decides visibility for push and pull
+alike, so a path outside this machine's scope is neither pushed nor
+pulled by it. Different machines may hold different scopes; safety comes
+from the symmetry, not from uniformity.
+
+**D5 — flat `.gitignore`.** A `.gitignore` is read and obeyed at exactly
+four locations: the vault root, `<configDir>`, `<configDir>/plugins`,
+and one level below that. Anywhere else it is not opened at all. This is
+a deliberate divergence from git (§13.6).
+
+**D6 — a `.gitignore` syncs only where it is honoured.** Shipping a
+control file we do not execute would put a file that looks
+authoritative on every other device while governing nothing.
+
+**D6a — a control file MAY be per-device, on purpose.** A user rule
+below the `invariants` section (`/.gitignore`) takes the root file out
+of sync while it keeps controlling. That is a feature, and the reason
+D7 membership for the root file is structural rather than derived from
+the file's own text: the exit has to happen at the matcher, which can
+tell "kept local deliberately" from "cannot be seen".
+
+**D7 — no permission without discoverability.** `isSyncable` must never
+permit a dot-path that push discovery cannot reach. Permission and
+reach are ONE set. Violating this is destructive rather than merely
+wrong: the path sits in the baselines answering "syncable", the scan
+never visits it, and Pass 2 reads the absence as a deletion and
+propagates it to every device.
+
+### 13.2 The two managed sections
+
+The root `.gitignore` carries two managed sections, and the difference
+is authority, not layout — in gitignore the POSITION of a line IS its
+strength (last-match-wins):
+
+| section | position | strength | contents |
+|---|---|---|---|
+| `invariants` | top | overridable — user rules below win | `.*`, `.*/`, `!/.gitignore` |
+| `final` | bottom | absolute | `!<configDir>/`, `*.conflict-from-*`, `*.ges-tmp*`, `*.ges-bak*` |
+
+`<configDir>/.gitignore` and any existing
+`<configDir>/plugins/*/.gitignore` carry the `final` section only:
+everything written there protects data, and none of it is a default the
+user is invited to overrule. `<configDir>/plugins/.gitignore` is a
+managed file of its own, carrying the per-device "sync plugins
+data.json" switch at a level ABOVE the plugin folders — so a plugin's
+own `.gitignore` speaks last and can overrule it in either direction.
+
+🔒 The four marker lines are frozen. A version that rewrites one finds
+no section in any existing install, writes a second, and leaves the
+first as litter that can override it.
+
+### 13.3 Discovery
+
+Obsidian's file index excludes dot-paths entirely, so dot-space needs
+its own enumeration — and it covers exactly what the opt-in set
+permits:
+
+- **pass 0** — `readRootGitignore` turns the root file's `!`-rules into
+  `{dotFiles, walkTargets}`. A rule that does not address one concrete
+  path contributes nothing (globs, unanchored directories, dot-files
+  inside ordinary folders).
+- **pass 2** — the named dot-FILES, stat'd by exact path.
+- **pass 3** — the walk TARGETS, enumerated by `walkDotDir`, which
+  prunes dot-subdirectories (D3: a nested rule makes that directory a
+  target in its own right) and carries a depth cap so a symlink loop
+  terminates.
+
+Scope is computed at the START of each operation (`beginScan`) and
+released at its end, never lazily: `isSyncable` throws when asked
+without a scope, and that guard is meaningless if "not computed yet" and
+"lifecycle bug" are indistinguishable.
+
+### 13.4 The Pass 2 belt
+
+D7 answers "is this path reachable in principle". The belt answers "did
+we manage to look, this pass". A configured walk target whose
+enumeration failed leaves its subtree unvisited, and unvisited is
+indistinguishable from deleted — so a snapshot path under such a target
+yields nothing: no delete, and no baseline removal either. Tracked per
+target, because one flag would let a failure under one target mask a
+genuine deletion under another.
+
+### 13.5 Narrowing vs widening
+
+Narrowing is silent by design: a path that leaves scope gets
+`store.remove()`, never a `deleted` change. Emitting the delete would
+erase the file from the remote and from every other device over a rule
+the user did not write. The file on disk is untouched — leaving scope is
+not deleting.
+
+### 13.6 The recorded divergence from git
+
+`isSyncable` is the source of truth about our scope; the gitignore text
+is maintained so a real `git status` looks approximately right, and
+"approximately" is enough. The one divergence that matters: git reads a
+`.gitignore` at every level, we read four. Ours is narrower and
+predictable, and it is paired with D6 so we never obey a control file we
+would then refuse to sync.
+
+---
+
+## 14. Glossary
 
 The following terms appear repeatedly in the article. Definitions are
 intentionally concise; consult the relevant section for context.

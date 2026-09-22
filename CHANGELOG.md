@@ -11,6 +11,96 @@ For the full design rationale behind any change below, see
 
 ---
 
+## Unreleased
+
+Dot-space scope: what the plugin syncs outside your notes is now
+one explicit decision instead of several implicit ones.
+
+### ⚠️ Read before upgrading
+
+Two changes are silent, and one of them can expose files you
+expected to stay private.
+
+- **A `.gitignore` in a subfolder is no longer obeyed.** Only
+  three locations are read: the vault root, `.obsidian/`, and one
+  level under `.obsidian/plugins/`. If `notes/private/.gitignore`
+  contained `*`, those notes were excluded and **will now sync**.
+  Move the rule into the root `.gitignore` with its path in front
+  (`notes/private/`) **before** your next sync.
+- **Root dot-files other than `.gitignore` stop syncing.** Earlier
+  versions picked up every dot-file at the vault root
+  (`.gitattributes`, `.editorconfig`, …) whether or not you asked
+  for it. They now wait for a `!`-rule — e.g. `!/.gitattributes`.
+  Nothing is deleted: the files stay on disk, the copies already
+  on GitHub stay there, and the plugin simply stops touching them
+  in either direction.
+
+### Changed
+
+- **Everything starting with a dot is invisible to sync by
+  default**, and becomes visible only through the root
+  `.gitignore` (a `!`-rule naming a concrete path), the
+  per-device *Sync configs* setting, or by being the root
+  `.gitignore` itself. Rules that name a *shape* rather than a
+  path — globs, unanchored folder rules like `!.myconfig/` —
+  grant nothing, on purpose: a rule that permitted a file the
+  plugin could not find would make it look deleted on the next
+  sync, and that delete would travel to your other devices.
+- **`Push plugins data.json` is now per-device** and renamed
+  *Sync plugins data.json*. It used to live in the shared
+  `.gitignore`, so switching it on one machine switched it on for
+  all of them; now you can share plugin settings between two
+  devices out of ten. A plugin can overrule the switch from a
+  `.gitignore` in its own folder, in either direction.
+- **The managed `.gitignore` blocks are now two**, and the
+  difference is deliberate: the block at the TOP is a default your
+  own rules override, the block at the BOTTOM is not. Conflict
+  siblings and the plugin's temporary files live in the bottom
+  one, so they can no longer be un-ignored by accident.
+- **The conflict badge counts tracked conflicts only.** It used to
+  include purely local leftovers; those now surface in the
+  conflicts panel, which is the only place they can be acted on.
+  The badge and the pre-sync prompt now agree with each other.
+
+### Added
+
+- **Conflicts in dot-space are visible at last.** A conflict on a
+  file inside `.obsidian/` or an opted-in dot-folder used to be
+  invisible in the conflicts panel even though the engine had
+  registered it. The panel now lists it, and so does the pre-sync
+  prompt.
+- **`Ctrl`/`Cmd`+`R` in the conflicts panel** re-scans the list.
+  The panel paints what it already knows immediately and fills in
+  findings from dot-folders a moment later, rather than blocking
+  on a directory walk.
+- **A control file can be kept to one machine.** Writing
+  `/.gitignore` among your own rules takes the root `.gitignore`
+  out of sync while it keeps governing that device — useful when
+  one machine needs its own `.editorconfig`. Documented in the
+  README, including the cost.
+
+### Fixed
+
+- **The `Push plugins data.json` switch did nothing when on.** The
+  allow-rule sat above the plugin's own catch-all and lost to it,
+  so the setting had no effect in any vault whose
+  `.obsidian/.gitignore` the plugin had created — i.e. the common
+  case.
+- **A stale allow-rule from an older install could silently turn
+  the switch back on**, letting other plugins' `data.json` travel
+  while the settings tab showed it off.
+- **A conflict sibling from a device whose label contains a space**
+  ("Home iMac") was not recognised by one of the two layers that
+  keep siblings local. It was still held back by the other, but the
+  gap is closed.
+- **A repository with every file deleted no longer breaks syncing.**
+  GitHub answers 404 for an empty tree, which the plugin read as
+  "this commit does not exist" and gave up. It can also reach that
+  state by itself — delete every note and sync — so the next sync
+  used to fail with nothing to explain it.
+
+---
+
 ## 2.0.2-beta — 2026-05-30
 
 Major architectural rework, no breaking changes for the default
