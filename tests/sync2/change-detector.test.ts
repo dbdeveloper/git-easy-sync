@@ -1002,3 +1002,114 @@ describe("D7 — no permission without discoverability (DOT-FILES §3.2 step 5)"
     ).toBe(false);
   });
 });
+
+describe("pass 3 — walkDotDir: only what was opted in, and no way to hang", () => {
+  let f: ReturnType<typeof fixture>;
+
+  beforeEach(() => {
+    f = fixture();
+  });
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  const paths = async () =>
+    (await f.detector.findChanges()).map((c) => c.path).sort();
+
+  it("an anchored `!/.myconfig/` is walked; an unanchored one is not", async () => {
+    writeFile(f.root, ".myconfig/note.md", "a");
+    writeFile(f.root, ".myconfig/deep/inner.md", "b");
+
+    writeFile(f.root, ".gitignore", "!.myconfig/\n"); // unanchored
+    expect(await paths()).toEqual([".gitignore"]);
+
+    writeFile(f.root, ".gitignore", "!/.myconfig/\n"); // anchored
+    expect(await paths()).toEqual([
+      ".gitignore",
+      ".myconfig/deep/inner.md",
+      ".myconfig/note.md",
+    ]);
+  });
+
+  it("D3 prune: a dot-SUBdirectory inside a target is not descended into", async () => {
+    // Nested dot-dirs stay hidden unless named again — and naming one
+    // makes it a target in its own right, so descending here would both
+    // double-visit it and reach dot-dirs nobody opted into.
+    writeFile(f.root, ".myconfig/ok.md", "a");
+    writeFile(f.root, ".myconfig/.secret/hidden.md", "b");
+    writeFile(f.root, ".gitignore", "!/.myconfig/\n");
+    expect(await paths()).toEqual([".gitignore", ".myconfig/ok.md"]);
+
+    // Named again → its own target → now it is walked. (`.*` in the
+    // managed section would still hide it from the matcher, so the rule
+    // has to re-admit it there too; here the fixture has no dot-hide.)
+    writeFile(f.root, ".gitignore", "!/.myconfig/\n!/.myconfig/.secret/\n");
+    expect(await paths()).toEqual([
+      ".gitignore",
+      ".myconfig/.secret/hidden.md",
+      ".myconfig/ok.md",
+    ]);
+  });
+
+  it("a deep tree terminates instead of running away", async () => {
+    // The depth cap exists so a symlink loop cannot hang the sync. A
+    // loop cannot be built portably in a test, but the cap is the thing
+    // that actually terminates one, so this pins that it holds and that
+    // ordinary depth is unaffected.
+    let deep = ".myconfig";
+    for (let i = 0; i < 70; i++) deep += `/d${i}`;
+    writeFile(f.root, `${deep}/far.md`, "x");
+    writeFile(f.root, ".myconfig/near.md", "y");
+    writeFile(f.root, ".gitignore", "!/.myconfig/\n");
+
+    const out = await paths();
+    expect(out).toContain(".myconfig/near.md");
+    expect(out).not.toContain(`${deep}/far.md`);
+  });
+});
+
+describe("TD4.3 — a root dotfile that is no longer opted in leaves scope SILENTLY", () => {
+  // The behaviour change that came with deleting `walkRootDotfiles`.
+  // That walk listed the vault root and took every dotfile it found,
+  // which made dot-space default-VISIBLE there — the opposite of D1. So
+  // a `.editorconfig` synced by an older version is now out of scope.
+  //
+  // Out of scope must mean a silent `store.remove`, NOT a `deleted`
+  // change: emitting the delete would erase the file from the remote
+  // and from every other device, over a rule the user never wrote.
+  let f: ReturnType<typeof fixture>;
+
+  beforeEach(() => {
+    f = fixture();
+  });
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  it("drops the baseline row and emits nothing", async () => {
+    writeFile(f.root, ".editorconfig", "root = true\n");
+    writeFile(f.root, ".gitignore", "");
+    // It was synced once, by a version that took every root dotfile.
+    await f.store.set(".editorconfig", {
+      baselineSha: await shaOf("root = true\n"),
+      mtime: 1,
+      size: 1,
+    });
+
+    const out = await f.detector.findChanges();
+    expect(out.map((c) => c.path)).not.toContain(".editorconfig");
+    expect(out.some((c) => c.kind === "deleted")).toBe(false);
+    // ...and the stale row is gone, so it stops being reconsidered.
+    expect(await f.store.get(".editorconfig")).toBeFalsy();
+    // The file itself is untouched on disk — leaving scope is not
+    // deleting.
+    expect(fs.existsSync(path.join(f.root, ".editorconfig"))).toBe(true);
+  });
+
+  it("naming it again brings it back without any special case", async () => {
+    writeFile(f.root, ".editorconfig", "root = true\n");
+    writeFile(f.root, ".gitignore", "!/.editorconfig\n");
+    const out = await f.detector.findChanges();
+    expect(out.map((c) => c.path)).toContain(".editorconfig");
+  });
+});
