@@ -1162,6 +1162,26 @@ describe("Pass 2 belt — an interrupted walk is not a mass deletion (§3.3)", (
     expect(await f.store.get(".myconfig/note.md")).toBeTruthy();
   });
 
+  it("configDir is a target like any other, and the belt covers it", async () => {
+    // The one that historically threw: Obsidian rewriting its own
+    // config mid-walk on Android. Before B2 configDir was walked by a
+    // hardcoded branch; it is a walk target now, and the belt has to
+    // reach it or a transient listing failure deletes the user's
+    // config from every device.
+    writeFile(f.root, `${CONFIG_DIR}/app.json`, "{}");
+    writeFile(f.root, ".gitignore", "");
+    await f.store.set(`${CONFIG_DIR}/app.json`, {
+      baselineSha: await shaOf("{}"),
+      mtime: 1,
+      size: 1,
+    });
+    breakListingOf(CONFIG_DIR);
+
+    const out = await f.detector.findChanges();
+    expect(out.some((c) => c.kind === "deleted")).toBe(false);
+    expect(await f.store.get(`${CONFIG_DIR}/app.json`)).toBeTruthy();
+  });
+
   it("PER TARGET: a healthy target still reports its real deletions", async () => {
     // A single boolean would have protected both targets, masking a
     // genuine delete under the one that walked fine. That is why the
@@ -1206,5 +1226,66 @@ describe("Pass 2 belt — an interrupted walk is not a mass deletion (§3.3)", (
     breakListingOf(".myconfig");
     await detector.findChanges();
     expect(seen).toEqual([".myconfig"]);
+  });
+});
+
+describe("scope belongs to the OPERATION, not to the detector", () => {
+  let f: ReturnType<typeof fixture>;
+  beforeEach(() => {
+    f = fixture();
+  });
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  it("the fail-loud still fires AFTER a successful scan", async () => {
+    // Left set, `optIn` would outlive its operation and the guard would
+    // fire exactly once per process: every later lifecycle bug would
+    // silently reuse the PREVIOUS operation's scope — the stale-set
+    // state TD7.5 exists to make loud.
+    writeFile(f.root, ".gitignore", "");
+    await f.detector.findChanges();
+    await expect(f.detector.checkSyncable(".editorconfig")).rejects.toThrow(
+      /beginScan/,
+    );
+  });
+
+  it("a scan that throws still releases the scope", async () => {
+    writeFile(f.root, ".gitignore", "");
+    const real = f.vault.adapter;
+    const wrapped = {
+      ...real,
+      list: async () => {
+        throw new Error("boom");
+      },
+    };
+    Object.defineProperty(f.vault, "adapter", {
+      get: () => wrapped,
+      configurable: true,
+    });
+    await f.detector.findChanges().catch(() => undefined);
+    Object.defineProperty(f.vault, "adapter", {
+      get: () => real,
+      configurable: true,
+    });
+    await expect(f.detector.checkSyncable(".editorconfig")).rejects.toThrow(
+      /beginScan/,
+    );
+  });
+
+  it("a fresh scan sees a rule added since the last one", async () => {
+    // The matcher holds a parsed level by mtime for up to 500 ms, so
+    // without invalidating the root node at scan start the set and `gi`
+    // could answer from different generations of the file the user just
+    // edited.
+    writeFile(f.root, ".editorconfig", "root = true\n");
+    writeFile(f.root, ".gitignore", "");
+    expect((await f.detector.findChanges()).map((c) => c.path)).not.toContain(
+      ".editorconfig",
+    );
+    writeFile(f.root, ".gitignore", "!/.editorconfig\n");
+    expect((await f.detector.findChanges()).map((c) => c.path)).toContain(
+      ".editorconfig",
+    );
   });
 });

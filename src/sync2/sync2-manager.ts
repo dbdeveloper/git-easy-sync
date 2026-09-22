@@ -257,9 +257,13 @@ export class Sync2Manager {
     // path — checkSyncable fails loud without it (DOT-FILES §5), and
     // this gate runs before runCommitPass gets a chance to do it.
     await this.deps.detector.beginScan();
-    if (!(await this.deps.detector.checkSyncable(path))) {
-      return { kind: "ignored" };
+    let syncable: boolean;
+    try {
+      syncable = await this.deps.detector.checkSyncable(path);
+    } finally {
+      this.deps.detector.endScan();
     }
+    if (!syncable) return { kind: "ignored" };
     const count = await this.runCommitPass(path);
     return count > 0 ? { kind: "committed", count } : { kind: "no-change" };
   }
@@ -543,6 +547,9 @@ export class Sync2Manager {
           );
       }
     } finally {
+      // Scope belongs to the operation, not to the object — see
+      // ChangeDetector.endScan.
+      this.deps.detector.endScan();
       this.running = false;
       this.emitDrainStatus({
         state: "idle",

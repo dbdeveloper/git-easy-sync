@@ -278,11 +278,27 @@ export default class ChangeDetector {
   // findChanges/findChangeForPath call it themselves; the manager calls
   // it for the paths it owns (drain, bootstrap).
   async beginScan(): Promise<void> {
+    // §5: drop the matcher's parse of the ROOT level first. The set is
+    // read from that file directly (so it is always fresh), but `gi`
+    // holds a level by mtime for up to 500 ms, and step 6 asks `gi`.
+    // Without this the set and the matcher could answer from different
+    // generations of the same file for the first half-second of an
+    // operation the user started BECAUSE they just edited it.
+    this.gi.invalidate("");
     this.optIn = await readRootGitignore({
       vault: this.vault,
       configDir: this.configDir,
       syncConfigDir: this.syncConfigDir,
     });
+  }
+
+  // Drop this operation's scope. Load-bearing for the fail-loud: left
+  // set, the guard would fire exactly ONCE per process — after the
+  // first successful scan every later lifecycle bug would silently
+  // reuse the PREVIOUS operation's scope, which is the stale-set state
+  // TD7.5 exists to make loud. Always called from a `finally`.
+  endScan(): void {
+    this.optIn = null;
   }
 
   // Walk the vault, return everything that needs to flow remote-ward,
@@ -310,6 +326,14 @@ export default class ChangeDetector {
   // read+SHA.
   async findChanges(): Promise<FileChange[]> {
     await this.beginScan();
+    try {
+      return await this.scan();
+    } finally {
+      this.endScan();
+    }
+  }
+
+  private async scan(): Promise<FileChange[]> {
     const out: FileChange[] = [];
     const watermark = this.hotMeta.getLastCommitMtime();
     const allFiles: FileLike[] = this.vault.getFiles().map((f) => ({
@@ -571,6 +595,14 @@ export default class ChangeDetector {
     // establishes its own scope — otherwise it would be the fail-loud's
     // first victim rather than its beneficiary.
     await this.beginScan();
+    try {
+      return await this.changeForPath(path);
+    } finally {
+      this.endScan();
+    }
+  }
+
+  private async changeForPath(path: string): Promise<FileChange | null> {
     if (!(await this.checkSyncable(path))) return null;
 
     const stat = await this.vault.adapter.stat(path);

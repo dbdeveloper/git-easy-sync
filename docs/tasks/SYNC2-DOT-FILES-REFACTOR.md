@@ -1974,6 +1974,15 @@ Probe 1–4 міряні на `ignore`/`GI`. Але мета §8.1 — конс�
     відпрацював, а інший упав, справжні видалення під першим замаскувалися б.
   - **TD4.3 пін:** раніше синкнутий root-dotfile (`.editorconfig`) виходить зі scope
     **тихо** — `store.remove`, без `deleted`; файл на диску цілий.
+  - **Scope належить ОПЕРАЦІЇ, не об'єкту** (знайдено при ревізії): `endScan()` у
+    `finally` кожної точки входу. Без цього `optIn` пережив би операцію, і fail-loud
+    спрацював би рівно ОДИН раз за процес — далі кожен lifecycle-баг тихо перевикористав
+    би scope ПОПЕРЕДНЬОЇ операції, тобто саме той застарілий стан, який TD7.5 має робити
+    гучним.
+  - **`gi.invalidate("")` на старті `beginScan`** (§5): набір читається з файлу напряму й
+    завжди свіжий, але крок 6 питає `gi`, який тримає рівень за mtime до 500 мс — інакше
+    перші півсекунди операції, яку користувач почав САМЕ тому що щойно правив файл,
+    набір і матчер відповідали б із різних поколінь того самого файлу.
   **`readRootGitignore`** (ПАС 0): з `!`-правил root `.gitignore`
   породити opt-in-набір = dot-файли + анкеровані dir-walk-targets, ∪ `.obsidian/` якщо
   `syncConfigDir` (data.json). **ВИДАЛИТИ `walkRootDotfiles`** → root dot-файли `stat`-ити
@@ -2008,8 +2017,9 @@ Probe 1–4 міряні на `ignore`/`GI`. Але мета §8.1 — конс�
   + маркер). Робиться ПІСЛЯ ядра (A–D); до того міграція ручна (§8).
 
 **Зачеплений код:** `src/gi.ts` (whitelist), `src/sync2/change-detector.ts`
-(`isSyncable`, `findChanges`, **`walkRootDotfiles` ВИДАЛИТИ** → `readRootGitignore` +
-direct-stat, `walkConfigDir`→`walkDotDir` + cycle-detection, Pass 2 belt),
+(✅ `isSyncable` + D6/D7, `findChanges`, **`walkRootDotfiles` ВИДАЛЕНО** → `readRootGitignore` +
+direct-stat, `walkConfigDir`→`walkDotDir` + cycle-cap, Pass 2 belt),
+✅ `src/sync2/dot-space.ts` (новий — opt-in-набір і класифікація §4.2),
 `src/sync2/gitignore-invariants.ts` (**модель двох секцій + dot-hide** — §3.1),
 `src/sync2/invariant-state.ts` (мапа за шляхом + відбитки на секцію — §3.1.2),
 можливо `src/main.ts:876` (конструкція `GI`).
