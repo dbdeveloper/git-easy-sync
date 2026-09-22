@@ -36,6 +36,7 @@ import {
   UNKNOWN_DEVICE_LABEL,
 } from "../sync2/conflict-siblings";
 import { deriveAutosaveId } from "./autosave-store";
+import { readRootGitignore, walkDotDir } from "../sync2/dot-space";
 
 export type ConflictEntryKind = "tracked" | "synthetic";
 
@@ -202,6 +203,44 @@ export function assembleResult(entries: ConflictEntry[]): DetectionResult {
     b.isoTimestamp.localeCompare(a.isoTimestamp),
   );
   return { entries: sorted, byBasePath: groupByBasePath(sorted) };
+}
+
+// SYNTHETIC entries in permitted DOT-SPACE — the SLOW branch (§4.3.1
+// п.1). Obsidian's index cannot see dot-paths at all, so without this
+// an orphan sibling next to `.myconfig/note.md` would never appear in
+// the panel and the user would have no way to clear it.
+//
+// It walks the SAME targets the sync scan does, through the same
+// walker: a sibling in a dot-directory nobody opted into is one the
+// user could not resolve through sync anyway, so listing it would be
+// an invitation to act on something outside our reach.
+//
+// Costly by nature (a real directory walk — ~22 s on Android for a
+// large configDir, §14), which is why it is a separate pass that tops
+// the list up rather than part of the first paint.
+export async function syntheticFromDotSpace(
+  vault: Vault,
+  conflictStore: ConflictStoreV2,
+  opts: { configDir: string; syncConfigDir: () => boolean },
+): Promise<ConflictEntry[]> {
+  const optIn = await readRootGitignore({
+    vault,
+    configDir: opts.configDir,
+    syncConfigDir: opts.syncConfigDir,
+  });
+  const out: ConflictEntry[] = [];
+  for (const target of optIn.walkTargets) {
+    const { files } = await walkDotDir(vault, target);
+    for (const f of files) {
+      const entry = entryFromSibling(conflictStore, f.path);
+      if (!entry) continue;
+      // Tracked ones are listed by the store branch, which sees them
+      // whether or not any walk reaches them.
+      if (entry.kind === "tracked") continue;
+      out.push(entry);
+    }
+  }
+  return out;
 }
 
 // The panel's list WITHOUT the slow dot-space branch: tracked from the

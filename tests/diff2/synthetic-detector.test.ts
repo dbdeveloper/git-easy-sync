@@ -15,6 +15,7 @@ import {
   findAllConflicts,
   groupByBasePath,
   pendingConflictSummary,
+  syntheticFromDotSpace,
   type ConflictEntry,
 } from "../../src/diff2/synthetic-detector";
 
@@ -602,5 +603,80 @@ describe("§24 + §4.3 — the gate and the badge are TRACKED-only", () => {
     );
     expect(summary?.trackedPaths).toEqual([".myconfig/note.md"]);
     expect(summary?.trackedConflictCount).toBe(1);
+  });
+});
+
+describe("§4.3.1 п.1 — the SLOW branch reaches dot-space the index cannot see", () => {
+  let fx: ReturnType<typeof fixture>;
+  const opts = { configDir: CONFIG_DIR, syncConfigDir: () => true };
+
+  beforeEach(async () => {
+    fx = fixture();
+    await fx.store.load();
+  });
+  afterEach(() => cleanup(fx.root));
+
+  const scan = () =>
+    syntheticFromDotSpace(
+      fx.vault as unknown as import("obsidian").Vault,
+      fx.store,
+      opts,
+    );
+
+  it("an orphan sibling inside an opted-in dot-dir is found", async () => {
+    // Obsidian's index has no dot-paths, so the fast branch is blind
+    // here — without this pass the user could never clear the leftover.
+    writeFile(fx.root, ".gitignore", "!/.myconfig/\n");
+    writeFile(fx.root, ".myconfig/note.md", "ours");
+    const sib = siblingPathFor(".myconfig/note.md", "Phone", 1_700_000_000_000);
+    writeFile(fx.root, sib, "theirs");
+
+    // Confirm the premise rather than assuming it.
+    expect(fx.vault.getFiles().map((f) => f.path)).not.toContain(sib);
+
+    expect((await scan()).map((e) => e.siblingPath)).toEqual([sib]);
+  });
+
+  it("a dot-dir NOBODY opted into is not scanned", async () => {
+    // Listing it would invite the user to act on something they cannot
+    // resolve through sync anyway: the same walk boundaries as the
+    // push side, deliberately.
+    writeFile(fx.root, ".gitignore", "");
+    writeFile(fx.root, ".secret/note.md", "ours");
+    writeFile(
+      fx.root,
+      siblingPathFor(".secret/note.md", "Phone", 1_700_000_000_000),
+      "theirs",
+    );
+    expect(await scan()).toEqual([]);
+  });
+
+  it("a TRACKED sibling in dot-space is left to the store branch", async () => {
+    // It is listed either way; returning it from both would double the
+    // row once the panel concatenates them.
+    writeFile(fx.root, ".gitignore", "!/.myconfig/\n");
+    writeFile(fx.root, ".myconfig/note.md", "ours");
+    await track(fx, ".myconfig/note.md", "Phone", 1_700_000_000_000);
+    expect(await scan()).toEqual([]);
+  });
+
+  it("configDir is scanned when the toggle is on, and not when it is off", async () => {
+    writeFile(fx.root, ".gitignore", "");
+    writeFile(fx.root, `${CONFIG_DIR}/app.json`, "{}");
+    const sib = siblingPathFor(
+      `${CONFIG_DIR}/app.json`,
+      "Phone",
+      1_700_000_000_000,
+    );
+    writeFile(fx.root, sib, "theirs");
+
+    expect((await scan()).map((e) => e.siblingPath)).toEqual([sib]);
+    expect(
+      await syntheticFromDotSpace(
+        fx.vault as unknown as import("obsidian").Vault,
+        fx.store,
+        { configDir: CONFIG_DIR, syncConfigDir: () => false },
+      ),
+    ).toEqual([]);
   });
 });

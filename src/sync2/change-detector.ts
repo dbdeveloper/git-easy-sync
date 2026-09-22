@@ -8,6 +8,7 @@ import {
   OptInSet,
   readRootGitignore,
   underWalkTarget,
+  walkDotDir,
 } from "./dot-space";
 import { calculateGitBlobSHA } from "../utils";
 import HotMetadataStore from "./hot-metadata";
@@ -163,11 +164,6 @@ function isMissingFileError(err: unknown): boolean {
 // except a path separator. It does not widen the false-positive surface
 // either — what makes the shape unambiguous is the trailing
 // `-<iso-timestamp>Z`, not the label's alphabet.
-// How deep below a walk target the enumeration may go. Generous for a
-// notes vault and irrelevant to a healthy one; its only job is to make
-// a symlink loop terminate instead of hanging the sync (§4.1).
-const WALK_MAX_DEPTH = 64;
-
 const CONFLICT_SIBLING_PATTERN =
   /\.conflict-from-[^/]+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(\.[^./]+)?$/;
 // (The trailing-extension group stays optional — files without a
@@ -359,7 +355,7 @@ export default class ChangeDetector {
     // under the target that was fine (§3.3).
     const incompleteTargets = new Set<string>();
     for (const target of optIn.walkTargets) {
-      const walked = await this.walkDotDir(target);
+      const walked = await walkDotDir(this.vault, target);
       allFiles.push(...walked.files);
       if (!walked.completed) {
         incompleteTargets.add(target);
@@ -761,66 +757,6 @@ export default class ChangeDetector {
     return out;
   }
 
-  // Pass 3: recursively enumerate ONE walk target via adapter.list().
-  // Generalises the old `walkConfigDir`, which only ever knew about
-  // `<configDir>/`; the targets now come from the opt-in set, so an
-  // anchored `!/.myconfig/` is walked the same way configDir is.
-  //
-  // PRUNE (D3): we do not descend into dot-SUBdirectories. A dot-dir
-  // inside an opted-in dot-dir stays hidden unless named again, and
-  // naming it again makes it a target in its own right — so descending
-  // here would visit it twice and, worse, would visit dot-dirs nobody
-  // opted into at all. The matcher agrees: root `.*` matches at any
-  // depth (§10 probe 2).
-  //
-  // Reports whether it FINISHED. Pass 2's belt needs that per target:
-  // an interrupted walk leaves its subtree unvisited, and unvisited
-  // must not be read as deleted (§3.3).
-  private async walkDotDir(
-    prefix: string,
-  ): Promise<{ files: FileLike[]; completed: boolean }> {
-    const out: FileLike[] = [];
-    // Cycle safety (§4.1 MUST-FIX). A symlink loop (`a/link -> a`,
-    // desktop only — mobile vaults are sandboxed without symlinks)
-    // produces an endless sequence of DISTINCT paths, so a visited-set
-    // alone cannot stop it; the depth cap is what actually terminates.
-    // The visited set still earns its place against a listing that
-    // repeats a folder. Neither has ever fired in practice — they are
-    // here so a hang is impossible, not because one was observed.
-    const visited = new Set<string>();
-    const baseDepth = prefix.split("/").length;
-    const stack: string[] = [prefix];
-    try {
-      while (stack.length > 0) {
-        const dir = stack.pop() as string;
-        if (visited.has(dir)) continue;
-        visited.add(dir);
-        if (dir.split("/").length - baseDepth > WALK_MAX_DEPTH) continue;
-        if (!(await this.vault.adapter.exists(dir))) continue;
-        const { files, folders } = await this.vault.adapter.list(dir);
-        for (const filePath of files) {
-          const stat = await this.vault.adapter.stat(filePath);
-          if (!stat) continue;
-          out.push({
-            path: filePath,
-            stat: { mtime: stat.mtime, size: stat.size },
-          });
-        }
-        for (const folder of folders) {
-          const name = folder.slice(folder.lastIndexOf("/") + 1);
-          if (name.startsWith(".")) continue; // D3 prune, see above
-          stack.push(folder);
-        }
-      }
-    } catch {
-      // A folder vanishing mid-walk, a permission error, anything: the
-      // subtree is INCOMPLETE, and saying so is what stops Pass 2 from
-      // reading the gap as a mass deletion. Whatever we did collect is
-      // still usable as candidates.
-      return { files: out, completed: false };
-    }
-    return { files: out, completed: true };
-  }
 
   // Reader for GI: resolves a `.gitignore` absolute path to its
   // content + mtime via vault.adapter. The mtime lets GI auto-skip

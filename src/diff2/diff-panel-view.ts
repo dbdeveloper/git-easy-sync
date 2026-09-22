@@ -54,6 +54,12 @@ export interface DiffEditViewDeps {
   // deleted a sibling in the file explorer, …). main.ts binds it to
   // processConflicts + store.save + counter refresh.
   reconcileConflicts?: () => Promise<void>;
+  // DOT-FILES §4.3 — the SLOW half of the conflicts list: siblings that
+  // live in permitted dot-space, which Obsidian's index cannot see.
+  // Injected as a thunk so the panel never has to know about configDir
+  // or the settings toggle; main.ts binds it. Optional: without it the
+  // panel simply shows the fast half, which is the pre-Крок-C list.
+  scanDotSpaceConflicts?: () => Promise<ConflictEntry[]>;
   conflictCounter: ConflictCounter;
   // Snapshot store passed to atomicWriteFile so the post-write
   // recordSync step lines up with the snapshot's expectations.
@@ -228,6 +234,20 @@ export class DiffPanelView extends ItemView {
         );
         this.conflictEntries = entries;
         this.render();
+
+        // Then the expensive half. The user sees the fast list first and
+        // the dot-space findings arrive a moment later — explicitly
+        // accepted (§4.3): open the panel, see 10 rows, then 11. The
+        // alternative is blocking the view on a directory walk.
+        const fromDotSpace = await this.deps.scanDotSpaceConflicts?.();
+        if (fromDotSpace && fromDotSpace.length > 0) {
+          const seen = new Set(this.conflictEntries.map((e) => e.siblingPath));
+          const fresh = fromDotSpace.filter((e) => !seen.has(e.siblingPath));
+          if (fresh.length > 0) {
+            this.conflictEntries = [...this.conflictEntries, ...fresh];
+            this.render();
+          }
+        }
       } while (this.refreshAgain);
     } finally {
       this.refreshing = false;

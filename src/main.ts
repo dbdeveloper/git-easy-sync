@@ -89,6 +89,7 @@ import {
   autosaveIdForEntry,
   findAllConflicts,
   pendingConflictSummary,
+  syntheticFromDotSpace,
   type ConflictEntry,
 } from "./diff2/synthetic-detector";
 import { setWordDiffPerfSink } from "./diff2/word-level-diff";
@@ -2608,6 +2609,13 @@ export default class GitHubSyncPlugin extends Plugin {
       conflictStore: this.conflictStoreV2,
       conflictCounter: this.conflictCounter,
       reconcileConflicts: () => this.reconcileConflictsV2(),
+      // DOT-FILES §4.3 — bound here because this is where configDir and
+      // the per-device toggle live; the panel stays ignorant of both.
+      scanDotSpaceConflicts: () =>
+        syntheticFromDotSpace(this.app.vault, this.conflictStoreV2, {
+          configDir: this.app.vault.configDir,
+          syncConfigDir: () => this.settings.syncConfigDir ?? true,
+        }),
       // §5.0.e one-side-silent exit logs here instead of a Notice.
       logger: this.logger,
       localDeviceLabel: () => this.settings.deviceLabel ?? "Obsidian",

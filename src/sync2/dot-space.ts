@@ -204,3 +204,78 @@ async function readIfPresent(
     return null;
   }
 }
+
+// How deep below a walk target the enumeration may go. Generous for a
+// notes vault and irrelevant to a healthy one; its only job is to make
+// a symlink loop terminate instead of hanging (§4.1).
+const WALK_MAX_DEPTH = 64;
+
+export interface WalkedFile {
+  path: string;
+  stat: { mtime: number; size: number };
+}
+
+// Recursively enumerate ONE walk target via adapter.list().
+//
+// Lives here rather than inside ChangeDetector because it has two
+// consumers: the change scan (push discovery) and diff2's
+// synthetic-conflict list, which needs the same boundaries without
+// dragging the scan's lifecycle (`beginScan`, the opt-in set) into the
+// UI layer.
+//
+// PRUNE (D3): dot-SUBdirectories are not descended into. A dot-dir
+// inside an opted-in dot-dir stays hidden unless named again, and
+// naming it again makes it a target in its own right — so descending
+// here would visit it twice and, worse, would reach dot-dirs nobody
+// opted into. The matcher agrees: root `.*` matches at any depth
+// (§10 probe 2).
+//
+// Reports whether it FINISHED. The push side's Pass-2 belt needs that
+// per target: an interrupted walk leaves its subtree unvisited, and
+// unvisited must not be read as deleted (§3.3).
+export async function walkDotDir(
+  vault: Vault,
+  prefix: string,
+): Promise<{ files: WalkedFile[]; completed: boolean }> {
+  const out: WalkedFile[] = [];
+  // Cycle safety (§4.1 MUST-FIX). A symlink loop (`a/link -> a`,
+  // desktop only — mobile vaults are sandboxed without symlinks)
+  // produces an endless sequence of DISTINCT paths, so a visited-set
+  // alone cannot stop it; the depth cap is what actually terminates.
+  // The visited set still earns its place against a listing that
+  // repeats a folder. Neither has ever fired in practice — they are
+  // here so a hang is impossible, not because one was observed.
+  const visited = new Set<string>();
+  const baseDepth = prefix.split("/").length;
+  const stack: string[] = [prefix];
+  try {
+    while (stack.length > 0) {
+      const dir = stack.pop() as string;
+      if (visited.has(dir)) continue;
+      visited.add(dir);
+      if (dir.split("/").length - baseDepth > WALK_MAX_DEPTH) continue;
+      if (!(await vault.adapter.exists(dir))) continue;
+      const { files, folders } = await vault.adapter.list(dir);
+      for (const filePath of files) {
+        const stat = await vault.adapter.stat(filePath);
+        if (!stat) continue;
+        out.push({
+          path: filePath,
+          stat: { mtime: stat.mtime, size: stat.size },
+        });
+      }
+      for (const folder of folders) {
+        const name = folder.slice(folder.lastIndexOf("/") + 1);
+        if (name.startsWith(".")) continue; // D3 prune, see above
+        stack.push(folder);
+      }
+    }
+  } catch {
+    // A folder vanishing mid-walk, a permission error, anything: the
+    // subtree is INCOMPLETE, and saying so is what stops the push
+    // side's Pass 2 from reading the gap as a mass deletion. Whatever
+    // we did collect is still usable.
+    return { files: out, completed: false };
+  }
+  return { files: out, completed: true };
+}
