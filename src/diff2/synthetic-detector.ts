@@ -243,6 +243,28 @@ export async function syntheticFromDotSpace(
   return out;
 }
 
+// Fold late dot-space findings into a list the panel is already
+// showing. Pure, so the one part of the eventual-list machinery with a
+// real failure mode — a row appearing twice — is testable without
+// mounting a view.
+//
+// Deduped by sibling path, which is the row's identity: one sibling
+// file is one conflict, whichever branch found it. Re-sorted, because
+// a late arrival belongs wherever its timestamp puts it, not at the
+// bottom.
+export function mergeDotSpaceFindings(
+  existing: ConflictEntry[],
+  found: ConflictEntry[],
+): { entries: ConflictEntry[]; added: number } {
+  const seen = new Set(existing.map((e) => e.siblingPath));
+  const fresh = found.filter((e) => !seen.has(e.siblingPath));
+  if (fresh.length === 0) return { entries: existing, added: 0 };
+  return {
+    entries: assembleResult([...existing, ...fresh]).entries,
+    added: fresh.length,
+  };
+}
+
 // The panel's list WITHOUT the slow dot-space branch: tracked from the
 // store, synthetic from the index. This is what a refresh shows
 // immediately; the dot-space findings are topped up afterwards

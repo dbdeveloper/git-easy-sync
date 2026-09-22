@@ -15,6 +15,7 @@ import {
   findAllConflicts,
   groupByBasePath,
   pendingConflictSummary,
+  mergeDotSpaceFindings,
   syntheticFromDotSpace,
   type ConflictEntry,
 } from "../../src/diff2/synthetic-detector";
@@ -678,5 +679,48 @@ describe("§4.3.1 п.1 — the SLOW branch reaches dot-space the index cannot se
         { configDir: CONFIG_DIR, syncConfigDir: () => false },
       ),
     ).toEqual([]);
+  });
+});
+
+describe("mergeDotSpaceFindings — the eventual list, N then N+1", () => {
+  const at = (sibling: string, iso: string): ConflictEntry => ({
+    basePath: "b.md",
+    siblingPath: sibling,
+    deviceLabel: "Phone",
+    isoTimestamp: iso,
+    kind: "synthetic",
+  });
+
+  it("appends what is new and reports how many", () => {
+    const fast = [at("a-2026-01-02T00-00-00Z.md", "2026-01-02T00-00-00Z")];
+    const slow = [at("b-2026-01-03T00-00-00Z.md", "2026-01-03T00-00-00Z")];
+    const merged = mergeDotSpaceFindings(fast, slow);
+    expect(merged.added).toBe(1);
+    expect(merged.entries).toHaveLength(2);
+  });
+
+  it("a row the fast branch already showed is not added twice", () => {
+    // The panel concatenates two independently-produced lists; without
+    // a dedup on sibling path the same conflict would appear as two
+    // rows and the user would not know which to open.
+    const row = at("a-2026-01-02T00-00-00Z.md", "2026-01-02T00-00-00Z");
+    const merged = mergeDotSpaceFindings([row], [{ ...row }]);
+    expect(merged.added).toBe(0);
+    expect(merged.entries).toHaveLength(1);
+  });
+
+  it("a late arrival lands where its timestamp puts it, not at the bottom", () => {
+    const fast = [at("old-2026-01-01T00-00-00Z.md", "2026-01-01T00-00-00Z")];
+    const slow = [at("new-2026-01-09T00-00-00Z.md", "2026-01-09T00-00-00Z")];
+    expect(
+      mergeDotSpaceFindings(fast, slow).entries.map((e) => e.isoTimestamp),
+    ).toEqual(["2026-01-09T00-00-00Z", "2026-01-01T00-00-00Z"]);
+  });
+
+  it("nothing found → the very same array back (no needless repaint)", () => {
+    const fast = [at("a-2026-01-02T00-00-00Z.md", "2026-01-02T00-00-00Z")];
+    const merged = mergeDotSpaceFindings(fast, []);
+    expect(merged.added).toBe(0);
+    expect(merged.entries).toBe(fast);
   });
 });

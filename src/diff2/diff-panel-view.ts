@@ -35,6 +35,7 @@ import type Logger from "../logger";
 import {
   assembleResult,
   findAllConflicts,
+  mergeDotSpaceFindings,
   type ConflictEntry,
 } from "./synthetic-detector";
 import type { BackNav, DiffEditorOrigin } from "./editor-tabs";
@@ -219,6 +220,22 @@ export class DiffPanelView extends ItemView {
   // trigger during a running refresh sets a flag and the current run
   // repeats once at the end. Stacking them would let a few impatient
   // refreshes queue several walks.
+  // Existence pass over the list ALREADY in memory. Deliberately not a
+  // re-scan: §4.3.1 п.4 makes disappearance the trivial half, and the
+  // expensive half (the dot-space walk) has nothing to say about a file
+  // that is gone.
+  private async pruneVanishedEntries(): Promise<void> {
+    if (this.conflictEntries.length === 0) return;
+    const alive: ConflictEntry[] = [];
+    for (const e of this.conflictEntries) {
+      if (await this.deps.vault.adapter.exists(e.siblingPath)) alive.push(e);
+    }
+    if (alive.length !== this.conflictEntries.length) {
+      this.conflictEntries = alive;
+      this.render();
+    }
+  }
+
   async refreshConflicts(): Promise<void> {
     if (this.refreshing) {
       this.refreshAgain = true;
@@ -228,6 +245,12 @@ export class DiffPanelView extends ItemView {
     try {
       do {
         this.refreshAgain = false;
+        // Cheapest first (§4.3.1 п.4): drop rows whose sibling file is
+        // already gone, straight off the list we are holding. No walk,
+        // no store read — so a conflict the user just resolved leaves
+        // the panel immediately instead of lingering until the slow
+        // half finishes.
+        await this.pruneVanishedEntries();
         const { entries } = await findAllConflicts(
           this.deps.vault,
           this.deps.conflictStore,
@@ -241,10 +264,12 @@ export class DiffPanelView extends ItemView {
         // alternative is blocking the view on a directory walk.
         const fromDotSpace = await this.deps.scanDotSpaceConflicts?.();
         if (fromDotSpace && fromDotSpace.length > 0) {
-          const seen = new Set(this.conflictEntries.map((e) => e.siblingPath));
-          const fresh = fromDotSpace.filter((e) => !seen.has(e.siblingPath));
-          if (fresh.length > 0) {
-            this.conflictEntries = [...this.conflictEntries, ...fresh];
+          const merged = mergeDotSpaceFindings(
+            this.conflictEntries,
+            fromDotSpace,
+          );
+          if (merged.added > 0) {
+            this.conflictEntries = merged.entries;
             this.render();
           }
         }
@@ -442,6 +467,15 @@ export class DiffPanelView extends ItemView {
   }
 
   private onConflictKeyDown(e: KeyboardEvent): void {
+    // Ctrl/Cmd+R — re-scan (§4.3). Bound to the LIST element, not to a
+    // global hotkey: a global one would fire in unrelated tabs, and
+    // Obsidian already owns some chords. Refresh coalesces, so holding
+    // it down cannot stack directory walks.
+    if ((e.ctrlKey || e.metaKey) && (e.key === "r" || e.key === "R")) {
+      e.preventDefault();
+      void this.refreshConflicts();
+      return;
+    }
     const r = nextHistorySelection(
       e.key,
       this.conflictSelectedIndex,
