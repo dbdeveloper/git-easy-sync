@@ -222,15 +222,6 @@ export default class GitHubSyncPlugin extends Plugin {
   hotMeta!: HotMetadataStore;
   baselines!: FileBaselinesStore;
   invariantState!: InvariantStateStore;
-  // Cached value of the toggle for synchronous use in the settings
-  // tab. Refreshed at onload from invariants.getPushPluginsDataJson()
-  // and after every successful set from the tab's onChange. Settings
-  // tab must NOT call toggle.setValue() from an async context — for
-  // reasons we don't fully understand, doing so triggers an infinite
-  // re-entry inside Obsidian's settings pipeline and freezes the
-  // renderer. Synchronous read of this cache sidesteps the issue.
-  pushPluginsDataJsonCached: boolean = false;
-
   // §35 token-expiry UX. The old once-per-hour throttle is GONE: a
   // user-initiated Sync while the token is expired must re-open the modal
   // EVERY time (the field-reported "close it once, next Sync stays silent" bug).
@@ -1034,6 +1025,7 @@ export default class GitHubSyncPlugin extends Plugin {
       // depends on it (DOT-FILES §3.1.1), so flipping the checkbox has
       // to change what the next pass writes.
       syncConfigDir: () => this.settings.syncConfigDir ?? true,
+      pushPluginsDataJson: () => this.settings.pushPluginsDataJson ?? false,
       // DOT-FILES §3.1.3. Everything here is logged; only the case we
       // cannot fix ourselves reaches the user, because only they can
       // finish it — we refuse to guess where a damaged section ended,
@@ -1050,15 +1042,6 @@ export default class GitHubSyncPlugin extends Plugin {
         }
       },
     });
-    // Prime the toggle cache once, here, so the settings tab can
-    // read it synchronously without re-entering Obsidian via an
-    // async setValue (see field doc above).
-    try {
-      this.pushPluginsDataJsonCached =
-        await this.invariants.getPushPluginsDataJson();
-    } catch {
-      this.pushPluginsDataJsonCached = false;
-    }
     const conflictStoreV2 = new ConflictStoreV2({
       vault: this.app.vault,
       selfPluginId: manifest.id,

@@ -695,7 +695,7 @@ describe("D5 whitelist — the gate §5 calls mandatory", () => {
     expect(gi.ignored(".obsidian/plugins/plain/other.js")).toBe(true);
   });
 
-  it("exactly three kinds of level are read, and nothing else", () => {
+  it("exactly four kinds of level are read, and nothing else", () => {
     w(".gitignore", "*.log\n");
     w(".obsidian/.gitignore", "workspace.json\n");
     w(".obsidian/plugins/foo/.gitignore", "*\n");
@@ -745,6 +745,7 @@ describe("D5 whitelist — the gate §5 calls mandatory", () => {
     const dirs = [
       "",
       ".obsidian",
+      ".obsidian/plugins",
       ".obsidian/plugins/foo",
       ".obsidian/plugins/foo/sub",
       ".obsidian/snippets",

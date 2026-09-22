@@ -76,11 +76,16 @@ interface Fixture {
   syncable(p: string, opts?: { syncConfigDir?: boolean }): Promise<boolean>;
   write(rel: string, content: string): void;
   read(rel: string): string;
+  /** The per-device switch (DOT-FILES §3.1.4). Flipping it rewrites
+   *  `<configDir>/plugins/.gitignore`, which is where it now lives. */
+  pushDataJson(): boolean;
+  setPushDataJson(v: boolean): Promise<void>;
 }
 
 let fixtures: string[] = [];
 
-function makeFixture(): Fixture {
+function makeFixture(initialPushDataJson = false): Fixture {
+  let pushDataJson = initialPushDataJson;
   const root = path.join(
     os.tmpdir(),
     `leak-guard-${crypto.randomBytes(4).toString("hex")}`,
@@ -128,6 +133,7 @@ function makeFixture(): Fixture {
     }),
     // Anomalies are not the subject here; a real reporter lives in
     // main.ts (DOT-FILES §3.1.3).
+    pushPluginsDataJson: () => pushDataJson,
     syncConfigDir: () => true,
     gi: { invalidate: () => {} },
     onAnomaly: () => {},
@@ -146,6 +152,11 @@ function makeFixture(): Fixture {
     root,
     inv,
     write,
+    pushDataJson: () => pushDataJson,
+    setPushDataJson: async (v: boolean) => {
+      pushDataJson = v;
+      await inv.enforce();
+    },
     read: (rel) => fs.readFileSync(path.join(root, rel), "utf8"),
     syncable: (p, opts) =>
       isSyncable(
@@ -189,7 +200,7 @@ describe("L1 — hardcoded deny: OUR token file, with no gitignore in play", () 
   it("an explicit ALLOW line cannot open our data.json or .runtime/ — the deny is unconditional", async () => {
     const f = makeFixture();
     await f.inv.enforce();
-    await f.inv.setPushPluginsDataJson(true);
+    await f.setPushDataJson(true);
     // Hostile-as-possible gitignore state: someone (a hand edit, or a
     // peer device's synced file) explicitly un-ignores both paths, at
     // the deepest level, where a `!` rule normally wins.
@@ -280,7 +291,7 @@ describe("L3 — a plugin's OWN allowlist .gitignore (protects the PRE-RENAME to
   it("the shipped allowlist survives the data.json toggle being turned ON", async () => {
     const f = makeFixture();
     await f.inv.enforce();
-    await f.inv.setPushPluginsDataJson(true);
+    await f.setPushDataJson(true);
     // The toggle lifts the configDir rule, but a deeper .gitignore wins
     // on paths inside its own directory: both sync plugins stay closed.
     expect(
@@ -400,7 +411,7 @@ describe("L2/L5 — the configDir default for OTHER plugins is a user-flippable 
   it("OFF (default): a third-party data.json does not travel, while its allowlisted files do", async () => {
     const f = makeFixture();
     await f.inv.enforce();
-    expect(await f.inv.getPushPluginsDataJson()).toBe(false); // default
+    expect(f.pushDataJson()).toBe(false); // default
     expect(
       await f.syncable(`${CONFIG_DIR}/plugins/${OTHER}/data.json`),
     ).toBe(false);
@@ -439,8 +450,8 @@ describe("L2/L5 — the configDir default for OTHER plugins is a user-flippable 
       // have the ON state also rewrite the catch-all).
       const f = makeFixture();
       await f.inv.enforce();
-      await f.inv.setPushPluginsDataJson(true);
-      expect(await f.inv.getPushPluginsDataJson()).toBe(true); // holds
+      await f.setPushDataJson(true);
+      expect(f.pushDataJson()).toBe(true); // holds
       expect(
         await f.syncable(`${CONFIG_DIR}/plugins/${OTHER}/data.json`),
       ).toBe(true); // ← the no-op
@@ -454,7 +465,7 @@ describe("L2/L5 — the configDir default for OTHER plugins is a user-flippable 
     const f = makeFixture();
     f.write(`${CONFIG_DIR}/.gitignore`, ""); // pre-existing, no defaults seeded
     await f.inv.enforce();
-    await f.inv.setPushPluginsDataJson(true);
+    await f.setPushDataJson(true);
     expect(
       await f.syncable(`${CONFIG_DIR}/plugins/${OTHER}/data.json`),
     ).toBe(true);
@@ -463,16 +474,19 @@ describe("L2/L5 — the configDir default for OTHER plugins is a user-flippable 
   it("flipping back OFF blocks it again — no stale allow line survives the rewrite", async () => {
     const f = makeFixture();
     await f.inv.enforce();
-    await f.inv.setPushPluginsDataJson(true);
-    await f.inv.setPushPluginsDataJson(false);
+    await f.setPushDataJson(true);
+    await f.setPushDataJson(false);
     expect(
       await f.syncable(`${CONFIG_DIR}/plugins/${OTHER}/data.json`),
     ).toBe(false);
-    // Exactly one data.json rule in the file, and it is the block form.
-    const cd = f.read(`${CONFIG_DIR}/.gitignore`);
-    expect(cd.match(/^!?plugins\/\*\/data\.json$/gm)).toEqual([
-      "plugins/*/data.json",
-    ]);
+    // The rule lives in `<configDir>/plugins/.gitignore` now, not in
+    // the shared configDir file (DOT-FILES §3.1.4) — exactly one of it,
+    // in the block form, and nothing left behind upstairs.
+    expect(f.read(`${CONFIG_DIR}/.gitignore`)).not.toMatch(
+      /^!?plugins\/\*\/data\.json$/m,
+    );
+    const plugins = f.read(`${CONFIG_DIR}/plugins/.gitignore`);
+    expect(plugins.match(/^!?\*\/data\.json$/gm)).toEqual(["*/data.json"]);
   });
 
   it("per-device configDir state never syncs", async () => {
@@ -582,7 +596,7 @@ plugins/*/*
     // Two blocks now coexist; the toggle reads OFF because the relic's
     // marker is not ours, and the catch-all below out-ranks its stale
     // allow line.
-    expect(await f.inv.getPushPluginsDataJson()).toBe(false);
+    expect(f.pushDataJson()).toBe(false);
     expect(
       await f.syncable(`${CONFIG_DIR}/plugins/${OTHER}/data.json`),
     ).toBe(false);

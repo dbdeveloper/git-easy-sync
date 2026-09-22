@@ -17,10 +17,10 @@ type AsyncReadFile = (absPath: string) => Promise<string | null>;
 
 // ── D5: where a .gitignore is honoured (DOT-FILES §5) ────────────────
 //
-// A `.gitignore` is read and obeyed at exactly three kinds of location:
-// the vault root, `<configDir>`, and ONE level under
-// `<configDir>/plugins/`. Anywhere else it is not read AT ALL — not
-// consulted, not even opened.
+// A `.gitignore` is read and obeyed at exactly four kinds of location:
+// the vault root, `<configDir>`, `<configDir>/plugins` itself, and ONE
+// level under it. Anywhere else it is not read AT ALL — not consulted,
+// not even opened.
 //
 // That is a deliberate divergence from git (§3.4): our scope is
 // narrower and predictable. A control file the user drops deep in the
@@ -42,6 +42,13 @@ export function isWhitelistedGitignoreDir(
   configDir: string,
 ): boolean {
   if (relDir === "" || relDir === configDir) return true;
+  // `<configDir>/plugins` itself: the carrier of the per-device
+  // "Sync plugins data.json" switch (DOT-FILES §3.1.4). It has to be
+  // honoured for a second reason too — real git reads it
+  // unconditionally, and this is the one file whose entire purpose is
+  // to be legible to git, so skipping it would diverge precisely where
+  // agreement matters most.
+  if (relDir === `${configDir}/plugins`) return true;
   const pluginsPrefix = `${configDir}/plugins/`;
   if (relDir.startsWith(pluginsPrefix)) {
     // exactly one segment below — a plugin's own folder, nothing deeper

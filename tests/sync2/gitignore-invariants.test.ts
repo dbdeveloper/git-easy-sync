@@ -38,7 +38,7 @@ import { calculateGitBlobSHA } from "../../src/utils";
 const CONFIG_DIR = ".obsidian";
 const SELF = "git-easy-sync";
 
-function fixture(syncConfigDir = true) {
+function fixture(syncConfigDir = true, pushDataJson = false) {
   const root = path.join(
     os.tmpdir(),
     `gi-inv-test-${crypto.randomBytes(4).toString("hex")}`,
@@ -63,6 +63,7 @@ function fixture(syncConfigDir = true) {
     configDir: CONFIG_DIR,
     selfPluginId: SELF,
     seeds,
+    pushPluginsDataJson: () => pushDataJson,
     syncConfigDir: () => syncConfigDir,
     gi: { invalidate: () => {} },
     onAnomaly: (report) => anomalies.push(report),
@@ -483,7 +484,7 @@ describe("GitignoreInvariants.enforce", () => {
     // Pick any line known to be in the current block but missing
     // from our stale stand-in.
     expect(after).toContain("workspace.json");
-    expect(after).toContain("plugins/*/data.json");
+    expect(after).toContain("community-plugins.json");
     // Stale marker line removed (canonical block fully rewritten).
     expect(after).not.toContain("# old block");
   });
@@ -807,6 +808,7 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
       configDir: CONFIG_DIR,
       selfPluginId: SELF,
       seeds: f.seeds,
+      pushPluginsDataJson: () => false,
       syncConfigDir: () => true,
       gi: { invalidate: (dir) => invalidated.push(dir) },
       onAnomaly: () => {},
@@ -1002,6 +1004,7 @@ describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () =>
       configDir: CONFIG_DIR,
       selfPluginId: SELF,
       seeds: f.seeds,
+      pushPluginsDataJson: () => false,
       syncConfigDir: () => true,
       gi: { invalidate: () => {} },
       onAnomaly: () => {},
@@ -1102,51 +1105,132 @@ describe("§12 Крок A done-criteria that the content tests above do not cove
   });
 });
 
-describe("the data.json toggle survives a syncConfigDir round-trip", () => {
-  // This gitignore is the ONLY store of that toggle — which is exactly
-  // what lets it travel between devices. So turning configDir sync off
-  // and back on must not quietly reset the user's opt-in.
+describe("the per-device data.json switch (DOT-FILES §3.1.4)", () => {
+  // It used to be a shared line in `<configDir>/.gitignore`, and this
+  // suite used to prove the line survived a syncConfigDir round-trip —
+  // a problem that only existed because the gitignore was the toggle's
+  // ONLY store. The value now lives in settings, so nothing to survive;
+  // what needs proving instead is that the FILE materialises the
+  // setting, and that a plugin can still overrule it.
   let f: ReturnType<typeof fixture>;
+  let push = false;
   let syncConfigDir = true;
+  const pluginsGi = () =>
+    path.join(f.root, CONFIG_DIR, "plugins", ".gitignore");
 
-  const invWith = (state: InvariantStateStore) =>
+  const invWith = () =>
     new GitignoreInvariants({
       vault: f.vault as unknown as import("obsidian").Vault,
-      state,
+      state: f.state,
       configDir: CONFIG_DIR,
       selfPluginId: SELF,
       seeds: f.seeds,
+      pushPluginsDataJson: () => push,
       syncConfigDir: () => syncConfigDir,
       gi: { invalidate: () => {} },
       onAnomaly: () => {},
     });
 
+  const verdict = (p: string) =>
+    new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR)).ignored(p);
+
   beforeEach(async () => {
     f = fixture();
     await f.state.load();
+    push = false;
     syncConfigDir = true;
+    fs.mkdirSync(path.join(f.root, CONFIG_DIR, "plugins", "brat"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(f.root, CONFIG_DIR, "plugins", "brat", "data.json"),
+      "{}",
+    );
   });
 
   afterEach(() => {
     fs.rmSync(f.root, { recursive: true, force: true });
   });
 
-  it("ON → configDir OFF → configDir ON keeps the opt-in", async () => {
-    const inv = invWith(f.state);
+  it("the setting decides, and flipping it rewrites the file", async () => {
+    const inv = invWith();
     await inv.enforce();
-    await inv.setPushPluginsDataJson(true);
-    expect(await inv.getPushPluginsDataJson()).toBe(true);
+    expect(fs.readFileSync(pluginsGi(), "utf8")).toContain("\n*/data.json");
+    expect(verdict(`${CONFIG_DIR}/plugins/brat/data.json`)).toBe(true);
 
-    syncConfigDir = false;
+    push = true;
     await inv.enforce();
-    // Still remembered while inert — and still inert: `*` below wins.
-    expect(await inv.getPushPluginsDataJson()).toBe(true);
-    expect(
-      new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR)).ignored(`${CONFIG_DIR}/plugins/brat/data.json`),
-    ).toBe(true);
+    expect(fs.readFileSync(pluginsGi(), "utf8")).toContain("\n!*/data.json");
+    expect(verdict(`${CONFIG_DIR}/plugins/brat/data.json`)).toBe(false);
+  });
 
-    syncConfigDir = true;
+  it("the pattern is `*/data.json` — anchored to THIS directory", async () => {
+    // `plugins/*/data.json` here would mean
+    // `<configDir>/plugins/plugins/*/data.json` and match nothing. The
+    // first draft of this design had exactly that, and with it the file
+    // did nothing at all.
+    push = true;
+    await invWith().enforce();
+    const body = fs.readFileSync(pluginsGi(), "utf8");
+    expect(body).toContain("!*/data.json");
+    expect(body).not.toContain("plugins/*/data.json");
+  });
+
+  it("a plugin overrules the switch from its OWN .gitignore, both ways", async () => {
+    // The requirement that forced this design: it cannot be a hardcoded
+    // gate, because a gate returns before the matcher is consulted and
+    // nothing could overrule it.
+    fs.writeFileSync(
+      path.join(f.root, CONFIG_DIR, "plugins", "brat", ".gitignore"),
+      "!data.json\n",
+    );
+    await invWith().enforce(); // switch OFF
+    expect(verdict(`${CONFIG_DIR}/plugins/brat/data.json`)).toBe(false);
+
+    fs.writeFileSync(
+      path.join(f.root, CONFIG_DIR, "plugins", "brat", ".gitignore"),
+      "data.json\n",
+    );
+    push = true;
+    await invWith().enforce(); // switch ON
+    expect(verdict(`${CONFIG_DIR}/plugins/brat/data.json`)).toBe(true);
+  });
+
+  it("the file hides itself, and no rule from above can undo that", async () => {
+    push = true;
+    await invWith().enforce();
+    expect(verdict(`${CONFIG_DIR}/plugins/.gitignore`)).toBe(true);
+
+    // A user planting an allow-rule in both files above it changes
+    // nothing: this file is the deepest node that speaks about its own
+    // path, so its first line wins. Verified against real git too.
+    const rootPath = path.join(f.root, ".gitignore");
+    fs.writeFileSync(
+      rootPath,
+      fs.readFileSync(rootPath, "utf8") +
+        `\n!${CONFIG_DIR}/plugins/.gitignore\n`,
+    );
+    const cdPath = cdGitignore(f.root);
+    fs.writeFileSync(
+      cdPath,
+      `!plugins/.gitignore\n` + fs.readFileSync(cdPath, "utf8"),
+    );
+    expect(verdict(`${CONFIG_DIR}/plugins/.gitignore`)).toBe(true);
+  });
+
+  it("our own data.json stays blocked whatever the switch says", async () => {
+    push = true;
+    await invWith().enforce();
+    expect(verdict(`${CONFIG_DIR}/plugins/${SELF}/data.json`)).toBe(true);
+  });
+
+  it("the file is ours: a hand-edit is reverted on the next pass", async () => {
+    const inv = invWith();
     await inv.enforce();
-    expect(await inv.getPushPluginsDataJson()).toBe(true);
+    fs.writeFileSync(pluginsGi(), "!*/data.json\n# mine now\n");
+    await inv.enforce();
+    const body = fs.readFileSync(pluginsGi(), "utf8");
+    expect(body).not.toContain("# mine now");
+    expect(body).toContain("*/data.json");
   });
 });

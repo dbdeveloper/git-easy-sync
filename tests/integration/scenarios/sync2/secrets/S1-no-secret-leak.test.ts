@@ -149,7 +149,7 @@ describe.skipIf(!integrationEnabled())("sync2 S1 — no secret leak", () => {
   // Our own handle on the managed gitignores: the shared test fixture
   // wires GitignoreInvariants into the manager but does not expose it,
   // and the toggle test has to flip the setting from outside.
-  const invariantsFor = (c: Sync2TestClient) =>
+  const invariantsFor = (c: Sync2TestClient, pushDataJson = false) =>
     new GitignoreInvariants({
       vault: c.vault,
       state: new InvariantStateStore({
@@ -162,6 +162,7 @@ describe.skipIf(!integrationEnabled())("sync2 S1 — no secret leak", () => {
         vault: c.vault,
         selfPluginId: SELF,
       }),
+      pushPluginsDataJson: () => pushDataJson,
       syncConfigDir: () => true,
       // Legitimately a stub HERE: this is a second, throwaway handle
       // built only to flip the toggle from outside the shared fixture.
@@ -232,17 +233,19 @@ describe.skipIf(!integrationEnabled())("sync2 S1 — no secret leak", () => {
       // is held by the hardcoded deny, and the pre-rename one by the
       // allowlist it shipped — neither obeys this setting.
       const env = requireEnv();
-      client = await createSync2Client({ branch, syncConfigDir: true });
+      client = await createSync2Client({
+        branch,
+        syncConfigDir: true,
+        pushPluginsDataJson: true,
+      });
       const startHead = await getBranchHead(branch, env);
       const before = await treeAt(client, startHead as string);
       await plantSecrets(client);
-      // enforce() first so the managed block exists, then flip it. The
-      // manager's own enforce() at syncAll start reads the block and
-      // preserves whatever state it finds, so ON survives into the sync.
-      const inv = invariantsFor(client);
-      await inv.enforce();
-      await inv.setPushPluginsDataJson(true);
-      expect(await inv.getPushPluginsDataJson()).toBe(true);
+      // The switch is a PER-DEVICE setting now (DOT-FILES §3.1.4), and
+      // the harness client was built with it on, so the manager's own
+      // enforce() at syncAll start materialises it. This extra call
+      // just makes sure the file is there before the first scan.
+      await invariantsFor(client, true).enforce();
 
       await sync2AllAndAssertNoErrors(client);
 

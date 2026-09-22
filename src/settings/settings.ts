@@ -172,19 +172,29 @@ export interface GitHubSyncSettings {
   // decimal-point ambiguity (e.g., "1.5" vs "1500000"). Settings UI
   // surfaces the input in KB for readability and converts.
   maxAutoMergeSizeBytes?: number;
+
+  // Per-device. See the note below for why it is per-device and how it
+  // reaches the matcher. Default OFF: a plugin's data.json may hold API
+  // tokens, and the safe direction is not to publish them.
+  pushPluginsDataJson?: boolean;
 }
 
-// NOTE: "Push plugins data.json to GitHub" is NOT a per-device
-// setting field. Its source of truth is the presence of the line
-// `!plugins/*/data.json` in `<configDir>/.gitignore`. The
-// settings-tab checkbox reads/writes that file via
-// GitignoreInvariants.getPushPluginsDataJson / setPushPluginsDataJson.
-// Storing it here would have to either (a) duplicate state with the
-// gitignore (drift risk) or (b) propagate cross-device differently
-// from the gitignore itself (ping-pong on devices that disagree).
-// Letting the gitignore be the single source keeps both devices
-// converging on the same policy as soon as one of them pushes the
-// gitignore.
+// NOTE (rewritten 2026-09-22, DOT-FILES §3.1.4): "Sync plugins
+// data.json" IS a per-device field now — it moved here from a shared
+// line in `<configDir>/.gitignore`.
+//
+// The old arrangement made the gitignore the single source of truth so
+// devices would converge. That is exactly what the owner does NOT want:
+// with ten machines on one repo, turning it on for two of them is the
+// whole point, and a shared line is for everyone or for no one.
+//
+// The value is MATERIALISED as `<configDir>/plugins/.gitignore` rather
+// than enforced by a hardcoded gate. That placement is load-bearing: it
+// sits one level ABOVE the plugin folders, so a plugin's own
+// `.gitignore` speaks last and can overrule the switch in either
+// direction — which is intended behaviour, not a leak. (A hardcoded
+// gate like `syncConfigDir` returns before the matcher is consulted and
+// could not be overruled at all.)
 
 export const DEFAULT_SETTINGS: GitHubSyncSettings = {
   githubToken: "",
@@ -208,6 +218,7 @@ export const DEFAULT_SETTINGS: GitHubSyncSettings = {
   consolidateCommits: false,
   deviceLabel: "Obsidian",
   syncConfigDir: false,
+  pushPluginsDataJson: false,
   // Off by default: a "true" default surprised first-time users by
   // turning their initial adoption into a "convergence push" (we
   // canonicalize remote bytes on pull, skip recordSync because bytes

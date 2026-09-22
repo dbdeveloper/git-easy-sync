@@ -68,6 +68,7 @@ export interface Sync2ClientOpts {
   // syncing configDir paths the way they did before the toggle
   // landed. I-series tests opt into false explicitly.
   syncConfigDir?: boolean;
+  pushPluginsDataJson?: boolean;
   // Default `true` here for back-compat with existing C-series tests
   // that exercise normalization. Production default flipped to false
   // in DEFAULT_SETTINGS to avoid the "convergence push" surprise on
@@ -139,6 +140,7 @@ export async function createSync2Client(
     showStatusBarItem: false,
     showSyncRibbonButton: false,
     consolidateCommits: opts.consolidateCommits ?? false,
+    pushPluginsDataJson: opts.pushPluginsDataJson ?? false,
     syncConfigDir: opts.syncConfigDir ?? true,
   };
 
@@ -208,6 +210,7 @@ export async function createSync2Client(
     seeds: gitignoreSeeds,
     // Anomalies are not the subject here; surfacing them would only
     // add noise. A real reporter lives in main.ts (DOT-FILES §3.1.3).
+    pushPluginsDataJson: () => settings.pushPluginsDataJson ?? false,
     syncConfigDir: () => settings.syncConfigDir ?? true,
     // The REAL matcher, not a stub. This is the same composition the
     // plugin builds, and a no-op here would recreate exactly the failure
