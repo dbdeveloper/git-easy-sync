@@ -177,6 +177,32 @@ describe("process_conflicts (§VIII I)", () => {
     expect(siblingExists("note.md", 8000, "other")).toBe(false);
   });
 
+  it("I.4b: a synthetic that matches the base with NO tracked twin — only 2.3 can reach it", async () => {
+    // Found by mutation probe (§IX.3, 2026-09-23): disabling the
+    // synthetic half of 2.3 left the suite green. I.4 above looks like
+    // it covers this, but its synthetic shares a sha with its tracked
+    // sibling, so the 2.2 dedup group deletes the file before 2.3 ever
+    // looks at it — the assertion passes for the wrong reason.
+    //
+    // Here the tracked sibling says something else entirely, so no
+    // group forms and the record must survive. The synthetic is the
+    // only thing that already agrees with the base, and deleting it is
+    // the whole of the action: it was never in the list, so nothing
+    // else records that it went.
+    putFile("note.md", "reconciled\n");
+    const state = emptyConflictsState();
+    const t = await tracked("note.md", "still divergent\n", 2000);
+    entry(state, "note.md", [t]);
+    const synthetic = buildSiblingFilePath("note.md", 8000, "other");
+    putFile(synthetic, "reconciled\n");
+
+    const result = await processConflicts(deps(), state);
+    expect(fs.existsSync(path.join(dir, synthetic))).toBe(false);
+    // …and the real conflict is untouched by the cleanup.
+    expect(result.entries.get("note.md")!.siblings).toHaveLength(1);
+    expect(siblingExists("note.md", 2000)).toBe(true);
+  });
+
   it("I.5: base+sibling moved away (both files gone from the old path) → the old record prunes cleanly; the new-path synthetic pair belongs to the diff2 scan (Phase 5.5)", async () => {
     // No files created at all — the user moved them elsewhere.
     const state = emptyConflictsState();

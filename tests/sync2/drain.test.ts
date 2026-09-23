@@ -1196,6 +1196,53 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(dec(world.headFiles().get("note.md")!.bytes)).toBe("C1\n");
   });
 
+  it("S3b §12.5 sweep WIRING: all FOUR reference sources reach the store — the drain never sweeps on a partial view", async () => {
+    // Found by mutation probe (§IX.3, 2026-09-23). F.5 pins the STORE
+    // half (`sweep()` honours each source it is handed), and S3 above
+    // pins reaping — but nothing pinned the LIST. Deleting the journal
+    // source, the conflictStore source, or the Deleted-bin source from
+    // `sweepSyncStore` left the whole suite green, and S3's title
+    // ("queue/journal/conflict-referenced blobs survive") wrote a
+    // cheque its body never cashed: both its blobs are expected to DIE.
+    //
+    // What a missing source costs is not hygiene. Source 5's own
+    // comment says it plainly: the bin's captures are referenced by
+    // nothing else until the deletion reaches a batch, so dropping it
+    // deletes the user's only copy of a file between the delete and
+    // its commit. The other two cost a crash-restart its blobs.
+    //
+    // Distinguishable markers, not real blobs: the assertion is about
+    // WHICH sources were consulted, so the sweep's verdict on them is
+    // beside the point.
+    await setupAligned();
+    journal.collectReferencedShas = async () => new Set(["marker-journal"]);
+    conflictStore.collectReferencedShas = async () =>
+      new Set(["marker-conflict"]);
+
+    const consulted = new Set<string>();
+    const realSweep = syncStore.sweep.bind(syncStore);
+    syncStore.sweep = async (sources) => {
+      for (const s of sources) {
+        for (const sha of await s()) consulted.add(sha);
+      }
+      return realSweep(sources);
+    };
+
+    const r = await drainOnce(
+      makeDeps({
+        queueReferencedShas: async () => new Set(["marker-queue"]),
+        deletedBinReferencedShas: async () => new Set(["marker-bin"]),
+      }),
+    );
+    expect(r.status).toBe("ok");
+    expect([...consulted].sort()).toEqual([
+      "marker-bin",
+      "marker-conflict",
+      "marker-journal",
+      "marker-queue",
+    ]);
+  });
+
   it("S1 forbidden-name collision: canonical target exists → LOUD skip, NO baseline for the original (no silent remote deletion)", async () => {
     await setupAligned();
     const BAD = 'we"ird.md';
