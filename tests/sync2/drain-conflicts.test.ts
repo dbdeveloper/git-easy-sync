@@ -199,6 +199,7 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
       discoverChangedFiles: honestDiscovery,
       hot: {
         getLastSyncCommitSha: () => baseCommit,
+        getLastSyncTreeSha: () => null,
         getConflictBranch: () => null,
         update: async () => {},
       },
@@ -1023,7 +1024,18 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     // (deviceLabel, now), so with the harness's frozen clock a re-mint
     // would be byte-identical to the restored name and this test could
     // not tell restore from re-mint. Ten minutes later it can.
-    const d2 = makeDeps({ now: () => 1_800_000_600_000 });
+    const carriedForward: Array<string | null> = [];
+    const d2 = makeDeps({
+      now: () => 1_800_000_600_000,
+      hot: {
+        getLastSyncCommitSha: () => baseCommit,
+        getLastSyncTreeSha: () => null,
+        getConflictBranch: () => null,
+        update: async (f) => {
+          carriedForward.push(f.conflictBranchName);
+        },
+      },
+    });
     const realHead = d2.client.getBranchHeadSha.bind(d2.client);
     d2.client.getBranchHeadSha = async (b: string) => {
       touched.push(b);
@@ -1037,8 +1049,18 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
 
     const r2 = await drainOnce(d2);
     expect(r2.status).toBe("ok");
-    expect(touched.length).toBeGreaterThan(0);
-    expect([...new Set(touched)]).toEqual([branchFromJournal]);
+    // NEGATIVE half: whatever the drain touched, it was not a second
+    // branch. (Since §II.7.1 this drain touches NOTHING — it resumes a
+    // Vault-step and never reaches a conflict-branch push site, so
+    // there is nothing to ask the network about. An empty list is the
+    // strongest possible form of "no second branch".)
+    expect(touched.filter((b) => b !== branchFromJournal)).toEqual([]);
+    // POSITIVE half, and the one that survives having no network calls
+    // at all: the name this drain CARRIES FORWARD is the restored one.
+    // A re-mint under the later clock would show up here as a
+    // different string — which is what the ten-minute offset above is
+    // for. This is the assertion that actually pins J.1.
+    expect(carriedForward[carriedForward.length - 1]).toBe(branchFromJournal);
     // And the work the crash interrupted actually finished.
     expect(vaultFiles.files.get(OTHER)!.content).toBe("other v2\n");
   });
@@ -1215,6 +1237,8 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     lastSyncTreeSha: string | null;
     conflictBranchName: string | null;
   }>;
+  // The hot pair's conflict-branch field, read back by the fake below.
+  let hotConflictBranch: string | null;
 
   const NOTE2 = "note.md";
   const V0b = "one\ntwo\nthree\n";
@@ -1236,6 +1260,7 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     });
     vaultFiles = new FakeVaultFiles();
     baselines = new Map();
+    hotConflictBranch = null;
     batches = [];
     baseCommit = null;
     seq = 0;
@@ -1327,9 +1352,23 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     discoverChangedFiles: honest,
     hot: {
       getLastSyncCommitSha: () => baseCommit,
-      getConflictBranch: () => null,
+      getLastSyncTreeSha: () => null,
+      // ⚠️ READS BACK what update() wrote, as production's hot pair
+      // does. It used to return a flat null, and the whole G-series
+      // still passed — because `now` is FROZEN here, so a drain that
+      // "regenerated" the name produced a byte-identical string and
+      // found the real branch anyway. That is a frozen-clock
+      // coincidence, not the mechanism: in production the stamp moves
+      // every millisecond, and the hot pair is the ONLY thing that
+      // carries a branch from the drain that births it to the drain
+      // that finalizes it. Exposed 2026-09-23 by §II.7.1 (lazy
+      // minting), which removed the regeneration the coincidence
+      // rode on.
+      getConflictBranch: () =>
+        hotConflictBranch === null ? null : { name: hotConflictBranch },
       update: async (f) => {
         hotUpdates.push(f);
+        hotConflictBranch = f.conflictBranchName;
       },
     },
     conflictStore,
@@ -1545,6 +1584,7 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     const d = deps({
       hot: {
         getLastSyncCommitSha: () => baseCommit,
+        getLastSyncTreeSha: () => null,
         getConflictBranch: () => ({ name: "hot-carried-branch" }),
         update: async (f) => {
           hotUpdates.push(f);
@@ -1558,7 +1598,13 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     };
     const r = await drainOnce(d);
     expect(r.status).toBe("ok");
-    expect(heads).toContain("hot-carried-branch"); // NOT a regenerated name
+    // Since §II.7.1 this drain asks the network about no branch at all
+    // — an unresolved conflict with no batch never reaches a push
+    // site, and reading a head nobody consumes was exactly the cost
+    // that fix removed. So the invariant is asserted where it lives:
+    // the name goes THROUGH this drain unchanged, and no regenerated
+    // one appears anywhere.
+    expect(heads.filter((b) => b !== "hot-carried-branch")).toEqual([]);
     expect(hotUpdates[hotUpdates.length - 1].conflictBranchName).toBe(
       "hot-carried-branch",
     );

@@ -208,6 +208,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       (discoveryOverride ?? honestDiscovery)(base, head),
     hot: {
       getLastSyncCommitSha: () => baseCommit,
+      getLastSyncTreeSha: () => null,
       getConflictBranch: () => null,
       update: async (f) => {
         hotUpdates.push(f);
@@ -324,15 +325,16 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     await stageBatch({ "note.md": "C1\n" });
     vaultFiles.files.set("note.md", { content: "C1\n", mtime: 100 });
 
-    // Crash: journal.persist throws right after the push. The FIRST
-    // persist call in a run stores the conflict-branch name (§II.7,
-    // before any network) — the batch-completion persist is the
-    // second call.
+    // Crash: journal.persist throws right after the push. Since
+    // §II.7.1 the branch-name mint is lazy, so a run with no conflict
+    // never persists for it — the batch-completion persist is the
+    // FIRST call, not the second. (Before that fix this was `=== 2`,
+    // and the extra write it counted happened on every sync.)
     const origPersist = journal.persist.bind(journal);
     let persists = 0;
     journal.persist = async (state) => {
       persists += 1;
-      if (persists === 2) {
+      if (persists === 1) {
         throw new Error("power loss before persist");
       }
       return origPersist(state);
@@ -348,6 +350,64 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(r.pushedCommits).toHaveLength(0);
     expect(world.commits.length).toBe(2);
     expect(batches[0].removed).toBe(true);
+  });
+
+  it("§II.7.1: an EMPTY drain costs exactly ONE request — the head read, and nothing else", async () => {
+    // Field measurement 2026-09-23 (the reason §II.7.1 exists): on a
+    // clean vault with an unmoved remote the drain was spending FIVE
+    // sequential round trips, ~400 ms each, where the 2.x engine spent
+    // one. Four carried no information this run could not already have:
+    //
+    //   2. getBranchHeadSha(<name minted THIS run>)  — cannot exist
+    //   3. getGuardedHead() again, in FINALIZE       — unlocked by #2
+    //   4. getBranchHeadSha(<the same phantom>)      — unlocked by #2
+    //   5. getCommit(head) for a tree the hot pair already stored
+    //
+    // This is a COST test, so it counts calls rather than asserting on
+    // the end state: every regression here is invisible to correctness
+    // tests by construction, and a latency-bound path is exactly where
+    // "one more little read" accumulates unnoticed.
+    await setupAligned();
+    baseCommit = world.head;
+    const calls: string[] = [];
+    const client = world.makeClient();
+    for (const m of [
+      "getGuardedHead",
+      "getBranchHeadSha",
+      "getCommit",
+      "compareStatus",
+      "getBlobFromRepo",
+      "getContentsMetadataAtRef",
+      "createBlob",
+    ] as const) {
+      const orig = (client[m] as (...a: unknown[]) => unknown).bind(client);
+      (client as unknown as Record<string, unknown>)[m] = (...a: unknown[]) => {
+        calls.push(m);
+        return orig(...a);
+      };
+    }
+    // The stored anchor already describes this very head, which is what
+    // lets the epilogue skip request 5.
+    const r = await drainOnce(
+      makeDeps({
+        client,
+        hot: {
+          getLastSyncCommitSha: () => baseCommit,
+          getLastSyncTreeSha: () => world.commitTrees.get(world.head!)!,
+          getConflictBranch: () => null,
+          update: async (f) => {
+            hotUpdates.push(f);
+          },
+        },
+      }),
+    );
+    expect(r.status).toBe("ok");
+    expect(calls).toEqual(["getGuardedHead"]);
+    // …and the anchor it writes is still the honest (commit, tree)
+    // pair — the saving must not come from writing a skewed one.
+    const last = hotUpdates[hotUpdates.length - 1];
+    expect(last.lastSyncCommitSha).toBe(world.head);
+    expect(last.lastSyncTreeSha).toBe(world.commitTrees.get(world.head!)!);
   });
 
   it("B.5: remote-only (no batches) → zero pushes, the vault receives R_n, honest read short-circuit", async () => {
@@ -625,6 +685,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
           },
           hot: {
             getLastSyncCommitSha: () => c0,
+            getLastSyncTreeSha: () => null,
             getConflictBranch: () => null,
             update: async () => {},
           },
@@ -838,10 +899,13 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     // CAP exit persists none of the FAILED ATTEMPT's state. The new
     // store-then-journal pair sits at the batch END, which a CAP exit
     // never reaches — pinned here so a future "just save it
-    // defensively" cannot poison the store. (The journal itself is not
-    // null: the branch-name mint persists a CLEAN state early, which is
-    // exactly what D.16 carved out.)
-    expect((await journal.load())!.trackedFiles.size).toBe(0);
+    // defensively" cannot poison the store. Since §II.7.1 the journal
+    // is ABSENT entirely: the CLEAN early write this used to assert on
+    // was the branch-name mint's, and a run with no conflict no longer
+    // mints. Absence is the stronger form of the same invariant, so
+    // the assertion reads "nothing of the failed attempt persisted",
+    // whether or not a file exists.
+    expect((await journal.load())?.trackedFiles.size ?? 0).toBe(0);
     expect((await conflictStore.load()).entries.size).toBe(0);
   });
 
@@ -1231,7 +1295,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     const r = await drainOnce(
       makeDeps({
         queueReferencedShas: async () => new Set(["marker-queue"]),
-        deletedBinReferencedShas: async () => new Set(["marker-bin"]),
+        deletedBinReferencedShas: () => new Set(["marker-bin"]),
       }),
     );
     expect(r.status).toBe("ok");

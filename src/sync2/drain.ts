@@ -241,6 +241,11 @@ export interface DrainDeps {
   ): Promise<DiscoveryResult>;
   hot: {
     getLastSyncCommitSha(): string | null;
+    // The tree stored BESIDE getLastSyncCommitSha(), written together
+    // as one pair. Read by the epilogue to skip a getCommit when the
+    // head never moved this run (§II.7.1) — the stored pair already
+    // describes exactly that commit.
+    getLastSyncTreeSha(): string | null;
     // J.2 fallback: the conflict-branch name survives BETWEEN drains
     // without a journal via the hot pair.
     getConflictBranch(): { name: string } | null;
@@ -422,6 +427,11 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // anchor at the wrong tree (METAFILE §2.1.2).
   let knownHeadTreeSha: string | null = null;
   let conflictHeadHash: string | null = null;
+  // Has ensureConflictBranch() run for the CURRENT batch attempt?
+  // `conflictHeadHash === null` cannot answer that — null is also the
+  // legitimate "branch doesn't exist yet", and the two mean opposite
+  // things to shouldPushToConflictBranch (§II.7.1).
+  let conflictBranchResolved = false;
   // Discovery's complete picture of the repo at ONE pinned commit,
   // when it read the full tree. Layer 2 (§II.13) answers from it
   // instead of one HEAD request per file — see the call site for why
@@ -529,26 +539,15 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         state.conflictBranchName =
           deps.hot.getConflictBranch()?.name ?? null;
       }
-      if (state.conflictBranchName === null) {
-        // Persist BEFORE any network call that would touch the branch
-        // (§II.7) — the name must survive a crash even if this drain
-        // never pushes to it.
-        state.conflictBranchName = buildConflictBranchName(
-          deps.deviceLabel(),
-          deps.now(),
-        );
-        await deps.journal.persist(state);
-      }
-
-      // conflict_head_hash — always read LIVE, never persisted
-      // (§II.7); null = the branch doesn't exist yet.
-      {
-        const r = await deps.retry.run(() =>
-          deps.client.getBranchHeadSha(state.conflictBranchName!),
-        );
-        if (r.error !== null) return statusFromError(r.error, result);
-        conflictHeadHash = r.result;
-      }
+      // ⚠️ MINTING AND THE LIVE HEAD READ ARE NOT HERE (§II.7.1).
+      // Seeding recovers a name a PREVIOUS run left behind; it never
+      // invents one. Everything that needs an invented name goes
+      // through ensureConflictBranch() below, at the moment the branch
+      // is actually about to be touched. Measured 2026-09-23: minting
+      // here cost three round trips on every empty sync — the probe of
+      // a branch whose name carries this run's own timestamp, plus the
+      // two FINALIZE reads that the resulting non-null name unlocked.
+      conflictBranchResolved = false; // a 422 restart re-reads the head
 
       // Pull-folding: remote changes unconditionally refresh the
       // remote half of tracking (§II.2 "всі pull просто ЗАМІЩАЮТЬ").
@@ -668,6 +667,37 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       [];
     const mainPushTracked: TrackedFile[] = [];
 
+    // §II.7.1 — mint the branch name and read its live head, ONCE per
+    // batch attempt, at the moment the branch is first touched.
+    //
+    // The §II.7 order is preserved literally: the name reaches disk
+    // BEFORE the network call, and THIS is that network call. What
+    // changed is only WHEN the pair runs. §II.7's guarantee protects
+    // against a crash between "push succeeded" and "journal written",
+    // which can only happen on a run that reaches a push site — and
+    // every such run passes through here first (both accumulation
+    // sites call shouldPushToConflictBranch before staging anything).
+    // A run that never gets here has nothing to orphan, so the name it
+    // used to mint bought a guarantee against an impossible crash.
+    const ensureConflictBranch = async (): Promise<DrainResult | null> => {
+      if (conflictBranchResolved) return null;
+      if (state.conflictBranchName === null) {
+        state.conflictBranchName = buildConflictBranchName(
+          deps.deviceLabel(),
+          deps.now(),
+        );
+        await deps.journal.persist(state);
+      }
+      // Always LIVE, never persisted (§II.7); null = no branch yet.
+      const r = await deps.retry.run(() =>
+        deps.client.getBranchHeadSha(state.conflictBranchName!),
+      );
+      if (r.error !== null) return statusFromError(r.error, result);
+      conflictHeadHash = r.result;
+      conflictBranchResolved = true;
+      return null;
+    };
+
     // §II.7: the journal (conflicts) answers without the network on
     // the happy path; the live per-file check is the crash-safe
     // fallback (replaces the old bulk-diff). Returns null on an
@@ -693,6 +723,14 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       const rec = conflicts!.entries.get(path);
       if (rec !== undefined && rec.conflictBase.sha === sha) {
         return { should: false, abort: null }; // the record answers — no network
+      }
+      // Past the record's answer, this path may well end up on the
+      // branch — so this is where the branch first gets touched
+      // (§II.7.1). Deliberately BELOW the fast path: the happy path
+      // must stay free of both the mint and the round trip.
+      {
+        const abort = await ensureConflictBranch();
+        if (abort !== null) return { should: false, abort };
       }
       if (conflictHeadHash === null) {
         // Branch doesn't exist yet. A deletion-ours has nothing to
@@ -1792,6 +1830,18 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // skew METAFILE §2.1.2 forbids — one request per pull-only drain is
   // the price of an honest anchor.
   if (headHash !== null && knownHeadTreeSha === null) {
+    // …and when the head never moved, the stored anchor is already the
+    // honest pair for THIS commit (§II.7.1): `hot` still holds the
+    // pre-run values here — update() is the next statement, not this
+    // one. Measured 2026-09-23: this was the 5th round trip of an
+    // empty sync, spent re-learning what was already on disk.
+    if (headHash === deps.hot.getLastSyncCommitSha()) {
+      knownHeadTreeSha = deps.hot.getLastSyncTreeSha();
+    }
+  }
+  if (headHash !== null && knownHeadTreeSha === null) {
+    // Either the head moved, or the stored pair had no tree to give
+    // (a pre-anchor install) — pay for it honestly.
     const r = await deps.retry.run(() =>
       deps.client.getCommit({ sha: headHash!, retry: true }),
     );

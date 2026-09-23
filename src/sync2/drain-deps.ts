@@ -401,6 +401,7 @@ export interface BuildDrainDepsArgs {
   siblingTx: SiblingTx;
   hotMeta: {
     getLastSyncCommitSha(): string | null;
+    getLastSyncTreeSha(): string | null;
     getConflictBranch(): { name: string } | null;
     update(fields: {
       lastSyncCommitSha: string | null;
@@ -506,6 +507,7 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
       ),
     hot: {
       getLastSyncCommitSha: () => args.hotMeta.getLastSyncCommitSha(),
+      getLastSyncTreeSha: () => args.hotMeta.getLastSyncTreeSha(),
       getConflictBranch: () => {
         const cb = args.hotMeta.getConflictBranch();
         return cb === null ? null : { name: cb.name };

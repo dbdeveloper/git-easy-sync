@@ -182,6 +182,7 @@ describe("diff2 port real composition (drainOnce → conflicts.json → findAllC
     discoverChangedFiles: honestDiscovery,
     hot: {
       getLastSyncCommitSha: () => baseCommit,
+      getLastSyncTreeSha: () => null,
       getConflictBranch: () => null,
       update: async () => {},
     },

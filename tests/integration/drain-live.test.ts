@@ -304,6 +304,7 @@ describe.skipIf(!integrationEnabled())(
             ),
           hot: {
             getLastSyncCommitSha: () => seedCommit,
+            getLastSyncTreeSha: () => null,
             getConflictBranch: () => null,
             update: async () => {},
           },
@@ -510,6 +511,7 @@ describe.skipIf(!integrationEnabled())(
             ),
           hot: {
             getLastSyncCommitSha: () => seedCommit,
+            getLastSyncTreeSha: () => null,
             getConflictBranch: () => null,
             update: async () => {},
           },
