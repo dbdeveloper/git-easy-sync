@@ -353,6 +353,53 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     // The OLD sibling file is gone (mark transaction step 4).
     expect(vaultHas(remoteSiblingName(firstSibling.mtime!))).toBe(false);
     expect(fs.existsSync(path.join(dir, ".obsidian/plugins", PLUGIN_ID, ".runtime", SIBLING_TX_MARK_FILE))).toBe(false);
+    // C.13/pull-folding, owner rule §II.6 п.5 — asserted against the
+    // SOURCE of the name, not against the stored value. `rec.siblings
+    // [0].mtime` above is the very field the rule sets, so deriving
+    // the expected name from it can only prove self-consistency; a
+    // fold that stamped the merge moment instead of the folded remote
+    // commit would sail through. The fake stamps R2 at this time.
+    expect(rec.siblings[0].mtime).toBe(world.committedAt);
+  });
+
+  it("C.5b: a NO-OP fold (the fresh remote reverts to conflictBase → ours wins → merged == sibling) must not run the replace transaction", async () => {
+    // Found by mutation probe (§IX.3, 2026-09-23): deleting the
+    // `merged.sha === previousSibling.sha` short-circuit left the
+    // whole suite green, and the §II.11 mark transaction is the ONE
+    // branch that destroys evidence — it deletes the old sibling file
+    // in step 4. Nothing was watching it run on a fold with nothing
+    // to replace.
+    await setupAligned();
+    await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+    await drainOnce(makeDeps());
+    const firstSibling = (await conflictStore.load()).entries.get(NOTE)!
+      .siblings[0];
+    const firstName = remoteSiblingName(firstSibling.mtime!);
+    expect(vaultHas(firstName)).toBe(true);
+
+    // The other device REVERTS to our version. New sha → a real pull;
+    // but diff3(base=conflictBase=LOCAL, ours=sibling=REMOTE_CLASH,
+    // theirs=LOCAL) has theirs == base, so ours wins verbatim and the
+    // fold reproduces the sibling byte for byte.
+    world.committedAt += 5000;
+    await world.commitFiles({ [NOTE]: LOCAL_CLASH });
+    baseCommit = world.commits[world.commits.length - 2];
+
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    const rec = (await conflictStore.load()).entries.get(NOTE)!;
+    expect(rec.siblings).toHaveLength(1);
+    // The sibling survived, under its ORIGINAL name, with its bytes.
+    expect(rec.siblings[0].sha).toBe(firstSibling.sha);
+    expect(vaultHas(firstName)).toBe(true);
+    expect(fs.readFileSync(path.join(dir, firstName), "utf8")).toBe(
+      REMOTE_CLASH,
+    );
+    // And no transaction mark was left behind by a run that should
+    // never have started.
+    expect(fs.existsSync(path.join(dir, ".obsidian/plugins", PLUGIN_ID, ".runtime", SIBLING_TX_MARK_FILE))).toBe(false);
   });
 
   it("C.21 (free size): every sibling persisted in conflicts.json carries a PROVEN size — the fake compare gives none", async () => {
@@ -578,6 +625,51 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
       true,
     ); // seeded flag routed the batch to STEP2 (J.3)
     expect(r.pushedCommits).toEqual([]); // NOT pushed to main
+    expect(dec(world.headFiles().get(NOTE)!.bytes)).toBe(V0);
+  });
+
+  it("J.3b: seeding must RAISE the flag on a tracked record that already exists — the else-branch, where an unraised flag sends conflict content to MAIN", async () => {
+    // Found by mutation probe (§IX.3, 2026-09-23): deleting
+    // `existing.isManualConflict = true` from the seeding loop left
+    // the whole suite green. J.3 only covers the `undefined` branch
+    // (no journal record → create one flagged), and J.5's assertions
+    // survive because its dedup (conflictBase.sha == local.sha) blocks
+    // the push for an unrelated reason.
+    //
+    // The shape that actually hurts: a crashed run left a tracked
+    // record whose halves are ALIGNED (base == remote == V0) and whose
+    // flag is down. Read without the seeding raise, _diff3 calls that
+    // a clean local-only change and pushes it to MAIN — publishing one
+    // side of an unresolved conflict over the other device's work.
+    // The durable record is the only thing that knows better, and the
+    // raise is how it gets a say.
+    await setupAligned();
+    const js =
+      (await journal.load()) ??
+      (await import("../../src/sync2/drain-journal")).emptyDrainState();
+    js.trackedFiles.set(NOTE, {
+      base: { path: NOTE, sha: await sha(V0), size: 1, mtime: 1, blob: null, mode: "", deviceLabel: null },
+      remote: { path: NOTE, sha: await sha(V0), size: 1, mtime: 1, blob: null, mode: "", deviceLabel: null },
+      isManualConflict: false,
+    });
+    await journal.persist(js);
+    // conflictBase differs from the local content, so STEP1/STEP2's
+    // idempotent-push dedup cannot mask the missing raise.
+    const durable = await conflictStore.load();
+    durable.entries.set(NOTE, {
+      conflictBase: { path: NOTE, sha: await sha(V0), size: null, mtime: null, blob: null, mode: "", deviceLabel: null },
+      siblings: [],
+    });
+    await conflictStore.save(durable);
+
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    expect(r.conflictVerdicts.some((v) => v.site === "step2-existing")).toBe(
+      true,
+    );
+    expect(r.pushedCommits).toEqual([]); // MAIN untouched
     expect(dec(world.headFiles().get(NOTE)!.bytes)).toBe(V0);
   });
 
