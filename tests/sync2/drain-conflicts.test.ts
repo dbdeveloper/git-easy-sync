@@ -392,6 +392,13 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     const rec = (await conflictStore.load()).entries.get(NOTE)!;
     expect(rec.siblings).toHaveLength(1);
     // The sibling survived, under its ORIGINAL name, with its bytes.
+    // This `vaultHas` is the one the mutation breaks, and it confirms
+    // the source comment's mechanism exactly: `merged` IS the previous
+    // sibling's own FileInfo (ours-wins returns the object, not a
+    // copy), so the `merged.mtime = tracked.remote.mtime` further down
+    // mutates it IN PLACE — old and new then derive the same file name
+    // and the transaction's step 4 deletes what its step 2 wrote. The
+    // record keeps pointing at a file that is no longer there.
     expect(rec.siblings[0].sha).toBe(firstSibling.sha);
     expect(vaultHas(firstName)).toBe(true);
     expect(fs.readFileSync(path.join(dir, firstName), "utf8")).toBe(
