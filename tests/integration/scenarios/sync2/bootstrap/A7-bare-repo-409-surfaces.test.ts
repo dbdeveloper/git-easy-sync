@@ -27,8 +27,18 @@ import { calculateGitBlobSHA } from "../../../../../src/utils";
 //
 //   1. main head read        getBranchHeadSha        → must read null
 //   2. conflict head read    getBranchHeadShaByName  → must read null
-//                            (§II.7 reads it LIVE on every drain start,
-//                            so it fires even when no conflict exists)
+//                            ⚠️ PROBED DIRECTLY since §II.7.1
+//                            (2026-09-23). This row used to be checked
+//                            by counting the drain's own calls, because
+//                            the drain read this head on EVERY start —
+//                            which is the waste §II.7.1 removed, so on
+//                            a conflict-free first sync the count is
+//                            now legitimately zero. The SURFACE is
+//                            still reachable (FINALIZE reads a name
+//                            carried over from an earlier run, and the
+//                            repo can have been emptied since), so it
+//                            keeps its coverage — just not through a
+//                            call the engine no longer needs to make.
 //   3. first Git Data write  createTree/-Commit/-Blob → impossible;
 //                            the Contents-API seed is the only door
 //   4. deletion-only batch   createTree with no base_tree → nothing to
@@ -90,15 +100,22 @@ describe.skipIf(!bootstrapEnabled())(
           return r;
         };
 
+        // Surface 2, probed DIRECTLY while the repo is still bare —
+        // see the header note. A by-name ref read on a repo with no
+        // refs at all is a 409, and the client must answer null; any
+        // caller that gets a throw here (FINALIZE is the live one)
+        // aborts a drain that had nothing wrong with it.
+        expect(
+          await gh.getBranchHeadShaByName({
+            branch: "git-easy-sync-conflicts-nobody-20260101000000-000",
+          }),
+        ).toBeNull();
+        expect(byNameNulls).toBe(byNameReads); // …and via any caller
+
         // The whole point: this must NOT throw a ConflictError.
         await sync2AllAndAssertNoErrors(client);
 
         expect(mainReads).toBeGreaterThan(0);
-        // The conflict-branch head is read live on every drain start
-        // (§II.7) — on a bare repo that read is a 409 and MUST answer
-        // null, which is what let the drain proceed at all.
-        expect(byNameReads).toBeGreaterThan(0);
-        expect(byNameNulls).toBe(byNameReads);
 
         // Surface 3: the branch exists and carries the content.
         expect(await getBranchHead(branch, env)).not.toBeNull();
