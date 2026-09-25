@@ -1661,4 +1661,116 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(c.heads()).toBeGreaterThan(0);
     expect(r.layer2Corrections.map((x) => x.path)).toEqual(["note.md"]);
   });
+
+  // ── §II.13.2: the drain acquires the snapshot ITSELF ─────────────
+  //
+  // P.29a-e above all depend on discovery HAPPENING to have read a
+  // tree. It only does that on the cold path, so the everyday shape —
+  // many local files, remote barely moved — fell through to per-path
+  // and cost the owner ~15 s of a 23 s sync (41 requests), and 78 s of
+  // 90 s on a 63 MB vault (255 requests). These pin the fix: when
+  // there is no usable snapshot and the batch is worth it, read the
+  // tree once. Layer 2's logic is unchanged — only where it looks.
+
+  // A batch of N ordinary files, remote NOT moved (so discovery is
+  // never called and leaves no snapshot) — the exact field shape.
+  const stageNFiles = async (n: number): Promise<string[]> => {
+    const paths: string[] = [];
+    const files: Record<string, string> = {};
+    for (let i = 0; i < n; i++) {
+      const p = `f${i}.md`;
+      paths.push(p);
+      files[p] = `content ${i}\n`;
+    }
+    baseCommit = await world.commitFiles(files);
+    for (const [p, content] of Object.entries(files)) {
+      baselines.set(p, {
+        baselineSha: await sha(content),
+        mtime: 50,
+        size: enc(content).byteLength,
+      });
+      vaultFiles.files.set(p, { content, mtime: 50 });
+    }
+    const edits: Record<string, string> = {};
+    for (const p of paths) edits[p] = `EDITED ${p}\n`;
+    await stageBatch(edits);
+    for (const p of paths) {
+      vaultFiles.files.set(p, { content: `EDITED ${p}\n`, mtime: 100 });
+    }
+    return paths;
+  };
+
+  it("§II.13.2 🔑 (cost): a batch of 4+ with no snapshot reads the tree ONCE — zero per-path requests", async () => {
+    const paths = await stageNFiles(6);
+    const r = await drainOnce(makeDeps());
+
+    expect(r.status).toBe("ok");
+    expect(world.treeReads).toHaveLength(1); // one bulk answer…
+    expect(world.metadataReads).toEqual([]); // …and nothing per path
+    // The work still happened: all six edits reached the remote.
+    for (const p of paths) {
+      expect(dec(world.headFiles().get(p)!.bytes)).toBe(`EDITED ${p}\n`);
+    }
+  });
+
+  it("§II.13.2 (threshold=4, owner): a batch of THREE stays on the per-path transport", async () => {
+    // Below the threshold a tree — potentially megabytes — costs more
+    // than three round trips. The number is the owner's decision
+    // (2026-09-25); this pins that a decision is being honoured at all,
+    // so moving it is a deliberate act rather than a silent drift.
+    await stageNFiles(3);
+    const r = await drainOnce(makeDeps());
+
+    expect(r.status).toBe("ok");
+    expect(world.treeReads).toEqual([]);
+    expect(world.metadataReads).toHaveLength(3);
+  });
+
+  it("§II.13.2 ⚠️ (truncated): a capped tree is REFUSED, falls back to per-path, and is not re-requested", async () => {
+    // THE trap. "Absent from the snapshot == absent from the repo"
+    // holds only for a COMPLETE tree; GitHub caps at 100k entries or
+    // 7 MB and says so. Building a snapshot from a truncated response
+    // would read "not listed" as "deleted", push over it, and produce
+    // exactly the silent clobber Layer 2 exists to prevent.
+    world.truncateTrees = true;
+    const paths = await stageNFiles(6);
+    const warnings: string[] = [];
+
+    const r = await drainOnce(
+      makeDeps({
+        logger: {
+          info: () => {},
+          warn: (m: string) => warnings.push(m),
+        },
+      }),
+    );
+
+    expect(r.status).toBe("ok");
+    expect(world.treeReads).toHaveLength(1); // asked ONCE, not per file
+    expect(world.metadataReads).toHaveLength(6); // …then paid honestly
+    expect(
+      warnings.some((w) => w.includes("truncated")),
+    ).toBe(true); // and said so out loud
+    // Correctness is untouched by the fallback.
+    for (const p of paths) {
+      expect(dec(world.headFiles().get(p)!.bytes)).toBe(`EDITED ${p}\n`);
+    }
+  });
+
+  it("§II.13.2 (correctness): a blindspot is corrected from the SELF-READ tree, identically to a HEAD", async () => {
+    // The bulk source must be the same authority, not a cheaper guess:
+    // a remote change discovery never mentioned has to be caught here
+    // exactly as P.29b catches it through discovery's own snapshot.
+    const paths = await stageNFiles(4);
+    // A remote edit to ONE of them that discovery will not report.
+    await world.commitFiles({ [paths[0]]: "HIDDEN REMOTE\n" });
+    discoveryOverride = async () => ({ changes: [], tree: null });
+
+    const r = await drainOnce(makeDeps());
+
+    expect(r.status).toBe("ok");
+    expect(world.treeReads).toHaveLength(1);
+    expect(world.metadataReads).toEqual([]);
+    expect(r.layer2Corrections.map((x) => x.path)).toEqual([paths[0]]);
+  });
 });

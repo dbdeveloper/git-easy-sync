@@ -300,6 +300,13 @@ export function makeDrainClient(deps: MakeDrainClientDeps): DrainClient {
       return r === null ? null : { sha: r.sha, size: r.size };
     },
 
+    // §II.13.2 — Layer 2's bulk source. Straight passthrough on
+    // purpose: `truncated` is the DRAIN's decision to act on (fall
+    // back to per-path), not something to swallow here.
+    async getRepoTreeAtCommit(sha) {
+      return client.getRepoTree({ sha, retry: true });
+    },
+
     async getBlobFromRepo(sha) {
       let blob: { content: string; encoding: string };
       try {

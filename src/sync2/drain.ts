@@ -141,6 +141,15 @@ export interface DrainClient {
     path: string,
     ref: string,
   ): Promise<{ sha: string; size: number } | null>;
+  // Layer 2's BULK transport (§II.13.2): the whole repo at one commit,
+  // in one request, so a large batch stops paying per path. Same
+  // authority — a commit's tree is immutable — cheaper transport.
+  // ⚠️ `truncated` MUST be honoured by the caller: "absent from the
+  // list" only means "absent from the repo" for a COMPLETE list.
+  getRepoTreeAtCommit(sha: string): Promise<{
+    files: Array<{ path: string; sha: string; size: number | null }>;
+    truncated: boolean;
+  }>;
   getBlobFromRepo(sha: string): Promise<ArrayBuffer | null>;
   // ── conflict-branch surface (Phase 5) ───────────────────────────
   // null = the branch doesn't exist yet (404).
@@ -357,6 +366,12 @@ export interface DrainResult {
 
 const ERROR_422_CAP = 5;
 
+// §II.13.2 — batch size from which Layer 2 stops asking per path and
+// reads the whole tree once instead. OWNER DECISION (2026-09-25), not a
+// constant pulled from the air: below it, per-path is genuinely cheaper
+// (a tree can be megabytes; three HEADs are three round trips).
+const LAYER2_TREE_THRESHOLD = 4;
+
 export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // Drain-scoped state (§II.9 / §II.13 ownership: dies with this run).
   const verifiedShas = new Set<string>();
@@ -439,6 +454,11 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // that is the same authority, not a shortcut around it. Set to null
   // whenever it can no longer be trusted for the CURRENT head.
   let remoteTree: RemoteTreeSnapshot | null = null;
+  // Which head we have already tried to read a tree for (§II.13.2).
+  // Distinct from `remoteTree === null`: a truncated response leaves no
+  // snapshot but must NOT be re-requested for every remaining file in
+  // the batch. Cleared implicitly by the head rolling.
+  let treeFetchAttemptedForHead: string | null = null;
   // Run-scoped ambient conflicts (§III): null = not loaded yet; an
   // EMPTY state is a distinct legal value. Survives 422 restarts —
   // fresh in-memory STEP1 records must not vanish on a restart scan.
@@ -664,6 +684,60 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     // sha:null = ours-side DELETION (4.6.b conflict born from a batch
     // deletion entry) — lands on the conflict branch as a tree
     // deletion, never as a blob.
+    // §II.13.2 — acquire Layer 2's bulk answer source OURSELVES when
+    // discovery did not happen to leave one.
+    //
+    // Lazy, at the first Layer-2 miss: a batch whose files all answer
+    // from an existing snapshot never gets here, and the batch size is
+    // only known once a batch is claimed (the seed block runs before
+    // claimBatch()). The result lands in the SAME `remoteTree` the fast
+    // path below reads, so Layer 2's own logic is untouched — only
+    // where its answer comes from changes.
+    const acquireRemoteTree = async (
+      batchSize: number,
+    ): Promise<DrainResult | null> => {
+      if (headHash === null) return null;
+      if (remoteTree !== null && remoteTree.atCommit === headHash) return null;
+      // Below the threshold, per-path is genuinely cheaper: a tree can
+      // be megabytes, three HEADs are three round trips.
+      if (batchSize < LAYER2_TREE_THRESHOLD) return null;
+      // A truncated tree (or a fetched-then-rolled head) must not make
+      // every remaining file re-request it.
+      if (treeFetchAttemptedForHead === headHash) return null;
+      treeFetchAttemptedForHead = headHash;
+
+      const r = await deps.retry.run(() =>
+        deps.client.getRepoTreeAtCommit(headHash!),
+      );
+      if (r.error !== null) return statusFromError(r.error, result);
+      if (r.result!.truncated) {
+        // ⚠️ THE trap (§II.13.2). "Absent from the snapshot == 404"
+        // holds ONLY for a COMPLETE tree; on a truncated one "not
+        // listed" would read as "deleted", we would push over it, and
+        // that is precisely the silent clobber Layer 2 exists to
+        // prevent. Slow and correct beats fast and wrong.
+        deps.logger?.warn(
+          "Layer 2: repo tree truncated — falling back to per-path checks",
+          { atCommit: headHash },
+        );
+        return null;
+      }
+      const paths = new Map<string, { sha: string; size: number | null }>();
+      // Deliberately UNFILTERED: a path outside the current sync scope
+      // can still exist on the server, and a filtered snapshot would
+      // show it as deleted (§II.13).
+      for (const f of r.result!.files) {
+        paths.set(f.path, { sha: f.sha, size: f.size });
+      }
+      remoteTree = { atCommit: headHash, paths };
+      deps.logger?.info("Layer 2: repo tree read in bulk", {
+        atCommit: headHash,
+        paths: paths.size,
+        batchSize,
+      });
+      return null;
+    };
+
     // The ONE lazy remote-mtime fill, shared by every site that can
     // reach an mtime comparison (§II.1 п.3.b.e and the plugin-core
     // dispatch). Having two of these — one filled, one forgotten — is
@@ -895,6 +969,14 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // snapshot": headHash rolls after every batch push, and a map
         // answering for the wrong commit is precisely the silent
         // clobber G9 exists to prevent. Unknown commit → network.
+        // §II.13.2: if there is no usable snapshot and this batch is
+        // big enough to make one worth reading, read it now. Placed
+        // BEFORE the source selection so the selection itself is
+        // unchanged — it simply finds a snapshot more often.
+        {
+          const abort = await acquireRemoteTree(claimed.meta.entries.length);
+          if (abort !== null) return abort;
+        }
         let live: {
           sha: string;
           // NOT `number` as the HEAD transport types it: the tree can

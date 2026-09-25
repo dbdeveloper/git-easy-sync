@@ -85,6 +85,7 @@ function adaptClient(client: GithubClient): DrainClient {
     // test reads the head raw.
     getGuardedHead: () => client.getBranchHeadSha({ retry: true }),
     getCommit: (args) => client.getCommit(args),
+    getRepoTreeAtCommit: (sha) => client.getRepoTree({ sha, retry: true }),
     createTree: (args) => client.createTree(args),
     createBlob: (args) => client.createBlob(args),
     pushCommitFromTree: (args) =>

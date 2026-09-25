@@ -26,6 +26,12 @@ export class FakeWorld {
   readonly blobs = new Map<string, ArrayBuffer>();
   readonly commits: string[] = [];
   readonly branchHeads = new Map<string, string>(); // conflict branches
+  // Layer 2 transport accounting (§II.13.2 cost tests): which paths
+  // were asked one at a time, and which commits were read in bulk.
+  readonly metadataReads: string[] = [];
+  readonly treeReads: string[] = [];
+  // Models GitHub's truncated response — a tree that must be refused.
+  truncateTrees = false;
   readonly commitParents = new Map<string, string[]>();
   committedAt = 1_700_000_000_000;
 
@@ -154,8 +160,21 @@ export class FakeWorld {
         return { sha: commitSha, committedAt: (this.committedAt += 1000) };
       },
       getContentsMetadataAtRef: async (p, ref) => {
+        this.metadataReads.push(p);
         const f = this.filesAt(ref).get(p);
         return f ? { sha: f.sha, size: f.bytes.byteLength } : null;
+      },
+      // §II.13.2 — the real thing: EVERY blob at that commit, in one
+      // answer. `truncateTrees` models GitHub's 100k/7MB cap, which is
+      // the one response shape that must NOT become a snapshot.
+      getRepoTreeAtCommit: async (sha) => {
+        this.treeReads.push(sha);
+        const files = [...this.filesAt(sha)].map(([path, f]) => ({
+          path,
+          sha: f.sha,
+          size: f.bytes.byteLength as number | null,
+        }));
+        return { files, truncated: this.truncateTrees };
       },
       getBlobFromRepo: async (s) => this.blobs.get(s) ?? null,
       getBranchHeadSha: async (branch) => this.branchHeads.get(branch) ?? null,
