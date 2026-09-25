@@ -1259,6 +1259,9 @@ export default class GitHubSyncPlugin extends Plugin {
       },
       onSyncStarted: () => {
         this.inFullSync = true;
+        // A stale request would make the NEXT drain's idle event
+        // announce a cancellation that never happened.
+        this.syncCancelRequested = false;
         this.armSyncProgressNotice();
       },
       onSyncCompleted: (summary) => {
@@ -1780,6 +1783,24 @@ export default class GitHubSyncPlugin extends Plugin {
 
   // Create-or-update. duration 0: this notice lives until WE take it
   // down, because its whole purpose is to span the operation.
+  // ⚠️ THE INVARIANT (owner, 2026-09-26): everything that stops or
+  // interrupts a sync must end this notice. It has duration 0, so a
+  // missed path does not degrade — it leaves a message on screen until
+  // Obsidian restarts.
+  //
+  // Guaranteed structurally by hanging the teardown on the two events
+  // that CANNOT be skipped, rather than on a list of sites to remember:
+  //
+  //   drain → "idle"   — emitted from the drain's own `finally`, so it
+  //                      fires however the drain ended: success, error,
+  //                      cancel, throw. Covers background drains, which
+  //                      produce no summary at all.
+  //   onSyncCompleted  — emitted from syncAll/syncFile's `finally`, so
+  //                      it fires even when the COMMIT pass threw and no
+  //                      drain ever started.
+  //
+  // Between them every exit is covered; a new exit path has to bypass
+  // both to leak, and neither can be bypassed from inside the engine.
   private setSyncNotice(text: string): void {
     if (this.syncNoticeHideTimer !== null) {
       window.clearTimeout(this.syncNoticeHideTimer);
@@ -1796,6 +1817,13 @@ export default class GitHubSyncPlugin extends Plugin {
   // go. Not BRIEF_NOTICE_MS — that is tuned for a toast that appears out
   // of nowhere; this one the user has been watching.
   private finishSyncNotice(text: string): void {
+    // ⚠️ The progress machinery MUST be disarmed here, not only in
+    // clearSyncNotice. Field bug 2026-09-26: a 0.5 s sync left its 2 s
+    // timer pending, it fired 1.5 s later over an idle plugin, and
+    // `syncProgressActive` then stayed true FOREVER — so every later
+    // sync had its "Nothing to commit" instantly overwritten by a
+    // STALE progress line ("Uploading 1 of 1" from some earlier drain).
+    this.disarmSyncProgress();
     this.setSyncNotice(text);
     const notice = this.syncNotice;
     this.syncNoticeHideTimer = window.setTimeout(() => {
@@ -1819,6 +1847,14 @@ export default class GitHubSyncPlugin extends Plugin {
   // Arm the "this is taking a while" switch. Only the TEXT changes when
   // it fires — by then the notice usually already exists, carrying the
   // commit outcome.
+  private disarmSyncProgress(): void {
+    if (this.syncProgressTimer !== null) {
+      window.clearTimeout(this.syncProgressTimer);
+      this.syncProgressTimer = null;
+    }
+    this.syncProgressActive = false;
+  }
+
   private armSyncProgressNotice(): void {
     if (this.syncProgressTimer !== null || this.syncProgressActive) return;
     this.syncProgressTimer = window.setTimeout(() => {
@@ -1857,15 +1893,11 @@ export default class GitHubSyncPlugin extends Plugin {
   // it hangs on screen until Obsidian restarts, which is worse than
   // showing no progress at all.
   private clearSyncNotice(): void {
-    if (this.syncProgressTimer !== null) {
-      window.clearTimeout(this.syncProgressTimer);
-      this.syncProgressTimer = null;
-    }
+    this.disarmSyncProgress();
     if (this.syncNoticeHideTimer !== null) {
       window.clearTimeout(this.syncNoticeHideTimer);
       this.syncNoticeHideTimer = null;
     }
-    this.syncProgressActive = false;
     this.syncNotice?.hide();
     this.syncNotice = null;
   }

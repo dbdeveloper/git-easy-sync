@@ -272,6 +272,35 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(order).toEqual(["enforce", "detect"]);
   });
 
+  it("§II.16 🔑: a new drain starts with a CLEARED progress snapshot — no stale counters from the last run", async () => {
+    // Field bug 2026-09-26: a sync with nothing to do painted
+    // "Uploading 1 of 1" — counters from a drain that had finished
+    // minutes earlier. The status object outlives a drain, so anything
+    // left in it is read as current by whatever paints next.
+    const seen: Array<unknown> = [];
+    manager.setDrainStatusListener((s) => seen.push(s.progress));
+    deps.drainFn = async (d) => {
+      d.onProgress?.({
+        pullDone: 0,
+        pullTotal: 0,
+        pushDone: 1,
+        pushTotal: 1,
+        conflicts: 0,
+        path: "a.md",
+      });
+      return okResult();
+    };
+    await manager.syncAll();
+    expect(manager.getDrainStatus().progress).not.toBeNull(); // it reported
+
+    // A second run that reports NOTHING must not inherit the first's numbers.
+    deps.drainFn = async () => okResult();
+    seen.length = 0;
+    await manager.syncAll();
+    expect(seen[0]).toBeNull(); // the "running" emit cleared it
+    expect(manager.getDrainStatus().progress).toBeNull();
+  });
+
   it("§II.17: a CANCELLED sync does not report success — the summary must not say 'Sync done'", async () => {
     // A cancelled drain returns normally (it is not an error), so the
     // summary's `ok` flag would have been true and the user would have

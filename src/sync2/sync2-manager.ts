@@ -532,12 +532,18 @@ export class Sync2Manager {
     // dot-directory would silently fail to pull: a one-sided break that
     // only surfaces on the second device.
     const startedAtMs = this.now();
+    // ⚠️ `progress: null` is load-bearing, not tidiness. It used to
+    // carry the PREVIOUS drain's snapshot into the next one, so a sync
+    // with nothing to do could paint "Uploading 1 of 1" from a run that
+    // had ended minutes ago (field bug 2026-09-26).
+    this.lastProgress = null;
     this.emitDrainStatus({
       state: "running",
       startedAt: startedAtMs,
       currentPath: null,
       totalFiles: 0,
       currentFile: 0,
+      progress: null,
     });
     try {
       // Placed INSIDE the try and after the status flip: the UI's
