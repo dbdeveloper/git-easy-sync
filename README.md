@@ -77,10 +77,12 @@ mid-range Android devices without OOM crashes.
   bar 🔀 + ribbon badge) in real time so you see resolution
   progress immediately as you delete or rename sibling files. They
   never push, never pull, never mutate sync state.
-- **Click feels instant.** The click path writes the commit batch to
-  disk and returns immediately; the network work happens in the
-  background. Idle syncs stay silent; only heavy ones show a progress
-  notice.
+- **Click feels instant, and never silent.** The click path writes the
+  commit batch to disk and returns immediately; the network work happens
+  in the background. A single notice carries the whole operation — what
+  was committed, live progress if it runs longer than two seconds, then
+  the result. A sync that finishes quickly shows no progress bar, only
+  the outcome.
 - **Resume on crash.** Four layers of resume cover adoption pull,
   incremental pull, push blob upload, and the find-changes → queue
   bridge. A push interrupted mid-flight (Obsidian closed, phone
@@ -481,6 +483,32 @@ Settings tab layout matches what you'll see in Obsidian under
   everything except this one".
 
 ### Interface
+
+**What a sync tells you.** One notice carries the whole operation and
+changes as it goes: the commit result first (`Commit 3 files` /
+`Nothing to commit`), then — *only if the sync is still running after
+two seconds* — live progress, then the summary, which disappears after
+a moment:
+
+```
+Syncing with GitHub
+Downloading 2 of 10
+Uploading 3 of 5
+⚠ 2 files need resolving
+```
+
+Both counters run at once because this plugin sends and receives in the
+same pass rather than in separate phases, and their totals can GROW
+mid-sync: the plugin genuinely learns of more work as it goes (another
+batch of local changes, another answer from the server) and would rather
+show that than a total it guessed. A quick sync shows no progress at
+all — only the summary.
+
+**Stopping a sync.** Clicking the sync button while one is running
+offers `Cancel sync`. It stops at the next safe point, so it is not
+instant on a slow upload — you will see `Sync canceled` when it actually
+stops. Nothing is left half-done: the next sync picks up exactly where
+this one left off.
 
 - **Show status bar item** — shows a `GitHub` indicator in
   Obsidian's status bar (plus the `🔀 N` conflict counter when

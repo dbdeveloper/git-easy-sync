@@ -53,6 +53,10 @@ src/
 │                                    #  onTransition hook (drives the red status-bar/ribbon UI)
 ├── status-bar-model.ts              # E2 (TODO §6-7): pure statusBarSuffix +
 │                                    #  statusMenuState + buildStatusMenu (status-bar text + menu)
+├── sync-progress-model.ts           # NEW-DRAIN §II.16: pure progressNoticeText +
+│                                    #  syncSummaryText. Every rule here is about what to
+│                                    #  HIDE (a zero line, an empty clause), and absence is
+│                                    #  what eyeballing a running sync cannot check
 ├── utils.ts                         # hasTextExtension, retry helpers, calculateGitBlobSHA,
 │                                    #  isRetriableStatus / isWriteRetriableStatus / isRetriableError,
 │                                    #  describeError (typed-error extractor used by safeStringify)
