@@ -716,9 +716,15 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // listed" would read as "deleted", we would push over it, and
         // that is precisely the silent clobber Layer 2 exists to
         // prevent. Slow and correct beats fast and wrong.
+        // The cost of this fallback is NOT graceful at scale: the tree
+        // caps at 7 MB, which SPIKE-TREES-LIMIT §4 puts at ~25k files
+        // (sooner with long or non-ASCII paths), and per-path at that
+        // size is hours. Say the price out loud — a silent hour is
+        // indistinguishable from a hang. Lifting the ceiling needs the
+        // per-directory tree walk recorded in that same §4.
         deps.logger?.warn(
           "Layer 2: repo tree truncated — falling back to per-path checks",
-          { atCommit: headHash },
+          { atCommit: headHash, perPathRequests: batchSize },
         );
         return null;
       }
