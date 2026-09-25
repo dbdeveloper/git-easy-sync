@@ -239,6 +239,33 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(enforced).toBe(1);
   });
 
+  it("a COMMIT pass enforces the invariants BEFORE detecting changes — so a file enforce() fixes rides in THAT commit", async () => {
+    // Probed 2026-09-23 while answering "does the syncConfigDir toggle
+    // need its own enforce() call?": removing this call outright, or
+    // moving it after change detection, left the entire suite green.
+    // Both the call AND its position were unpinned.
+    //
+    // The position is the whole answer to that question. Because
+    // enforce() runs FIRST, a user who flips a setting and then hits
+    // [commit] gets the .gitignore rewrite in that very commit — no
+    // separate toggle-time call needed, and no lone commit afterwards.
+    // Move it one line down and the rewrite misses the scan, surfacing
+    // a commit later: exactly the detached commit the owner objected
+    // to. So this asserts ORDER, not just that it was called.
+    const order: string[] = [];
+    deps.invariants = {
+      enforce: async () => {
+        order.push("enforce");
+      },
+    };
+    deps.detector.findChanges = async () => {
+      order.push("detect");
+      return [modified("a.md")];
+    };
+    await manager.commitOnly();
+    expect(order).toEqual(["enforce", "detect"]);
+  });
+
   it("a failing enforce() never blocks the sync — hygiene, not a gate", async () => {
     deps.invariants = {
       enforce: async () => {
