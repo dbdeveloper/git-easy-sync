@@ -62,6 +62,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     pulledFiles: number;
     conflicts: number;
     ok: boolean;
+    cancelled: boolean;
   }>;
   let latched: Array<401 | 403>;
 
@@ -271,6 +272,29 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(order).toEqual(["enforce", "detect"]);
   });
 
+  it("§II.17: a CANCELLED sync does not report success — the summary must not say 'Sync done'", async () => {
+    // A cancelled drain returns normally (it is not an error), so the
+    // summary's `ok` flag would have been true and the user would have
+    // been told the sync finished — right after they stopped it.
+    deps.drainFn = async () => okResult({ status: "cancelled" });
+    await manager.syncAll();
+    expect(completed).toHaveLength(1);
+    expect(completed[0].ok).toBe(false);
+    // …and it is distinguishable from an ERROR, because the two get
+    // different words: a cancel is confirmed ("Sync canceled"), an
+    // error already has its own notice.
+    expect(completed[0].cancelled).toBe(true);
+  });
+
+  it("§II.17: an ordinary successful sync still reports ok — the cancel flag does not leak between runs", async () => {
+    deps.drainFn = async () => okResult({ status: "cancelled" });
+    await manager.syncAll();
+    deps.drainFn = async () => okResult();
+    await manager.syncAll();
+    expect(completed[1].ok).toBe(true);
+    expect(completed[1].cancelled).toBe(false);
+  });
+
   it("§II.16: the queue depth is reported as EACH batch lands, not once at the end", async () => {
     // Found 2026-09-25 while wiring the progress notice: fireQueueDepth
     // ran once after the WHOLE drain, so a four-batch run showed a
@@ -466,6 +490,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       pulledFiles: 3,
       conflicts: 0,
       ok: true,
+      cancelled: false,
     });
     expect(pluginReloads).toEqual([["other-plugin", "dead-plugin"]]);
   });

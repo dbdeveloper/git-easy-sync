@@ -1410,6 +1410,81 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(dec(world.headFiles().get("note.md")!.bytes)).toBe("C1\n");
   });
 
+  it("S1 cancel 🔑 (Vault-step): a pull-heavy drain stops mid-loop, keeps the journal, and the NEXT drain finishes the job", async () => {
+    // The gap found 2026-09-26: the Vault-step had no cancel check, and
+    // it is the phase where the user actually waits on a big pull —
+    // every pulled file is written here. [Cancel sync] did nothing
+    // until the whole loop drained.
+    //
+    // The point of this test is NOT that it exits. It is that exiting
+    // COSTS NOTHING: the journal survives, and a second drain lands
+    // every file. If that were false, cancellation would be a way to
+    // corrupt a sync, and the button would have to go.
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `base ${i}\n`;
+    baseCommit = await world.commitFiles(files);
+    for (const [p, content] of Object.entries(files)) {
+      baselines.set(p, {
+        baselineSha: await sha(content),
+        mtime: 50,
+        size: enc(content).byteLength,
+      });
+      vaultFiles.files.set(p, { content, mtime: 50 });
+    }
+    // Remote moves every one of them — a pure pull, so ALL the work is
+    // in the Vault-step and none of it in a batch.
+    const remoteEdits: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) remoteEdits[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(remoteEdits);
+
+    // Cancel once the Vault-step has written its first file.
+    let cancelled = false;
+    const r1 = await drainOnce(
+      makeDeps({
+        cancelRequested: () => cancelled,
+        vaultFiles: new Proxy(vaultFiles, {
+          get(t, prop, recv) {
+            if (prop === "write") {
+              return async (...args: unknown[]) => {
+                cancelled = true; // the user clicks [Cancel sync] now
+                return (
+                  t as unknown as Record<string, (...a: unknown[]) => unknown>
+                ).write(...args);
+              };
+            }
+            return Reflect.get(t, prop, recv);
+          },
+        }) as unknown as typeof vaultFiles,
+      }),
+    );
+    expect(r1.status).toBe("cancelled");
+    // Partial by construction — that is what makes the resume the
+    // interesting half.
+    expect(r1.vaultStepWrites.length).toBeLessThan(4);
+    // 🔑 THE invariant that makes cancelling safe here. A pure pull
+    // writes no journal at all (only a completed batch does), so the
+    // resume does not come from stored state — it comes from the next
+    // drain REDISCOVERING the same remote changes. That only works
+    // while the anchor still points at the old commit. Had the
+    // epilogue run and advanced it, the next drain would believe it
+    // was up to date and the unwritten files would be lost silently.
+    expect(hotUpdates).toEqual([]);
+    expect(await journal.load()).toBeNull(); // nothing to persist, by design
+
+    // The resume: every file lands, and the run completes normally.
+    cancelled = false;
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    for (let i = 0; i < 4; i++) {
+      expect(vaultFiles.files.get(`p${i}.md`)!.content).toBe(`REMOTE ${i}\n`);
+    }
+    // …and THIS run did confirm itself: the anchor finally moved.
+    expect(hotUpdates.length).toBeGreaterThan(0);
+    expect(hotUpdates[hotUpdates.length - 1].lastSyncCommitSha).toBe(
+      world.head,
+    );
+  });
+
   it("S1 message+author: main push carries the BATCH's createdAt (message AND author.date); merge/conflict use now()", async () => {
     await setupAligned();
     const CREATED = 1_777_000_123_000;

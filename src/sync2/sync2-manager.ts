@@ -165,9 +165,12 @@ export interface Sync2ManagerDeps {
     // different unit from the status-bar badge, which counts sibling
     // FILES: one path with two siblings is 1 here and 2 there.
     conflicts: number;
-    // False when the operation ended by throwing. The summary notice
-    // must not claim success over an error the user is about to see.
+    // False when the operation ended by throwing OR was cancelled —
+    // the summary notice must not claim success over either.
     ok: boolean;
+    // Distinguishes the two: a cancel is a user decision and gets its
+    // own confirmation, an error already has its own notice.
+    cancelled: boolean;
   }): void;
   onQueueDepthChanged?(depth: number): void;
   // Mobile auto-reload: plugin ids whose files the Vault-step touched.
@@ -213,6 +216,10 @@ export class Sync2Manager {
   // subscribes mid-drain (the notice arms itself 2 s in) can paint
   // immediately instead of waiting for the next file.
   private lastProgress: DrainProgress | null = null;
+  // A cancelled drain returns NORMALLY (it is not an error), so without
+  // this the closing summary would cheerfully announce "Sync done" over
+  // a sync the user just stopped.
+  private lastDrainWasCancelled = false;
 
   private drainStatus: DrainStatus = {
     state: "idle",
@@ -253,13 +260,14 @@ export class Sync2Manager {
     try {
       pushedFiles = await this.runCommitPass(null);
       await this.drain();
-      ok = true;
+      ok = !this.lastDrainWasCancelled;
     } finally {
       this.deps.onSyncCompleted?.({
         pushedFiles,
         pulledFiles: this.pulledFilesThisSync,
         conflicts: this.trackedConflictPaths(),
         ok,
+        cancelled: this.lastDrainWasCancelled,
       });
     }
   }
@@ -274,13 +282,14 @@ export class Sync2Manager {
       const outcome = await this.commitFile(path);
       pushedFiles = outcome.kind === "committed" ? outcome.count : 0;
       await this.drain();
-      ok = true;
+      ok = !this.lastDrainWasCancelled;
     } finally {
       this.deps.onSyncCompleted?.({
         pushedFiles,
         pulledFiles: this.pulledFilesThisSync,
         conflicts: this.trackedConflictPaths(),
         ok,
+        cancelled: this.lastDrainWasCancelled,
       });
     }
   }
@@ -493,6 +502,7 @@ export class Sync2Manager {
     if (this.running) return; // H3: collapse into the in-flight drain
     this.running = true;
     this.abortRequested = false;
+    this.lastDrainWasCancelled = false;
     // DOT-FILES §3.1.2 / owner 2026-09-20: the managed .gitignore
     // files return to canonical before EVERY operation, not just
     // before a commit. Until now enforce() ran only on the commit
@@ -570,6 +580,7 @@ export class Sync2Manager {
         }
         case "cancelled": {
           this.deps.logger.info("Sync2 drain cancelled by user");
+          this.lastDrainWasCancelled = true;
           return;
         }
         case "token-expired": {

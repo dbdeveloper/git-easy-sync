@@ -1564,6 +1564,22 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
 
   // ── Vault-step (§II.3/II.4/II.5 endings + STEP3) ─────────────────
   for (const [path, tracked] of state.trackedFiles) {
+    // S1 cancel (Vault-step boundary, owner 2026-09-26). THE phase
+    // where cancelling matters most: this loop writes every pulled
+    // file into the vault and fetches the blobs it needs, so on a big
+    // pull it is where the user waits — and until now [Cancel sync]
+    // did nothing here.
+    //
+    // Exiting mid-loop is not a new path to invent: the network abort
+    // a few lines down already leaves exactly this state, by an
+    // explicit owner decision ("abort, never per-file skip — the
+    // journal stays, the next drain repeats the WHOLE Vault-step").
+    // The journal survives (only the epilogue clears it), so the next
+    // run resumes and finishes.
+    //
+    // ⚠️ BEFORE countPull: a path we are not going to process must not
+    // be counted as processed.
+    if (deps.cancelRequested?.()) return result("cancelled");
     // §II.16 — count the remote change the moment this path is taken
     // up, BEFORE any of the skips below. A path already counted in the
     // batch loop is guarded by the set, so this is the second half of

@@ -1251,6 +1251,12 @@ export default class GitHubSyncPlugin extends Plugin {
       onSyncStarted: () => this.armSyncProgressNotice(),
       onSyncCompleted: (summary) => {
         this.disarmSyncProgressNotice();
+        if (summary.cancelled) {
+          // The click produced "cancellation requested"; this confirms
+          // it actually stopped. Different moments, both worth saying.
+          new Notice("Sync canceled", BRIEF_NOTICE_MS);
+          return;
+        }
         if (!summary.ok) return; // the error's own notice speaks instead
         new Notice(
           syncSummaryText({
