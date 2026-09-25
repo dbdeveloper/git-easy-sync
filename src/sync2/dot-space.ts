@@ -122,6 +122,12 @@ export interface DotSpaceDeps {
   vault: Vault;
   configDir: string;
   syncConfigDir: () => boolean;
+  // §4.2 — a `!`-rule that names a dot-path but grants NOTHING is
+  // refused on purpose (D7), and until 2026-09-26 it was refused in
+  // total silence. Field report: the owner wrote `!.test/` (no anchor),
+  // nothing synced, and the log had ZERO mentions of the path — leaving
+  // no way to tell a deliberate refusal from a broken feature.
+  logger?: { warn(message: string, data?: unknown): void };
 }
 
 // Pass 0: read the root .gitignore and turn its `!`-rules into the set.
@@ -167,6 +173,18 @@ export async function readRootGitignore(
     const target = classifyRule(rule, onDisk);
     if (target.kind === "file") dotFiles.add(target.path);
     else if (target.kind === "dir") walkTargets.add(target.path);
+    else {
+      // It addresses a real dot-path (addressedPath said so) and still
+      // grants nothing — so the user wrote something that LOOKS right,
+      // git would honour it, and we deliberately do not. Say so.
+      deps.logger?.warn(
+        "gitignore: this rule does not make a dot-path syncable — " +
+          "anchor it with a leading slash, e.g. `!/name/` instead of " +
+          "`!name/` (an unanchored rule matches at any depth, and the " +
+          "sync cannot know WHERE to look)",
+        { rule, path: addressed.path },
+      );
+    }
   }
   return { dotFiles, walkTargets };
 }

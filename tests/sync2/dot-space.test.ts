@@ -204,6 +204,46 @@ describe("readRootGitignore", () => {
     );
   });
 
+  it("a rule that LOOKS right but grants nothing warns LOUDLY — silence was the actual defect", async () => {
+    // Field report 2026-09-26: the owner wrote `!.test/` (no anchor),
+    // nothing synced, and the log had ZERO mentions of the path. The
+    // refusal itself is correct and load-bearing (D7: an unanchored
+    // rule matches at any depth, so permission without a known location
+    // would let Pass 2 read the path as deleted). What was wrong is
+    // that a deliberate refusal was indistinguishable from a broken
+    // feature — git honours the rule, we do not, and nobody said so.
+    mkdir(".test");
+    w(".gitignore", "!.test/\n");
+    const warnings: Array<{ msg: string; data?: unknown }> = [];
+
+    const set = await readRootGitignore({
+      vault: vault as unknown as import("obsidian").Vault,
+      configDir: CONFIG_DIR,
+      syncConfigDir: () => true,
+      logger: { warn: (msg, data) => warnings.push({ msg, data }) },
+    });
+
+    expect(set.walkTargets.has(".test")).toBe(false); // still refused
+    expect(warnings).toHaveLength(1);
+    // The message has to carry the FIX, not just the verdict.
+    expect(warnings[0].msg).toContain("!/name/");
+    expect(warnings[0].data).toMatchObject({ rule: "!.test/" });
+  });
+
+  it("an ANCHORED rule is accepted and says nothing — the warning is for refusals only", async () => {
+    mkdir(".test");
+    w(".gitignore", "!/.test/\n");
+    const warnings: string[] = [];
+    const set = await readRootGitignore({
+      vault: vault as unknown as import("obsidian").Vault,
+      configDir: CONFIG_DIR,
+      syncConfigDir: () => true,
+      logger: { warn: (m) => warnings.push(m) },
+    });
+    expect(set.walkTargets.has(".test")).toBe(true);
+    expect(warnings).toEqual([]);
+  });
+
   it("the same name is a file or a target depending on what it IS", async () => {
     w(".gitignore", "!/.claude\n");
     const asFile = await read();

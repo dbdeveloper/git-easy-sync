@@ -118,6 +118,11 @@ const BRIEF_NOTICE_MS = 700;
 // Owner decision 2026-09-25: the complaint was "pauses over 3-4 seconds
 // feel burdensome", so the notice appears BEFORE that becomes true.
 const SYNC_PROGRESS_DELAY_MS = 2000;
+// How long the closing line ("Sync done — …") stays after the operation
+// ends. The user has been watching this notice, so it does not need the
+// dwell time of a toast that appears out of nowhere — a second is the
+// owner's call.
+const SYNC_SUMMARY_LINGER_MS = 1000;
 
 // §35 — the automatic "Sync skipped: token expired" toast. Longer than
 // BRIEF_NOTICE_MS: it carries actionable words the user must actually read,
@@ -646,6 +651,10 @@ export default class GitHubSyncPlugin extends Plugin {
   }
 
   async onunload(): Promise<void> {
+    // §II.16 — the sync notice has duration 0. If the plugin goes away
+    // mid-sync (disable, or the self-update reload) nothing else will
+    // ever hide it, and it would outlive the plugin that made it.
+    this.clearSyncNotice();
     // §4.5.3 (B3) — persist the last stable layout snapshot so a fast reload can restore
     // our windows. FIRST thing: our leaves are already closed by now, but lastStableLayout
     // holds the pre-teardown snapshot (with them). Cancel a pending capture so it can't
@@ -990,6 +999,7 @@ export default class GitHubSyncPlugin extends Plugin {
       selfPluginId: manifest.id,
       vaultRoot,
       syncConfigDir: () => this.settings.syncConfigDir ?? true,
+      logger: this.logger,
       // DOT-FILES §3.3: a walk target we could not fully enumerate is
       // protected from Pass 2 silently, so the only way anyone learns a
       // target keeps failing is this line.
@@ -1240,28 +1250,33 @@ export default class GitHubSyncPlugin extends Plugin {
         await this.app.fileManager.renameFile(file, newPath);
       },
       onLocalCommitted: (count: number) => {
-        new Notice(
+        this.reportCommitOutcome(
           count === 1 ? "Commit 1 file" : `Commit ${count} files`,
-          BRIEF_NOTICE_MS,
         );
       },
       onNoLocalChanges: () => {
-        new Notice("Nothing to commit", BRIEF_NOTICE_MS);
+        this.reportCommitOutcome("Nothing to commit");
       },
-      onSyncStarted: () => this.armSyncProgressNotice(),
+      onSyncStarted: () => {
+        this.inFullSync = true;
+        this.armSyncProgressNotice();
+      },
       onSyncCompleted: (summary) => {
-        this.disarmSyncProgressNotice();
-        // A cancel is announced by the drain-idle handler above (it
-        // covers background drains too); the summary only has to stay
-        // quiet about it. An error likewise has its own notice.
-        if (!summary.ok) return;
-        new Notice(
+        this.inFullSync = false;
+        // A cancel is announced by the drain-idle handler (it covers
+        // background drains too, which never produce a summary); an
+        // error already has its own notice. Either way the shared
+        // notice must come DOWN — it has duration 0.
+        if (!summary.ok) {
+          if (!summary.cancelled) this.clearSyncNotice();
+          return;
+        }
+        this.finishSyncNotice(
           syncSummaryText({
             sent: summary.pushedFiles,
             received: summary.pulledFiles,
             conflicts: summary.conflicts,
           }),
-          BRIEF_NOTICE_MS,
         );
       },
       onQueueDepthChanged: (depth: number) => {
@@ -1297,14 +1312,18 @@ export default class GitHubSyncPlugin extends Plugin {
         // …and a drain that ended without a syncAll wrapper still has
         // to take the notice down (see disarm's warning).
         if (s.state === "idle") {
-          this.disarmSyncProgressNotice();
-          // The confirmation lives HERE, not on the sync summary,
-          // because a background drain (interval tick, watchdog) never
-          // produces a summary — cancelling one used to report nothing
-          // at all. This fires for every path that can be cancelled.
+          // The cancel confirmation lives HERE, not on the sync
+          // summary, because a background drain (interval tick,
+          // watchdog) never produces a summary — cancelling one used to
+          // report nothing at all. This fires for every path that can
+          // be cancelled.
           if (this.syncCancelRequested) {
             this.syncCancelRequested = false;
-            new Notice("Sync canceled", BRIEF_NOTICE_MS);
+            this.finishSyncNotice("Sync canceled");
+          } else if (!this.inFullSync) {
+            // A drain with no syncAll wrapper has no summary coming, so
+            // nothing else will take the notice down.
+            this.clearSyncNotice();
           }
         }
       },
@@ -1733,41 +1752,88 @@ export default class GitHubSyncPlugin extends Plugin {
     return el;
   }
 
-  // ── §II.16 sync progress notice ─────────────────────────────────────
+  // ── §II.16 the sync notice — ONE notice for the whole operation ─────
   //
-  // ONE notice for the whole operation, updated in place. It appears
-  // only if the sync is still running after SYNC_PROGRESS_DELAY_MS —
-  // the single condition, deliberately (owner, 2026-09-25): the
-  // complaint was about TIME, and size is a proxy that lies on a slow
-  // connection. A two-file sync over bad mobile radio is silent longer
-  // than forty files over Wi-Fi.
+  // Owner design 2026-09-26, after screenshots of the alternative: a
+  // single Notice object that CHANGES TEXT as the operation moves,
+  // rather than one toast per event.
   //
-  // Consequence, accepted: the user often sees "3 of 10" rather than
-  // "1 of 10", because the first two passed during those two seconds.
-  // That is correct — progress shows where we ARE, not a replay.
-  // Set when the USER asked to stop, cleared when the drain actually
-  // goes idle — that transition is what "Sync canceled" reports.
+  //   Nothing to commit  →  (progress, if it gets slow)  →  Sync done
+  //   └─────────────────── the same notice throughout ──────────────┘
+  //
+  // Why not separate toasts: they stack. Obsidian sizes a notice STACK
+  // to a common width, so the shorter text sits in a box padded to the
+  // wider one — and when the upper notice expires, the lower one shrinks
+  // AND jumps up into the freed slot. In the field that read as two
+  // different messages, one of them "with trailing spaces". One notice
+  // cannot stack with itself.
+  //
+  // A commit with NO drain behind it (the [Commit] button) keeps the old
+  // behaviour: a brief toast that expires on its own, because nothing is
+  // coming to replace it.
+  private syncNotice: Notice | null = null;
+  private syncNoticeHideTimer: number | null = null;
+  private inFullSync = false;
   private syncCancelRequested = false;
-  private syncProgressNotice: Notice | null = null;
   private syncProgressTimer: number | null = null;
+  private syncProgressActive = false;
 
-  private armSyncProgressNotice(): void {
-    if (this.syncProgressTimer !== null || this.syncProgressNotice !== null) {
-      return; // already armed or showing — entry points may overlap
+  // Create-or-update. duration 0: this notice lives until WE take it
+  // down, because its whole purpose is to span the operation.
+  private setSyncNotice(text: string): void {
+    if (this.syncNoticeHideTimer !== null) {
+      window.clearTimeout(this.syncNoticeHideTimer);
+      this.syncNoticeHideTimer = null;
     }
+    if (this.syncNotice === null) {
+      this.syncNotice = new Notice(text, 0);
+      return;
+    }
+    this.syncNotice.setMessage(text);
+  }
+
+  // The finale: say the last word, leave it up long enough to read, then
+  // go. Not BRIEF_NOTICE_MS — that is tuned for a toast that appears out
+  // of nowhere; this one the user has been watching.
+  private finishSyncNotice(text: string): void {
+    this.setSyncNotice(text);
+    const notice = this.syncNotice;
+    this.syncNoticeHideTimer = window.setTimeout(() => {
+      this.syncNoticeHideTimer = null;
+      notice?.hide();
+      if (this.syncNotice === notice) this.syncNotice = null;
+    }, SYNC_SUMMARY_LINGER_MS);
+  }
+
+  // The commit pass has something to say. Inside a full sync it writes
+  // into the shared notice and STAYS — the drain will replace the text.
+  // Standalone, it is a brief toast with nothing following it.
+  private reportCommitOutcome(text: string): void {
+    if (this.inFullSync) {
+      this.setSyncNotice(text);
+      return;
+    }
+    new Notice(text, BRIEF_NOTICE_MS);
+  }
+
+  // Arm the "this is taking a while" switch. Only the TEXT changes when
+  // it fires — by then the notice usually already exists, carrying the
+  // commit outcome.
+  private armSyncProgressNotice(): void {
+    if (this.syncProgressTimer !== null || this.syncProgressActive) return;
     this.syncProgressTimer = window.setTimeout(() => {
       this.syncProgressTimer = null;
-      // duration 0 = stays until hidden. The hide lives in
-      // disarmSyncProgressNotice, which every exit path calls.
-      this.syncProgressNotice = new Notice(
-        this.currentSyncProgressText(),
-        0,
-      );
+      this.syncProgressActive = true;
+      this.setSyncNotice(this.currentSyncProgressText());
     }, SYNC_PROGRESS_DELAY_MS);
   }
 
+  // Repaints are ignored until the delay has elapsed: before that the
+  // notice is showing the commit outcome, and overwriting it early would
+  // undo the very sequencing this design is for.
   private repaintSyncProgressNotice(): void {
-    this.syncProgressNotice?.setMessage(this.currentSyncProgressText());
+    if (!this.syncProgressActive) return;
+    this.setSyncNotice(this.currentSyncProgressText());
   }
 
   // Before the drain reports anything (the commit pass is still
@@ -1786,16 +1852,22 @@ export default class GitHubSyncPlugin extends Plugin {
     );
   }
 
-  // ⚠️ A `duration: 0` notice never dismisses itself. This must run on
-  // EVERY exit — success, error, cancellation — or it hangs on screen
-  // until Obsidian restarts, which is worse than showing no progress.
-  private disarmSyncProgressNotice(): void {
+  // ⚠️ A `duration: 0` notice never dismisses itself. Every exit path
+  // must end in finishSyncNotice() or this — success, error, cancel — or
+  // it hangs on screen until Obsidian restarts, which is worse than
+  // showing no progress at all.
+  private clearSyncNotice(): void {
     if (this.syncProgressTimer !== null) {
       window.clearTimeout(this.syncProgressTimer);
       this.syncProgressTimer = null;
     }
-    this.syncProgressNotice?.hide();
-    this.syncProgressNotice = null;
+    if (this.syncNoticeHideTimer !== null) {
+      window.clearTimeout(this.syncNoticeHideTimer);
+      this.syncNoticeHideTimer = null;
+    }
+    this.syncProgressActive = false;
+    this.syncNotice?.hide();
+    this.syncNotice = null;
   }
 
   // ── status bar ──────────────────────────────────────────────────────

@@ -185,6 +185,10 @@ export interface ChangeDetectorDeps {
   // The getter pattern (vs. a fixed boolean) keeps the manager from
   // re-instantiating the detector on every settings change.
   syncConfigDir: () => boolean;
+  // Optional: surfaces the dot-space warnings from readRootGitignore —
+  // a `!`-rule that grants nothing is refused by design, and saying so
+  // is the difference between a documented limit and a silent feature.
+  logger?: { warn(message: string, data?: unknown): void };
   // Optional: when set, findChanges bridges the snapshot store with
   // the live push-queue. A file whose local bytes match what some
   // pending batch already holds is treated as "committed locally"
@@ -236,6 +240,7 @@ export default class ChangeDetector {
   private readonly selfPluginId: string;
   private readonly vaultRoot: string;
   private readonly syncConfigDir: () => boolean;
+  private readonly logger?: { warn(message: string, data?: unknown): void };
   private readonly queue: PeekableQueue | undefined;
   private readonly conflictBaseSha:
     | ((path: string) => string | null | undefined)
@@ -260,6 +265,7 @@ export default class ChangeDetector {
     this.selfPluginId = deps.selfPluginId;
     this.vaultRoot = deps.vaultRoot;
     this.syncConfigDir = deps.syncConfigDir;
+    this.logger = deps.logger;
     this.queue = deps.queue;
     this.conflictBaseSha = deps.conflictBaseSha;
     this.logWalkIncomplete = deps.logWalkIncomplete;
@@ -285,6 +291,7 @@ export default class ChangeDetector {
       vault: this.vault,
       configDir: this.configDir,
       syncConfigDir: this.syncConfigDir,
+      logger: this.logger,
     });
   }
 
