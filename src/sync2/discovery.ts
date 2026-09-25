@@ -202,9 +202,19 @@ export async function fullTreeDiffAgainstColdBaseline(
     // Hard error, NEVER a silent partial return (SPIKE-TREES-LIMIT
     // §4.2: the documented cap is 100k entries OR 7 MB, and 20k
     // entries already measure ~5.6 MB — this is a real ceiling).
+    // ⚠️ OWNER DECISION 2026-09-25: this ceiling is the plugin's
+    // declared supported size, not a defect to engineer around. The
+    // per-directory tree walk that would lift it (SPIKE-TREES-LIMIT §4)
+    // stays unbuilt. So this message is USER-FACING — it reaches a
+    // Notice — and has to say what happened and what to do, not name
+    // the function it happened in.
     throw new TreeTruncatedError(
-      "fullTreeDiffAgainstColdBaseline: recursive tree response truncated — " +
-        "discovery is structurally impossible with this mechanism at this vault size",
+      "This vault is too large for Git Easy Sync. GitHub caps its " +
+        "repository listing at 7 MB (about 20 000 files), and this " +
+        "repository is past it — so the plugin cannot see the whole " +
+        "repository at once, and syncing part of it would risk " +
+        "overwriting files it could not check. Nothing was changed. " +
+        "A vault this size needs a tool built for it.",
     );
   }
 

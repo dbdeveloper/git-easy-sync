@@ -110,6 +110,16 @@ mid-range Android devices without OOM crashes.
   plugin-bundle semver), but binary files and overlapping text
   edits always surface as a sibling file so you see both versions
   before deciding.
+- **No vaults beyond roughly 20 000 files.** To sync safely the plugin
+  has to know what the repository holds, and it learns that from
+  GitHub's tree API — which caps a single answer at 7 MB. Measured:
+  ~278 bytes per file, so a 20 000-file repository already sits at
+  ~80% of the cap, and non-ASCII or deeply nested paths reach it
+  sooner. Past that the first sync fails with a clear message rather
+  than syncing part of your vault. There are ways around the cap, but
+  they add a whole layer of machinery for a case this plugin has
+  chosen not to serve — if your vault is that large, use a tool built
+  for it.
 
 ---
 
