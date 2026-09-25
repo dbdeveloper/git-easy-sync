@@ -6,7 +6,12 @@ import { Vault } from "../../mock-obsidian";
 import SyncStore from "../../src/sync2/sync-store";
 import DrainJournal from "../../src/sync2/drain-journal";
 import NetworkRetry from "../../src/sync2/retry-network";
-import { drainOnce, DrainDeps, DrainClient } from "../../src/sync2/drain";
+import {
+  drainOnce,
+  DrainDeps,
+  DrainClient,
+  DrainProgress,
+} from "../../src/sync2/drain";
 import ConflictStoreV2 from "../../src/sync2/conflict-store-v2";
 import SiblingTx from "../../src/sync2/sibling-tx";
 import { mergeBlobsWithMainThreadDiff3 } from "../../src/sync2/diff3";
@@ -225,7 +230,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     commitMessage: () => "Sync at test (test-device)",
     mergeMessage: () => "Merge conflict branch (test-device)",
     now: () => 1_700_000_500_000,
-    onProgress: (a, b) => progressLog.push([a, b]),
+    onProgress: (p) => progressLog.push([p.pushDone, p.pushTotal]),
     ...over,
   });
 
@@ -1006,6 +1011,111 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     ]);
   });
 
+  // ── §II.16: the two progress counters ────────────────────────────
+
+  it("§II.16: the push total GROWS batch by batch — 3, then 3+5 — because the run learns of work as it goes", async () => {
+    // The user's own reading of the design, pinned: a thousand files in
+    // ten batches counts 100/100 → 101/200 → … and that is correct.
+    // The drain cannot know the queue's depth in files, and inventing a
+    // total would be a guess dressed as knowledge. The status bar's
+    // falling "↑ N" is what tells the user more batches are coming.
+    await setupAligned();
+    await stageBatch({ "a.md": "A\n", "b.md": "B\n", "c.md": "C\n" });
+    await stageBatch({
+      "d.md": "D\n",
+      "e.md": "E\n",
+      "f.md": "F\n",
+      "g.md": "G\n",
+      "h.md": "H\n",
+    });
+
+    const snaps: DrainProgress[] = [];
+    const r = await drainOnce(
+      makeDeps({ onProgress: (p) => snaps.push({ ...p }) }),
+    );
+    expect(r.status).toBe("ok");
+    expect(snaps.map((p) => [p.pushDone, p.pushTotal])).toEqual([
+      [1, 3],
+      [2, 3],
+      [3, 3],
+      [4, 8], // the second batch arrives — the total grows, done keeps going
+      [5, 8],
+      [6, 8],
+      [7, 8],
+      [8, 8],
+    ]);
+  });
+
+  it("§II.16 🔑: a 422 restart ROLLS the push counters BACK — it never inflates them", async () => {
+    // Owner decision 2026-09-25, and the argument is about fear, not
+    // arithmetic: someone who changed three files and sees six will
+    // conclude the plugin is sending something they did not ask for.
+    // A count that visibly restarts is less alarming than one that
+    // doubles.
+    await setupAligned();
+    await stageBatch({ "a.md": "A\n", "b.md": "B\n", "c.md": "C\n" });
+
+    const client = world.makeClient();
+    const origPush = client.pushCommitFromTree.bind(client);
+    let failures = 0;
+    client.pushCommitFromTree = async (args) => {
+      if (failures === 0) {
+        failures += 1;
+        await world.commitFiles({ "other.md": "raced\n" });
+        throw new ValidationError("422: head moved");
+      }
+      return origPush(args);
+    };
+
+    const snaps: DrainProgress[] = [];
+    const r = await drainOnce(
+      makeDeps({ client, onProgress: (p) => snaps.push({ ...p }) }),
+    );
+    expect(r.status).toBe("ok");
+    const pushes = snaps.map((p) => [p.pushDone, p.pushTotal]);
+    // Three files, one restart: the count runs 1..3, goes back to the
+    // pre-batch values, and runs 1..3 again. It NEVER reaches 4 or a
+    // total of 6.
+    expect(pushes).toEqual([
+      [1, 3],
+      [2, 3],
+      [3, 3],
+      [1, 3], // ← the restart put them back; it did NOT continue to 4
+      [2, 3],
+      [3, 3],
+      [3, 3], // the Vault-step's PULL tick for the raced file, below
+    ]);
+    // Never inflated: neither number ever exceeded the three files the
+    // user actually changed.
+    expect(Math.max(...snaps.map((p) => p.pushDone))).toBe(3);
+    expect(Math.max(...snaps.map((p) => p.pushTotal))).toBe(3);
+    // The seventh snapshot is the other side reporting: the commit this
+    // test raced in is a remote change, so it counts as one pull.
+    expect(snaps[snaps.length - 1].pullDone).toBe(1);
+  });
+
+  it("§II.16: one remote change is ONE pull unit, even when the path is also in the batch", async () => {
+    // _diff3 runs for ordinary paths in TWO places (the batch loop and
+    // the Vault-step), and a path present in both would be counted
+    // twice without the guard — the counter would overshoot its own
+    // total, which is the one thing a progress display must never do.
+    await setupAligned();
+    await world.commitFiles({ "note.md": "one\ntwo\nREMOTE\n" });
+    await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
+    vaultFiles.files.set("note.md", {
+      content: "LOCAL\ntwo\nthree\n",
+      mtime: 100,
+    });
+
+    const snaps: DrainProgress[] = [];
+    const r = await drainOnce(
+      makeDeps({ onProgress: (p) => snaps.push({ ...p }) }),
+    );
+    expect(r.status).toBe("ok");
+    const last = snaps[snaps.length - 1];
+    expect([last.pullDone, last.pullTotal]).toEqual([1, 1]);
+  });
+
   it("L/stat short-circuit: only files with a REAL divergence pay for a vault read (advisor 2026-08-30 — no O(vault) re-hash)", async () => {
     // 5 aligned files; remote changes ONE; the user touches NONE.
     const files: Record<string, string> = {};
@@ -1349,14 +1459,26 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     await world.commitFiles({ "note.md": "R\n", "obs.md": null });
     await stageBatch({ "other.md": "O\n" });
 
-    const paths: Array<string | undefined> = [];
+    const snaps: DrainProgress[] = [];
     const r = await drainOnce(
-      makeDeps({ onProgress: (_p, _t, path) => paths.push(path) }),
+      makeDeps({ onProgress: (p) => snaps.push({ ...p }) }),
     );
     expect(r.status).toBe("ok");
     expect(r.vaultStepWrites).toEqual(["note.md"]);
     expect(r.vaultStepRemoves).toEqual(["obs.md"]);
-    expect(paths).toEqual(["other.md"]); // per-file progress names the file
+    // §II.16: progress names BOTH sides. `other.md` is the push (a
+    // batch entry); note.md and obs.md are the pull (remote changes
+    // landing in the Vault-step). Before §II.16 only the batch entry
+    // reported, so the two remote paths were a silent stretch.
+    expect(snaps.map((p) => p.path)).toEqual([
+      "other.md",
+      "note.md",
+      "obs.md",
+    ]);
+    // …and the counters end honest: one file out, two in.
+    const last = snaps[snaps.length - 1];
+    expect([last.pushDone, last.pushTotal]).toEqual([1, 1]);
+    expect([last.pullDone, last.pullTotal]).toEqual([2, 2]);
   });
 
 

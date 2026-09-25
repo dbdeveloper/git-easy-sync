@@ -57,7 +57,12 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
   let writtenBatches: FileChange[][];
   let notices: { committed: number[]; noChanges: number };
   let pluginReloads: string[][];
-  let completed: Array<{ pushedFiles: number; pulledFiles: number }>;
+  let completed: Array<{
+    pushedFiles: number;
+    pulledFiles: number;
+    conflicts: number;
+    ok: boolean;
+  }>;
   let latched: Array<401 | 403>;
 
   const put = (p: string, content: string): void => {
@@ -266,6 +271,28 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(order).toEqual(["enforce", "detect"]);
   });
 
+  it("§II.16: the queue depth is reported as EACH batch lands, not once at the end", async () => {
+    // Found 2026-09-25 while wiring the progress notice: fireQueueDepth
+    // ran once after the WHOLE drain, so a four-batch run showed a
+    // frozen "↑ 4" and then jumped to zero. That matters more now than
+    // it did: the push counter legitimately restarts per batch
+    // ("100 of 100" → "101 of 200"), and the falling badge is what
+    // tells the user those restarts mean "more to come" rather than
+    // "something went wrong".
+    const depths: number[] = [];
+    deps.onQueueDepthChanged = (d) => depths.push(d);
+    // A drain that removes two batch dirs, as the engine would.
+    deps.drainFn = async (d) => {
+      await d.removeBatchDir("queue/b1");
+      await d.removeBatchDir("queue/b2");
+      return okResult();
+    };
+    await manager.resumeQueue();
+    // At least one report PER removal — the point is that the depth
+    // moves during the run, not only after it.
+    expect(depths.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("a failing enforce() never blocks the sync — hygiene, not a gate", async () => {
     deps.invariants = {
       enforce: async () => {
@@ -431,7 +458,15 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     });
     await manager.syncAll();
     expect(manager.getDrainStatus().lastError).toBeNull();
-    expect(completed[0]).toEqual({ pushedFiles: 0, pulledFiles: 3 });
+    // §II.16 widened the summary: `ok` so the notice never claims
+    // success over an error, and `conflicts` (tracked BASE paths, not
+    // sibling files) for its third clause.
+    expect(completed[0]).toEqual({
+      pushedFiles: 0,
+      pulledFiles: 3,
+      conflicts: 0,
+      ok: true,
+    });
     expect(pluginReloads).toEqual([["other-plugin", "dead-plugin"]]);
   });
 

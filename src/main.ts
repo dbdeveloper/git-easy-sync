@@ -53,6 +53,10 @@ import {
   syncTooltip,
   type MenuActionKey,
 } from "./status-bar-model";
+import {
+  progressNoticeText,
+  syncSummaryText,
+} from "./sync-progress-model";
 import WorkerClient from "./worker/worker-client";
 import { PreSyncConflictModal } from "./sync2/views/pre-sync-conflict-modal";
 import { TrashWatcher } from "./diff2/trash-watcher";
@@ -110,6 +114,10 @@ import manifest from "../manifest.json";
 // sweet spot — long enough to read "Commit 3 files" without rushing,
 // short enough that consecutive Sync clicks don't stack notices.
 const BRIEF_NOTICE_MS = 700;
+// §II.16 — how long a sync may stay silent before it starts reporting.
+// Owner decision 2026-09-25: the complaint was "pauses over 3-4 seconds
+// feel burdensome", so the notice appears BEFORE that becomes true.
+const SYNC_PROGRESS_DELAY_MS = 2000;
 
 // §35 — the automatic "Sync skipped: token expired" toast. Longer than
 // BRIEF_NOTICE_MS: it carries actionable words the user must actually read,
@@ -1240,7 +1248,19 @@ export default class GitHubSyncPlugin extends Plugin {
       onNoLocalChanges: () => {
         new Notice("Nothing to commit", BRIEF_NOTICE_MS);
       },
-      onSyncCompleted: () => {},
+      onSyncStarted: () => this.armSyncProgressNotice(),
+      onSyncCompleted: (summary) => {
+        this.disarmSyncProgressNotice();
+        if (!summary.ok) return; // the error's own notice speaks instead
+        new Notice(
+          syncSummaryText({
+            sent: summary.pushedFiles,
+            received: summary.pulledFiles,
+            conflicts: summary.conflicts,
+          }),
+          BRIEF_NOTICE_MS,
+        );
+      },
       onQueueDepthChanged: (depth: number) => {
         this.refreshRibbonPendingBatchesBadge(depth);
       },
@@ -1263,7 +1283,18 @@ export default class GitHubSyncPlugin extends Plugin {
     // 2.0.2-beta2: drive the ribbon "syncing" look from drain status.
     // The icon (refresh-cw) spins + tints accent while a drain runs.
     this.drainStatusRibbonUnsub = this.sync2Manager.setDrainStatusListener(
-      (s) => this.applyRibbonSyncingState(s.state === "running"),
+      (s) => {
+        this.applyRibbonSyncingState(s.state === "running");
+        // §II.16 — every drain event repaints the live notice. Also
+        // ARMS it for entry points that drain without a commit pass
+        // (interval watchdog, resumeQueue): those never fire
+        // onSyncStarted, and a long drain there is just as silent.
+        if (s.state === "running") this.armSyncProgressNotice();
+        this.repaintSyncProgressNotice();
+        // …and a drain that ended without a syncAll wrapper still has
+        // to take the notice down (see disarm's warning).
+        if (s.state === "idle") this.disarmSyncProgressNotice();
+      },
     );
 
     // Conflict resolution events (sibling delete, edit, rename) are
@@ -1683,6 +1714,68 @@ export default class GitHubSyncPlugin extends Plugin {
     el.style.pointerEvents = "none";
     parent.style.position = "relative";
     return el;
+  }
+
+  // ── §II.16 sync progress notice ─────────────────────────────────────
+  //
+  // ONE notice for the whole operation, updated in place. It appears
+  // only if the sync is still running after SYNC_PROGRESS_DELAY_MS —
+  // the single condition, deliberately (owner, 2026-09-25): the
+  // complaint was about TIME, and size is a proxy that lies on a slow
+  // connection. A two-file sync over bad mobile radio is silent longer
+  // than forty files over Wi-Fi.
+  //
+  // Consequence, accepted: the user often sees "3 of 10" rather than
+  // "1 of 10", because the first two passed during those two seconds.
+  // That is correct — progress shows where we ARE, not a replay.
+  private syncProgressNotice: Notice | null = null;
+  private syncProgressTimer: number | null = null;
+
+  private armSyncProgressNotice(): void {
+    if (this.syncProgressTimer !== null || this.syncProgressNotice !== null) {
+      return; // already armed or showing — entry points may overlap
+    }
+    this.syncProgressTimer = window.setTimeout(() => {
+      this.syncProgressTimer = null;
+      // duration 0 = stays until hidden. The hide lives in
+      // disarmSyncProgressNotice, which every exit path calls.
+      this.syncProgressNotice = new Notice(
+        this.currentSyncProgressText(),
+        0,
+      );
+    }, SYNC_PROGRESS_DELAY_MS);
+  }
+
+  private repaintSyncProgressNotice(): void {
+    this.syncProgressNotice?.setMessage(this.currentSyncProgressText());
+  }
+
+  // Before the drain reports anything (the commit pass is still
+  // running) there are no counters, and the header alone is the honest
+  // statement: "working on it".
+  private currentSyncProgressText(): string {
+    const p = this.sync2Manager?.getDrainStatus().progress ?? null;
+    return progressNoticeText(
+      p ?? {
+        pullDone: 0,
+        pullTotal: 0,
+        pushDone: 0,
+        pushTotal: 0,
+        conflicts: 0,
+      },
+    );
+  }
+
+  // ⚠️ A `duration: 0` notice never dismisses itself. This must run on
+  // EVERY exit — success, error, cancellation — or it hangs on screen
+  // until Obsidian restarts, which is worse than showing no progress.
+  private disarmSyncProgressNotice(): void {
+    if (this.syncProgressTimer !== null) {
+      window.clearTimeout(this.syncProgressTimer);
+      this.syncProgressTimer = null;
+    }
+    this.syncProgressNotice?.hide();
+    this.syncProgressNotice = null;
   }
 
   // ── status bar ──────────────────────────────────────────────────────

@@ -36,7 +36,7 @@
 //   writer↔claimer Peterson protocol.
 
 import { type Vault } from "obsidian";
-import { drainOnce, DrainResult } from "./drain";
+import { drainOnce, DrainResult, DrainProgress } from "./drain";
 import {
   buildDrainDeps,
   BuildDrainDepsArgs,
@@ -71,6 +71,10 @@ export interface DrainStatus {
   // Counters for the per-file "N of M" line.
   totalFiles: number;
   currentFile: number;
+  // §II.16 — the full two-counter snapshot behind the user-facing
+  // notice. null until the drain reports for the first time (the
+  // commit pass runs before it, and the notice may already be up).
+  progress: DrainProgress | null;
   // Last error surfaced by drain (most recent); `isAuthError` drives
   // the Settings token-help box. Cleared by the next successful drain.
   lastError: {
@@ -147,9 +151,23 @@ export interface Sync2ManagerDeps {
   renameFile?: (oldPath: string, newPath: string) => Promise<void>;
   onLocalCommitted?(filesCount: number): void;
   onNoLocalChanges?(): void;
+  // §II.16 — the whole user-visible operation began. Paired with
+  // onSyncCompleted; main.ts arms the 2 s progress timer here, so the
+  // wait is measured from the CLICK, not from the drain (a slow commit
+  // pass is silence too).
+  onSyncStarted?(): void;
   onSyncCompleted?(summary: {
     pushedFiles: number;
     pulledFiles: number;
+    // TRACKED conflicts only, counted in PATHS — the unit the user's
+    // wording means ("files in conflict"). Synthetic siblings are a
+    // diff2 concern and never a drain one (§III). ⚠️ Deliberately a
+    // different unit from the status-bar badge, which counts sibling
+    // FILES: one path with two siblings is 1 here and 2 there.
+    conflicts: number;
+    // False when the operation ended by throwing. The summary notice
+    // must not claim success over an error the user is about to see.
+    ok: boolean;
   }): void;
   onQueueDepthChanged?(depth: number): void;
   // Mobile auto-reload: plugin ids whose files the Vault-step touched.
@@ -191,10 +209,16 @@ export class Sync2Manager {
 
   private pulledFilesThisSync = 0;
 
+  // §II.16 — the most recent progress snapshot, kept so a listener that
+  // subscribes mid-drain (the notice arms itself 2 s in) can paint
+  // immediately instead of waiting for the next file.
+  private lastProgress: DrainProgress | null = null;
+
   private drainStatus: DrainStatus = {
     state: "idle",
     startedAt: null,
     currentPath: null,
+    progress: null,
     totalFiles: 0,
     currentFile: 0,
     lastError: null,
@@ -209,17 +233,33 @@ export class Sync2Manager {
 
   // ── public surface ─────────────────────────────────────────────────
 
+  // §II.16 — tracked conflict PATHS, read after the drain has run
+  // process_conflicts (which prunes records whose sibling files are
+  // gone), so this is the settled number, not a mid-flight one.
+  private trackedConflictPaths(): number {
+    try {
+      return this.deps.conflictStore.getCachedState().entries.size;
+    } catch {
+      return 0;
+    }
+  }
+
   async syncAll(): Promise<void> {
     this.deps.logger.info("Sync2 syncAll start");
     this.pulledFilesThisSync = 0;
     let pushedFiles = 0;
+    let ok = false;
+    this.deps.onSyncStarted?.();
     try {
       pushedFiles = await this.runCommitPass(null);
       await this.drain();
+      ok = true;
     } finally {
       this.deps.onSyncCompleted?.({
         pushedFiles,
         pulledFiles: this.pulledFilesThisSync,
+        conflicts: this.trackedConflictPaths(),
+        ok,
       });
     }
   }
@@ -228,14 +268,19 @@ export class Sync2Manager {
     this.deps.logger.info("Sync2 syncFile start", { path });
     this.pulledFilesThisSync = 0;
     let pushedFiles = 0;
+    let ok = false;
+    this.deps.onSyncStarted?.();
     try {
       const outcome = await this.commitFile(path);
       pushedFiles = outcome.kind === "committed" ? outcome.count : 0;
       await this.drain();
+      ok = true;
     } finally {
       this.deps.onSyncCompleted?.({
         pushedFiles,
         pulledFiles: this.pulledFilesThisSync,
+        conflicts: this.trackedConflictPaths(),
+        ok,
       });
     }
   }
@@ -589,16 +634,33 @@ export class Sync2Manager {
       deletedBinReferencedShas: this.deps.deletedBin
         ? () => this.deps.deletedBin!.referencedShas()
         : undefined,
-      onProgress: (processed, totalFiles, path) =>
+      onProgress: (p) => {
+        this.lastProgress = p;
         this.emitDrainStatus({
-          currentFile: processed,
-          totalFiles,
-          currentPath: path ?? null,
-        }),
+          // The Settings panel's per-file line keeps its old meaning:
+          // the PUSH pair, which is what it always showed.
+          currentFile: p.pushDone,
+          totalFiles: p.pushTotal,
+          currentPath: p.path,
+          progress: p,
+        });
+      },
       logger: this.deps.logger,
       now: this.now,
     };
-    return buildDrainDeps(args);
+    const built = buildDrainDeps(args);
+    // §II.16 — the status bar's "↑ N" must fall as batches land, not
+    // jump to zero at the end. fireQueueDepth() used to run ONCE after
+    // the whole drain, so a four-batch run showed "↑ 4" throughout.
+    // Wrapping the removal is the smallest honest hook: the depth
+    // changes exactly when a batch dir stops existing.
+    const removeBatchDir = built.removeBatchDir;
+    built.removeBatchDir = async (dir) => {
+      await removeBatchDir(dir);
+      this.queueIndex = null; // the queue just shrank — rebuild lazily
+      await this.fireQueueDepth();
+    };
+    return built;
   }
 
   // ── helpers ────────────────────────────────────────────────────────

@@ -312,7 +312,9 @@ export interface DrainDeps {
   // branch-lifecycle. Optional: fakes fall back to commitMessage.
   conflictMessage?(whenMs: number): string;
   now(): number;
-  onProgress?: (processed: number, total: number, path?: string) => void;
+  // §II.16 — fired BEFORE the work it announces, so the number the user
+  // sees is what is happening now, not what already finished.
+  onProgress?: (p: DrainProgress) => void;
   logger?: {
     info(message: string, data?: unknown): void;
     warn(message: string, data?: unknown): void;
@@ -372,6 +374,24 @@ const ERROR_422_CAP = 5;
 // (a tree can be megabytes; three HEADs are three round trips).
 const LAYER2_TREE_THRESHOLD = 4;
 
+// §II.16 — one progress snapshot for the user-facing notice.
+//
+// TWO independent counters, both live at once: this engine interleaves
+// pull and push, so "file N of M" has no single meaning. Totals GROW as
+// the run learns of more work (another batch claimed, another discovery
+// call) — that is the model, not a glitch.
+export interface DrainProgress {
+  pullDone: number;
+  pullTotal: number;
+  pushDone: number;
+  pushTotal: number;
+  // Unresolved conflicts right now — the notice's third line, shown
+  // only when non-zero.
+  conflicts: number;
+  // What the run is touching, for the Settings panel's detail line.
+  path: string | null;
+}
+
 export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // Drain-scoped state (§II.9 / §II.13 ownership: dies with this run).
   const verifiedShas = new Set<string>();
@@ -430,6 +450,57 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     maxAutoMergeFileSize: deps.maxAutoMergeFileSize,
     mergeBlobs: deps.mergeBlobs,
     computeSha: deps.computeSha,
+  };
+
+  // ── §II.16 progress counters (run-scoped) ────────────────────────
+  // PULL grows: discovery answers again after a restart and the news
+  // from the server genuinely got bigger. PUSH rolls BACK on a restart
+  // instead — see §II.16 for why the same number means different things
+  // depending on whose files it counts.
+  let pullDone = 0;
+  let pullTotal = 0;
+  let pushDone = 0;
+  let pushTotal = 0;
+  // One remote change = one unit, even though a path can reach _diff3
+  // from BOTH the batch loop and the Vault-step.
+  const pullCounted = new Set<string>();
+  // Paths discovery reported as changed remotely, this run.
+  const remoteChanged = new Set<string>();
+  // Snapshot taken when a batch is claimed, restored on a 422 restart.
+  let pushDoneBeforeBatch = 0;
+  let pushTotalBeforeBatch = 0;
+
+  const emitProgress = (path: string | null): void => {
+    deps.onProgress?.({
+      pullDone,
+      pullTotal,
+      pushDone,
+      pushTotal,
+      conflicts: conflicts?.entries.size ?? 0,
+      path,
+    });
+  };
+
+  // Count a remote change the moment the run TAKES UP that path —
+  // deliberately one step earlier than _diff3, because the batch loop's
+  // "remote already equals our local content" short-circuit returns
+  // before it, and such a path would otherwise never be counted at all
+  // (§II.16). Returns true when this call did the counting.
+  // §II.16 — a 422 restart re-processes the SAME batch, so its files
+  // must not be counted twice. Put both numbers back to where they
+  // stood before this batch; the re-claim adds the batch again and the
+  // count runs up from there. The user sees a rollback, which is the
+  // owner's explicit preference over an inflating counter.
+  const rollbackPushCounters = (): void => {
+    pushDone = pushDoneBeforeBatch;
+    pushTotal = pushTotalBeforeBatch;
+  };
+
+  const countPull = (path: string): boolean => {
+    if (!remoteChanged.has(path) || pullCounted.has(path)) return false;
+    pullCounted.add(path);
+    pullDone += 1;
+    return true;
   };
 
   let restartBatch = true;
@@ -546,6 +617,17 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         );
         if (r.error !== null) return statusFromError(r.error, result);
         remoteFiles = r.result!.changes;
+        // §II.16 — the pull total GROWS here, including on a 422
+        // restart: discovery asked the server again and the news
+        // genuinely got bigger. Paths already known are not re-added,
+        // so a restart that re-reports the same change does not
+        // inflate the total.
+        for (const f of remoteFiles) {
+          if (!remoteChanged.has(f.path)) {
+            remoteChanged.add(f.path);
+            pullTotal += 1;
+          }
+        }
         // Layer 2's free answer source for THIS head (§II.13 below).
         remoteTree = r.result!.tree;
       }
@@ -627,6 +709,14 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
 
     const claimed = await deps.claimBatch();
     if (claimed === null) break;
+    // §II.16 — the push total grows by THIS batch. Both numbers are
+    // snapshotted first so a 422 restart can put them back: the user
+    // sees the count roll back and start again rather than inflate,
+    // because these are files THEY changed and a doubled count reads
+    // as "the plugin is sending something I did not ask for".
+    pushDoneBeforeBatch = pushDone;
+    pushTotalBeforeBatch = pushTotal;
+    pushTotal += claimed.meta.entries.length;
 
     // BARE REPO: seed BEFORE any Git Data call (they all 409 while
     // the repo has no ref — gate finding). The seed content is one of
@@ -890,10 +980,16 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // S1 cancel (file boundary): the in-memory mutations of this
       // half-processed batch die with the return — D.16 rule.
       if (deps.cancelRequested?.()) return result("cancelled");
-      // §4.1: progress by file count, numbers already in hand — the
-      // progress bar is not worth a single extra request.
+      // §4.1/§II.16: progress by file count, numbers already in hand —
+      // the progress bar is not worth a single extra request. Fired
+      // BEFORE the work, so the number names what is happening now.
       processed += 1;
-      deps.onProgress?.(processed, total, entry.path);
+      pushDone += 1;
+      // A path that is BOTH in this batch and changed remotely is one
+      // pull unit too — counted here, before the short-circuit below
+      // can skip it (§II.16).
+      countPull(entry.path);
+      emitProgress(entry.path);
 
       const local = await loadLocalFromBatch(deps, entry);
       if (local === null) continue; // §12.5.B: vanished + changed — next detection re-emits
@@ -1192,6 +1288,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     if (batchAborted !== null) return batchAborted;
     if (restartFromFlush) {
       restartBatch = true;
+      rollbackPushCounters();
       error422Count += 1;
       if (error422Count >= ERROR_422_CAP) {
         // NO persist here (D.16): `state` carries the FAILED attempt's
@@ -1213,6 +1310,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       if (e instanceof ValidationError) {
         await uploadedBlobs.clear();
         restartBatch = true;
+        rollbackPushCounters();
         error422Count += 1;
         if (error422Count >= ERROR_422_CAP) {
           // NO persist — dirty state, see the restartFromFlush CAP.
@@ -1247,6 +1345,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             return result("too-many-concurrent-pushes");
           }
           restartBatch = true;
+          rollbackPushCounters();
           continue; // batch dir NOT removed — reprocessed with fresh remote state
         }
         return statusFromError(r.error, result);
@@ -1465,6 +1564,11 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
 
   // ── Vault-step (§II.3/II.4/II.5 endings + STEP3) ─────────────────
   for (const [path, tracked] of state.trackedFiles) {
+    // §II.16 — count the remote change the moment this path is taken
+    // up, BEFORE any of the skips below. A path already counted in the
+    // batch loop is guarded by the set, so this is the second half of
+    // "one remote change = exactly one unit", not a double count.
+    if (countPull(path)) emitProgress(path);
     if (tracked.isManualConflict) {
       // STEP3 (§II.6): the ONLY place that decides what the sibling
       // file becomes — conflict content never rides batches/push.

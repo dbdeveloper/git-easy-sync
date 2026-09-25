@@ -35,6 +35,7 @@ import type { NewTreeRequestItem } from "../github/client";
 import type {
   DrainDeps,
   DrainClient,
+  DrainProgress,
   VaultFileReader,
 } from "./drain";
 import {
@@ -452,7 +453,7 @@ export interface BuildDrainDepsArgs {
   // Pull-side canonicalize toggle (autoCanonicalizeTextFiles) — the
   // third of text-normalize.ts's three must-agree sites.
   autoCanonicalize?: () => boolean;
-  onProgress?: (processed: number, total: number, path?: string) => void;
+  onProgress?: (p: DrainProgress) => void;
   logger?: Logger;
   now?: () => number;
 }
