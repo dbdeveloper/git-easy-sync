@@ -1251,13 +1251,10 @@ export default class GitHubSyncPlugin extends Plugin {
       onSyncStarted: () => this.armSyncProgressNotice(),
       onSyncCompleted: (summary) => {
         this.disarmSyncProgressNotice();
-        if (summary.cancelled) {
-          // The click produced "cancellation requested"; this confirms
-          // it actually stopped. Different moments, both worth saying.
-          new Notice("Sync canceled", BRIEF_NOTICE_MS);
-          return;
-        }
-        if (!summary.ok) return; // the error's own notice speaks instead
+        // A cancel is announced by the drain-idle handler above (it
+        // covers background drains too); the summary only has to stay
+        // quiet about it. An error likewise has its own notice.
+        if (!summary.ok) return;
         new Notice(
           syncSummaryText({
             sent: summary.pushedFiles,
@@ -1299,7 +1296,17 @@ export default class GitHubSyncPlugin extends Plugin {
         this.repaintSyncProgressNotice();
         // …and a drain that ended without a syncAll wrapper still has
         // to take the notice down (see disarm's warning).
-        if (s.state === "idle") this.disarmSyncProgressNotice();
+        if (s.state === "idle") {
+          this.disarmSyncProgressNotice();
+          // The confirmation lives HERE, not on the sync summary,
+          // because a background drain (interval tick, watchdog) never
+          // produces a summary — cancelling one used to report nothing
+          // at all. This fires for every path that can be cancelled.
+          if (this.syncCancelRequested) {
+            this.syncCancelRequested = false;
+            new Notice("Sync canceled", BRIEF_NOTICE_MS);
+          }
+        }
       },
     );
 
@@ -1366,8 +1373,12 @@ export default class GitHubSyncPlugin extends Plugin {
     // ignores — keystroke shortcuts shouldn't open modals.
     if (this.sync2Manager.getDrainStatus().state === "running") {
       const modal = new CancelSyncModal(this.app, () => {
+        // No "cancellation requested" toast: the user just clicked a
+        // button labelled [Cancel sync]. Echoing the click back is
+        // noise — what they actually want to know is when it STOPPED,
+        // which the drain-idle handler reports (owner, 2026-09-26).
+        this.syncCancelRequested = true;
         this.sync2Manager.cancelDrain();
-        new Notice("Sync cancellation requested.", 4000);
       });
       modal.open();
       return;
@@ -1734,6 +1745,9 @@ export default class GitHubSyncPlugin extends Plugin {
   // Consequence, accepted: the user often sees "3 of 10" rather than
   // "1 of 10", because the first two passed during those two seconds.
   // That is correct — progress shows where we ARE, not a replay.
+  // Set when the USER asked to stop, cleared when the drain actually
+  // goes idle — that transition is what "Sync canceled" reports.
+  private syncCancelRequested = false;
   private syncProgressNotice: Notice | null = null;
   private syncProgressTimer: number | null = null;
 
@@ -2211,8 +2225,8 @@ export default class GitHubSyncPlugin extends Plugin {
     if (this.sync2Manager.getDrainStatus().state !== "running") {
       return;
     }
+    this.syncCancelRequested = true;
     this.sync2Manager.cancelDrain();
-    new Notice("Sync cancellation requested.", 4000);
   }
 
   // §35 — the pre-flight token-expired GATE. Every GitHub-touching sync surface

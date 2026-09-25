@@ -1405,6 +1405,38 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     return [...world.branchHeads.keys()][0];
   };
 
+  it("§II.17: a cancel landing just before FINALIZE skips the merge — and the NEXT drain does it", async () => {
+    // FINALIZE is another multi-request stretch (compare, getCommit,
+    // createMergeCommit, the main ref move, the branch delete), so it
+    // gets its own checkpoint. Skipping it costs nothing: §II.14 checks
+    // reachability first, so the merge is idempotent and the next drain
+    // finds the same branch waiting.
+    await setup();
+    const branch = await birthConflict();
+    const rec = (await conflictStore.load()).entries.get(NOTE2)!;
+    // Resolve it, so FINALIZE would otherwise fire.
+    fs.rmSync(
+      path.join(
+        dir,
+        buildSiblingFilePath(NOTE2, rec.siblings[0].mtime!, "other-device"),
+      ),
+    );
+    baseCommit = world.head;
+
+    // False at the batch boundary (nothing to claim), TRUE at the
+    // FINALIZE checkpoint — the click lands in between.
+    let calls = 0;
+    const r = await drainOnce(deps({ cancelRequested: () => ++calls > 1 }));
+    expect(r.status).toBe("cancelled");
+    expect(r.finalizedMergeSha).toBeNull();
+    expect(world.branchHeads.has(branch)).toBe(true); // branch untouched
+
+    const r2 = await drainOnce(deps());
+    expect(r2.status).toBe("ok");
+    expect(r2.finalizedMergeSha).not.toBeNull();
+    expect(world.branchHeads.has(branch)).toBe(false); // merged and deleted
+  });
+
   it("G.7: FINALIZE never fires while unresolved tracked conflicts remain — the branch stays", async () => {
     await setup();
     const branch = await birthConflict();

@@ -1485,6 +1485,41 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     );
   });
 
+  it("S1 cancel 🔑 (push boundary): a click during the 4-second push stretch is NOT lost", async () => {
+    // Field report 2026-09-26: [Cancel sync] appeared to do nothing.
+    // The per-file loop is LOCAL and finishes in milliseconds; the
+    // stretch the user actually waits through is flush → commit → ref
+    // move (~3-4 s on the owner's device), and it had no checkpoint at
+    // all. A click landing there was silently dropped and the drain ran
+    // to completion.
+    await setupAligned();
+    await stageBatch({ "note.md": "C1\n" });
+
+    // The click lands WHILE the files are being processed — i.e. after
+    // the loop's own check for this entry has already passed. The old
+    // code then went straight into the push and ignored it entirely.
+    let cancelled = false;
+    const r = await drainOnce(
+      makeDeps({
+        onProgress: () => {
+          cancelled = true;
+        },
+        cancelRequested: () => cancelled,
+      }),
+    );
+    // Without the checkpoint this returns "ok" and the ref has moved.
+    expect(r.status).toBe("cancelled");
+    expect(r.pushedCommits).toEqual([]);
+    expect(batches[0].removed).toBe(false); // the batch waits for the redo
+    expect(hotUpdates).toEqual([]); // nothing confirmed
+
+    // And the redo lands it — cancelling cost only the time already spent.
+    cancelled = false;
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    expect(dec(world.headFiles().get("note.md")!.bytes)).toBe("C1\n");
+  });
+
   it("S1 message+author: main push carries the BATCH's createdAt (message AND author.date); merge/conflict use now()", async () => {
     await setupAligned();
     const CREATED = 1_777_000_123_000;

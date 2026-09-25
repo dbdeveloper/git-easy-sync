@@ -1302,6 +1302,20 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       continue;
     }
 
+    // S1 cancel (push boundary, owner 2026-09-26 — field report). The
+    // per-file loop above is LOCAL and finishes in milliseconds; what
+    // the user actually waits through is the stretch below: flush →
+    // commit → ref move, measured at ~3-4 s on the owner's device. It
+    // had no checkpoint, so a click landing there was simply lost and
+    // "Sync canceled" never appeared.
+    //
+    // Safe by the same D.16 argument as the batch boundary: nothing of
+    // THIS batch has reached a ref yet, the batch dir is not removed
+    // and the journal holds the last COMPLETED batch. Mid-batch
+    // flushes may have left dangling trees on GitHub — objects with no
+    // ref, which GitHub collects, exactly as a 422 restart leaves them.
+    if (deps.cancelRequested?.()) return result("cancelled");
+
     // Final flush (§II.15, load-bearing): without it the batch tail
     // below the threshold silently never becomes a tree (class I1).
     try {
@@ -1430,6 +1444,12 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // carries the MAIN tree (content no-op) with parents
   // [main, conflict] — POST /merges is never used (a content merge
   // would resurrect the superseded C_n over the user's resolution).
+  // S1 cancel (FINALIZE boundary): the merge below is another
+  // multi-request stretch — compare, getCommit, createMergeCommit, the
+  // main ref move, the branch delete. FINALIZE is idempotent by
+  // construction (§II.14 checks reachability first), so skipping it
+  // costs nothing: the next drain finds the same branch and merges it.
+  if (deps.cancelRequested?.()) return result("cancelled");
   if (state.conflictBranchName !== null && conflicts!.entries.size === 0) {
     {
       const r = await deps.retry.run(() => deps.client.getGuardedHead());
