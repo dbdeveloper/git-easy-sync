@@ -352,6 +352,183 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(batches[0].removed).toBe(true);
   });
 
+  // ── A1 п.22-25: the drain's half of the .obsidian/ mtime tiebreak ──
+  //
+  // The pure half lives in diff3.test.ts (the exhaustive sensitivity
+  // matrix). This is the SEAM the field defect of 2026-09-23 lived in:
+  // _diff3 decides 3.b.e internally and cannot fetch a mtime, Layer 2
+  // (§II.13) nulls the remote one by design, and for plain .obsidian/
+  // paths nothing put it back — so "newest wins" silently became
+  // "remote always wins". Three tests: it works both ways, and it does
+  // not start paying for paths that never compare mtimes.
+
+  const obsidianTiebreakSetup = async (opts: {
+    localMtime: number;
+  }): Promise<{ deps: DrainDeps; infoCalls: string[] }> => {
+    const OBS = ".obsidian/app.json";
+    baseCommit = await world.commitFiles({ [OBS]: "base\n" });
+    baselines.set(OBS, {
+      baselineSha: await sha("base\n"),
+      mtime: 50,
+      size: enc("base\n").byteLength,
+    });
+    // BOTH sides move away from base → the real collision, 3.b.e.
+    world.committedAt += 5000;
+    await world.commitFiles({ [OBS]: "REMOTE\n" });
+    await stageBatch({ [OBS]: "LOCAL\n" }, opts.localMtime);
+    vaultFiles.files.set(OBS, { content: "LOCAL\n", mtime: opts.localMtime });
+
+    const infoCalls: string[] = [];
+    const client = world.makeClient();
+    const origInfo = client.getCommitInfoForPath.bind(client);
+    client.getCommitInfoForPath = async (p, ref) => {
+      infoCalls.push(p);
+      return origInfo(p, ref);
+    };
+    return { deps: makeDeps({ client }), infoCalls };
+  };
+
+  it("A1 п.22 🔑: LOCAL is newer → local wins, and the drain PAID for the mtime that proves it", async () => {
+    // Before the fix this assertion was unreachable: remote.mtime was
+    // null at the tiebreak, the null guard sent every such path to
+    // remote, and the local edit was overwritten — exactly what the
+    // owner's device log showed happening to a freshly-enforced
+    // `.obsidian/.gitignore`.
+    const { deps, infoCalls } = await obsidianTiebreakSetup({
+      localMtime: 1_700_000_900_000, // after the remote commit
+    });
+    const r = await drainOnce(deps);
+    expect(r.status).toBe("ok");
+    expect(infoCalls).toEqual([".obsidian/app.json"]); // fetched ONCE
+    expect(vaultFiles.files.get(".obsidian/app.json")!.content).toBe("LOCAL\n");
+    expect(dec(world.headFiles().get(".obsidian/app.json")!.bytes)).toBe(
+      "LOCAL\n",
+    );
+  });
+
+  it("A1 п.23: REMOTE is newer → remote wins — the fetch decides the winner, it does not hand it to local", async () => {
+    const { deps, infoCalls } = await obsidianTiebreakSetup({
+      localMtime: 1_700_000_001_000, // before the remote commit
+    });
+    const r = await drainOnce(deps);
+    expect(r.status).toBe("ok");
+    expect(infoCalls).toEqual([".obsidian/app.json"]);
+    expect(vaultFiles.files.get(".obsidian/app.json")!.content).toBe(
+      "REMOTE\n",
+    );
+  });
+
+  it("A1 п.24 (cost): a one-sided .obsidian change pays NOTHING — the fill is gated on the tiebreak, not on the folder", async () => {
+    // The lazy fill must not become "fetch a commit for every
+    // .obsidian file": enabling `Sync config` puts dozens of them in a
+    // single batch, and each fetch is a full round trip. Only a
+    // genuine two-sided collision compares mtimes, so only it pays.
+    const OBS = ".obsidian/app.json";
+    baseCommit = await world.commitFiles({ [OBS]: "base\n" });
+    baselines.set(OBS, {
+      baselineSha: await sha("base\n"),
+      mtime: 50,
+      size: enc("base\n").byteLength,
+    });
+    // Remote stays at base; only the local side moved.
+    await stageBatch({ [OBS]: "LOCAL\n" });
+    vaultFiles.files.set(OBS, { content: "LOCAL\n", mtime: 100 });
+
+    const infoCalls: string[] = [];
+    const client = world.makeClient();
+    const origInfo = client.getCommitInfoForPath.bind(client);
+    client.getCommitInfoForPath = async (p, ref) => {
+      infoCalls.push(p);
+      return origInfo(p, ref);
+    };
+    const r = await drainOnce(makeDeps({ client }));
+    expect(r.status).toBe("ok");
+    expect(infoCalls).toEqual([]); // 3.b.1.a — local wins outright
+    expect(dec(world.headFiles().get(OBS)!.bytes)).toBe("LOCAL\n");
+  });
+
+  it("A1 п.24b (cost): a remote mtime the journal already carries is NOT re-fetched", async () => {
+    // fillRemoteMtime is deliberately callable by any site that might
+    // need a mtime, which only stays cheap while it no-ops on a known
+    // one. Without that guard every caller becomes a round trip, and a
+    // 422 restart re-pays for the whole batch.
+    const OBS = ".obsidian/app.json";
+    baseCommit = await world.commitFiles({ [OBS]: "base\n" });
+    baselines.set(OBS, {
+      baselineSha: await sha("base\n"),
+      mtime: 50,
+      size: enc("base\n").byteLength,
+    });
+    world.committedAt += 5000;
+    await world.commitFiles({ [OBS]: "REMOTE\n" });
+    await stageBatch({ [OBS]: "LOCAL\n" }, 1_700_000_900_000);
+    vaultFiles.files.set(OBS, { content: "LOCAL\n", mtime: 1_700_000_900_000 });
+
+    // A journal from an interrupted run that already learned the
+    // remote half — sha matching head, so Layer 2 finds nothing to
+    // correct and the mtime it carries survives into the tiebreak.
+    const { emptyDrainState } = await import("../../src/sync2/drain-journal");
+    const js = (await journal.load()) ?? emptyDrainState();
+    js.trackedFiles.set(OBS, {
+      base: { path: OBS, sha: await sha("base\n"), size: 5, mtime: 50, blob: null, mode: "", deviceLabel: null },
+      remote: { path: OBS, sha: await sha("REMOTE\n"), size: 7, mtime: 1_700_000_005_000, blob: null, mode: "", deviceLabel: null },
+      isManualConflict: false,
+    });
+    await journal.persist(js);
+
+    const infoCalls: string[] = [];
+    const client = world.makeClient();
+    const origInfo = client.getCommitInfoForPath.bind(client);
+    client.getCommitInfoForPath = async (p, ref) => {
+      infoCalls.push(p);
+      return origInfo(p, ref);
+    };
+    const r = await drainOnce(makeDeps({ client }));
+    expect(r.status).toBe("ok");
+    expect(infoCalls).toEqual([]); // the answer was already in hand
+    // …and it was actually USED: local is newer, so local wins.
+    expect(dec(world.headFiles().get(OBS)!.bytes)).toBe("LOCAL\n");
+  });
+
+  it("A1 п.25: the PLUGIN-CORE seam pays for its mtime too — E4's own fix, which had no test until now", async () => {
+    // Found by probe while pinning the 3.b.e fix (2026-09-23): deleting
+    // the lazy fill from the plugin-dispatch branch left the entire
+    // suite green. That fill IS the gate finding E4, whose comment
+    // spells out the degeneration it prevents — and nothing was holding
+    // it. Same shape as the defect it was written to fix, one branch
+    // over. The two sites now share one fillRemoteMtime; this pins the
+    // second caller so a future consolidation cannot quietly drop it.
+    const CORE = ".obsidian/plugins/somePlugin/main.js";
+    baseCommit = await world.commitFiles({ [CORE]: "base\n" });
+    baselines.set(CORE, {
+      baselineSha: await sha("base\n"),
+      mtime: 50,
+      size: enc("base\n").byteLength,
+    });
+    world.committedAt += 5000;
+    await world.commitFiles({ [CORE]: "REMOTE\n" });
+    await stageBatch({ [CORE]: "LOCAL\n" }, 1_700_000_900_000);
+    vaultFiles.files.set(CORE, {
+      content: "LOCAL\n",
+      mtime: 1_700_000_900_000,
+    });
+
+    const infoCalls: string[] = [];
+    const client = world.makeClient();
+    const origInfo = client.getCommitInfoForPath.bind(client);
+    client.getCommitInfoForPath = async (p, ref) => {
+      infoCalls.push(p);
+      return origInfo(p, ref);
+    };
+    const r = await drainOnce(makeDeps({ client }));
+    expect(r.status).toBe("ok");
+    expect(infoCalls).toEqual([CORE]);
+    // Local is the newer edit, so it must survive — with a null mtime
+    // the tiebreak would have handed this to remote.
+    expect(dec(world.headFiles().get(CORE)!.bytes)).toBe("LOCAL\n");
+    expect(vaultFiles.files.get(CORE)!.content).toBe("LOCAL\n");
+  });
+
   it("§II.7.1: an EMPTY drain costs exactly ONE request — the head read, and nothing else", async () => {
     // Field measurement 2026-09-23 (the reason §II.7.1 exists): on a
     // clean vault with an unmoved remote the drain was spending FIVE

@@ -74,6 +74,7 @@ import DrainJournal, {
 import {
   DELETED,
   pickNewestForObsidian,
+  needsObsidianMtimeTiebreak,
   Diff3Deps,
   Diff3Result,
   FileInfo,
@@ -663,6 +664,29 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     // sha:null = ours-side DELETION (4.6.b conflict born from a batch
     // deletion entry) — lands on the conflict branch as a tree
     // deletion, never as a blob.
+    // The ONE lazy remote-mtime fill, shared by every site that can
+    // reach an mtime comparison (§II.1 п.3.b.e and the plugin-core
+    // dispatch). Having two of these — one filled, one forgotten — is
+    // the defect this consolidates; a third site must call THIS, not
+    // copy it.
+    //
+    // No-ops when the mtime is already known or the repo is empty, so
+    // callers may ask freely. Returns an abort result on a network
+    // failure, null on success.
+    const fillRemoteMtime = async (
+      path: string,
+      tracked: TrackedFile,
+    ): Promise<DrainResult | null> => {
+      if (tracked.remote.mtime !== null || headHash === null) return null;
+      const info = await deps.retry.run(() =>
+        deps.client.getCommitInfoForPath(path, headHash!),
+      );
+      if (info.error !== null) return statusFromError(info.error, result);
+      tracked.remote.mtime =
+        info.result?.committedAtMs ?? tracked.remote.mtime;
+      return null;
+    };
+
     const conflictCommitEntries: Array<{ path: string; sha: string | null }> =
       [];
     const mainPushTracked: TrackedFile[] = [];
@@ -939,6 +963,24 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         continue;
       }
 
+      // §II.1 п.3.b.e needs a remote mtime, and Layer 2 just above may
+      // have nulled it (full-half replacement). _diff3 decides 3.b.e
+      // INTERNALLY and has no network, so the fill has to happen here,
+      // before the call — otherwise the null guard in
+      // pickNewestForObsidian hands the path to remote unconditionally
+      // and the documented "newest wins" never runs. That is the defect
+      // the 2026-09-23 field log caught: a locally-enforced
+      // `.obsidian/.gitignore`, seconds old, lost to a remote copy
+      // written by a previous plugin version, and the correction came
+      // back as its own commit on the next pass.
+      //
+      // The precondition is imported, never re-derived: two hand-copied
+      // copies of it drifting apart is how only the plugin-core seam
+      // got this fill in the first place.
+      if (needsObsidianMtimeTiebreak(tracked, local)) {
+        const abort = await fillRemoteMtime(entry.path, tracked);
+        if (abort !== null) return abort;
+      }
       let verdict = await _diff3(diff3Deps, tracked, local, headHash);
       if (verdict.kind === "plugin-dispatch") {
         // INTERIM (gate decision 2026-08-31): a genuine two-sided
@@ -948,13 +990,9 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // Discovery leaves remote.mtime null — fetch it LAZILY (same
         // rule as the conflict-birth sites) or the tiebreak would
         // degenerate into "remote always wins" (gate finding, E4).
-        if (tracked.remote.mtime === null && headHash !== null) {
-          const info = await deps.retry.run(() =>
-            deps.client.getCommitInfoForPath(entry.path, headHash!),
-          );
-          if (info.error !== null) return statusFromError(info.error, result);
-          tracked.remote.mtime =
-            info.result?.committedAtMs ?? tracked.remote.mtime;
+        {
+          const abort = await fillRemoteMtime(entry.path, tracked);
+          if (abort !== null) return abort;
         }
         deps.logger?.warn(
           "plugin-core collision resolved by mtime (interim until PLUGIN-UPDATE-COMPAT)",

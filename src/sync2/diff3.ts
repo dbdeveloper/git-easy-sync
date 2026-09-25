@@ -108,6 +108,43 @@ export interface Diff3Deps {
 
 const PLUGIN_CORE_FILE = /^\.obsidian\/plugins\/[^/]+\/(manifest\.json|main\.js|styles\.css)$/;
 
+// The §II.1 п.3.b branch conditions, named once and used by _diff3
+// below AND by needsObsidianMtimeTiebreak at the bottom of this file.
+//
+// ⚠️ They are functions, not inline expressions, for one reason: the
+// 3.b.e fallback needs a remote mtime that only the NETWORK can supply,
+// so its precondition has to be answerable from OUTSIDE this decision
+// function — and a second, hand-copied version of that precondition is
+// precisely the defect this replaced (field log 2026-09-23: Layer 2
+// nulls remote.mtime, nothing refilled it for plain .obsidian/ paths,
+// and "newest wins" silently degenerated into "remote always wins").
+// One definition, two readers.
+function isPluginCoreCollision(
+  path: string,
+  local: FileInfo,
+  remote: FileInfo,
+): boolean {
+  return (
+    PLUGIN_CORE_FILE.test(path) && local.sha !== null && remote.sha !== null
+  );
+}
+
+function remoteUnmovedLocalLive(
+  base: FileInfo,
+  local: FileInfo,
+  remote: FileInfo,
+): boolean {
+  return (remote.sha === null || remote.sha === base.sha) && local.sha !== null;
+}
+
+function localUnmovedRemoteLive(
+  base: FileInfo,
+  local: FileInfo,
+  remote: FileInfo,
+): boolean {
+  return (local.sha === null || local.sha === base.sha) && remote.sha !== null;
+}
+
 export async function _diff3(
   deps: Diff3Deps,
   tracked: { base: FileInfo; remote: FileInfo } | null,
@@ -156,11 +193,7 @@ export async function _diff3(
 
   // ── §II.1 п.3 — the .obsidian/ special branch ───────────────────
   if (path.startsWith(".obsidian/")) {
-    if (
-      PLUGIN_CORE_FILE.test(path) &&
-      local.sha !== null &&
-      remote.sha !== null
-    ) {
+    if (isPluginCoreCollision(path, local, remote)) {
       // 3.a — plugin core files route to their own rules
       // (SYNC2-PLUGIN-UPDATE-COMPAT). ⚠️ NARROWED at THE SWITCH gate
       // (2026-08-31, gate finding): the seam fires ONLY on a genuine
@@ -177,16 +210,10 @@ export async function _diff3(
     // resolves silently. No separate base=null case needed: when
     // base.sha==null, (remote.sha == base.sha) narrows to
     // (remote.sha == null) by itself.
-    if (
-      (remote.sha === null || remote.sha === base.sha) &&
-      local.sha !== null
-    ) {
+    if (remoteUnmovedLocalLive(base, local, remote)) {
       return { kind: "file", file: local }; // 3.b.1.a / 3.b.2.a
     }
-    if (
-      (local.sha === null || local.sha === base.sha) &&
-      remote.sha !== null
-    ) {
+    if (localUnmovedRemoteLive(base, local, remote)) {
       return { kind: "file", file: remote }; // 3.b.1.b / 3.b.2.b
     }
     // Real collision, delete-vs-edit → the LIVE side wins, mtime not
@@ -395,6 +422,50 @@ export async function _diff3(
 // (either mtime null/0-legacy) → remote — with the explicit null
 // guard, because a bare `>` would coerce `5 > null` to local and
 // silently invert the owner's fallback rule.
+// Would _diff3 resolve this path by the 3.b.e mtime tiebreak?
+//
+// The caller needs this BEFORE calling _diff3, because _diff3 decides
+// 3.b.e internally and cannot fetch a mtime: reaching the tiebreak with
+// `remote.mtime === null` is not a fallback, it is a silent inversion —
+// the null guard in pickNewestForObsidian hands EVERY such path to
+// remote, so the documented "newest wins" never runs at all.
+//
+// That is exactly what the field log of 2026-09-23 showed: Layer 2
+// (§II.13) replaces the remote half wholesale and nulls its mtime by
+// design, and for plain `.obsidian/` paths nothing put it back. The
+// plugin-core seam already had this lazy fill (gate finding E4, which
+// names the degeneration in so many words) — 3.b.e simply never got
+// the same treatment.
+//
+// Mirrors _diff3's early returns in order, on the SAME normalised
+// values (DELETED → sentinel sha). `plugin-dispatch` answers false: it
+// needs a mtime too, but the drain resolves that verdict itself and
+// fills it there.
+export function needsObsidianMtimeTiebreak(
+  tracked: { base: FileInfo; remote: FileInfo } | null,
+  localIn: FileInfo | null,
+): boolean {
+  const base: FileInfo = { ...(tracked?.base ?? emptyFileInfo()) };
+  const remote: FileInfo = { ...(tracked?.remote ?? emptyFileInfo()) };
+  const local: FileInfo = { ...(localIn ?? emptyFileInfo()) };
+  if (local.mode === DELETED) local.sha = DELETED_SHA_HASH;
+  if (remote.mode === DELETED) remote.sha = DELETED_SHA_HASH;
+
+  const path = base.path ?? local.path ?? remote.path;
+  if (path === null || !path.startsWith(".obsidian/")) return false;
+  // 2.a / 2.b — decided before the .obsidian branch is entered.
+  if (local.sha !== null && remote.sha !== null && local.sha === remote.sha) {
+    return false;
+  }
+  if (local.sha === null && remote.sha === null) return false;
+  if (isPluginCoreCollision(path, local, remote)) return false; // 3.a
+  if (remoteUnmovedLocalLive(base, local, remote)) return false; // 3.b.1.a
+  if (localUnmovedRemoteLive(base, local, remote)) return false; // 3.b.1.b
+  // delete-vs-edit (3.b.*.c/d) — the LIVE side wins, no mtime involved.
+  if (local.mode === DELETED || remote.mode === DELETED) return false;
+  return true; // 3.b.*.e
+}
+
 export function pickNewestForObsidian(
   local: FileInfo,
   remote: FileInfo,

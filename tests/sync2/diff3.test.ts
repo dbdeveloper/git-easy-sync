@@ -11,6 +11,7 @@ import {
   FileInfo,
   emptyFileInfo,
   mergeBlobsWithMainThreadDiff3,
+  needsObsidianMtimeTiebreak,
 } from "../../src/sync2/diff3";
 import { DELETED_SHA_HASH } from "../../src/sync2/discovery";
 import {
@@ -678,6 +679,160 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
       HEAD,
     );
     expect((r2 as { file: FileInfo }).file.sha).toBe(remoteOld.sha);
+  });
+
+  // ── A1 mtime-sensitivity: the exhaustive cross-check ────────────
+
+  it("A1 🔑 exhaustive: a verdict depends on mtime IF AND ONLY IF needsObsidianMtimeTiebreak says so", async () => {
+    // THE guard against the 2026-09-23 class of defect, which no
+    // mutation probe could have caught: every line did what its own
+    // comment said, and the bug lived in the SEAM — _diff3 decides
+    // 3.b.e internally using a mtime that the drain is responsible for
+    // fetching, and the two sides disagreed about when that was needed.
+    // A hand-written list of "cases that need a mtime" is the same
+    // hand-copying that caused it, so this enumerates the whole input
+    // space instead and derives the answer empirically: run _diff3
+    // twice with the mtimes SWAPPED, and see whether the winner moved.
+    //
+    // If it moved, the outcome depends on mtime — and the predicate the
+    // drain consults MUST have said so, or the drain would hand _diff3
+    // a null and the null guard would silently pick remote every time.
+    // If it did not move, the predicate must NOT claim a fetch is
+    // needed, or every ordinary .obsidian file pays a network request
+    // (the owner has 46 of them in one commit).
+    const SHAS = [null, "BASE", "A", "B"] as const;
+    const MODES = ["", DELETED] as const;
+    const PATHS = [
+      OB, // plain .obsidian file
+      ".obsidian/plugins/p/main.js", // plugin-core seam (3.a)
+      ".obsidian/plugins/p/data.json", // under plugins/, NOT core
+      "note.md", // outside .obsidian entirely
+    ];
+    // Any network use at all would mean the branch fell through to the
+    // standard rules, which this matrix is not modelling.
+    const deps = makeDeps({
+      mergeBlobs: async () => {
+        throw new Error("mtime matrix: merge must not run");
+      },
+      getBlobFromRepo: async () => {
+        throw new Error("mtime matrix: no blob fetch expected");
+      },
+      getContentsMetadataAtRef: async () => {
+        throw new Error("mtime matrix: no metadata fetch expected");
+      },
+    });
+
+    let sensitiveCases = 0;
+    for (const p of PATHS) {
+      for (const baseSha of [null, "BASE"] as const) {
+        for (const localSha of SHAS) {
+          for (const remoteSha of SHAS) {
+            for (const localMode of MODES) {
+              for (const remoteMode of MODES) {
+                // A DELETED side with a sha is incoherent input.
+                if (localMode === DELETED && localSha !== null) continue;
+                if (remoteMode === DELETED && remoteSha !== null) continue;
+                const mk = (lm: number, rm: number) => ({
+                  tracked: {
+                    base: fi({ path: p, sha: baseSha }),
+                    remote: fi({
+                      path: p,
+                      sha: remoteSha,
+                      mode: remoteMode,
+                      mtime: rm,
+                    }),
+                  },
+                  local: fi({
+                    path: p,
+                    sha: localSha,
+                    mode: localMode,
+                    mtime: lm,
+                  }),
+                });
+                const label = `${p} base=${baseSha} local=${localSha}/${localMode || "live"} remote=${remoteSha}/${remoteMode || "live"}`;
+
+                // Outside .obsidian/ the standard rules take over, and
+                // those need sizes and blobs this matrix deliberately
+                // does not model (they are covered by A.1-A.29). mtime
+                // has no say anywhere in them, so the expected answer
+                // is a flat false and running _diff3 would only assert
+                // the setup.
+                let mtimeSensitive = false;
+                if (p.startsWith(".obsidian/")) {
+                  const younger = mk(1000, 2000); // remote is newer
+                  const older = mk(2000, 1000); // local is newer
+                  const v1 = await _diff3(
+                    deps,
+                    younger.tracked,
+                    younger.local,
+                    HEAD,
+                  );
+                  const v2 = await _diff3(
+                    deps,
+                    older.tracked,
+                    older.local,
+                    HEAD,
+                  );
+                  const winner = (v: Awaited<ReturnType<typeof _diff3>>) =>
+                    v.kind === "file" ? `file:${v.file.sha}` : v.kind;
+                  mtimeSensitive = winner(v1) !== winner(v2);
+                }
+
+                // The predicate is asked with a null remote.mtime —
+                // exactly the state Layer 2 leaves behind, and the only
+                // state in which the drain has a decision to make.
+                const asked = needsObsidianMtimeTiebreak(
+                  {
+                    base: fi({ path: p, sha: baseSha }),
+                    remote: fi({
+                      path: p,
+                      sha: remoteSha,
+                      mode: remoteMode,
+                      mtime: null,
+                    }),
+                  },
+                  fi({ path: p, sha: localSha, mode: localMode, mtime: 2000 }),
+                );
+                expect(asked, label).toBe(mtimeSensitive);
+                if (mtimeSensitive) sensitiveCases += 1;
+              }
+            }
+          }
+        }
+      }
+    }
+    // Sanity on the matrix itself: a run that exercised NO mtime-
+    // sensitive case would pass the iff vacuously and guard nothing.
+    expect(sensitiveCases).toBeGreaterThan(0);
+  });
+
+  it("A1: the predicate is false outside .obsidian/, whatever the shas", () => {
+    // `note.md` collisions become MANUAL_CONFLICT; mtime has no say
+    // anywhere in the standard rules, and asking for one would buy a
+    // network request that changes nothing.
+    expect(
+      needsObsidianMtimeTiebreak(
+        { base: fi({ path: "note.md", sha: "BASE" }), remote: side("note.md", "R") },
+        side("note.md", "L"),
+      ),
+    ).toBe(false);
+  });
+
+  it("A1: a KNOWN remote mtime still reports as needing the tiebreak — the fetch is the caller's no-op, not ours", () => {
+    // The predicate answers "does this path resolve by 3.b.e", not "is
+    // a request required". Folding the null check in here would split
+    // one question into two and invite a caller to skip the fill for
+    // the wrong reason; the drain's fillRemoteMtime no-ops on a known
+    // mtime instead.
+    expect(
+      needsObsidianMtimeTiebreak(
+        {
+          base: fi({ path: OB, sha: "BASE" }),
+          remote: side(OB, "R", { mtime: 777 }),
+        },
+        side(OB, "L", { mtime: 888 }),
+      ),
+    ).toBe(true);
   });
 
   // ── P.20-22: rule 7's lazy remote.size ──────────────────────────
