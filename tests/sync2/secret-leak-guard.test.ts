@@ -45,7 +45,6 @@ import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
 import GitignoreInvariants from "../../src/sync2/gitignore-invariants";
-import InvariantStateStore from "../../src/sync2/invariant-state";
 import GitignoreSeedStore from "../../src/sync2/gitignore-seeds";
 import { isSyncable } from "../../src/sync2/change-detector";
 import GI, { whitelistedGitignoreDirs } from "../../src/gi";
@@ -121,10 +120,6 @@ function makeFixture(initialPushDataJson = false): Fixture {
   const vault = new Vault(root);
   const inv = new GitignoreInvariants({
     vault: vault as unknown as import("obsidian").Vault,
-    state: new InvariantStateStore({
-      vault: vault as unknown as import("obsidian").Vault,
-      selfPluginId: SELF,
-    }),
     configDir: CONFIG_DIR,
     selfPluginId: SELF,
     seeds: new GitignoreSeedStore({

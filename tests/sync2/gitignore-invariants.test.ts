@@ -12,7 +12,6 @@ import * as crypto from "crypto";
 import GitignoreInvariants, {
   INVARIANTS_BEGIN,
   INVARIANTS_END,
-  fingerprintOf,
   INVARIANTS_SECTION,
   FINAL_BEGIN,
   FINAL_END,
@@ -22,7 +21,6 @@ import GitignoreInvariants, {
   FINAL_SECTION,
   blockHasAllowLine,
 } from "../../src/sync2/gitignore-invariants";
-import InvariantStateStore from "../../src/sync2/invariant-state";
 import GitignoreSeedStore from "../../src/sync2/gitignore-seeds";
 import FileBaselinesStore from "../../src/sync2/file-baselines";
 import {
@@ -47,10 +45,6 @@ function fixture(syncConfigDir = true, pushDataJson = false) {
     recursive: true,
   });
   const vault = new Vault(root);
-  const state = new InvariantStateStore({
-    vault: vault as unknown as import("obsidian").Vault,
-    selfPluginId: SELF,
-  });
   const anomalies: SectionAnomalyReport[] = [];
   const seeds = new GitignoreSeedStore({
     vault: vault as unknown as import("obsidian").Vault,
@@ -58,7 +52,6 @@ function fixture(syncConfigDir = true, pushDataJson = false) {
   });
   const inv = new GitignoreInvariants({
     vault: vault as unknown as import("obsidian").Vault,
-    state,
     configDir: CONFIG_DIR,
     selfPluginId: SELF,
     seeds,
@@ -67,7 +60,7 @@ function fixture(syncConfigDir = true, pushDataJson = false) {
     gi: { invalidate: () => {} },
     onAnomaly: (report) => anomalies.push(report),
   });
-  return { root, vault, state, seeds, inv, anomalies };
+  return { root, vault, seeds, inv, anomalies };
 }
 
 const cdGitignore = (root: string) =>
@@ -103,7 +96,6 @@ describe("GitignoreInvariants.enforce", () => {
 
   beforeEach(async () => {
     f = fixture();
-    await f.state.load();
   });
 
   afterEach(() => {
@@ -235,7 +227,7 @@ describe("GitignoreInvariants.enforce", () => {
     expect(stat2.mtimeMs).toBe(stat1.mtimeMs);
   });
 
-  it("touched-but-unchanged: refreshes mtime cache without rewriting", async () => {
+  it("touched-but-unchanged: a file whose mtime moved but whose content did not is NOT rewritten", async () => {
     await f.inv.enforce();
     const cdPath = cdGitignore(f.root);
     const original = fs.readFileSync(cdPath, "utf8");
@@ -245,11 +237,6 @@ describe("GitignoreInvariants.enforce", () => {
     await f.inv.enforce();
     expect(fs.readFileSync(cdPath, "utf8")).toBe(original);
 
-    // Cached state now matches new mtime.
-    const stat = fs.statSync(cdPath);
-    expect(f.state.getFor(`${CONFIG_DIR}/.gitignore`)?.mtime).toBe(
-      stat.mtimeMs,
-    );
   });
 
   it("real edit: hash mismatch triggers splice rewrite", async () => {
@@ -269,47 +256,7 @@ describe("GitignoreInvariants.enforce", () => {
     expect(content).toContain("*.user-rule");
   });
 
-  it("notePathSelfWritten refreshes the cache after a sync2 push", async () => {
-    await f.inv.enforce();
-    const cdPath = cdGitignore(f.root);
 
-    // Simulate sync2 receiving a pulled .gitignore that's already
-    // canonical — the same bytes enforce() would produce. Re-stat to
-    // mimic the post-write mtime bump.
-    const canonical = fs.readFileSync(cdPath, "utf8");
-    fs.writeFileSync(cdPath, canonical + "# user added later\n");
-    fs.utimesSync(cdPath, new Date(), new Date(Date.now() + 5_000));
-
-    await f.inv.notePathSelfWritten(`${CONFIG_DIR}/.gitignore`);
-    const stat = fs.statSync(cdPath);
-    expect(f.state.getFor(`${CONFIG_DIR}/.gitignore`)?.mtime).toBe(
-      stat.mtimeMs,
-    );
-
-    // Next enforce() reads + splices + compares (there is no
-    // mtime/hash short-circuit). Splice produces the same content
-    // → no rewrite. Test verifies the post-splice equality short-
-    // circuit holds for canonical content.
-    const before = fs.readFileSync(cdPath, "utf8");
-    await f.inv.enforce();
-    expect(fs.readFileSync(cdPath, "utf8")).toBe(before);
-  });
-
-  it("invariant state survives across new instances (own .runtime file, write-through)", async () => {
-    await f.inv.enforce();
-    // No explicit save: InvariantStateStore persists on every set.
-
-    // New instance, fresh load.
-    const state2 = new InvariantStateStore({
-      vault: f.vault as unknown as import("obsidian").Vault,
-      selfPluginId: SELF,
-    });
-    await state2.load();
-    expect(state2.getFor(`${CONFIG_DIR}/.gitignore`)).toBeDefined();
-    expect(
-      state2.getFor(`${CONFIG_DIR}/plugins/${SELF}/.gitignore`),
-    ).toBeDefined();
-  });
 
   // ─── enforce() applies new canonical block on plugin upgrade ────────
   //
@@ -336,14 +283,10 @@ describe("GitignoreInvariants.enforce", () => {
     fs.writeFileSync(cdPath, staleBody + "\n");
     const staleStat = fs.statSync(cdPath);
 
-    // Seed the store to claim this exact stale content was what we
-    // recorded last enforce — the file's real mtime and size, so any
-    // "did anyone touch the FILE?" check says no. It has to rewrite
-    // anyway: what changed is what WE want, not what is on disk.
-    await f.state.set(`${CONFIG_DIR}/.gitignore`, {
-      mtime: staleStat.mtimeMs,
-      size: staleStat.size,
-    });
+    // Nothing about the FILE changed — same mtime, same size. It has
+    // to be rewritten anyway, because what changed is what WE want.
+    // (The cache that used to have to be tricked here is gone.)
+    void staleStat;
 
     // enforce() must re-splice the file and rewrite to current
     // canonical (which is wider than staleBody — contains
@@ -445,7 +388,6 @@ describe("§8.0 seed markers", () => {
   const fresh = async () => {
     const f = fixture();
     roots.push(f.root);
-    await f.state.load();
     await f.seeds.load();
     return f;
   };
@@ -550,7 +492,6 @@ describe("managed .gitignore writes are crash-safe (DOT-FILES §3.1.3)", () => {
 
   beforeEach(async () => {
     f = fixture();
-    await f.state.load();
   });
 
   afterEach(() => {
@@ -630,45 +571,30 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
 
   beforeEach(async () => {
     f = fixture();
-    await f.state.load();
   });
 
   afterEach(() => {
     fs.rmSync(f.root, { recursive: true, force: true });
   });
 
-  it("a fingerprint that no longer matches rewrites an UNTOUCHED file", async () => {
-    // The regression that killed the old short-circuit: a plugin upgrade
-    // changes the constant while the file on disk never moves, so
-    // mtime+size still agree and the new rules never ship. Here the
-    // record claims a body we no longer want — the pass must not believe
-    // the file is fresh.
+  it("a plugin upgrade reaches an UNTOUCHED file — the property the old cache kept getting wrong", async () => {
+    // The regression that killed the short-circuit TWICE: a plugin
+    // upgrade changes the canonical body while the file on disk never
+    // moves, so mtime+size still agree and the new rules never ship.
+    // The fix was a fingerprint cache; deleting that cache (2026-09-26)
+    // makes the whole class impossible — every pass reads and rebuilds.
+    // Kept as a test because the PROPERTY still matters, even though
+    // nothing can go wrong on this path any more.
     await f.inv.enforce();
     const rootPath = path.join(f.root, ".gitignore");
-    fs.writeFileSync(rootPath, `${sect("# something we never wrote")}\n`);
-    const stat = fs.statSync(rootPath);
-    await f.state.set(".gitignore", {
-      mtime: stat.mtimeMs,
-      size: stat.size,
-      invariants: await fingerprintOf("# a body from an older version"),
-    });
+    fs.writeFileSync(rootPath, `${sect("# a body from an older version")}\n`);
 
     await f.inv.enforce();
-    expect(fs.readFileSync(rootPath, "utf8")).toContain("*.conflict-from-*");
+    const after = fs.readFileSync(rootPath, "utf8");
+    expect(after).toContain("*.conflict-from-*");
+    expect(after).not.toContain("# a body from an older version");
   });
 
-  it("re-stats AFTER writing, so a settled file is not rewritten forever", async () => {
-    // A pre-write mtime in the record makes the next pass see "changed",
-    // rewrite, and record another pre-write mtime — for ever.
-    await f.inv.enforce();
-    const rootPath = path.join(f.root, ".gitignore");
-    const firstMtime = fs.statSync(rootPath).mtimeMs;
-
-    await new Promise((r) => setTimeout(r, 20));
-    await f.inv.enforce();
-    expect(fs.statSync(rootPath).mtimeMs).toBe(firstMtime);
-    expect(f.state.getFor(".gitignore")?.mtime).toBe(firstMtime);
-  });
 
   it("invalidates the matcher for the level it just wrote", async () => {
     // gi holds a parsed level by mtime for 500 ms, so without this the
@@ -677,7 +603,6 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
     const invalidated: (string | undefined)[] = [];
     const inv = new GitignoreInvariants({
       vault: f.vault as unknown as import("obsidian").Vault,
-      state: f.state,
       configDir: CONFIG_DIR,
       selfPluginId: SELF,
       seeds: f.seeds,
@@ -695,12 +620,16 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
   it("a third-party plugin's file is picked up by listing, not by a hardcoded name", async () => {
     fs.mkdirSync(foreignDir(f.root), { recursive: true });
     fs.writeFileSync(foreign(f.root), "*.map\n");
-    await f.inv.enforce();
-    // It entered the managed set...
-    expect(f.state.getFor(FOREIGN_REL)).toBeDefined();
-    // ...and nothing of theirs was touched: at syncConfigDir=ON we have
-    // no section to put there, so the file is byte-identical.
-    expect(fs.readFileSync(foreign(f.root), "utf8")).toBe("*.map\n");
+    // At syncConfigDir=ON we have nothing to write there, so "was it
+    // found?" would be unobservable. OFF makes the visit visible: the
+    // silencer appears in a file nobody named in any constant.
+    const off = fixture(false);
+    fs.rmSync(off.root, { recursive: true, force: true });
+    fs.cpSync(f.root, off.root, { recursive: true });
+    await off.inv.enforce();
+    expect(fs.readFileSync(foreign(off.root), "utf8")).toContain(
+      "# syncConfigDir is OFF on this device (git-easy-sync).",
+    );
   });
 
   it("we never CREATE a .gitignore in someone else's plugin folder", async () => {
@@ -711,7 +640,6 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
     fs.writeFileSync(path.join(foreignDir(f.root), "main.js"), "//");
     await f.inv.enforce();
     expect(fs.existsSync(foreign(f.root))).toBe(false);
-    expect(f.state.getFor(FOREIGN_REL)).toBeUndefined();
   });
 
   it("our silencer is REMOVED from a third-party file when it should not be there — the two lines and their separator", async () => {
@@ -748,16 +676,19 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
     expect(fs.readFileSync(foreign(f.root), "utf8")).toBe("");
   });
 
-  it("an uninstalled plugin's record is pruned, and no file is resurrected", async () => {
+  it("an uninstalled plugin leaves nothing behind, and no file is resurrected", async () => {
+    // There is no record to prune any more — the per-device state file
+    // went with the freshness cache (2026-09-26). What still has to hold
+    // is the half that was always the point: a vanished plugin folder is
+    // not recreated by the pass that used to manage its file.
     fs.mkdirSync(foreignDir(f.root), { recursive: true });
     fs.writeFileSync(foreign(f.root), "*.map\n");
     await f.inv.enforce();
-    expect(f.state.getFor(FOREIGN_REL)).toBeDefined();
 
     fs.rmSync(foreignDir(f.root), { recursive: true, force: true });
     await f.inv.enforce();
-    expect(f.state.getFor(FOREIGN_REL)).toBeUndefined();
     expect(fs.existsSync(foreign(f.root))).toBe(false);
+    expect(fs.existsSync(foreignDir(f.root))).toBe(false);
   });
 });
 
@@ -766,7 +697,6 @@ describe("section CONTENT: two strengths in the root file (DOT-FILES §3.1)", ()
 
   beforeEach(async () => {
     f = fixture();
-    await f.state.load();
   });
 
   afterEach(() => {
@@ -844,7 +774,6 @@ describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () =>
 
   beforeEach(async () => {
     f = fixture(false); // syncConfigDir OFF
-    await f.state.load();
     fs.mkdirSync(foreignDir(), { recursive: true });
     fs.writeFileSync(path.join(foreignDir(), ".gitignore"), "*.map\n");
     fs.writeFileSync(path.join(foreignDir(), "main.js"), "//");
@@ -897,7 +826,6 @@ describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () =>
     // pass has to converge from the OFF layout to the ON one.
     const inv = new GitignoreInvariants({
       vault: f.vault as unknown as import("obsidian").Vault,
-      state: f.state,
       configDir: CONFIG_DIR,
       selfPluginId: SELF,
       seeds: f.seeds,
@@ -925,7 +853,6 @@ describe("§12 Крок A done-criteria that the content tests above do not cove
 
   beforeEach(async () => {
     f = fixture();
-    await f.state.load();
   });
 
   afterEach(() => {
@@ -1018,7 +945,6 @@ describe("the per-device data.json switch (DOT-FILES §3.1.4)", () => {
   const invWith = () =>
     new GitignoreInvariants({
       vault: f.vault as unknown as import("obsidian").Vault,
-      state: f.state,
       configDir: CONFIG_DIR,
       selfPluginId: SELF,
       seeds: f.seeds,
@@ -1033,7 +959,6 @@ describe("the per-device data.json switch (DOT-FILES §3.1.4)", () => {
 
   beforeEach(async () => {
     f = fixture();
-    await f.state.load();
     push = false;
     syncConfigDir = true;
     fs.mkdirSync(path.join(f.root, CONFIG_DIR, "plugins", "brat"), {

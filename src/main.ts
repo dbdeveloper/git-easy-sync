@@ -32,7 +32,6 @@ import ChangeDetector from "./sync2/change-detector";
 import GitignoreInvariants from "./sync2/gitignore-invariants";
 import GitignoreSeedStore from "./sync2/gitignore-seeds";
 import DeletedStore from "./diff2/deleted-store";
-import InvariantStateStore from "./sync2/invariant-state";
 import { Sync2Manager } from "./sync2/sync2-manager";
 import { IntervalScheduler } from "./sync2/interval-scheduler";
 import ConflictStoreV2 from "./sync2/conflict-store-v2";
@@ -235,7 +234,6 @@ export default class GitHubSyncPlugin extends Plugin {
   // in-memory state after wiping .runtime/ (RESET-PLUGIN O2).
   hotMeta!: HotMetadataStore;
   baselines!: FileBaselinesStore;
-  invariantState!: InvariantStateStore;
   // §35 token-expiry UX. The old once-per-hour throttle is GONE: a
   // user-initiated Sync while the token is expired must re-open the modal
   // EVERY time (the field-reported "close it once, next Sync stays silent" bug).
@@ -848,7 +846,6 @@ export default class GitHubSyncPlugin extends Plugin {
         // bug). The Deleted bin re-reads below for the same reason.
         await this.hotMeta?.load();
         await this.baselines?.clear();
-        await this.invariantState?.load();
         await this.deletedStore?.load();
         // THE SWITCH: conflicts.json cache must also re-read the now-
         // empty disk, or the UI would resurrect pre-reset conflicts.
@@ -1020,12 +1017,6 @@ export default class GitHubSyncPlugin extends Plugin {
       // dedup, not filtered at commit time — an extra enqueue is the
       // accepted §6.3 churn.)
     });
-    const invariantState = new InvariantStateStore({
-      vault: this.app.vault,
-      selfPluginId: manifest.id,
-    });
-    await invariantState.load();
-    this.invariantState = invariantState;
     // DOT-FILES §8.0 — which managed .gitignore files are, right now,
     // exactly what we seeded. The drain uses them as fake ancestors so
     // a repo's own .gitignore is adopted instead of conflicting.
@@ -1037,7 +1028,6 @@ export default class GitHubSyncPlugin extends Plugin {
     this.gitignoreSeeds = gitignoreSeeds;
     this.invariants = new GitignoreInvariants({
       vault: this.app.vault,
-      state: invariantState,
       configDir: this.app.vault.configDir,
       selfPluginId: manifest.id,
       seeds: gitignoreSeeds,

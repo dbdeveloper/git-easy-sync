@@ -8,7 +8,6 @@ import HotMetadataStore from "../../src/sync2/hot-metadata";
 import FileBaselinesStore, {
   bucketIdForPath,
 } from "../../src/sync2/file-baselines";
-import InvariantStateStore from "../../src/sync2/invariant-state";
 import {
   hasResetMarker,
   removeResetMarker,
@@ -31,7 +30,6 @@ describe("reset (RESET-PLUGIN Phase 1.6)", () => {
   let vault: Vault;
   let hot: HotMetadataStore;
   let baselines: FileBaselinesStore;
-  let invariantState: InvariantStateStore;
 
   const pluginDir = (): string =>
     path.join(dir, ".obsidian", "plugins", PLUGIN_ID);
@@ -49,7 +47,6 @@ describe("reset (RESET-PLUGIN Phase 1.6)", () => {
     reinitStores: async () => {
       await hot.load();
       await baselines.clear();
-      await invariantState.load();
     },
   });
 
@@ -62,11 +59,6 @@ describe("reset (RESET-PLUGIN Phase 1.6)", () => {
       vault: vault as never,
       selfPluginId: PLUGIN_ID,
     });
-    invariantState = new InvariantStateStore({
-      vault: vault as never,
-      selfPluginId: PLUGIN_ID,
-    });
-    await invariantState.load();
   });
 
   afterEach(() => {
@@ -86,7 +78,6 @@ describe("reset (RESET-PLUGIN Phase 1.6)", () => {
       mtime: 1,
       size: 1,
     });
-    await invariantState.set(".gitignore", { mtime: 7, size: 77 });
     // A stray file no store knows about — D1's whole point.
     fs.writeFileSync(
       path.join(runtimeAbs(), "some-future-artifact.json"),
@@ -117,7 +108,6 @@ describe("reset (RESET-PLUGIN Phase 1.6)", () => {
     expect(hot.getLastSyncCommitSha()).toBeNull();
     expect(hot.getConflictBranch()).toBeNull();
     expect(await baselines.get("Notes/ghost.md")).toBeUndefined();
-    expect(invariantState.get()).toEqual({});
 
     // ...and operations that trigger write-through re-persist NOTHING
     // from before the reset.
@@ -127,7 +117,6 @@ describe("reset (RESET-PLUGIN Phase 1.6)", () => {
       mtime: 2,
       size: 2,
     });
-    await invariantState.set(".obsidian/.gitignore", { mtime: 9, size: 99 });
 
     const everything: string[] = [];
     const walk = (d: string): void => {

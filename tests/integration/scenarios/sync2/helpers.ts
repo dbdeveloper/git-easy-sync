@@ -26,7 +26,6 @@ import FileBaselinesStore from "../../../../src/sync2/file-baselines";
 import ChangeDetector from "../../../../src/sync2/change-detector";
 import GitignoreInvariants from "../../../../src/sync2/gitignore-invariants";
 import GitignoreSeedStore from "../../../../src/sync2/gitignore-seeds";
-import InvariantStateStore from "../../../../src/sync2/invariant-state";
 import ConflictStoreV2 from "../../../../src/sync2/conflict-store-v2";
 import BatchWriter from "../../../../src/sync2/batch-writer";
 import BatchHistorySource from "../../../../src/sync2/batch-history-source";
@@ -188,11 +187,6 @@ export async function createSync2Client(
         (await managerRef?.peekLatestPathSha(p)) ?? null,
     },
   });
-  const invariantState = new InvariantStateStore({
-    vault,
-    selfPluginId: SELF_PLUGIN_ID,
-  });
-  await invariantState.load();
   // DOT-FILES §8.0 — the fixture MUST carry the same composition the
   // product has. An earlier shape of this fix was optional here, the
   // harness silently skipped it, and the live probe failed on both
@@ -204,7 +198,6 @@ export async function createSync2Client(
   await gitignoreSeeds.load();
   const invariants = new GitignoreInvariants({
     vault,
-    state: invariantState,
     configDir: CONFIG_DIR,
     selfPluginId: SELF_PLUGIN_ID,
     seeds: gitignoreSeeds,

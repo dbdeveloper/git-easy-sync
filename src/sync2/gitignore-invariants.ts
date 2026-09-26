@@ -4,10 +4,6 @@
 
 import { Vault } from "obsidian";
 import { calculateGitBlobSHA } from "../utils";
-import InvariantStateStore, {
-  InvariantFileState,
-  SectionId,
-} from "./invariant-state";
 import GitignoreSeedStore from "./gitignore-seeds";
 import {
   assembleManagedSections,
@@ -289,7 +285,6 @@ $RECYCLE.BIN/
 
 export interface GitignoreInvariantsDeps {
   vault: Vault;
-  state: InvariantStateStore;
   configDir: string;
   selfPluginId: string;
   // DOT-FILES §8.0 seed markers. REQUIRED, not optional — learned the
@@ -340,6 +335,11 @@ type ManagedSectionSet = {
   remove?: ManagedSection[];
 };
 
+// Which of the two managed sections a report or a marker set refers to.
+// Lived in invariant-state.ts until that store was deleted; it was never
+// about state, only about naming a section.
+export type SectionId = "invariants" | "final";
+
 export interface SectionAnomalyReport {
   path: string;
   section: SectionId;
@@ -358,7 +358,6 @@ export interface SectionAnomalyReport {
 //                next enforce() sees an immediate cache hit.
 export default class GitignoreInvariants {
   private readonly vault: Vault;
-  private readonly state: InvariantStateStore;
   private readonly configDirGitignorePath: string;
   private readonly selfPluginGitignorePath: string;
   // Root <vault>/.gitignore. Bare ".gitignore" — relative to vault root.
@@ -374,7 +373,6 @@ export default class GitignoreInvariants {
 
   constructor(deps: GitignoreInvariantsDeps) {
     this.vault = deps.vault;
-    this.state = deps.state;
     this.seeds = deps.seeds;
     this.onAnomaly = deps.onAnomaly;
     this.gi = deps.gi;
@@ -421,7 +419,6 @@ export default class GitignoreInvariants {
     for (const path of await this.foreignPluginGitignores()) {
       await this.enforceForeignPluginGitignore(path);
     }
-    await this.pruneVanishedRecords();
   }
 
   // Third-party `<configDir>/plugins/<id>/.gitignore` files that EXIST
@@ -447,43 +444,6 @@ export default class GitignoreInvariants {
       if (await this.vault.adapter.exists(candidate)) out.push(candidate);
     }
     return out;
-  }
-
-  // A plugin was uninstalled: its folder and .gitignore are gone. Drop
-  // the record — keeping a fingerprint would be a claim about a file
-  // that no longer exists, and the next install of the same plugin
-  // would then be measured against a stranger's bytes.
-  private async pruneVanishedRecords(): Promise<void> {
-    for (const path of Object.keys(this.state.get())) {
-      if (
-        path === this.rootGitignorePath ||
-        path === this.configDirGitignorePath ||
-        path === this.selfPluginGitignorePath ||
-        path === this.pluginsDirGitignorePath
-      ) {
-        continue;
-      }
-      if (!(await this.vault.adapter.exists(path))) {
-        await this.state.remove(path);
-      }
-    }
-  }
-
-  // Called by Sync2Manager.recordSync after a successful self-push of
-  // one of the invariant files. Updates the cached mtime+hash so the
-  // next sync's enforce() short-circuits without re-reading.
-  async notePathSelfWritten(path: string): Promise<void> {
-    if (
-      path === this.configDirGitignorePath ||
-      path === this.selfPluginGitignorePath ||
-      path === this.rootGitignorePath
-    ) {
-      // No section bodies to record: what landed here came from a pull,
-      // not from us. Any fingerprint already on file is kept — it is
-      // only ever used as a repair anchor, and a stale one simply fails
-      // to match, which declines the repair. Safe direction.
-      await this.refreshState(path);
-    }
   }
 
   // ── internal ────────────────────────────────────────────────────────
@@ -512,7 +472,6 @@ export default class GitignoreInvariants {
       // ordinary path below, which adds our sections and nothing else.
       const content = this.seedFor(path)!;
       await this.write(path, content);
-      await this.refreshState(path, { final: body });
       await this.noteSeedState(path, content);
       return;
     }
@@ -523,18 +482,15 @@ export default class GitignoreInvariants {
     // plugin upgrade that changes the constant while the file sits
     // untouched, which is why the short-circuit had to be removed and
     // can now come back.
-    if (await this.isFresh(path, stat, { final: body })) return;
 
     const content = await this.vault.adapter.read(path);
 
     const fixed = this.assemble(path, content);
     if (fixed === content) {
-      await this.refreshState(path, { final: body });
       await this.noteSeedState(path, content);
       return;
     }
     await this.write(path, fixed);
-    await this.refreshState(path, { final: body });
     await this.noteSeedState(path, fixed);
   }
 
@@ -560,7 +516,6 @@ export default class GitignoreInvariants {
       // and takes the ordinary path.
       const content = this.seedFor(path)!;
       await this.write(path, content);
-      await this.refreshState(path, sections);
       await this.noteSeedState(path, content);
       return;
     }
@@ -568,18 +523,15 @@ export default class GitignoreInvariants {
     // Same freshness gate as configDir — see the comment there for why
     // the fingerprint half is load-bearing (a plugin upgrade changes a
     // body while the file on disk never moves).
-    if (await this.isFresh(path, stat, sections)) return;
 
     const content = await this.vault.adapter.read(path);
 
     const fixed = this.assemble(path, content);
     if (fixed === content) {
-      await this.refreshState(path, sections);
       await this.noteSeedState(path, content);
       return;
     }
     await this.write(path, fixed);
-    await this.refreshState(path, sections);
     await this.noteSeedState(path, fixed);
   }
 
@@ -593,7 +545,6 @@ export default class GitignoreInvariants {
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
       await this.write(path, canonical);
-      await this.refreshState(path);
       return;
     }
     // No freshness short-circuit, for the same reason as the self-plugin
@@ -601,11 +552,9 @@ export default class GitignoreInvariants {
     // whole-file fingerprint the record does not carry.
     const content = await this.vault.adapter.read(path);
     if (content === canonical) {
-      await this.refreshState(path);
       return;
     }
     await this.write(path, canonical);
-    await this.refreshState(path);
   }
 
   private async enforceSelfPluginGitignore(): Promise<void> {
@@ -615,7 +564,6 @@ export default class GitignoreInvariants {
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
       await this.write(path, canonical);
-      await this.refreshState(path);
       return;
     }
 
@@ -627,14 +575,12 @@ export default class GitignoreInvariants {
     const content = await this.vault.adapter.read(path);
     if (content === canonical) {
       // Already canonical — refresh cache only.
-      await this.refreshState(path);
       return;
     }
 
     // Sync2 owns this file outright — overwrite anything the user (or
     // anything else) wrote into it.
     await this.write(path, canonical);
-    await this.refreshState(path);
   }
 
   // ── DOT-FILES §8.0 seed markers ─────────────────────────────────
@@ -770,7 +716,6 @@ export default class GitignoreInvariants {
     const stat = await this.vault.adapter.stat(path);
     if (!stat) return; // vanished between list and stat — pruned below
     const body = this.foreignPluginFinalBody();
-    if (await this.isFresh(path, stat, { final: body })) return;
 
     const content = await this.vault.adapter.read(path);
     // Two lines, recognised back as exactly two lines. See
@@ -781,87 +726,15 @@ export default class GitignoreInvariants {
       body !== null,
     );
     if (fixed === content) {
-      await this.refreshState(path, { final: body ?? undefined });
       return;
     }
     await this.write(path, fixed);
-    await this.refreshState(path, { final: body ?? undefined });
   }
 
   // Desired body of our section inside a FOREIGN plugin's .gitignore.
   // null = the section must not be there at all.
   private foreignPluginFinalBody(): string | null {
     return foreignPluginFinalBodyFor(this.syncConfigDir());
-  }
-
-  // Cheap freshness gate (§3.1.2): skip the read and the hashing when
-  // the file has not moved AND what we want from it has not changed.
-  //
-  // Both halves are needed, and the second is the one that was missing
-  // before. `mtime`+`size` answer "did anyone touch the FILE?" — they
-  // are blind to a plugin upgrade that changes the constant while the
-  // file on disk sits untouched, which is exactly how the new rules
-  // failed to reach disk and why the short-circuit was ripped out
-  // (`void recorded`) instead of fixed. Comparing the recorded
-  // fingerprint against what we NOW want closes that hole, so the
-  // short-circuit can come back.
-  //
-  // `desired` maps a section to the body we want, `null`/undefined
-  // meaning "this section must not exist" — in which case freshness
-  // requires the record to carry no fingerprint for it either.
-  private async isFresh(
-    path: string,
-    stat: { mtime: number; size: number },
-    desired: Partial<Record<SectionId, string | null>>,
-  ): Promise<boolean> {
-    const rec = this.state.getFor(path);
-    if (!rec) return false;
-    if (rec.mtime !== stat.mtime || rec.size !== stat.size) return false;
-    for (const [id, body] of Object.entries(desired) as Array<
-      [SectionId, string | null | undefined]
-    >) {
-      const recorded = rec[id];
-      if (body === null || body === undefined) {
-        if (recorded) return false;
-        continue;
-      }
-      if (!recorded) return false;
-      const want = await fingerprintOf(body);
-      if (recorded.sha !== want.sha || recorded.len !== want.len) return false;
-    }
-    return true;
-  }
-
-  // Record what the file looks like NOW, keyed by its path.
-  //
-  // ⚠️ The stat MUST happen after the write, never before — a pre-write
-  // mtime makes the next pass see "changed", rewrite, and record another
-  // pre-write mtime, forever (DOT-FILES §3.1.2).
-  //
-  // `bodies` carries the section bodies we just composed, and only
-  // those: a section not named here keeps whatever fingerprint was on
-  // file. That matters for notePathSelfWritten, which fires after a PULL
-  // — we did not author those bytes, so we must not claim we did, and a
-  // stale fingerprint is harmless because it can only ever decline a
-  // repair by failing to match.
-  private async refreshState(
-    path: string,
-    bodies?: Partial<Record<SectionId, string>>,
-  ): Promise<void> {
-    const stat = await this.vault.adapter.stat(path);
-    if (!stat) return;
-    const previous = this.state.getFor(path);
-    const record: InvariantFileState = {
-      mtime: stat.mtime,
-      size: stat.size,
-      ...(previous?.invariants ? { invariants: previous.invariants } : {}),
-      ...(previous?.final ? { final: previous.final } : {}),
-    };
-    for (const id of ["invariants", "final"] as const) {
-      const body = bodies?.[id];
-      if (body !== undefined) record[id] = await fingerprintOf(body);
-    }
-    await this.state.set(path, record);
   }
 
   // Every write to a managed .gitignore goes through the crash-safe
@@ -987,24 +860,6 @@ export type SpliceAnomaly =
 export interface SpliceResult {
   content: string;
   anomalies: SpliceAnomaly[];
-}
-
-// Fingerprint of one section BODY: the git blob SHA over its bytes and
-// that byte count. They travel together because calculateGitBlobSHA
-// binds the length into its preimage (`blob <len>\0`), so `len` cannot
-// be forged apart from `sha`. UTF-8 bytes, deliberately — see the note
-// in invariant-state.ts.
-export async function fingerprintOf(
-  body: string,
-): Promise<{ sha: string; len: number }> {
-  const bytes = enc.encode(body);
-  const sha = await calculateGitBlobSHA(
-    bytes.buffer.slice(
-      bytes.byteOffset,
-      bytes.byteOffset + bytes.byteLength,
-    ) as ArrayBuffer,
-  );
-  return { sha, len: bytes.byteLength };
 }
 
 // Pure helpers for the "Push plugins data.json" toggle. Both work

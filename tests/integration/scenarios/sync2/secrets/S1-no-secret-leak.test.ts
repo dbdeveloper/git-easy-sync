@@ -46,7 +46,6 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 import GitignoreInvariants from "../../../../../src/sync2/gitignore-invariants";
-import InvariantStateStore from "../../../../../src/sync2/invariant-state";
 import GitignoreSeedStore from "../../../../../src/sync2/gitignore-seeds";
 
 const CONFIG_DIR = ".obsidian";
@@ -152,10 +151,6 @@ describe.skipIf(!integrationEnabled())("sync2 S1 — no secret leak", () => {
   const invariantsFor = (c: Sync2TestClient, pushDataJson = false) =>
     new GitignoreInvariants({
       vault: c.vault,
-      state: new InvariantStateStore({
-        vault: c.vault,
-        selfPluginId: SELF,
-      }),
       configDir: CONFIG_DIR,
       selfPluginId: SELF,
       seeds: new GitignoreSeedStore({
