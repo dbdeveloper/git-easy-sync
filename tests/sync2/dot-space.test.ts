@@ -230,6 +230,22 @@ describe("readRootGitignore", () => {
     expect(warnings[0].data).toMatchObject({ rule: "!.test/" });
   });
 
+  it("🔑 our OWN `!<configDir>/` is not warned about — it is unanchored on purpose", async () => {
+    // The config subtree joins the opt-in set from the SETTING, never
+    // from a rule; that line exists only so git agrees with us. Field
+    // report 2026-09-26: the warning fired on our own rule every pass,
+    // four times in a single sync.
+    w(".gitignore", `!${CONFIG_DIR}/\n`);
+    const warnings: string[] = [];
+    await readRootGitignore({
+      vault: vault as unknown as import("obsidian").Vault,
+      configDir: CONFIG_DIR,
+      syncConfigDir: () => true,
+      logger: { warn: (m) => warnings.push(m) },
+    });
+    expect(warnings).toEqual([]);
+  });
+
   it("an ANCHORED rule is accepted and says nothing — the warning is for refusals only", async () => {
     mkdir(".test");
     w(".gitignore", "!/.test/\n");

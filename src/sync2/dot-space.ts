@@ -173,10 +173,17 @@ export async function readRootGitignore(
     const target = classifyRule(rule, onDisk);
     if (target.kind === "file") dotFiles.add(target.path);
     else if (target.kind === "dir") walkTargets.add(target.path);
-    else {
+    else if (addressed.path !== deps.configDir) {
       // It addresses a real dot-path (addressedPath said so) and still
       // grants nothing — so the user wrote something that LOOKS right,
       // git would honour it, and we deliberately do not. Say so.
+      //
+      // ⚠️ EXCEPT `!<configDir>/`, which is OURS and deliberately
+      // unanchored. The config subtree joins the opt-in set from the
+      // SETTING (§6), never from a rule; that line exists only so git
+      // agrees with us about the same tree. Field report 2026-09-26:
+      // without this the plugin warned about its own rule on every
+      // single pass — four times in one sync.
       deps.logger?.warn(
         "gitignore: this rule does not make a dot-path syncable — " +
           "anchor it with a leading slash, e.g. `!/name/` instead of " +
