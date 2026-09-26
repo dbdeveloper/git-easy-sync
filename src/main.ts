@@ -21,6 +21,7 @@ import {
 } from "./diff2/history-deleted-lifecycle";
 import { GitHubSyncSettings, DEFAULT_SETTINGS } from "./settings/settings";
 import GitHubSyncSettingsTab from "./settings/tab";
+import { pluginsDataJsonToggleState } from "./settings/toggle-rules";
 import Logger from "./logger";
 import { describeError, calculateGitBlobSHA } from "./utils";
 import GithubClient from "./github/client";
@@ -778,11 +779,22 @@ export default class GitHubSyncPlugin extends Plugin {
     // covers the trailing-space case since `owner/repo` no longer
     // matches anything). Rewrite once on load so existing installs
     // self-heal without forcing the user to re-type each field.
+    //
+    // The same pass also repairs a violated toggle subordination. "Sync
+    // plugins data.json" is enforced at the UI (settings/toggle-rules.ts),
+    // so a value written by an OLDER build can break the rule: an install
+    // carrying `(syncConfigDir: false, pushPluginsDataJson: true)` renders
+    // the child off and greyed, but the first flip of the parent back ON
+    // would honour the stored `true` and silently resume publishing
+    // credentials — exactly what the rule exists to prevent. The UI can
+    // only police transitions it witnessed; persisted state has to be
+    // normalised on the way in.
     const before = JSON.stringify({
       t: this.settings.githubToken,
       o: this.settings.githubOwner,
       r: this.settings.githubRepo,
       b: this.settings.githubBranch,
+      d: this.settings.pushPluginsDataJson,
     });
     this.settings.githubToken = (this.settings.githubToken ?? "").trim();
     this.settings.githubOwner = (this.settings.githubOwner ?? "").trim();
@@ -790,11 +802,16 @@ export default class GitHubSyncPlugin extends Plugin {
     // bug-60: an empty branch field defaults to `main` — the branch the
     // first sync creates on a fresh repo, and what the Test-probe assumes.
     this.settings.githubBranch = (this.settings.githubBranch ?? "").trim() || "main";
+    this.settings.pushPluginsDataJson = pluginsDataJsonToggleState(
+      this.settings.syncConfigDir ?? true,
+      this.settings.pushPluginsDataJson ?? false,
+    ).value;
     const after = JSON.stringify({
       t: this.settings.githubToken,
       o: this.settings.githubOwner,
       r: this.settings.githubRepo,
       b: this.settings.githubBranch,
+      d: this.settings.pushPluginsDataJson,
     });
     if (before !== after) await this.saveSettings();
   }

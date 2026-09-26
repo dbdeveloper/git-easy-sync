@@ -533,6 +533,25 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     // can drive it. Assignment happens in the same synchronous render
     // pass, well before any onChange can fire.
     let dataJsonToggle: ToggleComponent | null = null;
+    // ⚠️ VERIFIED against obsidian.asar (app.js), 2026-09-26 — do not
+    // "simplify" this away:
+    //
+    //   setValue = function(e){ return this.on!==e && (this.on=e,
+    //     this.toggleEl.toggleClass("is-enabled",e),
+    //     changeCallback.call(this,e)), this }
+    //
+    // setValue FIRES onChange whenever the value actually changes. So
+    // the parent driving the child below would re-enter the child's
+    // handler, un-awaited — a second saveSettings and a second
+    // enforce() running CONCURRENTLY with the parent's. Two overlapping
+    // enforce() passes write the same gitignores through remove+rename,
+    // which is the Capacitor rename race (mobile rules) inside the very
+    // feature this adds. The flag is only ever held across a synchronous
+    // setValue call, so it cannot leak past a suspension point.
+    //
+    // Unpinned by tests on purpose: mock-obsidian's addToggle never
+    // invokes its callback, so a stub could only prove the stub.
+    let drivingDataJsonToggle = false;
 
     new Setting(containerEl)
       .setName("Sync configs (.obsidian/ folder)")
@@ -557,7 +576,12 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
               this.plugin.settings.pushPluginsDataJson ?? false,
             );
             this.plugin.settings.pushPluginsDataJson = sub.value;
-            dataJsonToggle?.setValue(sub.value);
+            drivingDataJsonToggle = true;
+            try {
+              dataJsonToggle?.setValue(sub.value);
+            } finally {
+              drivingDataJsonToggle = false;
+            }
             dataJsonToggle?.setDisabled(sub.disabled);
             await this.plugin.saveSettings();
             // Both values just moved, so the two gitignores under the
@@ -602,6 +626,10 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
         toggle.setValue(initial.value);
         toggle.setDisabled(initial.disabled);
         toggle.onChange(async (value) => {
+          // Re-entered by the parent's setValue (see above). The parent
+          // persists and enforces for both; doing it again here would
+          // race it.
+          if (drivingDataJsonToggle) return;
           this.plugin.settings.pushPluginsDataJson = value;
           await this.plugin.saveSettings();
           // Materialise it into <configDir>/plugins/.gitignore right
