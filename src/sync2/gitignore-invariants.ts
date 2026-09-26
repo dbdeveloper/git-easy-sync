@@ -481,12 +481,15 @@ export default class GitignoreInvariants {
 
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
-      // Fresh install: seed the recommended defaults, then our section
-      // BELOW them — the order that makes our rules outrank the
-      // catch-all those defaults contain.
-      const content =
-        `${CONFIG_DIR_RECOMMENDED_DEFAULTS}\n\n` +
-        `${composeSection(FINAL_BEGIN, body, FINAL_END)}\n`;
+      // Fresh install: the recommended defaults, then our section BELOW
+      // them — the order that makes our rules outrank the catch-all
+      // those defaults contain. Taken from seedFor so the bytes we write
+      // and the bytes the marker expects cannot disagree.
+      //
+      // ⚠️ MISSING is not EMPTY. A zero-length .gitignore is the user's
+      // decision ("I do not want your recommendations") and takes the
+      // ordinary path below, which adds our sections and nothing else.
+      const content = this.seedFor(path)!;
       await this.write(path, content);
       await this.refreshState(path, { final: body });
       await this.noteSeedState(path, content);
@@ -536,11 +539,11 @@ export default class GitignoreInvariants {
     if (!stat) {
       // Fresh install: dot-hide policy on top, recommended OS/editor
       // noise defaults in the middle (the user's zone), the final rules
-      // at the bottom.
-      const content =
-        `${composeSection(INVARIANTS_BEGIN, ROOT_INVARIANTS_BODY, INVARIANTS_END)}\n\n` +
-        `${ROOT_RECOMMENDED_DEFAULTS}\n\n` +
-        `${composeSection(FINAL_BEGIN, finalBody, FINAL_END)}\n`;
+      // at the bottom — from seedFor, the single source (see there).
+      //
+      // ⚠️ MISSING is not EMPTY: an empty file is the user's decision
+      // and takes the ordinary path.
+      const content = this.seedFor(path)!;
       await this.write(path, content);
       await this.refreshState(path, sections);
       await this.noteSeedState(path, content);
@@ -637,37 +640,47 @@ export default class GitignoreInvariants {
   // enforce() deliberately leaves alone (anything outside our block)
   // must drop the claim on the very next pass.
   //
-  // Returns the candidate seed contents for a path — plural for
-  // <configDir>/.gitignore, whose canonical form differs only by the
-  // data.json toggle line, and EMPTY for anything we do not seed
-  // (notably <self>/.gitignore, a constant that never negotiates).
-  private canonicalSeeds(path: string): string[] {
+  // THE canonical content of a managed file: what the plugin writes
+  // when the file does not exist yet, and — the same bytes, the same
+  // call — what §8.0's seed marker compares against.
+  //
+  // ⚠️ ONE source, and that is the point. This layout used to be spelled
+  // out in THREE places, each joining `\n\n` by hand: the fresh-install
+  // branch for the root file, the one for <configDir>, and the seed
+  // reference. Nothing compared them. A disagreement of a single blank
+  // line would not fail anything — it would simply stop the marker from
+  // ever being set, and the cold-start manual conflict §8.0 exists to
+  // prevent would come back, days later, on another device, with no
+  // trace in the log.
+  //
+  // Returns null for files we do not seed: <self>/.gitignore and
+  // <configDir>/plugins/.gitignore are constants the plugin owns
+  // outright and never negotiates, so they have no ancestor to offer.
+  private seedFor(path: string): string | null {
     const top = (body: string) =>
       composeSection(INVARIANTS_BEGIN, body, INVARIANTS_END);
     const bottom = (body: string) =>
       composeSection(FINAL_BEGIN, body, FINAL_END);
     if (path === this.rootGitignorePath) {
-      return [
+      return (
         `${top(ROOT_INVARIANTS_BODY)}\n\n` +
-          `${ROOT_RECOMMENDED_DEFAULTS}\n\n` +
-          `${bottom(rootFinalBody(this.configDir))}\n`,
-      ];
+        `${ROOT_RECOMMENDED_DEFAULTS}\n\n` +
+        `${bottom(rootFinalBody(this.configDir))}\n`
+      );
     }
     if (path === this.configDirGitignorePath) {
-      // ONE candidate now: the body stopped depending on the data.json
-      // toggle when that switch became per-device (§3.1.4).
-      return [
+      return (
         `${CONFIG_DIR_RECOMMENDED_DEFAULTS}\n\n` +
-          `${bottom(configDirFinalBody({ syncConfigDir: this.syncConfigDir() }))}\n`,
-      ];
+        `${bottom(configDirFinalBody({ syncConfigDir: this.syncConfigDir() }))}\n`
+      );
     }
-    return [];
+    return null;
   }
 
   private async noteSeedState(path: string, content: string): Promise<void> {
-    const candidates = this.canonicalSeeds(path);
-    if (candidates.length === 0) return; // not a seeded file
-    if (!candidates.includes(content)) {
+    const seed = this.seedFor(path);
+    if (seed === null) return; // not a seeded file
+    if (seed !== content) {
       await this.seeds.clear(path);
       return;
     }
