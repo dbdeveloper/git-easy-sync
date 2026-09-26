@@ -43,8 +43,9 @@ export interface AssembleResult {
   // Texts of lines deleted because they duplicated one of ours. The
   // caller logs these — see the note on presupposition (2).
   removed: string[];
-  // BEGIN markers whose interior was dropped wholesale because both of
-  // that section's markers were present (the version-migration path).
+  // BEGIN markers whose interior was dropped because both of that
+  // section's markers were found. Informational only — the drop is
+  // unconditional, not a mode.
   replacedSections: string[];
 }
 
@@ -114,15 +115,19 @@ function purge(
   }
 }
 
-// Drop the interior of a section whose BOTH markers are present — the
-// version-migration path. The markers themselves stay: they are template
-// lines, and the assembly below relocates them like any other.
+// Found a marker pair? Drop everything between them. Unconditionally —
+// there is no second path here and no "migration mode" to look for.
 //
-// With the interior gone, every body line is simply MISSING, so the
-// assembly creates it — the replacement is seamless. When either marker
-// is absent (an older version's markers differ), this does nothing and
-// the ordinary path applies: rules that match ours textually are drawn
-// into place, and the unrecognised markers stay in user space.
+// That one rule is why an older version's block replaces seamlessly: the
+// interior goes, every body line is then simply MISSING, and the
+// assembly below creates it like any other absent line. Nothing knows or
+// cares that the old content came from a different version.
+//
+// The markers themselves stay put: they are template lines too, and the
+// assembly relocates them like the rest. When a marker is absent (an
+// older version whose marker TEXT differs), this finds nothing and the
+// ordinary path applies — rules matching ours textually are drawn into
+// place, the unrecognised markers stay in user space.
 function dropSectionInterior(
   lines: string[],
   section: ManagedSection,
