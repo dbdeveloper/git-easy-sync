@@ -769,7 +769,17 @@ export default class GitignoreInvariants {
     if (await this.isFresh(path, stat, { final: body })) return;
 
     const content = await this.vault.adapter.read(path);
-    const fixed = await this.spliceOne(path, content, body, FINAL_SECTION);
+    // guestFile: this file belongs to another plugin's author. We place
+    // (or remove) our section and touch nothing else — in particular we
+    // do NOT purge lines that merely look like ours, because here they
+    // are theirs.
+    const final = { begin: FINAL_BEGIN, end: FINAL_END, body };
+    const fixed = assembleManagedSections(
+      content,
+      body === null
+        ? { remove: [{ ...final, body: "" }], guestFile: true }
+        : { final: { ...final, body }, guestFile: true },
+    ).content;
     if (fixed === content) {
       await this.refreshState(path, { final: body ?? undefined });
       return;
@@ -820,27 +830,6 @@ export default class GitignoreInvariants {
       if (recorded.sha !== want.sha || recorded.len !== want.len) return false;
     }
     return true;
-  }
-
-  // Splice ONE section of `path`, feeding the repair its recorded
-  // fingerprint and reporting whatever the splice found wrong.
-  private async spliceOne(
-    path: string,
-    existing: string,
-    body: string | null,
-    markers: SectionMarkers = INVARIANTS_SECTION,
-  ): Promise<string> {
-    const sectionId = markers.id;
-    const { content, anomalies } = await spliceSection({
-      existing,
-      markers,
-      body,
-      recorded: this.state.getFor(path)?.[sectionId],
-    });
-    for (const anomaly of anomalies) {
-      this.onAnomaly({ path, section: sectionId, anomaly });
-    }
-    return content;
   }
 
   // Record what the file looks like NOW, keyed by its path.
@@ -982,33 +971,6 @@ function dropLeadingNewline(text: string): string {
   return text;
 }
 
-// Cut EVERY well-formed BEGIN..END pair. Returns the remaining text and
-// how many pairs were removed.
-//
-// "Every", not "the first", is a deliberate inversion of the older rule
-// ("cut the first, leave the rest, report"). That was safer when the
-// section was replaced IN PLACE; now the section is PLACED, so a pair we
-// left behind could sit below ours and override it by last-match. Extra
-// pairs still get reported by the caller — they mean manual editing.
-function cutAllPairs(
-  existing: string,
-  markers: SectionMarkers,
-): { rest: string; cut: number } {
-  let rest = existing;
-  let cut = 0;
-  for (;;) {
-    const b = rest.indexOf(markers.begin);
-    if (b === -1) break;
-    const e = rest.indexOf(markers.end, b + markers.begin.length);
-    if (e === -1) break; // orphan BEGIN — not ours to guess at here
-    rest =
-      rest.slice(0, b) +
-      dropLeadingNewline(rest.slice(e + markers.end.length));
-    cut++;
-  }
-  return { rest, cut };
-}
-
 // Why the section was not brought to canonical cleanly. The caller logs
 // loudly and shows the user a notice: we will NOT guess where a damaged
 // section ended, because the text below a marker is the user's.
@@ -1027,57 +989,6 @@ export interface SpliceResult {
   anomalies: SpliceAnomaly[];
 }
 
-// Bring one managed section to canonical:
-//   - cut every well-formed pair, wherever it sits in the file;
-//   - if a marker is orphaned, try to cut the old body by the recorded
-//     {len, sha} (§3.1.3) — and if that does not match, leave it alone
-//     and report;
-//   - place `body` at the section's assigned position (null = delete).
-//
-// Async because the repair hashes a candidate span with the same
-// calculateGitBlobSHA the fingerprints were written with.
-export async function spliceSection(args: {
-  existing: string;
-  markers: SectionMarkers;
-  // null deletes the section — e.g. a foreign plugin's file at
-  // syncConfigDir=ON, where our section must go away entirely rather
-  // than linger empty.
-  body: string | null;
-  // Fingerprint of the body WE last wrote, from the freshness store.
-  // Absent on a first run, after a state loss, or on the very first
-  // upgrade to this shape — in which case orphan repair cannot run and
-  // the damaged text is left for the user.
-  recorded?: { sha: string; len: number };
-}): Promise<SpliceResult> {
-  const { markers, body, recorded } = args;
-  const anomalies: SpliceAnomaly[] = [];
-
-  const { rest: afterPairs, cut } = cutAllPairs(args.existing, markers);
-  if (cut > 1) anomalies.push("multiple-pairs");
-
-  let rest = afterPairs;
-  if (cut === 0 && rest.includes(markers.begin)) {
-    const repaired = await repairOrphanBegin(rest, markers, recorded);
-    rest = repaired.text;
-    anomalies.push(
-      repaired.ok ? "orphan-repaired" : "orphan-unrepairable",
-    );
-  }
-
-  const user = normalizeBody(rest);
-  if (body === null) return { content: user, anomalies };
-
-  const block = composeSection(markers.begin, body, markers.end);
-  if (user === "") return { content: `${block}\n`, anomalies };
-  return {
-    content:
-      markers.placement === "top"
-        ? `${block}\n\n${user}`
-        : `${user}\n${block}\n`,
-    anomalies,
-  };
-}
-
 // Fingerprint of one section BODY: the git blob SHA over its bytes and
 // that byte count. They travel together because calculateGitBlobSHA
 // binds the length into its preimage (`blob <len>\0`), so `len` cannot
@@ -1094,54 +1005,6 @@ export async function fingerprintOf(
     ) as ArrayBuffer,
   );
   return { sha, len: bytes.byteLength };
-}
-
-// An orphaned BEGIN (the user deleted END, or a crash truncated the
-// file) is NOT a harmless "we'll just write a fresh section": the stale
-// body stays in the file, and after we place the new section it can end
-// up overriding it. So we identify the old body by the ONE thing we
-// recorded about it — its byte length and its blob SHA — and cut exactly
-// that span.
-//
-// The measurement is over the body WITHOUT markers, which is what makes
-// this work at all: a missing END simply never enters the span.
-async function repairOrphanBegin(
-  text: string,
-  markers: SectionMarkers,
-  recorded: { sha: string; len: number } | undefined,
-): Promise<{ text: string; ok: boolean }> {
-  if (!recorded) return { text, ok: false };
-  const b = text.indexOf(markers.begin);
-  // The body starts right after the BEGIN line, i.e. past its newline.
-  const bodyStart = b + markers.begin.length + 1;
-  if (text[b + markers.begin.length] !== "\n") return { text, ok: false };
-
-  // Slice `len` UTF-8 BYTES, not characters. If the span straddles a
-  // multi-byte character the decode yields U+FFFD and the SHA will not
-  // match — which is the right answer: it was not our body.
-  const tailBytes = enc.encode(text.slice(bodyStart));
-  if (tailBytes.byteLength < recorded.len) return { text, ok: false };
-  const candidateBytes = tailBytes.slice(0, recorded.len);
-  const sha = await calculateGitBlobSHA(
-    candidateBytes.buffer.slice(
-      candidateBytes.byteOffset,
-      candidateBytes.byteOffset + candidateBytes.byteLength,
-    ) as ArrayBuffer,
-  );
-  if (sha !== recorded.sha) return { text, ok: false };
-
-  const candidate = dec.decode(candidateBytes);
-  let cutEnd = bodyStart + candidate.length;
-  // Take a trailing END too when it sits immediately after the body,
-  // which is the shape a half-written file leaves behind.
-  const afterBody = text.slice(cutEnd);
-  if (afterBody.startsWith(`\n${markers.end}`)) {
-    cutEnd += 1 + markers.end.length;
-  }
-  return {
-    text: text.slice(0, b) + dropLeadingNewline(text.slice(cutEnd)),
-    ok: true,
-  };
 }
 
 // Pure helpers for the "Push plugins data.json" toggle. Both work

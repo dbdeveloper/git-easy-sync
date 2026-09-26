@@ -151,7 +151,11 @@ function dropSectionInterior(
 // would match the first blank anywhere below and delete it — collapsing
 // the user's formatting into a wall. They exist in the template to be
 // CONSTRUCTED, nothing more.
-function placeTop(lines: string[], section: ManagedSection): number {
+function placeTop(
+  lines: string[],
+  section: ManagedSection,
+  purging: boolean,
+): number {
   const template = [section.begin, ...section.body.split("\n"), section.end];
   template.forEach((line, i) => {
     // ⚠️ A line ALREADY at its canonical position is left alone, not
@@ -163,7 +167,7 @@ function placeTop(lines: string[], section: ManagedSection): number {
       if (!inPlace) lines.splice(i, 0, line);
       return;
     }
-    purge(lines, line, inPlace ? i + 1 : i, () => lines.length);
+    if (purging) purge(lines, line, inPlace ? i + 1 : i, () => lines.length);
     if (!inPlace) lines.splice(i, 0, line);
   });
   return template.length;
@@ -176,6 +180,7 @@ function placeBottom(
   lines: string[],
   section: ManagedSection,
   lowerBound: number,
+  purging: boolean,
 ): void {
   const template = [section.begin, ...section.body.split("\n"), section.end];
   for (let k = 0; k < template.length; k++) {
@@ -190,7 +195,7 @@ function placeBottom(
     // ⚠️ Computed LIVE: purge shrinks the array under us, and a bound
     // captured before it would point past the end.
     const until = () => lines.length - k - (inPlace ? 1 : 0);
-    purge(lines, line, lowerBound, until);
+    if (purging) purge(lines, line, lowerBound, until);
     if (!inPlace) lines.splice(lines.length - k, 0, line);
   }
 }
@@ -281,6 +286,14 @@ export function assembleManagedSections(
     // would keep its per-device lines in force ABOVE the section that is
     // supposed to be the only authority in that file.
     remove?: ManagedSection[];
+    // ⚠️ THIRD-PARTY FILE. Presupposition (2) — "a second copy of one of
+    // our rules is meaningless, so remove it" — holds only in files that
+    // are OURS. In a plugin author's own .gitignore a line that looks
+    // like ours is THEIRS, and the standing promise for those files is
+    // "we touch EXACTLY our section and nothing else". Set this and the
+    // purge is skipped: the section is placed (or removed) and every
+    // other line is left exactly where its author put it.
+    guestFile?: boolean;
   },
 ): AssembleResult {
   const lines = toLines(existing);
@@ -299,7 +312,9 @@ export function assembleManagedSections(
   // presupposition (2) makes deliberate would become the silent kind.
   // Counting first sidesteps the question entirely: `total - need` is
   // how many copies stopped existing, whoever wrote them.
-  const removed = countExtras(lines, present);
+  const removed = sections.guestFile === true
+    ? []
+    : countExtras(lines, present);
 
   for (const section of sections.remove ?? []) {
     dropSectionEntirely(lines, section);
@@ -311,17 +326,26 @@ export function assembleManagedSections(
     }
   }
 
+  const purging = sections.guestFile !== true;
   let lowerBound = 0;
   if (sections.invariants) {
-    lowerBound = placeTop(lines, sections.invariants);
+    lowerBound = placeTop(lines, sections.invariants, purging);
     separateBelow(lines, lowerBound);
   }
   if (sections.final) {
     const height =
       2 + sections.final.body.split("\n").length;
-    placeBottom(lines, sections.final, lowerBound);
+    placeBottom(lines, sections.final, lowerBound, purging);
     separateAbove(lines, lines.length - height);
   }
 
+  // Trailing blanks are trimmed at BOTH ends of the work, not only when
+  // reading. Removing a section (a guest file losing ours, a stray
+  // `invariants` leaving <configDir>) can expose a blank that was its
+  // separator, and a file that gains a trailing newline on every pass is
+  // a diff on every sync.
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "") {
+    lines.pop();
+  }
   return { content: `${lines.join("\n")}\n`, removed, replacedSections };
 }

@@ -233,6 +233,44 @@ describe("§3.1.5 blank-line handling", () => {
 });
 
 
+describe("§3.1.5 a GUEST file — someone else's .gitignore", () => {
+  const GUEST = { final: BOTTOM, guestFile: true as const };
+
+  it("🔑 a line that LOOKS like ours is THEIRS — it is not purged", () => {
+    // Presupposition (2) holds only in files that are ours. The standing
+    // promise for a plugin author's own .gitignore is "we touch exactly
+    // our section and nothing else"; purging there would delete their
+    // line because it happened to match our text.
+    const theirs = ["*.conflict-from-*", "*.map"].join("\n");
+    const r = assembleManagedSections(theirs, GUEST);
+    expect(r.removed).toEqual([]);
+    expect(r.content).toContain("*.conflict-from-*\n*.map");
+  });
+
+  it("…while in OUR file the same line IS a duplicate and goes", () => {
+    // The block must already exist for a second copy to BE a second
+    // copy: in a file with no block, the lone occurrence simply becomes
+    // ours and nothing is destroyed.
+    const ours = assembleManagedSections("*.map", { final: BOTTOM }).content;
+    const r = assembleManagedSections(
+      `${ours}*.conflict-from-*\n`,
+      { final: BOTTOM },
+    );
+    expect(r.removed).toEqual(["*.conflict-from-*"]);
+  });
+
+  it("removing our section from a guest file leaves NO trailing blank", () => {
+    // The separator that stood above our section must go with it, or
+    // the file gains a newline on every pass — a diff on every sync.
+    const withOurs = assembleManagedSections("*.map", GUEST).content;
+    const r = assembleManagedSections(withOurs, {
+      remove: [{ ...BOTTOM, body: "" }],
+      guestFile: true,
+    });
+    expect(r.content).toBe("*.map\n");
+  });
+});
+
 describe("§3.1.5 single-section files", () => {
   it("a file with ONLY a final section anchors it to EOF and leaves the top alone", () => {
     const r = assembleManagedSections("user.md\n", { final: BOTTOM });
