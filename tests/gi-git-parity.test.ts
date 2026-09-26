@@ -225,6 +225,49 @@ describe.skipIf(!gitAvailable())("GI ↔ real git parity", () => {
     });
   });
 
+  it("🔑 the anchored `!/<configDir>/` hides a NESTED .obsidian — measured, not assumed", () => {
+    // Raised in review 2026-09-26. Every other `.obsidian` in this file
+    // is root-level, so changing ROOT_BOTTOM from `!.obsidian/` to
+    // `!/.obsidian/` passed parity TRIVIALLY — green without measuring
+    // the one thing the edit changed. A fixture that cannot tell the two
+    // spellings apart does not verify a rule about anchoring.
+    //
+    // `notes/.obsidian/` is the discriminator: unanchored, git re-admits
+    // it at any depth; anchored, it stays under `.*` / `.*/`. The walker
+    // only ever admits the ROOT config dir, so anchored is the spelling
+    // that matches what the plugin actually does.
+    const P = "notes/.obsidian/app.json";
+    const base = {
+      ...VAULT_FILES,
+      [P]: "{}",
+      ".obsidian/.gitignore": CONFIG_DEFAULTS + CONFIG_FINAL_ON,
+      ".obsidian/plugins/git-easy-sync/.gitignore": SELF_ALLOWLIST,
+      ".obsidian/plugins/brat/.gitignore": "*.map\n",
+    };
+
+    // The shipped spelling: hidden, and our matcher agrees with git.
+    const shipped = {
+      ...base,
+      ".gitignore": ROOT_TOP + ROOT_DEFAULTS + ROOT_BOTTOM,
+    };
+    expectParity(shipped);
+    expect(bothVerdicts(shipped).git.get(P), `git ignores ${P}`).toBe(true);
+
+    // The old spelling, asserted on git ALONE — this is what proves the
+    // fixture discriminates. No parity claim here: it is not our config,
+    // and D5 is free to diverge from git on a nested config dir.
+    const old = {
+      ...base,
+      ".gitignore":
+        ROOT_TOP +
+        ROOT_DEFAULTS +
+        ROOT_BOTTOM.replace("!/.obsidian/", "!.obsidian/"),
+    };
+    expect(bothVerdicts(old).git.get(P), `git TRACKS ${P} unanchored`).toBe(
+      false,
+    );
+  });
+
   it("a user rule between the two root sections: overrides the top, not the bottom", () => {
     // The asymmetry the whole two-section split exists for, measured
     // against git rather than against our own matcher.
