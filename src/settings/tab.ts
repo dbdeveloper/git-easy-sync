@@ -7,6 +7,7 @@ import {
   App,
   Setting,
   TextComponent,
+  ToggleComponent,
   Notice,
   Modal,
   requestUrl,
@@ -15,6 +16,7 @@ import GitHubSyncPlugin from "src/main";
 import { logFileNameFor } from "src/logger";
 import { formatSyncMessage } from "src/sync2/commit-message";
 import { renderTokenHelpBox } from "src/sync2/views/token-help";
+import { pluginsDataJsonToggleState } from "src/settings/toggle-rules";
 import { tokenExpiredMessage } from "src/token-expired-flag";
 import {
   probeGitHubConnection,
@@ -527,6 +529,11 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           }),
       );
 
+    // Captured when the subordinate toggle below is built, so the parent
+    // can drive it. Assignment happens in the same synchronous render
+    // pass, well before any onChange can fire.
+    let dataJsonToggle: ToggleComponent | null = null;
+
     new Setting(containerEl)
       .setName("Sync configs (.obsidian/ folder)")
       .setDesc(
@@ -543,7 +550,25 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           .setValue(this.plugin.settings.syncConfigDir ?? true)
           .onChange(async (value) => {
             this.plugin.settings.syncConfigDir = value;
+            // Drive the subordinate toggle (see toggle-rules.ts): OFF
+            // forces data.json off, ON only makes it reachable again.
+            const sub = pluginsDataJsonToggleState(
+              value,
+              this.plugin.settings.pushPluginsDataJson ?? false,
+            );
+            this.plugin.settings.pushPluginsDataJson = sub.value;
+            dataJsonToggle?.setValue(sub.value);
+            dataJsonToggle?.setDisabled(sub.disabled);
             await this.plugin.saveSettings();
+            // Both values just moved, so the two gitignores under the
+            // config folder are now stale. Materialise immediately, for
+            // the same reason the data.json toggle does it: `git status`
+            // should agree with the checkboxes without waiting for a sync.
+            try {
+              await this.plugin.invariants?.enforce();
+            } catch (err) {
+              new Notice(`Could not update gitignore: ${err}`);
+            }
           });
       });
 
@@ -558,7 +583,9 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
         "A plugin can still overrule it from its own .gitignore, in " +
         "either direction. " +
         "The data.json file for THIS plugin is ALWAYS blocked from syncing (it contains " +
-        "a GitHub token); this toggle never affects that.",
+        "a GitHub token); this toggle never affects that. " +
+        "Requires \"Sync configs\" above: turning that OFF switches this off too " +
+        "and greys it out, and turning it back ON does not re-enable this by itself.",
       )
       .addToggle((toggle) => {
         // Per-device now (DOT-FILES §3.1.4), so the value is read
@@ -567,7 +594,13 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
         // async resolution triggers an infinite re-entry inside
         // Obsidian's settings pipeline that freezes the renderer; a
         // plain field read cannot.)
-        toggle.setValue(this.plugin.settings.pushPluginsDataJson ?? false);
+        dataJsonToggle = toggle;
+        const initial = pluginsDataJsonToggleState(
+          this.plugin.settings.syncConfigDir ?? true,
+          this.plugin.settings.pushPluginsDataJson ?? false,
+        );
+        toggle.setValue(initial.value);
+        toggle.setDisabled(initial.disabled);
         toggle.onChange(async (value) => {
           this.plugin.settings.pushPluginsDataJson = value;
           await this.plugin.saveSettings();
