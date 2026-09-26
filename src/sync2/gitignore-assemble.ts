@@ -151,11 +151,7 @@ function dropSectionInterior(
 // would match the first blank anywhere below and delete it — collapsing
 // the user's formatting into a wall. They exist in the template to be
 // CONSTRUCTED, nothing more.
-function placeTop(
-  lines: string[],
-  section: ManagedSection,
-  purging: boolean,
-): number {
+function placeTop(lines: string[], section: ManagedSection): number {
   const template = [section.begin, ...section.body.split("\n"), section.end];
   template.forEach((line, i) => {
     // ⚠️ A line ALREADY at its canonical position is left alone, not
@@ -167,7 +163,7 @@ function placeTop(
       if (!inPlace) lines.splice(i, 0, line);
       return;
     }
-    if (purging) purge(lines, line, inPlace ? i + 1 : i, () => lines.length);
+    purge(lines, line, inPlace ? i + 1 : i, () => lines.length);
     if (!inPlace) lines.splice(i, 0, line);
   });
   return template.length;
@@ -180,7 +176,6 @@ function placeBottom(
   lines: string[],
   section: ManagedSection,
   lowerBound: number,
-  purging: boolean,
 ): void {
   const template = [section.begin, ...section.body.split("\n"), section.end];
   for (let k = 0; k < template.length; k++) {
@@ -195,7 +190,7 @@ function placeBottom(
     // ⚠️ Computed LIVE: purge shrinks the array under us, and a bound
     // captured before it would point past the end.
     const until = () => lines.length - k - (inPlace ? 1 : 0);
-    if (purging) purge(lines, line, lowerBound, until);
+    purge(lines, line, lowerBound, until);
     if (!inPlace) lines.splice(lines.length - k, 0, line);
   }
 }
@@ -286,14 +281,6 @@ export function assembleManagedSections(
     // would keep its per-device lines in force ABOVE the section that is
     // supposed to be the only authority in that file.
     remove?: ManagedSection[];
-    // ⚠️ THIRD-PARTY FILE. Presupposition (2) — "a second copy of one of
-    // our rules is meaningless, so remove it" — holds only in files that
-    // are OURS. In a plugin author's own .gitignore a line that looks
-    // like ours is THEIRS, and the standing promise for those files is
-    // "we touch EXACTLY our section and nothing else". Set this and the
-    // purge is skipped: the section is placed (or removed) and every
-    // other line is left exactly where its author put it.
-    guestFile?: boolean;
   },
 ): AssembleResult {
   const lines = toLines(existing);
@@ -312,9 +299,7 @@ export function assembleManagedSections(
   // presupposition (2) makes deliberate would become the silent kind.
   // Counting first sidesteps the question entirely: `total - need` is
   // how many copies stopped existing, whoever wrote them.
-  const removed = sections.guestFile === true
-    ? []
-    : countExtras(lines, present);
+  const removed = countExtras(lines, present);
 
   for (const section of sections.remove ?? []) {
     dropSectionEntirely(lines, section);
@@ -326,16 +311,15 @@ export function assembleManagedSections(
     }
   }
 
-  const purging = sections.guestFile !== true;
   let lowerBound = 0;
   if (sections.invariants) {
-    lowerBound = placeTop(lines, sections.invariants, purging);
+    lowerBound = placeTop(lines, sections.invariants);
     separateBelow(lines, lowerBound);
   }
   if (sections.final) {
     const height =
       2 + sections.final.body.split("\n").length;
-    placeBottom(lines, sections.final, lowerBound, purging);
+    placeBottom(lines, sections.final, lowerBound);
     separateAbove(lines, lines.length - height);
   }
 
@@ -348,4 +332,68 @@ export function assembleManagedSections(
     lines.pop();
   }
   return { content: `${lines.join("\n")}\n`, removed, replacedSections };
+}
+
+// ── A THIRD-PARTY plugin's own .gitignore ───────────────────────────
+//
+// Not the section machinery above, deliberately. In someone else's file
+// we write exactly TWO lines and recognise exactly those two lines back
+// — no markers, no purge, no layout rules. The comment IS the signature
+// (owner, 2026-09-26: "решта тексту НЕ ЧІПАЄМО ВЗАГАЛІ").
+//
+//   <comment>
+//   *
+//
+// Recognition is strict and counts BLANK LINES: the file's last line
+// must be `*` and the one above it our comment. Anything else — a blank
+// after them, a rule appended below, our older marker-wrapped form — is
+// NOT ours to touch, and we leave the file exactly as it is.
+//
+// The strictness is the feature. A looser match would eventually delete
+// a line an author wrote, and this file is theirs.
+export const FOREIGN_SILENCER_RULE = "*";
+
+export function applyForeignSilencer(
+  content: string,
+  comment: string,
+  want: boolean,
+): string {
+  // An EMPTY file behaves exactly like a missing one: we do nothing
+  // (owner, 2026-09-26). A plugin folder with no rules of its own is
+  // already covered by <configDir>/.gitignore, so there is nothing for
+  // a silencer to add — and writing into an empty third-party file
+  // would be the most gratuitous touch of all.
+  if (content.trim() === "") return content;
+
+  const lines = content.split("\n");
+  // A final newline is a TERMINATOR, not a blank line. A genuine
+  // trailing blank leaves a second empty element behind — and that is
+  // exactly the case the strict rule must refuse.
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+
+  const n = lines.length;
+  const present =
+    n >= 2 && lines[n - 1] === FOREIGN_SILENCER_RULE && lines[n - 2] === comment;
+
+  if (want === present) return content; // nothing to do — do nothing
+
+  if (want) {
+    // One blank line between their content and ours, by the same rule
+    // as everywhere else: add it only when there is not one already,
+    // and never at the top of an empty file.
+    if (lines.length > 0 && lines[lines.length - 1].trim() !== "") {
+      lines.push("");
+    }
+    lines.push(comment, FOREIGN_SILENCER_RULE);
+  } else {
+    lines.splice(n - 2, 2);
+    // Take the separator back with them, or the file grows a blank line
+    // every time the setting is toggled. A trailing blank carries no
+    // meaning in a gitignore, so this cannot cost the author anything.
+    while (lines.length > 0 && lines[lines.length - 1].trim() === "") {
+      lines.pop();
+    }
+  }
+
+  return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
 }

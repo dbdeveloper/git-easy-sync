@@ -8,6 +8,7 @@
 import { describe, it, expect } from "vitest";
 import {
   assembleManagedSections,
+  applyForeignSilencer,
   ManagedSection,
 } from "../../src/sync2/gitignore-assemble";
 
@@ -233,44 +234,6 @@ describe("§3.1.5 blank-line handling", () => {
 });
 
 
-describe("§3.1.5 a GUEST file — someone else's .gitignore", () => {
-  const GUEST = { final: BOTTOM, guestFile: true as const };
-
-  it("🔑 a line that LOOKS like ours is THEIRS — it is not purged", () => {
-    // Presupposition (2) holds only in files that are ours. The standing
-    // promise for a plugin author's own .gitignore is "we touch exactly
-    // our section and nothing else"; purging there would delete their
-    // line because it happened to match our text.
-    const theirs = ["*.conflict-from-*", "*.map"].join("\n");
-    const r = assembleManagedSections(theirs, GUEST);
-    expect(r.removed).toEqual([]);
-    expect(r.content).toContain("*.conflict-from-*\n*.map");
-  });
-
-  it("…while in OUR file the same line IS a duplicate and goes", () => {
-    // The block must already exist for a second copy to BE a second
-    // copy: in a file with no block, the lone occurrence simply becomes
-    // ours and nothing is destroyed.
-    const ours = assembleManagedSections("*.map", { final: BOTTOM }).content;
-    const r = assembleManagedSections(
-      `${ours}*.conflict-from-*\n`,
-      { final: BOTTOM },
-    );
-    expect(r.removed).toEqual(["*.conflict-from-*"]);
-  });
-
-  it("removing our section from a guest file leaves NO trailing blank", () => {
-    // The separator that stood above our section must go with it, or
-    // the file gains a newline on every pass — a diff on every sync.
-    const withOurs = assembleManagedSections("*.map", GUEST).content;
-    const r = assembleManagedSections(withOurs, {
-      remove: [{ ...BOTTOM, body: "" }],
-      guestFile: true,
-    });
-    expect(r.content).toBe("*.map\n");
-  });
-});
-
 describe("§3.1.5 single-section files", () => {
   it("a file with ONLY a final section anchors it to EOF and leaves the top alone", () => {
     const r = assembleManagedSections("user.md\n", { final: BOTTOM });
@@ -282,5 +245,60 @@ describe("§3.1.5 single-section files", () => {
   it("…and is idempotent too", () => {
     const once = assembleManagedSections("user.md\n", { final: BOTTOM }).content;
     expect(assembleManagedSections(once, { final: BOTTOM }).content).toBe(once);
+  });
+});
+
+describe("applyForeignSilencer — a third-party plugin's own .gitignore", () => {
+  const C = "# syncConfigDir is OFF on this device (git-easy-sync).";
+  const add = (content: string) => applyForeignSilencer(content, C, true);
+  const drop = (content: string) => applyForeignSilencer(content, C, false);
+
+  it("adds exactly two lines, with one blank separating them from their content", () => {
+    expect(add("*.map\n")).toBe(`*.map\n\n${C}\n*\n`);
+  });
+
+  it("does not double a separator that is already there", () => {
+    expect(add("*.map\n\n")).toBe(`*.map\n\n${C}\n*\n`);
+  });
+
+  it("🔑 removal is exactly the inverse of addition — the separator goes too", () => {
+    // Without taking the blank back, toggling the setting would grow the
+    // file by one line every time.
+    const theirs = "*.map\n";
+    expect(drop(add(theirs))).toBe(theirs);
+  });
+
+  it("idempotent both ways", () => {
+    const on = add("*.map\n");
+    expect(add(on)).toBe(on);
+    expect(drop(drop(on))).toBe("*.map\n");
+  });
+
+  it("🔑 recognition counts BLANK LINES: a trailing blank means it is not ours", () => {
+    // `*` is no longer the last line, so the strict rule refuses — and
+    // refusing is right: we cannot prove those two lines are the ones
+    // we wrote.
+    const notOurs = `*.map\n\n${C}\n*\n\n`;
+    expect(drop(notOurs)).toBe(notOurs);
+  });
+
+  it("🔑 the comment must be DIRECTLY above — a rule in between makes it theirs", () => {
+    const notOurs = `${C}\n*.map\n*\n`;
+    expect(drop(notOurs)).toBe(notOurs);
+  });
+
+  it("a `*` with no comment above is the AUTHOR's rule and survives", () => {
+    const theirs = "*.map\n*\n";
+    expect(drop(theirs)).toBe(theirs);
+  });
+
+  it("an EMPTY file is left alone, exactly like a missing one", () => {
+    expect(add("")).toBe("");
+    expect(drop("")).toBe("");
+    expect(add("\n")).toBe("\n");
+  });
+
+  it("removal that empties the file leaves it empty, not a stray newline", () => {
+    expect(drop(`${C}\n*\n`)).toBe("");
   });
 });

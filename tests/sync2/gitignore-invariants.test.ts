@@ -714,18 +714,38 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
     expect(f.state.getFor(FOREIGN_REL)).toBeUndefined();
   });
 
-  it("our section is REMOVED from a third-party file when it should not be there", async () => {
-    // Left behind by an earlier version, or by the toggle having been
-    // OFF. "Should not be there" means gone, not an empty marked block.
+  it("our silencer is REMOVED from a third-party file when it should not be there — the two lines and their separator", async () => {
+    // Owner rule 2026-09-26: in someone else's file we write exactly
+    // two lines and recognise exactly those two back. The separator
+    // goes with them, or toggling the setting grows a blank line each
+    // time.
     fs.mkdirSync(foreignDir(f.root), { recursive: true });
     fs.writeFileSync(
       foreign(f.root),
-      `*.map\n\n${FINAL_BEGIN}\n*\n${FINAL_END}\n`,
+      `*.map\n\n# syncConfigDir is OFF on this device (git-easy-sync).\n*\n`,
     );
     await f.inv.enforce();
-    const after = fs.readFileSync(foreign(f.root), "utf8");
-    expect(after).toBe("*.map\n");
-    expect(after).not.toContain(FINAL_BEGIN);
+    expect(fs.readFileSync(foreign(f.root), "utf8")).toBe("*.map\n");
+  });
+
+  it("the OLD marker-wrapped form in a third-party file is NOT ours to touch", async () => {
+    // Strictness is the point: the recogniser is "last line is `*`,
+    // the one above is our comment". A marker block does not match, so
+    // the file is left exactly as it is. Owner: "приберу руками" —
+    // leftovers are preferable to a looser match that would one day
+    // delete a line the plugin's author wrote.
+    fs.mkdirSync(foreignDir(f.root), { recursive: true });
+    const old = `*.map\n\n${FINAL_BEGIN}\n*\n${FINAL_END}\n`;
+    fs.writeFileSync(foreign(f.root), old);
+    await f.inv.enforce();
+    expect(fs.readFileSync(foreign(f.root), "utf8")).toBe(old);
+  });
+
+  it("an EMPTY third-party .gitignore is left alone, exactly like a missing one", async () => {
+    fs.mkdirSync(foreignDir(f.root), { recursive: true });
+    fs.writeFileSync(foreign(f.root), "");
+    await f.inv.enforce();
+    expect(fs.readFileSync(foreign(f.root), "utf8")).toBe("");
   });
 
   it("an uninstalled plugin's record is pruned, and no file is resurrected", async () => {
@@ -848,13 +868,17 @@ describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () =>
     expect(self).toContain(FINAL_BEGIN);
     expect(self.indexOf("!main.js")).toBeLessThan(self.indexOf(FINAL_BEGIN));
 
-    // A third party's file: our section only, their rules untouched.
+    // A third party's file: TWO lines of ours at the end, their rules
+    // untouched, and NO markers — those belong in files that are ours.
     const foreign = fs.readFileSync(
       path.join(foreignDir(), ".gitignore"),
       "utf8",
     );
     expect(foreign).toContain("*.map");
-    expect(foreign).toContain(FINAL_BEGIN);
+    expect(foreign).not.toContain(FINAL_BEGIN);
+    expect(foreign.endsWith(
+      "# syncConfigDir is OFF on this device (git-easy-sync).\n*\n",
+    )).toBe(true);
   });
 
   it("and the matcher agrees: nothing under configDir is visible", async () => {

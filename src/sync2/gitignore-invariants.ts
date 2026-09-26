@@ -11,6 +11,7 @@ import InvariantStateStore, {
 import GitignoreSeedStore from "./gitignore-seeds";
 import {
   assembleManagedSections,
+  applyForeignSilencer,
   ManagedSection,
 } from "./gitignore-assemble";
 import { atomicWriteFile } from "./atomic-write";
@@ -147,10 +148,13 @@ community-plugins.json`;
 // Only the OFF silencer ever goes here. Their node speaks last for
 // everything under their folder, so an allowlist of theirs (`!main.js`
 // and friends) would otherwise survive the `*` we put in <configDir>.
+// The one line that marks the silencer as OURS in a file that is not.
+const FOREIGN_SILENCER_COMMENT =
+  "# syncConfigDir is OFF on this device (git-easy-sync).";
+
 function foreignPluginFinalBodyFor(syncConfigDir: boolean): string | null {
   if (syncConfigDir) return null;
-  return `# syncConfigDir is OFF on this device (git-easy-sync).
-*`;
+  return `${FOREIGN_SILENCER_COMMENT}\n*`;
 }
 
 // Recommended defaults seeded ONLY when sync2 first creates
@@ -769,17 +773,13 @@ export default class GitignoreInvariants {
     if (await this.isFresh(path, stat, { final: body })) return;
 
     const content = await this.vault.adapter.read(path);
-    // guestFile: this file belongs to another plugin's author. We place
-    // (or remove) our section and touch nothing else — in particular we
-    // do NOT purge lines that merely look like ours, because here they
-    // are theirs.
-    const final = { begin: FINAL_BEGIN, end: FINAL_END, body };
-    const fixed = assembleManagedSections(
+    // Two lines, recognised back as exactly two lines. See
+    // applyForeignSilencer for why this file gets no section machinery.
+    const fixed = applyForeignSilencer(
       content,
-      body === null
-        ? { remove: [{ ...final, body: "" }], guestFile: true }
-        : { final: { ...final, body }, guestFile: true },
-    ).content;
+      FOREIGN_SILENCER_COMMENT,
+      body !== null,
+    );
     if (fixed === content) {
       await this.refreshState(path, { final: body ?? undefined });
       return;
