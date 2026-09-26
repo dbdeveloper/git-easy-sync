@@ -69,8 +69,13 @@ src/
 ├── settings/
 │   ├── settings.ts                  # GitHubSyncSettings + DEFAULT_SETTINGS (syncStartsWithCommit,
 │   │                                #  showCommitRibbonButton, consolidateCommits, maxAutoMergeSizeBytes)
+│   ├── toggle-rules.ts              # "Sync plugins data.json" is SUBORDINATE to "Sync configs":
+│   │                                #  parent OFF forces it off + greys it, ON only makes it
+│   │                                #  reachable. Pure, because tab.ts has no render harness.
 │   └── tab.ts                       # Settings UI (trim onChange, Reset modal, GitHub sync status section,
-│                                    #  Performance group with max-auto-merge KB input)
+│                                    #  Performance group with max-auto-merge KB input).
+│                                    #  ⚠️ ToggleComponent.setValue FIRES onChange (verified vs
+│                                    #  obsidian.asar) — driving one toggle from another needs a guard.
 ├── worker/                          # Web Worker orchestra (SYNC2 §8). esbuild emits each entry
 │   ├── types.ts                     #  point as an IIFE, inlines as string via `define`, runtime wraps in Blob URL.
 │   ├── cpu-worker.ts                # CPU pool: decode-base64, compute-git-blob-sha, merge-text (bundles node-diff3)
@@ -123,7 +128,6 @@ src/
     ├── reset.ts                     # RESET-PLUGIN core: drain guard → marker → rmdir .runtime
     ├── hot-metadata.ts              # 2-slot ping-pong metadata-{a,b}.json (monotonic seq)
     ├── file-baselines.ts            # 64 FNV-1a cold buckets + MRU; group ops are the PRIMARY API
-    ├── invariant-state.ts           # gitignore-invariants.json freshness marks
     ├── interval-scheduler.ts        # Periodic tick + onload startup (testable in isolation)
     ├── change-detector.ts           # Vault walk + findChanges + the queue-dedup bridge;
     │                                #  isSyncable (D6/D7) + the Pass-2 belt. SYNC2 §13.
@@ -136,6 +140,12 @@ src/
     │                                #  bottom) + the per-device plugins/.gitignore switch;
     │                                #  always-write enforce; §8.0 seed markers; runs before
     │                                #  commit AND drain. SYNC2 §13.2
+    ├── gitignore-assemble.ts        # LINE-WISE re-seating of those two sections: each template
+    │                                #  line is purged from the rest of the file before being
+    │                                #  placed (top anchored to line 1, `final` to EOF), so a
+    │                                #  rule of ours can never exist twice. Idempotent — which
+    │                                #  is why the old freshness cache (`invariant-state.ts`)
+    │                                #  could be deleted rather than fixed.
     ├── commit-message.ts            # Hardcoded format* helpers (Sync/Conflict/Merge/Init at …)
     ├── atomic-write.ts              # 5-step atomicWriteFile + stagingPathFor + AtomicWriteRecovery
     │                                #  (modify-in-place fast path preserves editor cursor/scroll)

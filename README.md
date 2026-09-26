@@ -475,6 +475,14 @@ Settings tab layout matches what you'll see in Obsidian under
   these files frequently store API tokens, account credentials,
   and license keys. Our own `data.json` is **always** blocked
   regardless of this toggle.
+  **Requires *Sync configs* above.** Turning that off switches this
+  off too and greys it out — with the config folder silenced, this
+  setting cannot do anything anyway, and a switch that looks ON
+  while doing nothing is the worst possible answer to "are my
+  secrets being published?". Turning *Sync configs* back on makes
+  this one available again but leaves it **off**: resuming the
+  publication of credentials is your decision to make again, not
+  something that should happen as a side effect.
   **Per-device**, like *Sync configs*: turning it on here leaves
   your other machines alone, so you can share plugin settings
   between two devices out of ten. A plugin can still overrule the
