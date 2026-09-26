@@ -171,19 +171,20 @@ export async function readRootGitignore(
     if (!addressed) continue;
     const onDisk = await statKind(deps.vault, addressed.path);
     const target = classifyRule(rule, onDisk);
+    // `<configDir>` is settings-owned (line above) and NO rule may grant
+    // it — not ours, not a hand-written one. Our own `!/<configDir>/` is
+    // anchored so git agrees with the walker about the same tree, but
+    // membership still comes from the toggle alone; without this skip an
+    // anchored rule would land in the `dir` branch and quietly override
+    // "Sync config: off". Its mirror one level down (`*` at the end of
+    // <configDir>/.gitignore) is what actually enforces OFF for content.
+    if (addressed.path === deps.configDir) continue;
     if (target.kind === "file") dotFiles.add(target.path);
     else if (target.kind === "dir") walkTargets.add(target.path);
-    else if (addressed.path !== deps.configDir) {
+    else {
       // It addresses a real dot-path (addressedPath said so) and still
       // grants nothing — so the user wrote something that LOOKS right,
       // git would honour it, and we deliberately do not. Say so.
-      //
-      // ⚠️ EXCEPT `!<configDir>/`, which is OURS and deliberately
-      // unanchored. The config subtree joins the opt-in set from the
-      // SETTING (§6), never from a rule; that line exists only so git
-      // agrees with us about the same tree. Field report 2026-09-26:
-      // without this the plugin warned about its own rule on every
-      // single pass — four times in one sync.
       deps.logger?.warn(
         "gitignore: this rule does not make a dot-path syncable — " +
           "anchor it with a leading slash, e.g. `!/name/` instead of " +

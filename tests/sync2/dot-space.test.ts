@@ -230,20 +230,43 @@ describe("readRootGitignore", () => {
     expect(warnings[0].data).toMatchObject({ rule: "!.test/" });
   });
 
-  it("🔑 our OWN `!<configDir>/` is not warned about — it is unanchored on purpose", async () => {
-    // The config subtree joins the opt-in set from the SETTING, never
-    // from a rule; that line exists only so git agrees with us. Field
-    // report 2026-09-26: the warning fired on our own rule every pass,
-    // four times in a single sync.
-    w(".gitignore", `!${CONFIG_DIR}/\n`);
-    const warnings: string[] = [];
-    await readRootGitignore({
+  // `<configDir>` membership is settings-owned. Both halves below pin
+  // the SAME invariant from the two sides that can break it, and both
+  // are live: our shipped `final` section carries `!/<configDir>/`, so
+  // the anchored case is not hypothetical.
+  it("🔑 NO rule grants <configDir> — anchored, with the toggle off, it stays out", async () => {
+    // Danger found 2026-09-26 while anchoring our own rule: anchored, it
+    // classifies as a `dir` target, and that branch adds unconditionally
+    // — which would have let a line in a SHARED file silently override a
+    // PER-DEVICE "Sync config: off".
+    mkdir(CONFIG_DIR);
+    w(".gitignore", `!/${CONFIG_DIR}/\n`);
+    const set = await readRootGitignore({
       vault: vault as unknown as import("obsidian").Vault,
       configDir: CONFIG_DIR,
-      syncConfigDir: () => true,
-      logger: { warn: (m) => warnings.push(m) },
+      syncConfigDir: () => false,
+      logger: { warn: () => {} },
     });
-    expect(warnings).toEqual([]);
+    expect(set.walkTargets.has(CONFIG_DIR)).toBe(false);
+  });
+
+  it("🔑 …and neither form is warned about — the toggle, not the rule, decides", async () => {
+    // Field report 2026-09-26: the warning fired on the plugin's own
+    // rule on every pass, four times in a single sync.
+    for (const rule of [`!/${CONFIG_DIR}/`, `!${CONFIG_DIR}/`]) {
+      mkdir(CONFIG_DIR);
+      w(".gitignore", `${rule}\n`);
+      const warnings: string[] = [];
+      const set = await readRootGitignore({
+        vault: vault as unknown as import("obsidian").Vault,
+        configDir: CONFIG_DIR,
+        syncConfigDir: () => true,
+        logger: { warn: (m) => warnings.push(m) },
+      });
+      expect(warnings, `for rule ${rule}`).toEqual([]);
+      // ON still admits it — via the setting, from either spelling.
+      expect(set.walkTargets.has(CONFIG_DIR), `for rule ${rule}`).toBe(true);
+    }
   });
 
   it("an ANCHORED rule is accepted and says nothing — the warning is for refusals only", async () => {

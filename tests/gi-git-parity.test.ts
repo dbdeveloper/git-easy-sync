@@ -166,7 +166,7 @@ describe.skipIf(!gitAvailable())("GI ↔ real git parity", () => {
   // against git, not ride along silently.
   const ROOT_TOP = ".*\n.*/\n!/.gitignore\n";
   const ROOT_BOTTOM =
-    "!.obsidian/\n*.conflict-from-*\n*.ges-tmp*\n*.ges-bak*\n";
+    "!/.obsidian/\n*.conflict-from-*\n*.ges-tmp*\n*.ges-bak*\n";
   const ROOT_DEFAULTS = "*.log\n.DS_Store\n.trash/\n";
   const CONFIG_DEFAULTS =
     "plugins/*/*\n!plugins/*/\n" +

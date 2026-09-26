@@ -719,7 +719,10 @@ describe("section CONTENT: two strengths in the root file (DOT-FILES §3.1)", ()
       c.indexOf("Recommended defaults"),
     );
     // The final rules, and nothing of them left up top.
-    expect(c).toContain(`!${CONFIG_DIR}/`);
+    // ANCHORED on purpose: unanchored, it promises git a match at any
+    // depth while the walker only ever admits the root one, and the
+    // dot-space reader then warns about our own line on every pass.
+    expect(c).toContain(`!/${CONFIG_DIR}/`);
     expect(c).toContain("*.conflict-from-*");
     expect(c.indexOf("*.conflict-from-*")).toBeGreaterThan(
       c.indexOf(FINAL_BEGIN),

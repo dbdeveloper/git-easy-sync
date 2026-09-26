@@ -236,7 +236,7 @@ function rootFinalBody(configDir: string): string {
 # These rules are final - nothing below or above overrides them.
 
 # The config subtree, governed by its own .gitignore files from here on.
-!${configDir}/
+!/${configDir}/
 
 # Conflict-resolver sibling files - per-device markers that must
 # never propagate via sync.
