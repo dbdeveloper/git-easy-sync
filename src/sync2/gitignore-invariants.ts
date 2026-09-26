@@ -9,6 +9,10 @@ import InvariantStateStore, {
   SectionId,
 } from "./invariant-state";
 import GitignoreSeedStore from "./gitignore-seeds";
+import {
+  assembleManagedSections,
+  ManagedSection,
+} from "./gitignore-assemble";
 import { atomicWriteFile } from "./atomic-write";
 
 // Markers of the managed `invariants` section. Editing anything between
@@ -323,10 +327,23 @@ export interface GitignoreMatcherCache {
   invalidate(dir?: string): void;
 }
 
+// What a managed file is made of: the sections it carries, and the ones
+// it must NOT carry (an older version put an `invariants` block into
+// <configDir>/.gitignore; §3.1.1 says that file has none).
+type ManagedSectionSet = {
+  invariants?: ManagedSection;
+  final?: ManagedSection;
+  remove?: ManagedSection[];
+};
+
 export interface SectionAnomalyReport {
   path: string;
   section: SectionId;
   anomaly: SpliceAnomaly;
+  // Set for "duplicate-removed": the line we deleted from the user's
+  // own space. The removal is deliberate (§3.1.5) and therefore has to
+  // be legible — which means naming the line, not just the event.
+  line?: string;
 }
 
 // Owner of the two managed gitignore files. Public surface:
@@ -506,13 +523,7 @@ export default class GitignoreInvariants {
 
     const content = await this.vault.adapter.read(path);
 
-    // Two splices, and the order matters: drop any `invariants` section
-    // an older version left at the TOP of this file first, then place
-    // ours at the bottom. Leaving the old one would be worse than
-    // useless — its per-device lines would still be in force, above the
-    // section that is supposed to be the only authority here.
-    const withoutOld = await this.spliceOne(path, content, null);
-    const fixed = await this.spliceOne(path, withoutOld, body, FINAL_SECTION);
+    const fixed = this.assemble(path, content);
     if (fixed === content) {
       await this.refreshState(path, { final: body });
       await this.noteSeedState(path, content);
@@ -557,16 +568,7 @@ export default class GitignoreInvariants {
 
     const content = await this.vault.adapter.read(path);
 
-    // Top section first, then bottom. The user's rules end up between
-    // them, which is exactly the point: they override the dot-hide
-    // policy above and cannot touch the final rules below.
-    const withTop = await this.spliceOne(path, content, ROOT_INVARIANTS_BODY);
-    const fixed = await this.spliceOne(
-      path,
-      withTop,
-      finalBody,
-      FINAL_SECTION,
-    );
+    const fixed = this.assemble(path, content);
     if (fixed === content) {
       await this.refreshState(path, sections);
       await this.noteSeedState(path, content);
@@ -656,25 +658,82 @@ export default class GitignoreInvariants {
   // Returns null for files we do not seed: <self>/.gitignore and
   // <configDir>/plugins/.gitignore are constants the plugin owns
   // outright and never negotiates, so they have no ancestor to offer.
+  // Rebuild `content` into canonical form, and SAY what that cost the
+  // user's own text.
+  //
+  // Removal is deliberate (§3.1.5 presupposition 2: a second copy of one
+  // of our rules is forbidden), which is exactly why it must be loud —
+  // silently deleting a line someone wrote is the defect class §4.2 had
+  // to fix, and the owner asked for this one in the log.
+  private assemble(path: string, content: string): string {
+    const sections = this.sectionsFor(path);
+    if (sections === null) return content;
+    const r = assembleManagedSections(content, sections);
+    for (const line of r.removed) {
+      this.onAnomaly({ path, section: "invariants", anomaly: "duplicate-removed", line });
+    }
+    return r.content;
+  }
+
   private seedFor(path: string): string | null {
-    const top = (body: string) =>
-      composeSection(INVARIANTS_BEGIN, body, INVARIANTS_END);
-    const bottom = (body: string) =>
-      composeSection(FINAL_BEGIN, body, FINAL_END);
+    const sections = this.sectionsFor(path);
+    if (sections === null) return null;
+    return assembleManagedSections(this.defaultUserSpaceFor(path), sections)
+      .content;
+  }
+
+  // The two managed sections a path carries, or null when the path is
+  // not one we seed (<self>/.gitignore and <configDir>/plugins/.gitignore
+  // are constants the plugin owns outright — nothing to negotiate, so
+  // no ancestor to offer).
+  private sectionsFor(path: string): ManagedSectionSet | null {
     if (path === this.rootGitignorePath) {
-      return (
-        `${top(ROOT_INVARIANTS_BODY)}\n\n` +
-        `${ROOT_RECOMMENDED_DEFAULTS}\n\n` +
-        `${bottom(rootFinalBody(this.configDir))}\n`
-      );
+      return {
+        invariants: {
+          begin: INVARIANTS_BEGIN,
+          end: INVARIANTS_END,
+          body: ROOT_INVARIANTS_BODY,
+        },
+        final: {
+          begin: FINAL_BEGIN,
+          end: FINAL_END,
+          body: rootFinalBody(this.configDir),
+        },
+      };
     }
     if (path === this.configDirGitignorePath) {
-      return (
-        `${CONFIG_DIR_RECOMMENDED_DEFAULTS}\n\n` +
-        `${bottom(configDirFinalBody({ syncConfigDir: this.syncConfigDir() }))}\n`
-      );
+      // No `invariants` here BY DESIGN: nothing we write into the
+      // config subtree is a default the user may overrule (§3.1.1).
+      // An older version DID put one here, so it is named for removal —
+      // left in place its per-device lines would still be in force,
+      // above the section meant to be the only authority in this file.
+      return {
+        final: {
+          begin: FINAL_BEGIN,
+          end: FINAL_END,
+          body: configDirFinalBody({ syncConfigDir: this.syncConfigDir() }),
+        },
+        remove: [
+          { begin: INVARIANTS_BEGIN, end: INVARIANTS_END, body: "" },
+        ],
+      };
     }
     return null;
+  }
+
+  // What a managed file contains BEFORE our sections go in, when it does
+  // not exist yet — the recommended rules we offer in the user's own
+  // zone. Empty for files that carry no such offer.
+  //
+  // ⚠️ MISSING is not EMPTY. A zero-length .gitignore is the user
+  // saying "I do not want your recommendations"; it takes the ordinary
+  // path, which adds our sections and nothing else (owner, 2026-09-26).
+  private defaultUserSpaceFor(path: string): string {
+    if (path === this.rootGitignorePath) return ROOT_RECOMMENDED_DEFAULTS;
+    if (path === this.configDirGitignorePath) {
+      return CONFIG_DIR_RECOMMENDED_DEFAULTS;
+    }
+    return "";
   }
 
   private async noteSeedState(path: string, content: string): Promise<void> {
@@ -956,7 +1015,12 @@ function cutAllPairs(
 export type SpliceAnomaly =
   | "orphan-repaired"
   | "orphan-unrepairable"
-  | "multiple-pairs";
+  | "multiple-pairs"
+  // §3.1.5: a second copy of one of our rules, found in the user's own
+  // space and deleted. Deliberate (presupposition 2) and therefore
+  // reported — a silent deletion of someone's line is the defect class
+  // §4.2 had to fix.
+  | "duplicate-removed";
 
 export interface SpliceResult {
   content: string;

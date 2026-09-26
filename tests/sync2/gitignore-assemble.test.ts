@@ -69,10 +69,15 @@ describe("assembleManagedSections (§3.1.5)", () => {
   });
 
   it("CONVERGES from shuffled lines — no marker pair needed", () => {
+    // Asserted structurally, not by patching CANONICAL: the layout is
+    // the thing under test, so an expectation derived from it would
+    // only prove self-consistency.
     const shuffled = [".*/", TOP.end, "user.md", TOP.begin, ".*"].join("\n");
-    expect(run(shuffled).content).toBe(
-      CANONICAL.replace(`${TOP.end}\n`, `${TOP.end}\nuser.md\n`),
-    );
+    const out = run(shuffled).content.split("\n");
+    expect(out[0]).toBe(TOP.begin);
+    expect(out.slice(0, TOP_LEN)).toEqual(CANONICAL.split("\n").slice(0, TOP_LEN));
+    expect(out[TOP_LEN]).toBe(""); // separator
+    expect(out[TOP_LEN + 1]).toBe("user.md"); // the only user line
   });
 
   it("CONVERGES from an ORPHANED begin — the case orphan-repair existed for", () => {
@@ -138,6 +143,39 @@ describe("assembleManagedSections (§3.1.5)", () => {
     expect(r.content).toContain("  .*");
   });
 });
+
+describe("§3.1.5 the separator rule", () => {
+  it("🔑 with NO user content the two blocks are still separated by one blank", () => {
+    // The correction that made the rule exceptionless: skipping the
+    // separator when user space is empty sounds tidy and is wrong —
+    // the blocks would touch and a reader could not tell where one
+    // policy ends and the other begins.
+    const lines = CANONICAL.split("\n");
+    expect(lines[TOP_LEN]).toBe("");
+    expect(lines[TOP_LEN + 1]).toBe(BOTTOM.begin);
+  });
+
+  it("one blank below the top block and one above the bottom block, with user text between", () => {
+    const out = run("user.md").content.split("\n");
+    expect(out[TOP_LEN]).toBe("");
+    expect(out[TOP_LEN + 1]).toBe("user.md");
+    expect(out[TOP_LEN + 2]).toBe("");
+    expect(out[TOP_LEN + 3]).toBe(BOTTOM.begin);
+  });
+
+  it("an existing separator is NOT doubled — this is what keeps a second pass identical", () => {
+    const once = run("user.md").content;
+    expect(run(once).content).toBe(once);
+  });
+
+  it("the file edges carry no separator: the top block starts at line 1, the bottom ends at EOF", () => {
+    expect(CANONICAL.startsWith(TOP.begin)).toBe(true);
+    expect(CANONICAL.endsWith(`${BOTTOM.end}\n`)).toBe(true);
+  });
+});
+
+// begin + body lines + end
+const TOP_LEN = 1 + TOP.body.split("\n").length + 1;
 
 describe("§3.1.5 blank-line handling", () => {
   it("🔑 the user's own double blank lines SURVIVE — we do not reformat the file", () => {

@@ -195,6 +195,47 @@ function placeBottom(
   }
 }
 
+// Delete a section that must not be in this file at all: the marker
+// pair and everything between it.
+//
+// A LONE marker takes only that line. The body it introduced is left
+// where it is — deleting an unbounded span on a guess is how the block
+// model's orphan repair ended up refusing to act at all, and here the
+// stray lines are at worst inert text in a file that is about to be
+// rewritten anyway.
+function dropSectionEntirely(lines: string[], section: ManagedSection): void {
+  const b = lines.findIndex((l) => sameLine(l, section.begin));
+  const e = lines.findIndex((l, i) => i > b && sameLine(l, section.end));
+  if (b >= 0 && e > b) {
+    lines.splice(b, e - b + 1);
+    return;
+  }
+  for (const marker of [section.begin, section.end]) {
+    const i = lines.findIndex((l) => sameLine(l, marker));
+    if (i >= 0) lines.splice(i, 1);
+  }
+}
+
+// Exactly ONE blank line separates a managed block from whatever sits
+// next to it — user text or the OTHER block, no exception (owner,
+// 2026-09-26). Only the file's edges have no separator: the top block
+// starts at line 1, the bottom block ends at EOF.
+//
+// The "no exception" part was a correction. Skipping the separator when
+// user space is empty sounded tidy and is wrong: with nothing between
+// them the two blocks would touch, and a reader could not tell where
+// one policy ends and the other begins.
+//
+// Both are no-ops when the blank is already there, which is what keeps
+// a second pass byte-identical.
+function separateBelow(lines: string[], at: number): void {
+  if (at < lines.length && lines[at].trim() !== "") lines.splice(at, 0, "");
+}
+
+function separateAbove(lines: string[], at: number): void {
+  if (at > 0 && lines[at - 1].trim() !== "") lines.splice(at, 0, "");
+}
+
 // How many copies of each of our lines the file holds BEYOND what our
 // sections need — those, and only those, are the user's duplicates.
 //
@@ -231,7 +272,16 @@ function countExtras(lines: string[], sections: ManagedSection[]): string[] {
 // line. Pinned by its own test.
 export function assembleManagedSections(
   existing: string,
-  sections: { invariants?: ManagedSection; final?: ManagedSection },
+  sections: {
+    invariants?: ManagedSection;
+    final?: ManagedSection;
+    // Sections that must NOT exist in this file. `<configDir>/.gitignore`
+    // carries a `final` section and no `invariants` one BY DESIGN
+    // (§3.1.1) — but an older version put one there, and leaving it
+    // would keep its per-device lines in force ABOVE the section that is
+    // supposed to be the only authority in that file.
+    remove?: ManagedSection[];
+  },
 ): AssembleResult {
   const lines = toLines(existing);
   const present = [sections.invariants, sections.final].filter(
@@ -251,6 +301,10 @@ export function assembleManagedSections(
   // how many copies stopped existing, whoever wrote them.
   const removed = countExtras(lines, present);
 
+  for (const section of sections.remove ?? []) {
+    dropSectionEntirely(lines, section);
+  }
+
   for (const section of present) {
     if (dropSectionInterior(lines, section)) {
       replacedSections.push(norm(section.begin));
@@ -260,9 +314,13 @@ export function assembleManagedSections(
   let lowerBound = 0;
   if (sections.invariants) {
     lowerBound = placeTop(lines, sections.invariants);
+    separateBelow(lines, lowerBound);
   }
   if (sections.final) {
+    const height =
+      2 + sections.final.body.split("\n").length;
     placeBottom(lines, sections.final, lowerBound);
+    separateAbove(lines, lines.length - height);
   }
 
   return { content: `${lines.join("\n")}\n`, removed, replacedSections };
