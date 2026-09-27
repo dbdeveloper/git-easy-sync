@@ -1,10 +1,22 @@
-// E1 — persistent ".token_expired" marker (TODO.md §5 / DIFF2 R2.7.3.a).
+// E1 — persistent `token_expired` marker (TODO.md §5 / DIFF2 R2.7.3.a).
 //
-// A file under the plugin's own dir (`<configDir>/plugins/<id>/.token_expired`)
-// that records the LAST KNOWN auth state, so Settings and the status-bar menu
-// (§7) can show "Token expired" with NO live network check and NO events. The
-// marker is gitignored by the seeded `plugins/*/*` block (like `.conflicts/`),
-// so this device-local auth state never syncs to GitHub.
+// ⚠️ Path corrected 2026-09-28: this header described
+// `<configDir>/plugins/<id>/.token_expired`, a dot-file in the plugin's own
+// directory. The marker moved into `.runtime/` with everything else
+// device-local and lost the dot; only the comments stayed behind, pointing a
+// future reader at a file that does not exist.
+//
+// `<configDir>/plugins/<id>/.runtime/token_expired` records the LAST KNOWN auth
+// state, so Settings and the status-bar menu (§7) can show "Token expired" with
+// NO live network check and NO events.
+//
+// No leading dot, and that is the convention rather than an oversight: the
+// WHOLE `.runtime/` subtree is denied in one hardcoded line
+// (change-detector.ts — "ALL of our plugin's per-device runtime state lives
+// under a SINGLE `.runtime/` subfolder"), so a dot on each child would guard
+// nothing. Dots are for markers that must live OUTSIDE that folder —
+// `.reset-in-progress` and `.gitignore-migration-in-progress`, both of which
+// have to survive the `rmdir .runtime` that RESET performs.
 //
 // The IN-MEMORY flag is authoritative; the file is a best-effort mirror:
 //   - init() seeds the in-memory flag from disk once at onload.

@@ -229,7 +229,7 @@ export default class GitHubSyncPlugin extends Plugin {
   // diff2 trash subsystem (see docs/DIFF2_IMPLEMENTATION_PLAN.md §R3).
   private trashWatcher: TrashWatcher | null = null;
   logger!: Logger;
-  // E1 (TODO §5) — persistent ".token_expired" marker; in-memory authoritative,
+  // E1 (TODO §5) — persistent `.runtime/token_expired` marker; in-memory authoritative,
   // file best-effort. Set/cleared per-drain (note()) + on the settings probe;
   // read by the §7 status-bar menu (isExpiredCached) + Settings.
   tokenExpiredFlag: TokenExpiredFlag | null = null;
