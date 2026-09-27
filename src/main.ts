@@ -1768,6 +1768,9 @@ export default class GitHubSyncPlugin extends Plugin {
         dismissLabel: report.resolvePath !== null ? "Skip" : "Close",
       }).prompt();
       if (decision === "resolve") {
+        // The Settings dialog is modal and would otherwise stay in front
+        // of the panel the user just asked for (field report 2026-09-28).
+        this.closeSettingsDialog();
         try {
           await this.activateDiffEditView();
         } catch (err) {
@@ -1780,6 +1783,30 @@ export default class GitHubSyncPlugin extends Plugin {
     } catch (err) {
       this.logger.error("gitignore check failed", `${err}`);
       new Notice(`Could not check .gitignore files: ${err}`);
+    }
+  }
+
+  // Close the Settings dialog, for the one case that navigates AWAY from
+  // it: "Check now" → "Solve conflict" opens the conflicts panel, and the
+  // dialog is modal, so leaving it up hides the thing the user asked for.
+  //
+  // ⚠️ `app.setting` is not in Obsidian's public typings, hence the cast.
+  // Verified against obsidian.asar: `this.setting = new Hee(this)`, and
+  // `Hee` carries `modalEl`/`contentEl`/`updateModalTitle`, i.e. it is a
+  // Modal subclass — so `close()` is inherited rather than invented here.
+  //
+  // Fails SOFT on purpose: if a future version moves this, the worst
+  // outcome is the dialog staying open, which is exactly today's
+  // behaviour. Wedging a working feature over a cosmetic step would be
+  // the wrong trade.
+  private closeSettingsDialog(): void {
+    try {
+      (this.app as unknown as { setting?: { close?: () => void } }).setting
+        ?.close?.();
+    } catch (err) {
+      this.logger.warn("could not close the settings dialog", {
+        err: `${err}`,
+      });
     }
   }
 
