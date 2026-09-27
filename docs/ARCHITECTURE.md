@@ -150,6 +150,11 @@ src/
     │                                #  runMigrationResume (phase 1, BEFORE the sweep) +
     │                                #  runMigrationFull (phase 2, after sweep AND enforce),
     │                                #  six recovery cases, migrationReportText
+    ├── gitignore-remote-cleanup.ts  # §8.1.6 Крок E6: deletes the consolidated nested
+    │                                #  .gitignore files from the REMOTE on the first
+    │                                #  successful drain. Filters against a freshly-read tree
+    │                                #  (that IS the 422-guard); defers on `truncated`; keeps
+    │                                #  the list on failure; clears AFTER the push, convergently
     ├── gitignore-assemble.ts        # LINE-WISE re-seating of those two sections: each template
     │                                #  line is purged from the rest of the file before being
     │                                #  placed (top anchored to line 1, `final` to EOF), so a

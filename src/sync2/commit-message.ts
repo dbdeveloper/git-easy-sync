@@ -86,6 +86,23 @@ export function formatResolveConflictMessage(
   return `Resolve conflict at ${formatLocalTimestamp(whenMs)} (${safeLabel(deviceLabel)})`;
 }
 
+// DOT-FILES §8.1.6 — the one commit that removes the nested `.gitignore`
+// files the migration consolidated into the root. Its own message because
+// it is the only commit that deletes paths the engine considers OUT OF
+// SCOPE, so a reader of `git log` should not have to guess why an
+// ordinary-looking sync removed files it never syncs.
+export function formatGitignoreCleanupMessage(
+  deviceLabel: string,
+  count: number,
+  whenMs: number,
+): string {
+  const files = `${count} nested .gitignore ${count === 1 ? "file" : "files"}`;
+  return (
+    `Remove ${files} consolidated into the root at ` +
+    `${formatLocalTimestamp(whenMs)} (${safeLabel(deviceLabel)})`
+  );
+}
+
 // Intermediate commit on the per-device conflict-branch: snapshot of
 // the user's local copy at registration time, or edit-while-in-
 // conflict push. NOT a main-bound commit; lands on the

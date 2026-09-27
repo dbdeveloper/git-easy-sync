@@ -103,7 +103,7 @@ export interface MigrationResult {
   reason?: string;
 }
 
-interface DoneMarker {
+export interface DoneMarker {
   migratedAt: number;
   sources: string[];
   // Paths §8.1.6 must still delete from the remote. Emptied by the drain
@@ -494,6 +494,21 @@ export function migrationReportText(
         resolvePath: null,
       };
   }
+}
+
+// §8.1.6 — the remote deletion consumed the pending list. Clearing is a
+// SEPARATE write from the push on purpose, and it happens AFTER it: if the
+// push lands and this fails, the next attempt re-reads the tree, finds the
+// paths already absent, and clears without pushing anything. A redundant
+// deletion entry is the one thing that must never be sent — it is the
+// known `422 BadObjectState` (memory project-github-422-on-deletion-entry).
+export async function clearRemotePending(deps: MigrationDeps): Promise<void> {
+  const marker = await readDoneMarker(deps);
+  if (marker === null) return;
+  await deps.vault.adapter.write(
+    donePath(deps),
+    JSON.stringify({ ...marker, remotePending: [] }, null, 2),
+  );
 }
 
 // Read the done marker, for §8.1.6's remote deletion and for the Settings

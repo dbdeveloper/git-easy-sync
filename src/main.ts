@@ -33,6 +33,7 @@ import {
   type MigrationDeps,
 } from "./sync2/gitignore-migration";
 import { GitignoreEditModal } from "./sync2/views/gitignore-edit-modal";
+import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
 import Logger from "./logger";
 import { describeError, calculateGitBlobSHA } from "./utils";
 import GithubClient from "./github/client";
@@ -1512,6 +1513,12 @@ export default class GitHubSyncPlugin extends Plugin {
         // success here does NOT prove auth. Never clear on a drain-only path,
         // or an empty interval tick would wipe a real expired marker.
       }
+      // DOT-FILES §8.1.6 — the FIRST successful drain removes from the
+      // remote the nested `.gitignore` files the migration consolidated.
+      // Inside the try on purpose: a sync that threw must not delete
+      // anything. Costs one small LOCAL read when there is nothing pending,
+      // which is every sync but one.
+      await this.cleanupMigratedGitignoresOnRemote();
     } catch (err) {
       // Log BEFORE the Notice so the user-visible toast and the
       // logged record always agree. Without this, the only artifact
@@ -1673,6 +1680,30 @@ export default class GitHubSyncPlugin extends Plugin {
         error: (m, d) => this.logger.error(m, `${d ? JSON.stringify(d) : ""}`),
       },
     };
+  }
+
+  // §8.1.6 — see deleteMigratedFromRemote for why this cannot be part of
+  // the migration itself (no credentials at startup, and the migration
+  // raises the very gate that forbids syncing).
+  private async cleanupMigratedGitignoresOnRemote(): Promise<void> {
+    const client = this.githubClient;
+    if (!client) return;
+    const r = await deleteMigratedFromRemote({
+      migration: this.migrationDeps(),
+      client,
+      branch: this.settings.githubBranch || "main",
+      deviceLabel: this.settings.deviceLabel ?? "Obsidian",
+    });
+    if (r.outcome === "nothing-pending") return;
+    this.logger.info("gitignore remote cleanup", r);
+    if (r.outcome === "deleted") {
+      new Notice(
+        `Removed ${r.deleted.length} nested .gitignore ` +
+          `${r.deleted.length === 1 ? "file" : "files"} from the repository — ` +
+          `their rules now live in the root .gitignore.`,
+        8000,
+      );
+    }
   }
 
   // Settings → "Check now" (§8.1.5). FORCED: the done marker gates the
