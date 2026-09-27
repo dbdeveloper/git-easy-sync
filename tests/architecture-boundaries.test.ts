@@ -96,3 +96,55 @@ describe("engine ↔ conflict-UI dependency direction", () => {
     expect(edges.length).toBeGreaterThan(0);
   });
 });
+
+// Marker files are DOT-prefixed and extension-less, wherever they live.
+//
+// ⚠️ Written down on 2026-09-28 after the owner pointed out it never had
+// been: the convention was real (four of six markers followed it) but lived
+// only in people's heads, so `gitignore-migration-done.json` and
+// `token_expired` drifted out of it without anything noticing. A convention
+// that is only remembered is a convention that decays.
+//
+// Markers are found by their DECLARATION — a `*MARKER*` constant — rather
+// than by guessing at string contents. An earlier attempt matched
+// marker-ish words anywhere and dragged in CSS class names and status-bar
+// copy; a name is not a marker because it reads like one. The flip side is
+// that a marker written as an inline literal would go unseen, which is
+// precisely how `token_expired` drifted, so declaring one IS the rule.
+describe("marker-file naming", () => {
+  const MARKER_DECL =
+    /(?:const|readonly|let)\s+(\w*MARKER\w*)\s*(?::[^=]+)?=\s*"([^"]+)"/g;
+
+  function markerDecls(): Array<{ file: string; id: string; name: string }> {
+    const out: Array<{ file: string; id: string; name: string }> = [];
+    for (const file of tsFilesUnder(SRC)) {
+      const source = fs.readFileSync(file, "utf8");
+      for (const m of source.matchAll(MARKER_DECL)) {
+        // LEGACY_* names exist ONLY to be read once and deleted — they are
+        // the migration away from a violation, not a violation.
+        if (m[1].startsWith("LEGACY")) continue;
+        out.push({ file: path.relative(SRC, file), id: m[1], name: m[2] });
+      }
+    }
+    return out;
+  }
+
+  it("finds the markers — otherwise this passes vacuously", () => {
+    expect(markerDecls().length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("🔑 every marker starts with a dot and carries no extension", () => {
+    // The dot is the mark AND hides the file from Obsidian's index and
+    // watcher (SYNC2-RESET-PLUGIN.md O6). No extension because a marker is
+    // defined by what it DECIDES, not by what it stores: `.token_expired`
+    // holds a kind tag and `.gitignore-migration-done` holds JSON, and
+    // neither of those makes it data.
+    const bad = markerDecls().filter(
+      (m) => !m.name.startsWith(".") || /\.[A-Za-z0-9]+$/.test(m.name.slice(1)),
+    );
+    expect(
+      bad.map((m) => `${m.file} → ${m.id} = "${m.name}"`),
+      "markers must be .dot-prefixed with no extension",
+    ).toEqual([]);
+  });
+});

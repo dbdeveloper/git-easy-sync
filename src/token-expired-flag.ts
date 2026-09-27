@@ -72,8 +72,17 @@ export function tokenExpiredMessage(kind: TokenExpiredKind): string {
         "Repository settings to resume syncing.";
 }
 
+// Named constants rather than inline literals, so the marker-naming rule
+// has something to check: `tests/architecture-boundaries.test.ts` reads
+// every `*MARKER*` declaration in src/ and asserts the shape. A literal
+// buried in a template string is exactly how `token_expired` drifted out
+// of the convention unnoticed in the first place.
+export const TOKEN_EXPIRED_MARKER = ".token_expired";
+export const LEGACY_TOKEN_EXPIRED_MARKER = "token_expired";
+
 export class TokenExpiredFlag {
   private readonly runtimeDir: string;
+  private readonly legacyPath: string;
   private readonly path: string;
   // Authoritative in-memory state; the file mirrors it best-effort.
   private expired = false;
@@ -91,7 +100,14 @@ export class TokenExpiredFlag {
     private readonly onTransition?: () => void,
   ) {
     this.runtimeDir = normalizePath(`${pluginDir}/.runtime`);
-    this.path = normalizePath(`${this.runtimeDir}/token_expired`);
+    this.path = normalizePath(`${this.runtimeDir}/${TOKEN_EXPIRED_MARKER}`);
+    // ⚠️ Shipped for a while WITHOUT the dot. Read-through at init() so a
+    // device that has an auth failure latched does not silently forget it
+    // — the whole point of the marker is that the state survives a
+    // restart, and a rename that drops it would defeat exactly that.
+    this.legacyPath = normalizePath(
+      `${this.runtimeDir}/${LEGACY_TOKEN_EXPIRED_MARKER}`,
+    );
   }
 
   // Seed the in-memory flag + kind from disk. Call once at onload. The file
@@ -100,9 +116,19 @@ export class TokenExpiredFlag {
   async init(): Promise<void> {
     try {
       this.expired = await this.vault.adapter.exists(this.path);
+      let from = this.path;
+      if (!this.expired && (await this.vault.adapter.exists(this.legacyPath))) {
+        // One-time adoption of the pre-dot name, then heal.
+        this.expired = true;
+        from = this.legacyPath;
+      }
       if (this.expired) {
-        const raw = (await this.vault.adapter.read(this.path)).trim();
+        const raw = (await this.vault.adapter.read(from)).trim();
         this.kind = raw === "scope" ? "scope" : "invalid";
+        if (from === this.legacyPath) {
+          await this.vault.adapter.write(this.path, this.kind);
+          await this.vault.adapter.remove(this.legacyPath);
+        }
       }
     } catch {
       this.expired = false; // unreadable → assume OK; a real auth fail re-sets

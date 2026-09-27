@@ -17,10 +17,14 @@ import {
   TokenExpiredFlag,
   authErrorKind,
   tokenExpiredMessage,
+  TOKEN_EXPIRED_MARKER,
 } from "../src/token-expired-flag";
 
 const PLUGIN_DIR = ".obsidian/plugins/git-easy-sync";
-const MARKER = `${PLUGIN_DIR}/.runtime/token_expired`;
+// From the CONSTANT, not a copy: this file hardcoded the pre-rename name
+// while its own header already said `.token_expired`, so the test and the
+// code disagreed and only the code was right.
+const MARKER = `${PLUGIN_DIR}/.runtime/${TOKEN_EXPIRED_MARKER}`;
 
 const tmpdirs: string[] = [];
 function fixture(): Vault {

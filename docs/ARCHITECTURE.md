@@ -47,7 +47,7 @@ src/
 │                                    #  before clearAll), pushPluginsDataJsonCached
 ├── gi.ts                            # GI (gitignore matcher) — path-browserify, mobile-safe
 ├── logger.ts                        # Truncated JSON log file
-├── token-expired-flag.ts            # E1 (TODO §5/§35): sticky .runtime/token_expired marker
+├── token-expired-flag.ts            # E1 (TODO §5/§35): sticky .runtime/.token_expired marker
 │                                    #  (in-memory authoritative + file mirror; file stores the
 │                                    #  401/403 class tag). authErrorKind + tokenExpiredMessage +
 │                                    #  onTransition hook (drives the red status-bar/ribbon UI)

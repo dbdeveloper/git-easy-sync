@@ -54,7 +54,22 @@ export const IN_PROGRESS_MARKER_NAME = ".gitignore-migration-in-progress";
 // In `.runtime/`, so a RESET makes the migration run again. Deliberate:
 // "reset everything" should mean it. The re-run finds no live nested
 // `.gitignore` (they are `*.bak`) and completes silently.
-export const DONE_MARKER_NAME = "gitignore-migration-done.json";
+//
+// DOT-prefixed and extension-less, like every marker in this plugin —
+// that shape IS how a marker is told apart from data at a glance. It
+// holds JSON all the same: a marker may carry content (`token_expired`
+// carries its kind tag), and what makes it a marker is what it DECIDES,
+// not how much it says.
+export const DONE_MARKER_NAME = ".gitignore-migration-done";
+
+// ⚠️ Shipped once as `gitignore-migration-done.json`, before the naming
+// rule was written down. Read-through exists so the rename does not throw
+// away a `remotePending` list: those paths are the ONLY record of what
+// §8.1.6 still has to delete from the remote, and losing them would leave
+// nested `.gitignore` files on the server forever, silently — exactly the
+// divergence the step exists to end. Self-healing: the first read rewrites
+// under the new name and removes the old one, so this never runs twice.
+const LEGACY_DONE_MARKER_NAME = "gitignore-migration-done.json";
 
 export interface MigrationDeps {
   vault: Vault;
@@ -126,6 +141,23 @@ function inProgressPath(deps: MigrationDeps): string {
 
 function donePath(deps: MigrationDeps): string {
   return normalizePath(`${pluginDir(deps)}/.runtime/${DONE_MARKER_NAME}`);
+}
+
+function legacyDonePath(deps: MigrationDeps): string {
+  return normalizePath(
+    `${pluginDir(deps)}/.runtime/${LEGACY_DONE_MARKER_NAME}`,
+  );
+}
+
+// Has the migration completed? Both marker names, because the answer must
+// not change just because the file was renamed — a device that ran the
+// migration under the old name has ALREADY done it, and re-running would
+// be wrong.
+async function doneMarkerExists(deps: MigrationDeps): Promise<boolean> {
+  return (
+    (await deps.vault.adapter.exists(donePath(deps))) ||
+    (await deps.vault.adapter.exists(legacyDonePath(deps)))
+  );
 }
 
 async function readIfPresent(
@@ -240,7 +272,7 @@ export async function runMigrationResume(
   const none = { sources: [], conflictPath: null };
 
   // Case 1 — the done marker is down, so step 6 is all that can be left.
-  if (await deps.vault.adapter.exists(donePath(deps))) {
+  if (await doneMarkerExists(deps)) {
     const inProgress = inProgressPath(deps);
     if (await deps.vault.adapter.exists(inProgress)) {
       await deps.vault.adapter.remove(inProgress);
@@ -323,7 +355,7 @@ export async function runMigrationFull(
   // The done marker gates the AUTOMATIC run only. The Settings button
   // (§8.1.5) exists precisely for the case the marker cannot cover: a
   // user who added a nested `.gitignore` after the first run.
-  if (!opts.force && (await deps.vault.adapter.exists(donePath(deps)))) {
+  if (!opts.force && (await doneMarkerExists(deps))) {
     return { kind: "already-done", ...none };
   }
 
@@ -542,8 +574,20 @@ export async function clearRemotePending(deps: MigrationDeps): Promise<void> {
 export async function readDoneMarker(
   deps: MigrationDeps,
 ): Promise<DoneMarker | null> {
-  const raw = await readIfPresent(deps.vault, donePath(deps));
-  if (raw === null) return null;
+  let raw = await readIfPresent(deps.vault, donePath(deps));
+  if (raw === null) {
+    // One-time read-through from the pre-rename name, then heal.
+    raw = await readIfPresent(deps.vault, legacyDonePath(deps));
+    if (raw === null) return null;
+    try {
+      await deps.vault.adapter.write(donePath(deps), raw);
+      await deps.vault.adapter.remove(legacyDonePath(deps));
+      deps.logger?.info("gitignore migration: marker renamed to the dot form");
+    } catch {
+      // The read succeeded, which is what the caller needs; healing can
+      // wait for the next pass rather than fail the run.
+    }
+  }
   try {
     const parsed = JSON.parse(raw) as Partial<DoneMarker>;
     if (!Array.isArray(parsed.sources)) return null;

@@ -33,6 +33,20 @@ etc.). The section-number map lives in [`docs/ARCHITECTURE.md`](../../docs/ARCHI
 
 ## Constraints
 
+- **EVERY marker file is DOT-prefixed and has NO extension — regardless of where it
+  lives.** `.reset-in-progress`, `.attempted`, `.attempted-commit`, `.token_expired`,
+  `.gitignore-migration-in-progress`, `.gitignore-migration-done`. That shape IS the
+  distinguishing mark: it is how a marker is told apart from data at a glance, and the
+  dot also hides the file from Obsidian's index and watcher (the O6 rationale in
+  `docs/tasks/SYNC2-RESET-PLUGIN.md`, which matters for any marker outside `.runtime/`).
+  ⚠️ **A marker MAY carry content** — `.token_expired` holds its kind tag,
+  `.gitignore-migration-done` holds JSON. What makes a file a marker is what it DECIDES,
+  not how much it says, so "it has data in it" is never a reason to give it a `.json`
+  name. Data files that are NOT markers keep the ordinary `.runtime/` convention
+  (`conflicts.json`, `metadata-a.json`, `gitignore-seeds.json`). Enforced by
+  `tests/architecture-boundaries.test.ts`; two files violated this before it was written
+  down (2026-09-28), both renamed with a one-time healing read.
+
 - **Don't add files to the hardcoded `isSyncable` blocklist** without a real reason. The default for new "should we sync this?" rules is to add patterns to the seeded gitignore (`CONFIG_DIR_SEED` / `ROOT_SEED` in `gitignore-invariants.ts`) — that way users can opt out.
 - **Don't hand-edit the canonical block in `<configDir>/.gitignore`** — `GitignoreInvariants.enforce()` will rewrite it on the next plugin load. To customise the truly-required behaviour, edit the constants in `gitignore-invariants.ts` and ship a new build.
 - **Polling, not events, for the sync engine.** `findChanges` walks the vault on each sync click; no `vault.on` subscription for sync purposes. Implication: edits made while the plugin was disabled get picked up on the next sync click without any "missed events" failure mode. The conflict layer's `ConflictWatcher` IS event-driven (`vault.on('delete'|'modify'|'rename')`), but **read-only** — it only calls `counter.markDirty()`, never mutates store; all conflict mutations happen through `process-conflicts.ts` (drain start/restarts + the three UI sites: onload, panel open, editor close). See [`docs/SYNC2.md`](../../docs/SYNC2.md) §1 (architecture layers + trigger models).
