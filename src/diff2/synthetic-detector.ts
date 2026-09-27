@@ -27,7 +27,7 @@
 // exists checks), conflictStore (for the cached-view lookup). Outputs:
 // categorised list of conflict entries.
 
-import type { Vault } from "obsidian";
+import { normalizePath, type Vault } from "obsidian";
 import type ConflictStoreV2 from "../sync2/conflict-store-v2";
 import { parseSiblingFilename } from "./strip-conflict-suffix";
 import {
@@ -237,6 +237,52 @@ export async function syntheticFromDotSpace(
       // Tracked ones are listed by the store branch, which sees them
       // whether or not any walk reaches them.
       if (entry.kind === "tracked") continue;
+      out.push(entry);
+    }
+  }
+
+  // …and the opt-in set's dot FILES, whose siblings no walk target
+  // covers. A `dotFiles` member is addressed by exact path (that is the
+  // whole point of §4.2 — no listing, no guessing WHERE), so the
+  // DIRECTORY it lives in is never walked; for `.gitignore` that
+  // directory is the vault root.
+  //
+  // Found 2026-09-27 by probe and confirmed against obsidian.asar,
+  // whose indexer hides a path if ANY segment is dotted:
+  //   function(e){for(;e;){if(basename(e).startsWith("."))return!0;
+  //                        e=dirname(e)}return!1}
+  // So a SYNTHETIC sibling of `<root>/.gitignore` was seen by nobody —
+  // not this branch, not the index. (The TRACKED case always worked:
+  // trackedEntries reads the STORE and only asks the disk whether the
+  // derived name exists.) Owner's rule: every conflict must be findable.
+  //
+  // Grouped by directory so a root carrying several members costs one
+  // listing rather than one per member.
+  const byDir = new Map<string, Set<string>>();
+  for (const filePath of optIn.dotFiles) {
+    const slash = filePath.lastIndexOf("/");
+    const dir = slash === -1 ? "" : filePath.slice(0, slash);
+    const members = byDir.get(dir) ?? new Set<string>();
+    members.add(filePath);
+    byDir.set(dir, members);
+  }
+  for (const [dir, members] of byDir) {
+    let listing: { files: string[] };
+    try {
+      listing = await vault.adapter.list(dir);
+    } catch {
+      continue; // unreadable or vanished mid-scan — skip-class
+    }
+    for (const candidate of listing.files) {
+      const entry = entryFromSibling(conflictStore, normalizePath(candidate));
+      if (!entry) continue;
+      // A listing holds every sibling in the directory, including ones
+      // belonging to files that are NOT members. Those are either the
+      // index branch's job (ordinary files) or deliberately out of
+      // reach (a dot-file nobody opted into) — same boundary the
+      // walk-target rule draws one level up.
+      if (!members.has(entry.basePath)) continue;
+      if (entry.kind === "tracked") continue; // the store branch owns these
       out.push(entry);
     }
   }

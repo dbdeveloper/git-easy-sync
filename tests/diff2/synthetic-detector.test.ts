@@ -638,6 +638,43 @@ describe("§4.3.1 п.1 — the SLOW branch reaches dot-space the index cannot se
     expect((await scan()).map((e) => e.siblingPath)).toEqual([sib]);
   });
 
+  it("🔑 an orphan sibling of a ROOT DOT-FILE is found (not just dot-DIRS)", async () => {
+    // Found 2026-09-27 by probe, confirmed against obsidian.asar: the
+    // real indexer hides any path with a dotted segment
+    //   function(e){for(;e;){if(basename(e).startsWith("."))return!0;
+    //                        e=dirname(e)}return!1}
+    // so a sibling of `<root>/.gitignore` is invisible to the fast
+    // branch — and it is not inside any walk TARGET either, because the
+    // root file is a `dotFiles` member, not a dot-directory. Nothing
+    // scanned it. The owner's rule: EVERY conflict must be findable.
+    //
+    // `.gitignore` is the case that matters, since it is a structural
+    // member of the opt-in set in every vault, and the §8.1 migration
+    // deliberately raises a SYNTHETIC conflict on exactly this path.
+    writeFile(fx.root, ".gitignore", ".*\n.*/\n!/.gitignore\n");
+    const sib = siblingPathFor(
+      ".gitignore",
+      "Old gitignore files",
+      1_700_000_000_000,
+    );
+    writeFile(fx.root, sib, "migrated rules\n");
+
+    // Both premises stated, not assumed: the index cannot see it, and
+    // it is not reachable as a dot-directory member either.
+    expect(fx.vault.getFiles().map((f) => f.path)).not.toContain(sib);
+
+    expect((await scan()).map((e) => e.siblingPath)).toEqual([sib]);
+  });
+
+  it("a TRACKED sibling of a root dot-file stays with the store branch", async () => {
+    // The negative half. Without it, a fix that simply returned every
+    // matching name would pass the test above while double-listing
+    // every tracked root-dot-file conflict once the panel concatenates.
+    writeFile(fx.root, ".gitignore", ".*\n!/.gitignore\n");
+    await track(fx, ".gitignore", "Phone", 1_700_000_000_000);
+    expect(await scan()).toEqual([]);
+  });
+
   it("a dot-dir NOBODY opted into is not scanned", async () => {
     // Listing it would invite the user to act on something they cannot
     // resolve through sync anyway: the same walk boundaries as the
