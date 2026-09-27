@@ -243,3 +243,74 @@ export async function findMigrationCandidates(
   });
   return { candidates, dirsScanned, dirsPruned, completed };
 }
+
+// ── §8.1.3 assembling the proposal, and §8.1.4's marker format ───────
+
+import { FINAL_BEGIN } from "./gitignore-invariants";
+
+// Split the assembled root `.gitignore` into the two halves §8.1.3 wraps
+// the migrated rules in: everything ABOVE our `final` section (the
+// invariants section plus the whole user space), and the `final` section
+// itself.
+//
+// Returns null when the `final` marker is absent, and the caller MUST
+// then refuse to build a proposal. That is not defensiveness for its own
+// sake: the proposal becomes the user's `<root>/.gitignore` the moment
+// they accept it, so a proposal missing the bottom half would DELETE the
+// absolute rules — `*.conflict-from-*` among them, which is what stops
+// every conflict sibling in the vault from being pushed to GitHub.
+// Producing nothing is strictly better than producing that.
+export function splitAtFinalSection(
+  rootContent: string,
+): { top: string; bottom: string } | null {
+  const idx = rootContent.indexOf(FINAL_BEGIN);
+  if (idx === -1) return null;
+  return { top: rootContent.slice(0, idx), bottom: rootContent.slice(idx) };
+}
+
+// The proposal's bytes: the root file's own top half, the migrated rules,
+// then the root file's own bottom half.
+//
+// Because both ends are the root file verbatim, the diff editor shows a
+// single insertion exactly where the rules belong — after the user's own
+// rules and before the absolute ones. That is the whole trick: no new UI,
+// and the user reviews the change in the place they already understand.
+export function buildMigrationProposal(
+  split: { top: string; bottom: string },
+  blocks: string[][],
+): string {
+  const rules = blocks.filter((b) => b.length > 0);
+  if (rules.length === 0) return split.top + split.bottom;
+  // One blank line between groups, and one before the bottom half, so the
+  // insertion reads as a block rather than as a run-on.
+  const body = rules.map((b) => b.join("\n")).join("\n\n");
+  const top = split.top.endsWith("\n") ? split.top : `${split.top}\n`;
+  return `${top}${body}\n\n${split.bottom}`;
+}
+
+// ── the in-progress marker (§8.1.4) ─────────────────────────────────
+
+// Serialise the processed list: one path per line, then a final line
+// holding the count. The count is the completeness check — a torn write
+// is detected rather than trusted.
+export function serializeMigrationList(paths: string[]): string {
+  return paths.length === 0 ? "0\n" : `${paths.join("\n")}\n${paths.length}\n`;
+}
+
+// Parse it back. Returns null when the file is NOT provably complete —
+// which the caller must treat as "discard and start over", never as
+// "empty list". Those two readings differ by everything: one re-scans,
+// the other would mark a migration done having moved nothing.
+export function parseMigrationList(text: string): string[] | null {
+  const lines = text.split("\n").map((l) => l.replace(/\r$/, ""));
+  // A trailing newline leaves one empty element; anything else empty in
+  // the middle means a malformed file.
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  if (lines.length === 0) return null;
+  const countLine = lines.pop() as string;
+  if (!/^\d+$/.test(countLine)) return null;
+  const count = Number(countLine);
+  if (count !== lines.length) return null;
+  if (lines.some((l) => l === "")) return null;
+  return lines;
+}

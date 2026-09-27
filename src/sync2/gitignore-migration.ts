@@ -1,0 +1,428 @@
+// Authored and tested by Claude Code under the attentive guidance of
+// Vladyslav Kozlovskyy <dbdevelop@gmail.com>, 2026.
+// AGPL-3.0 — see LICENSE.
+//
+// DOT-FILES §8.1 Крок E4 — the migration PROCEDURE: the forward path, the
+// two markers, and recovery from every window in between.
+//
+// The pure half lives in gitignore-migrate.ts (scope, translation, the
+// walk, the proposal assembly, the marker format). This module is the
+// part that touches the vault, so it is where the crash windows are.
+//
+// ⚠️ TWO PHASES ON onload, and they are not interchangeable (§8.1.4):
+//
+//   runMigrationResume()  — BEFORE AtomicWriteRecovery.sweep. Only the
+//     states holding a live `.ges-tmp`, because the sweep walks the whole
+//     vault and drops any unmarked staging file ("Always safe to drop").
+//     Needs neither the walk nor enforce(): the staging file is already
+//     built and the marker's list is the source of truth. Same shape
+//     recoverAutosaveDirs already has, for the same reason.
+//
+//   runMigrationFull()    — AFTER the sweep AND after enforce(). The fresh
+//     run needs the ASSEMBLED root `.gitignore`, because §8.1.3 wraps the
+//     migrated rules in that file's own two halves.
+//
+// Reverse the order and the two requirements are simply contradictory:
+// enforce() writes through atomicWriteFile, so it must follow a sweep
+// whose purpose is clearing foreign half-writes before the engine touches
+// the vault.
+//
+// Canonical spec: docs/tasks/SYNC2-DOT-FILES-REFACTOR.md §8.1.4.
+
+import { normalizePath, type Vault } from "obsidian";
+import { safeRename } from "./cross-platform";
+import {
+  buildSiblingFilePath,
+  MIGRATION_DEVICE_LABEL,
+} from "./conflict-siblings";
+import { SYNC_TMP_SUFFIX } from "./atomic-write";
+import {
+  findMigrationCandidates,
+  translateFile,
+  splitAtFinalSection,
+  buildMigrationProposal,
+  serializeMigrationList,
+  parseMigrationList,
+} from "./gitignore-migrate";
+
+// In the PLUGIN DIR, not `.runtime/`. RESET does `rmdir(.runtime, true)`,
+// and a half-renamed migration must still finish afterwards — the exact
+// reason `.reset-in-progress` lives there too (reset.ts).
+export const IN_PROGRESS_MARKER_NAME = ".gitignore-migration-in-progress";
+
+// In `.runtime/`, so a RESET makes the migration run again. Deliberate:
+// "reset everything" should mean it. The re-run finds no live nested
+// `.gitignore` (they are `*.bak`) and completes silently.
+export const DONE_MARKER_NAME = "gitignore-migration-done.json";
+
+export interface MigrationDeps {
+  vault: Vault;
+  configDir: string;
+  selfPluginId: string;
+  // "Would git refuse to ENTER this directory?" — see
+  // findMigrationCandidates for why this must be a DIRECTORY verdict from
+  // a GI honouring every level.
+  dirIgnored: (relDir: string) => boolean;
+  nowMs: () => number;
+  logger?: {
+    info(message: string, data?: unknown): void;
+    warn(message: string, data?: unknown): void;
+    error(message: string, data?: unknown): void;
+  };
+}
+
+export type MigrationKind =
+  // The done marker is present; nothing to do.
+  | "already-done"
+  // Ran, found no non-whitelisted `.gitignore`. Marked done.
+  | "nothing-found"
+  // Ran, moved rules, raised a proposal. Marked done.
+  | "migrated"
+  // Finished an interrupted run. Marked done.
+  | "resumed"
+  // The walk could not complete, so a `.gitignore` may have been missed.
+  // NOT marked done — the next run looks again.
+  | "incomplete"
+  // The root file has no `final` section, so no proposal can be built
+  // without risking the absolute rules. NOT marked done.
+  | "refused"
+  // ⚠️ Sources are already `*.bak` but the staging file is gone, so the
+  // rules cannot be re-derived. Should be unreachable while resume
+  // precedes the sweep; detected rather than assumed away.
+  | "stalled";
+
+export interface MigrationResult {
+  kind: MigrationKind;
+  // Source `.gitignore` paths that were renamed away. Also what §8.1.6's
+  // remote deletion needs, which is why the done marker records them.
+  sources: string[];
+  // The proposal raised, when one was.
+  conflictPath: string | null;
+  // Set for `incomplete` / `refused` / `stalled`, for the caller to log
+  // or surface.
+  reason?: string;
+}
+
+interface DoneMarker {
+  migratedAt: number;
+  sources: string[];
+  // Paths §8.1.6 must still delete from the remote. Emptied by the drain
+  // that performs them. Paths only, not {path, sha}: an arbitrary
+  // interval passes before that drain, so the only correct answer to "is
+  // this path on the server" is the one read at the time.
+  remotePending: string[];
+}
+
+function pluginDir(deps: MigrationDeps): string {
+  return normalizePath(
+    `${deps.vault.configDir}/plugins/${deps.selfPluginId}`,
+  );
+}
+
+function inProgressPath(deps: MigrationDeps): string {
+  return normalizePath(`${pluginDir(deps)}/${IN_PROGRESS_MARKER_NAME}`);
+}
+
+function donePath(deps: MigrationDeps): string {
+  return normalizePath(`${pluginDir(deps)}/.runtime/${DONE_MARKER_NAME}`);
+}
+
+async function readIfPresent(
+  vault: Vault,
+  path: string,
+): Promise<string | null> {
+  try {
+    if (!(await vault.adapter.exists(path))) return null;
+    return await vault.adapter.read(path);
+  } catch {
+    return null;
+  }
+}
+
+// The proposal's disk name, and the staging name it is renamed from.
+// Derived from the RESERVED label, which is also how the pre-sync gate
+// recognises the class (§8.1.5a).
+function proposalPathFor(atMs: number): string {
+  return buildSiblingFilePath(".gitignore", atMs, MIGRATION_DEVICE_LABEL);
+}
+
+// Any proposal already on disk, whatever its timestamp. Recovery needs
+// this: it knows a run was interrupted but not which moment named it.
+async function findExistingProposal(vault: Vault): Promise<string | null> {
+  try {
+    const { files } = await vault.adapter.list("");
+    const prefix = `.gitignore.conflict-from-${MIGRATION_DEVICE_LABEL}-`;
+    for (const f of files) {
+      const p = normalizePath(f);
+      if (p.startsWith(prefix) && !p.endsWith(SYNC_TMP_SUFFIX)) return p;
+    }
+  } catch {
+    // Unreadable root is handled by the callers' own failure paths.
+  }
+  return null;
+}
+
+async function findStagingProposal(vault: Vault): Promise<string | null> {
+  try {
+    const { files } = await vault.adapter.list("");
+    const prefix = `.gitignore.conflict-from-${MIGRATION_DEVICE_LABEL}-`;
+    for (const f of files) {
+      const p = normalizePath(f);
+      if (p.startsWith(prefix) && p.endsWith(SYNC_TMP_SUFFIX)) return p;
+    }
+  } catch {
+    // Same.
+  }
+  return null;
+}
+
+// First free name in `.bak`, `.bak2`, `.bak3`… NEVER overwrite: POSIX
+// rename would clobber an older backup silently and Capacitor would
+// throw, and both are worse than an extra suffix (owner, 2026-09-27).
+async function freeBakPath(vault: Vault, source: string): Promise<string> {
+  for (let n = 1; ; n++) {
+    const candidate = n === 1 ? `${source}.bak` : `${source}.bak${n}`;
+    if (!(await vault.adapter.exists(candidate))) return candidate;
+  }
+}
+
+// Step 3. Idempotent per file — which is what lets recovery cases 3 and 4
+// share one action: a source that is already gone was already renamed.
+async function renameSourcesAway(
+  deps: MigrationDeps,
+  sources: string[],
+): Promise<void> {
+  for (const source of sources) {
+    if (!(await deps.vault.adapter.exists(source))) continue;
+    const bak = await freeBakPath(deps.vault, source);
+    await safeRename(deps.vault.adapter, source, bak);
+    deps.logger?.info("gitignore migration: source renamed", { source, bak });
+  }
+}
+
+// Steps 5 and 6, in that order. The done marker goes down BEFORE the
+// in-progress one is lifted, so the only reachable in-between state is
+// "both present", which recovery case 1 resolves by finishing step 6.
+// The reverse order would leave a window with NEITHER marker, and a run
+// interrupted there would redo everything.
+async function finish(
+  deps: MigrationDeps,
+  sources: string[],
+): Promise<void> {
+  const marker: DoneMarker = {
+    migratedAt: deps.nowMs(),
+    sources,
+    remotePending: [...sources],
+  };
+  const dir = `${pluginDir(deps)}/.runtime`;
+  if (!(await deps.vault.adapter.exists(dir))) {
+    await deps.vault.adapter.mkdir(dir);
+  }
+  await deps.vault.adapter.write(donePath(deps), JSON.stringify(marker, null, 2));
+  const inProgress = inProgressPath(deps);
+  if (await deps.vault.adapter.exists(inProgress)) {
+    await deps.vault.adapter.remove(inProgress);
+  }
+}
+
+// ── PHASE 1 — resume, BEFORE AtomicWriteRecovery.sweep ──────────────
+export async function runMigrationResume(
+  deps: MigrationDeps,
+): Promise<MigrationResult> {
+  const none = { sources: [], conflictPath: null };
+
+  // Case 1 — the done marker is down, so step 6 is all that can be left.
+  if (await deps.vault.adapter.exists(donePath(deps))) {
+    const inProgress = inProgressPath(deps);
+    if (await deps.vault.adapter.exists(inProgress)) {
+      await deps.vault.adapter.remove(inProgress);
+      deps.logger?.info("gitignore migration: stale in-progress marker cleared");
+    }
+    return { kind: "already-done", ...none };
+  }
+
+  const raw = await readIfPresent(deps.vault, inProgressPath(deps));
+  // No marker: either nothing ever ran, or case 2 (a staging file with no
+  // marker). Case 2 needs no action here — the sweep performs exactly the
+  // deletion it wants, and the full run then starts fresh.
+  if (raw === null) return { kind: "already-done", ...none };
+
+  const sources = parseMigrationList(raw);
+  if (sources === null) {
+    // A torn marker cannot be trusted as a list, and must NOT be read as
+    // an empty one — that would mark a migration done having moved
+    // nothing. Discard it so the full run starts over.
+    deps.logger?.warn(
+      "gitignore migration: in-progress marker incomplete, discarding",
+    );
+    await deps.vault.adapter.remove(inProgressPath(deps));
+    return { kind: "already-done", ...none };
+  }
+
+  // Marker says there was nothing to migrate — step 4 is skipped by
+  // definition, so only steps 5 and 6 remain.
+  if (sources.length === 0) {
+    await finish(deps, []);
+    return { kind: "resumed", sources: [], conflictPath: null };
+  }
+
+  const existing = await findExistingProposal(deps.vault);
+  if (existing !== null) {
+    // Case 5 — step 4 already happened. Step 3 is idempotent, so running
+    // it again costs one `exists` per source and closes the window where
+    // it had only partly finished.
+    await renameSourcesAway(deps, sources);
+    await finish(deps, sources);
+    return { kind: "resumed", sources, conflictPath: existing };
+  }
+
+  const staging = await findStagingProposal(deps.vault);
+  if (staging !== null) {
+    // Cases 3 and 4 — the staging file is intact, so the list is
+    // trustworthy and the rest of the forward path simply continues.
+    await renameSourcesAway(deps, sources);
+    const proposal = staging.slice(0, -SYNC_TMP_SUFFIX.length);
+    await safeRename(deps.vault.adapter, staging, proposal);
+    await finish(deps, sources);
+    return { kind: "resumed", sources, conflictPath: proposal };
+  }
+
+  // ⚠️ Neither proposal nor staging, but the marker names sources. The
+  // rules are in `*.bak` and cannot be re-derived, because the walk can
+  // no longer see the files they came from. Should be unreachable while
+  // this runs before the sweep; reported rather than assumed away, and
+  // the marker is KEPT so the situation is not forgotten.
+  deps.logger?.error(
+    "gitignore migration STALLED: sources were renamed but the staged " +
+      "proposal is gone. Their rules are in the .bak files listed here " +
+      "and must be restored by hand.",
+    { sources },
+  );
+  return {
+    kind: "stalled",
+    sources,
+    conflictPath: null,
+    reason: "staged proposal missing after sources were renamed",
+  };
+}
+
+// ── PHASE 2 — the fresh run, AFTER the sweep and AFTER enforce() ────
+export async function runMigrationFull(
+  deps: MigrationDeps,
+): Promise<MigrationResult> {
+  const none = { sources: [], conflictPath: null };
+  if (await deps.vault.adapter.exists(donePath(deps))) {
+    return { kind: "already-done", ...none };
+  }
+
+  const rootContent = await readIfPresent(deps.vault, ".gitignore");
+  const split = rootContent === null ? null : splitAtFinalSection(rootContent);
+  if (split === null) {
+    // enforce() runs before this, so the section is there in practice.
+    // Refusing rather than improvising matters because the proposal
+    // BECOMES the root file when accepted: one without the bottom half
+    // would drop the absolute rules, `*.conflict-from-*` included, and
+    // every sibling in the vault would become pushable.
+    return {
+      kind: "refused",
+      ...none,
+      reason: "root .gitignore has no final section",
+    };
+  }
+
+  const walk = await findMigrationCandidates({
+    vault: deps.vault,
+    configDir: deps.configDir,
+    dirIgnored: deps.dirIgnored,
+  });
+  if (!walk.completed) {
+    // A `.gitignore` may have been missed, so the done marker must NOT go
+    // down — otherwise the migration would never look again.
+    return {
+      kind: "incomplete",
+      ...none,
+      reason: "the vault walk could not finish",
+    };
+  }
+  deps.logger?.info("gitignore migration: walk finished", {
+    dirsScanned: walk.dirsScanned,
+    dirsPruned: walk.dirsPruned,
+    candidates: walk.candidates.length,
+  });
+
+  if (walk.candidates.length === 0) {
+    // Steps 1 and 4 are skipped: nothing to stage, nothing to rename. The
+    // marker pair still runs, so the protocol has one shape rather than
+    // two and recovery's "marker is only 0" branch stays live.
+    await deps.vault.adapter.write(
+      inProgressPath(deps),
+      serializeMigrationList([]),
+    );
+    await finish(deps, []);
+    return { kind: "nothing-found", ...none };
+  }
+
+  // Shallowest-first, which is why translate happens in walk order:
+  // last-match-wins means a deeper rule must land LATER in the file.
+  const blocks: string[][] = [];
+  const sources: string[] = [];
+  for (const candidate of walk.candidates) {
+    const content = await readIfPresent(deps.vault, candidate.path);
+    if (content === null) continue; // vanished mid-run — skip-class
+    blocks.push(translateFile(content, candidate.dir));
+    sources.push(candidate.path);
+  }
+
+  const at = deps.nowMs();
+  const proposal = proposalPathFor(at);
+  const staging = `${proposal}${SYNC_TMP_SUFFIX}`;
+
+  // Step 1. A PLAIN write, deliberately not atomicWriteFile: that would
+  // stage under its own `.ges-tmp` AND drop a modify-marker, and the
+  // sweep would then FORWARD-COMPLETE our half-built file onto the
+  // proposal path. A bare staging file is the one the sweep drops, which
+  // is exactly the semantics recovery case 2 relies on.
+  await deps.vault.adapter.write(
+    staging,
+    buildMigrationProposal(split, blocks),
+  );
+  // Step 2 — the list becomes durable only now, so a crash before this
+  // leaves a staging file nobody claims (case 2) rather than renamed
+  // sources nobody can explain.
+  await deps.vault.adapter.write(
+    inProgressPath(deps),
+    serializeMigrationList(sources),
+  );
+  // Step 3, then 4.
+  await renameSourcesAway(deps, sources);
+  await safeRename(deps.vault.adapter, staging, proposal);
+  await finish(deps, sources);
+
+  deps.logger?.info("gitignore migration: done", {
+    sources,
+    proposal,
+  });
+  return { kind: "migrated", sources, conflictPath: proposal };
+}
+
+// Read the done marker, for §8.1.6's remote deletion and for the Settings
+// report. Returns null when the migration has not completed.
+export async function readDoneMarker(
+  deps: MigrationDeps,
+): Promise<DoneMarker | null> {
+  const raw = await readIfPresent(deps.vault, donePath(deps));
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<DoneMarker>;
+    if (!Array.isArray(parsed.sources)) return null;
+    return {
+      migratedAt: typeof parsed.migratedAt === "number" ? parsed.migratedAt : 0,
+      sources: parsed.sources.filter((s): s is string => typeof s === "string"),
+      remotePending: Array.isArray(parsed.remotePending)
+        ? parsed.remotePending.filter((s): s is string => typeof s === "string")
+        : [],
+    };
+  } catch {
+    return null;
+  }
+}
