@@ -16,6 +16,7 @@ import {
   deconflictDeviceLabel,
 } from "../../src/sync2/conflict-siblings";
 import { parseSiblingFilename } from "../../src/diff2/strip-conflict-suffix";
+import { FORBIDDEN_TO_CANONICAL } from "../../src/sync2/cross-platform";
 
 // Phase 2 sibling helpers (NEW-DRAIN §III допоміжні; §VIII C.7-family).
 // The disk-name format is a pre-existing invariant — the strongest
@@ -249,23 +250,21 @@ describe("the §8.1 migration label is reserved (DOT-FILES §8.1.5a)", () => {
     );
   });
 
-  it("🔑 the amended label still yields a FILESYSTEM-VALID sibling name", () => {
-    // The point of the Unicode glyph. buildSiblingFilePath does NOT run
-    // the label through sanitizeFilename — it only maps parens — so a
-    // literal "??" in the amendment would put a Windows FAT/NTFS-invalid
-    // `?` straight into a filename. Asserted on the PRODUCED NAME rather
-    // than on the label, because that is where the damage would land.
+  it("the amendment itself carries no ASCII `?`", () => {
+    // ⚠️ This pin was RETARGETED once buildSiblingFilePath started
+    // sanitising the label. It used to assert the produced FILENAME was
+    // valid — which now passes for a second reason (a literal `?` would
+    // be sanitised to ？), so it no longer pinned the choice it was
+    // written for. Asserted on the amendment text instead: the glyph is
+    // deliberate, and `？？` in a filename reads as mangled where ⁇ reads
+    // as intended.
+    expect(deconflictDeviceLabel(MIGRATION_DEVICE_LABEL)).not.toMatch(/\?/);
     const name = buildSiblingFilePath(
       ".gitignore",
       1_700_000_000_000,
       deconflictDeviceLabel(MIGRATION_DEVICE_LABEL),
     );
-    // The forbidden set from cross-platform.ts FORBIDDEN_REGEX, minus
-    // `[`/`]` which buildSiblingFilePath deliberately produces from
-    // parens (its own long-standing rule, not this feature's business).
-    expect(name).not.toMatch(/["<>:|?*\\#^]/);
-    // …and it is still a parseable sibling, or the conflict would never
-    // appear at all.
+    // Still a parseable sibling, or the conflict would never appear.
     expect(parseSiblingFilename(name)?.basePath).toBe(".gitignore");
   });
 
@@ -279,5 +278,55 @@ describe("the §8.1 migration label is reserved (DOT-FILES §8.1.5a)", () => {
     );
     const once = deconflictDeviceLabel(MIGRATION_DEVICE_LABEL);
     expect(deconflictDeviceLabel(once)).toBe(once);
+  });
+});
+
+describe("the device label is part of a FILENAME and is sanitised", () => {
+  const nameFor = (label: string) =>
+    buildSiblingFilePath("note.md", 1_700_000_000_000, label);
+
+  it("🔑 every FORBIDDEN_TO_CANONICAL character is replaced, not passed through", () => {
+    // The user can type anything into the Device-label field, and the
+    // label goes straight into a filename. Raw `?`/`:`/`|`/`*` etc. fail
+    // the write outright on Windows and Android; on macOS they succeed
+    // and produce a file the other platforms cannot represent — a vault
+    // that syncs on one machine and breaks on the next.
+    for (const [forbidden, canonical] of Object.entries(
+      FORBIDDEN_TO_CANONICAL,
+    )) {
+      const name = nameFor(`PC${forbidden}1`);
+      expect(name, `label containing ${forbidden}`).toContain(canonical);
+      expect(name, `label containing ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it("🔑 …and the ORDER is preserved: parens still become brackets", () => {
+    // The regression this fix could easily have caused, and the reason
+    // sanitising runs BEFORE the paren rule. That rule PRODUCES `[`/`]`,
+    // which are themselves in FORBIDDEN_TO_CANONICAL — sanitising after
+    // it would yield `Mac ［work］` and change the derived name of every
+    // sibling whose label has parens, orphaning files already on disk.
+    expect(nameFor("Mac (work)")).toContain("Mac [work]");
+    expect(nameFor("Mac (work)")).not.toContain("［");
+  });
+
+  it("a clean label is untouched, and the result still round-trips", () => {
+    // Without the clean half, "replace everything" would pass the first
+    // test too. The round-trip matters because a name that no longer
+    // parses is a conflict that never appears in the panel.
+    expect(nameFor("Mac")).toContain("conflict-from-Mac-");
+    const parsed = parseSiblingFilename(nameFor("PC?1"));
+    expect(parsed?.basePath).toBe("note.md");
+    expect(parsed?.deviceLabel).toBe("PC？1");
+  });
+
+  it("the scan still recognises a sanitised sibling on disk", () => {
+    // The label is derived, never stored — so write, read and scan must
+    // agree on the SAME transformation or the engine would look for a
+    // file it just wrote under a different name.
+    const name = nameFor("PC|:*1");
+    expect(name).toMatch(
+      /^note\.conflict-from-.+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.md$/,
+    );
   });
 });

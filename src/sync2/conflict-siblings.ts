@@ -24,6 +24,7 @@
 
 import { normalizePath, type Vault } from "obsidian";
 import { atomicWriteFile } from "./atomic-write";
+import { sanitizeFilename } from "./cross-platform";
 import { calculateGitBlobSHA } from "../utils";
 
 // Deep-defense fallback only: every conflict birth site (§III STEP1 /
@@ -119,8 +120,23 @@ export function buildSiblingFilePath(
   deviceLabel?: string | null,
 ): string {
   const { dir, stem, ext } = splitPath(basePath);
-  // Filesystem-safe label: parens replaced, same rule as v1.
-  const safeLabel = (deviceLabel ?? UNKNOWN_DEVICE_LABEL)
+  // The label is part of a FILENAME, so it must survive the same
+  // character rules every other vault path does — a user is free to type
+  // `My PC?` or `A[1]` into the Device-label field, and before this ran
+  // through sanitizeFilename those characters reached the filesystem
+  // raw. On Windows/Android the write then fails outright; on macOS it
+  // succeeds and produces a file the other platforms cannot represent.
+  //
+  // ⚠️ ORDER IS LOAD-BEARING: sanitize FIRST, replace parens SECOND.
+  // The paren rule exists for the commit-message grammar (so
+  // parseDeviceSuffix's trailing " (label)" stays unambiguous) and it
+  // PRODUCES `[`/`]`, which are themselves in FORBIDDEN_TO_CANONICAL.
+  // Sanitizing afterwards would rewrite them to ［］ and change the
+  // derived name of every sibling whose label contains parens — i.e. the
+  // common "Mac (work)" case — orphaning existing files. This order
+  // leaves the paren case byte-identical to what v1 produced and only
+  // touches labels that were genuinely unsafe.
+  const safeLabel = sanitizeFilename(deviceLabel ?? UNKNOWN_DEVICE_LABEL)
     .replace(/\(/g, "[")
     .replace(/\)/g, "]");
   const ts = formatTimestampForFilename(mtime);
