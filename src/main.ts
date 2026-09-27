@@ -33,6 +33,7 @@ import {
   type MigrationDeps,
 } from "./sync2/gitignore-migration";
 import { GitignoreEditModal } from "./sync2/views/gitignore-edit-modal";
+import { GitignoreDecisionModal } from "./sync2/views/gitignore-modal";
 import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
 import Logger from "./logger";
 import { describeError, calculateGitBlobSHA } from "./utils";
@@ -1216,13 +1217,7 @@ export default class GitHubSyncPlugin extends Plugin {
         this.logger.info("gitignore migration", r);
       }
       if (r.conflictPath !== null) {
-        new Notice(
-          `Your nested .gitignore rules were collected into a proposal ` +
-            `for the vault's root .gitignore (${r.sources.length} file(s) ` +
-            `renamed to .bak). Open the conflicts panel to review it — ` +
-            `syncing is paused until you do.`,
-          15000,
-        );
+        await this.showGitignoreMigrationModal(r.sources);
       }
     } catch (err) {
       this.logger.error("gitignore migration failed", `${err}`);
@@ -1706,6 +1701,38 @@ export default class GitHubSyncPlugin extends Plugin {
     }
   }
 
+  // The migration's own report (§8.1.5). A modal rather than a toast: the
+  // user is handed a change to accept or discard, which is a QUESTION, and
+  // a question that fades unread has not been asked.
+  private async showGitignoreMigrationModal(sources: string[]): Promise<void> {
+    const n = sources.length;
+    const decision = await new GitignoreDecisionModal(this.app, {
+      title: "Rules found outside the root .gitignore",
+      body: [
+        `${n} .gitignore ${n === 1 ? "file" : "files"} outside the vault ` +
+          `root ${n === 1 ? "was" : "were"} found. Plain git honours ` +
+          `${n === 1 ? "it" : "them"}, but this plugin reads only the root ` +
+          `file — so the rules were translated and offered as a change to ` +
+          `the root .gitignore for you to review.`,
+        "The originals were renamed to .bak; nothing was deleted. Syncing " +
+          "stays paused until you accept or discard the change.",
+      ],
+      paths: sources,
+      resolveLabel: "Solve conflict",
+      dismissLabel: "Skip",
+    }).prompt();
+    if (decision === "resolve") {
+      try {
+        await this.activateDiffEditView();
+      } catch (err) {
+        void this.logger.error(
+          "Failed to open the diff panel from the migration modal",
+          `${err}`,
+        );
+      }
+    }
+  }
+
   // Settings → "Check now" (§8.1.5). FORCED: the done marker gates the
   // automatic run, and this button exists precisely for what the marker
   // cannot cover — a nested `.gitignore` added after the first pass.
@@ -1730,10 +1757,17 @@ export default class GitHubSyncPlugin extends Plugin {
         : [];
       const open = disputes.find((d) => d.isMigrationProposal) ?? disputes[0];
       const report = migrationReportText(result, open?.siblingPath ?? null);
-      new Notice(`${report.title}
-
-${report.body}`, 20000);
-      if (report.resolvePath !== null) {
+      const decision = await new GitignoreDecisionModal(this.app, {
+        title: report.title,
+        body: [report.body],
+        paths: result.sources,
+        // Nothing to act on → a statement, so one button and no
+        // "Solve conflict" pointing at nothing.
+        resolveLabel:
+          report.resolvePath !== null ? "Solve conflict" : undefined,
+        dismissLabel: report.resolvePath !== null ? "Skip" : "Close",
+      }).prompt();
+      if (decision === "resolve") {
         try {
           await this.activateDiffEditView();
         } catch (err) {
@@ -1804,27 +1838,41 @@ ${report.body}`, 20000);
         MIGRATION_DEVICE_LABEL,
       );
       if (disputes.length > 0) {
-        const proposal = disputes.find((d) => d.isMigrationProposal);
-        new Notice(
-          `Reconcile your .gitignore rules before syncing — ` +
-            `${disputes.length} unresolved .gitignore ` +
-            `${disputes.length === 1 ? "conflict" : "conflicts"}. ` +
-            `These rules decide what gets synced at all, so syncing now ` +
-            `could publish or hide the wrong files. Open the conflicts ` +
-            `panel to resolve ` +
-            `${proposal ? "the proposed rule migration" : "it"}.`,
-          12000,
-        );
         this.logger.warn("sync blocked: .gitignore in conflict", {
           disputes: disputes.map((d) => d.siblingPath),
         });
-        try {
-          await this.activateDiffEditView();
-        } catch (err) {
-          void this.logger.error(
-            "Failed to open the diff panel from the gitignore gate",
-            `${err}`,
-          );
+        const proposal = disputes.find((d) => d.isMigrationProposal);
+        const n = disputes.length;
+        // A MODAL, not a toast (owner, 2026-09-28): this explains why a
+        // sync the user just asked for did not happen, and a toast that
+        // fades unread turns a refusal into a silent no-op.
+        const decision = await new GitignoreDecisionModal(this.app, {
+          title: "Sync paused — .gitignore is in conflict",
+          body: [
+            `${n} .gitignore ${n === 1 ? "file has" : "files have"} an ` +
+              `unresolved conflict.`,
+            "These rules decide which files are synced at all, so running " +
+              "a sync while they disagree could publish files you meant to " +
+              "keep private, or hide files you meant to keep.",
+            proposal
+              ? "One of them is the proposed migration of rules found " +
+                "elsewhere in the vault. Accept, edit or discard it, and " +
+                "syncing resumes."
+              : "Resolve it and syncing resumes.",
+          ],
+          paths: disputes.map((d) => d.basePath),
+          resolveLabel: "Solve conflict",
+          dismissLabel: "Cancel",
+        }).prompt();
+        if (decision === "resolve") {
+          try {
+            await this.activateDiffEditView();
+          } catch (err) {
+            void this.logger.error(
+              "Failed to open the diff panel from the gitignore gate",
+              `${err}`,
+            );
+          }
         }
         return false;
       }

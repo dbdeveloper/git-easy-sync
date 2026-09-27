@@ -30,6 +30,29 @@ const modal = vi.hoisted(() => ({
   constructed: 0,
   decision: "cancel" as "resolve" | "sync-anyway" | "cancel",
 }));
+// The §8.1.5a gitignore gate's modal. Same hoisting reason as below.
+const giModal = vi.hoisted(() => ({
+  opts: null as null | {
+    title: string;
+    body: string[];
+    paths?: string[];
+    resolveLabel?: string;
+    dismissLabel: string;
+  },
+  constructed: 0,
+  decision: "dismiss" as "resolve" | "dismiss",
+}));
+vi.mock("../src/sync2/views/gitignore-modal", () => ({
+  GitignoreDecisionModal: class {
+    constructor(_app: unknown, opts: never) {
+      giModal.opts = opts;
+      giModal.constructed++;
+    }
+    prompt() {
+      return Promise.resolve(giModal.decision);
+    }
+  },
+}));
 vi.mock("../src/sync2/views/pre-sync-conflict-modal", () => ({
   PreSyncConflictModal: class {
     constructor(_app: unknown, paths: string[], conflictCount: number) {
@@ -106,7 +129,10 @@ function makeGate(
       workspace: { openLinkText: openSpy },
     },
     conflictStoreV2: store,
-    logger: { error: errorSpy },
+    // The §8.1.5a gate logs a WARN before it blocks; without it here the
+    // stub threw and the catch's own warn threw again, so the gate looked
+    // broken when only the harness was.
+    logger: { error: errorSpy, warn: vi.fn(), info: vi.fn() },
     activateDiffEditView: activateSpy,
   });
   return { plugin, openSpy, activateSpy, errorSpy };
@@ -286,5 +312,74 @@ describe("confirmPendingConflictsBeforeSync (pre-sync conflict gate)", () => {
     // The modal was handed ONLY the live conflict — the resolved phantom is gone.
     expect(modal.constructed).toBe(1);
     expect(modal.paths).toEqual(["live.md"]);
+  });
+});
+
+
+describe("§8.1.5a the .gitignore gate is a MODAL and blocks unconditionally", () => {
+  let fx: ReturnType<typeof fixture>;
+
+  beforeEach(async () => {
+    fx = fixture();
+    await fx.store.load();
+    giModal.opts = null;
+    giModal.constructed = 0;
+    giModal.decision = "dismiss";
+    modal.constructed = 0;
+  });
+  afterEach(() => {
+    if (fs.existsSync(fx.root)) fs.rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  const PROPOSAL =
+    ".gitignore.conflict-from-Old gitignore files-2026-09-28T10-00-00Z";
+
+  it("🔑 blocks even when the user dismisses — there is no 'sync anyway'", async () => {
+    // The whole point of the hard gate. A dismissal is "not now", never
+    // "go ahead": these rules decide what gets synced at all.
+    writeFile(fx.root, ".gitignore", ".*\n");
+    writeFile(fx.root, PROPOSAL, "proposed\n");
+    const { plugin, activateSpy } = makeGate(fx.vault, fx.store);
+
+    giModal.decision = "dismiss";
+    expect(await plugin.confirmPendingConflictsBeforeSync()).toBe(false);
+    expect(giModal.constructed).toBe(1);
+    // Dismiss must NOT drag the user into the panel they just declined.
+    expect(activateSpy).not.toHaveBeenCalled();
+    // …and the ordinary conflict modal never gets a turn: the gate
+    // returned first.
+    expect(modal.constructed).toBe(0);
+  });
+
+  it("🔑 'Solve conflict' opens the panel, and still does not sync", async () => {
+    writeFile(fx.root, ".gitignore", ".*\n");
+    writeFile(fx.root, PROPOSAL, "proposed\n");
+    const { plugin, activateSpy } = makeGate(fx.vault, fx.store);
+
+    giModal.decision = "resolve";
+    expect(await plugin.confirmPendingConflictsBeforeSync()).toBe(false);
+    expect(activateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the file and offers both buttons", async () => {
+    // The user is asked to judge a specific file; a modal that does not
+    // say which one is asking them to guess.
+    writeFile(fx.root, ".gitignore", ".*\n");
+    writeFile(fx.root, PROPOSAL, "proposed\n");
+    const { plugin } = makeGate(fx.vault, fx.store);
+    await plugin.confirmPendingConflictsBeforeSync();
+
+    expect(giModal.opts?.paths).toEqual([".gitignore"]);
+    expect(giModal.opts?.resolveLabel).toBe("Solve conflict");
+    expect(giModal.opts?.dismissLabel).toBe("Cancel");
+  });
+
+  it("a clean vault never shows it, and the ordinary gate still runs", async () => {
+    // Without this, a gate that fired unconditionally would pass every
+    // test above while blocking every sync in the product.
+    writeFile(fx.root, ".gitignore", ".*\n");
+    const { plugin } = makeGate(fx.vault, fx.store);
+    expect(await plugin.confirmPendingConflictsBeforeSync()).toBe(true);
+    expect(giModal.constructed).toBe(0);
   });
 });
