@@ -1728,6 +1728,11 @@ export default class GitHubSyncPlugin extends Plugin {
       dismissLabel: "Skip",
     }).prompt();
     if (decision === "resolve") {
+      // Enabling the plugin from Settings → Community plugins runs this
+      // with the Settings dialog still in front (field report
+      // 2026-09-28); on an ordinary start it is closed and this is a
+      // no-op, guarded inside.
+      this.closeSettingsDialog();
       try {
         await this.activateDiffEditView();
       } catch (err) {
@@ -1801,14 +1806,28 @@ export default class GitHubSyncPlugin extends Plugin {
   // `Hee` carries `modalEl`/`contentEl`/`updateModalTitle`, i.e. it is a
   // Modal subclass — so `close()` is inherited rather than invented here.
   //
-  // Fails SOFT on purpose: if a future version moves this, the worst
-  // outcome is the dialog staying open, which is exactly today's
-  // behaviour. Wedging a working feature over a cosmetic step would be
-  // the wrong trade.
+  // ⚠️ AND IT MUST ONLY BE CALLED WHILE OPEN. `Modal.prototype.close` runs
+  // `keymap.popScope(this.scope)` UNCONDITIONALLY — there is no is-open
+  // guard inside it — so closing an already-closed dialog pops a scope
+  // that was never pushed and corrupts the keymap stack. That did not
+  // matter while the only caller was the Settings button (the dialog is
+  // open by definition there); it started to matter the moment the
+  // automatic migration, which runs at plugin start, wanted the same
+  // thing. `open()` does `appendChild(containerEl)` and `close()` detaches
+  // it, so `isConnected` is the honest signal.
+  //
+  // Fails SOFT: if a future version moves any of this, the worst outcome
+  // is the dialog staying open — exactly today's behaviour. Wedging a
+  // working feature over a cosmetic step would be the wrong trade.
   private closeSettingsDialog(): void {
     try {
-      (this.app as unknown as { setting?: { close?: () => void } }).setting
-        ?.close?.();
+      const setting = (
+        this.app as unknown as {
+          setting?: { containerEl?: HTMLElement; close?: () => void };
+        }
+      ).setting;
+      if (!setting?.containerEl?.isConnected) return;
+      setting.close?.();
     } catch (err) {
       this.logger.warn("could not close the settings dialog", {
         err: `${err}`,
@@ -1898,6 +1917,7 @@ export default class GitHubSyncPlugin extends Plugin {
           dismissLabel: "Cancel",
         }).prompt();
         if (decision === "resolve") {
+          this.closeSettingsDialog();
           try {
             await this.activateDiffEditView();
           } catch (err) {
@@ -3176,7 +3196,7 @@ export default class GitHubSyncPlugin extends Plugin {
     }
     const leaf = await this.activateDiffEditView();
     if (leaf.view instanceof DiffPanelView) {
-      leaf.view.applyBackNav(nav);
+      await leaf.view.applyBackNav(nav);
       // Return the cursor to the LAUNCH position + focus the list (same reason as history —
       // active-leaf-change alone is unreliable across splits).
       const panel = leaf.view;

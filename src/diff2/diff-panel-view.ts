@@ -224,16 +224,18 @@ export class DiffPanelView extends ItemView {
   // re-scan: §4.3.1 п.4 makes disappearance the trivial half, and the
   // expensive half (the dot-space walk) has nothing to say about a file
   // that is gone.
-  private async pruneVanishedEntries(): Promise<void> {
-    if (this.conflictEntries.length === 0) return;
+  // Returns whether anything went, and does NOT render: it has two
+  // callers now and they want different things — one repaints for the
+  // fast-path feel, the other is about to repaint anyway.
+  private async pruneVanishedEntries(): Promise<boolean> {
+    if (this.conflictEntries.length === 0) return false;
     const alive: ConflictEntry[] = [];
     for (const e of this.conflictEntries) {
       if (await this.deps.vault.adapter.exists(e.siblingPath)) alive.push(e);
     }
-    if (alive.length !== this.conflictEntries.length) {
-      this.conflictEntries = alive;
-      this.render();
-    }
+    if (alive.length === this.conflictEntries.length) return false;
+    this.conflictEntries = alive;
+    return true;
   }
 
   async refreshConflicts(): Promise<void> {
@@ -250,7 +252,7 @@ export class DiffPanelView extends ItemView {
         // no store read — so a conflict the user just resolved leaves
         // the panel immediately instead of lingering until the slow
         // half finishes.
-        await this.pruneVanishedEntries();
+        if (await this.pruneVanishedEntries()) this.render();
         const { entries } = await findAllConflicts(
           this.deps.vault,
           this.deps.conflictStore,
@@ -290,8 +292,24 @@ export class DiffPanelView extends ItemView {
   // sub-tab, re-render the (now-fresher) list, and scroll to the resolved base group.
   // Only PANEL back-navs reach the panel; a history back-nav is routed to the
   // diff2-history view by the caller (7a.1 narrowing — the panel never renders it).
-  applyBackNav(nav: Extract<BackNav, { kind: "panel" }>): void {
+  async applyBackNav(nav: Extract<BackNav, { kind: "panel" }>): Promise<void> {
     this.viewState = { tab: nav.tab };
+    // ⚠️ Prune BEFORE repainting. This used to render straight from the
+    // in-memory list, so a conflict the user had just resolved came back
+    // on screen — a row that did nothing when clicked, because the file
+    // behind it was gone (field report 2026-09-28).
+    //
+    // It did not bite for ordinary files: ConflictWatcher hears
+    // `vault.on('delete')` and drives a refresh. It bites for DOT-paths —
+    // `.gitignore` and its sibling — because Obsidian's indexer hides any
+    // path with a dotted segment, so that event never fires at all. The
+    // `[←]` return is the one moment we KNOW something may have gone, so
+    // it is where the check belongs.
+    //
+    // The cheap half only: one `exists` per row, no walk. The expensive
+    // dot-space scan has nothing to say about a file that is gone, and
+    // running it here would cost seconds on Android for no answer.
+    await this.pruneVanishedEntries();
     this.render();
     if (nav.scrollToBase) this.scrollToBase(nav.scrollToBase);
   }
