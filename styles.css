@@ -1173,3 +1173,45 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
     display: flex;
     flex-direction: column;
 }
+
+/* bug-gitignore-editor (field report 2026-09-28) — the SAME shape as bug-23
+ * above, and it appeared for the same reason: a content box that grows with
+ * its child instead of clipping. The modal scrolled, the textarea scrolled
+ * inside it (two scrollbars), and the Save/Cancel row was pushed below the
+ * fold — so the editor had no visible way to commit.
+ *
+ * Fix: the content box is a flex COLUMN that clips, the textarea is the only
+ * thing that flexes, and the button row cannot shrink. Then exactly one
+ * element scrolls and the buttons are always reachable. */
+.git-easy-sync-gitignore-modal {
+    width: min(760px, 92vw);
+}
+.git-easy-sync-gitignore-modal .modal-content {
+    display: flex;
+    flex-direction: column;
+    max-height: 70vh;
+    overflow: hidden;
+}
+.git-easy-sync-gitignore-hint {
+    flex-shrink: 0;
+    margin-top: 0;
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+}
+.git-easy-sync-gitignore-editor {
+    flex: 1 1 auto;
+    min-height: 12em;
+    width: 100%;
+    box-sizing: border-box;
+    font-family: var(--font-monospace);
+    /* A .gitignore line must NOT wrap: a wrapped rule reads as two rules,
+     * which is exactly the thing the user is here to judge. Horizontal
+     * scrolling is the honest trade. */
+    white-space: pre;
+    overflow: auto;
+    resize: none;
+}
+.git-easy-sync-gitignore-modal .modal-button-container {
+    flex-shrink: 0;
+    margin-top: 0.75em;
+}

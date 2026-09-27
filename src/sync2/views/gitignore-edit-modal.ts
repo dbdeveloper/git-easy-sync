@@ -32,8 +32,15 @@ export class GitignoreEditModal extends Modal {
 
   onOpen(): void {
     const { contentEl } = this;
+    // Sizing + the flex-column clip live in styles.css; see the
+    // bug-gitignore-editor comment there for why the default box gave two
+    // scrollbars and hid the buttons.
+    this.modalEl.addClass("git-easy-sync-gitignore-modal");
     contentEl.empty();
-    contentEl.createEl("h3", { text: "Root .gitignore" });
+    // titleEl, not an h3 inside the content box — the house pattern
+    // (PreSyncConflictModal), and it keeps the heading OUT of the flex
+    // column, where it would have been a shrinkable item.
+    this.titleEl.setText("Root .gitignore");
     contentEl.createEl("p", {
       text:
         "Lines between the DO-NOT-EDIT markers are maintained by the plugin " +
@@ -46,7 +53,8 @@ export class GitignoreEditModal extends Modal {
       cls: "git-easy-sync-gitignore-editor",
     });
     area.value = this.initial;
-    area.rows = 24;
+    // No `rows`: the flex column decides the height, and a fixed row count
+    // would fight it.
     area.spellcheck = false;
     this.textarea = area;
 
