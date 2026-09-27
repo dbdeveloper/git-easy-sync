@@ -32,6 +32,7 @@ import {
   buildMigrationProposal,
 } from "../../src/sync2/gitignore-migrate";
 import {
+  PLUGINS_DIR_MANAGED_LINES,
   FINAL_BEGIN,
   FINAL_END,
   INVARIANTS_BEGIN,
@@ -214,6 +215,63 @@ describe("§8.1.4 the forward path", () => {
     expect(r.sources).toEqual([`${CONFIG_DIR}/plugins/.gitignore`]);
     expect(exists(`${CONFIG_DIR}/.gitignore`)).toBe(true);
     expect(exists(`${CONFIG_DIR}/plugins/.gitignore`)).toBe(false);
+  });
+
+  it("🔑 OUR OWN template in plugins/.gitignore is not migrated, and the file is not renamed", async () => {
+    // Field report 2026-09-28: the whole managed file was hoisted into
+    // the proposal. Not a leak — measured against git, the deeper
+    // per-device file still speaks last so the data.json toggle held —
+    // but it duplicated our rules into the SHARED root file and showed
+    // the user lines they cannot judge.
+    //
+    // The file must also stay PUT: enforce() owns it and recreates it on
+    // the next pass, so renaming it would be churn plus a stray `.bak`.
+    const deps = setup({
+      ".gitignore": ROOT,
+      [`${CONFIG_DIR}/plugins/.gitignore`]: PLUGINS_DIR_MANAGED_LINES.slice(
+        0,
+        4,
+      ).join("\n"),
+    });
+    const r = await runMigrationFull(deps);
+    expect(r.kind).toBe("nothing-found");
+    expect(r.sources).toEqual([]);
+    expect(exists(`${CONFIG_DIR}/plugins/.gitignore`)).toBe(true);
+    expect(exists(`${CONFIG_DIR}/plugins/.gitignore.bak`)).toBe(false);
+  });
+
+  it("🔑 …but USER content in that same file still travels", async () => {
+    // The half that makes the filter a filter rather than a skip: the
+    // file is in scope precisely because enforce() would destroy anything
+    // a user put there.
+    const deps = setup({
+      ".gitignore": ROOT,
+      [`${CONFIG_DIR}/plugins/.gitignore`]: [
+        ...PLUGINS_DIR_MANAGED_LINES.slice(0, 4),
+        "my-own-rule",
+      ].join("\n"),
+    });
+    const r = await runMigrationFull(deps);
+    expect(r.kind).toBe("migrated");
+    const body = read(PROPOSAL);
+    expect(body).toContain("my-own-rule");
+    // Ours is gone from the proposal — including BOTH toggle spellings.
+    expect(body).not.toContain("data.json");
+    expect(body).not.toContain("Managed file");
+  });
+
+  it("a nested file with no rules is left in place, not renamed", async () => {
+    // Renaming is the destructive half; doing it for a file whose rules
+    // we did not take buys nothing.
+    const deps = setup({
+      ".gitignore": ROOT,
+      "a/.gitignore": "# just a comment\n",
+      "b/.gitignore": "real\n",
+    });
+    const r = await runMigrationFull(deps);
+    expect(r.sources).toEqual(["b/.gitignore"]);
+    expect(exists("a/.gitignore")).toBe(true);
+    expect(exists("b/.gitignore.bak")).toBe(true);
   });
 });
 

@@ -39,6 +39,7 @@ import { SYNC_TMP_SUFFIX } from "./atomic-write";
 import {
   findMigrationCandidates,
   translateFile,
+  stripOurPluginsDirTemplate,
   splitAtFinalSection,
   buildMigrationProposal,
   serializeMigrationList,
@@ -377,11 +378,36 @@ export async function runMigrationFull(
   // last-match-wins means a deeper rule must land LATER in the file.
   const blocks: string[][] = [];
   const sources: string[] = [];
+  const pluginsDirGitignore = `${deps.configDir}/plugins/.gitignore`;
   for (const candidate of walk.candidates) {
-    const content = await readIfPresent(deps.vault, candidate.path);
-    if (content === null) continue; // vanished mid-run — skip-class
-    blocks.push(translateFile(content, candidate.dir));
+    const raw = await readIfPresent(deps.vault, candidate.path);
+    if (raw === null) continue; // vanished mid-run — skip-class
+    // Our own managed template must not travel into the root file.
+    const content =
+      candidate.path === pluginsDirGitignore
+        ? stripOurPluginsDirTemplate(raw)
+        : raw;
+    const block = translateFile(content, candidate.dir);
+    // ⚠️ RENAME ONLY WHAT CONTRIBUTED. Renaming is the destructive half,
+    // and doing it for a file whose rules we did not take buys nothing:
+    // for `<configDir>/plugins/.gitignore` it would be pure churn, since
+    // enforce() owns that file and recreates it on the next pass, leaving
+    // a stray `.bak` behind. A file with no rules had no effect to
+    // preserve either way.
+    if (block.length === 0) continue;
+    blocks.push(block);
     sources.push(candidate.path);
+  }
+  if (sources.length === 0) {
+    // Candidates existed but none carried a rule worth moving — the same
+    // outcome as finding none, and it must be recorded the same way or
+    // the migration would never stop looking.
+    await deps.vault.adapter.write(
+      inProgressPath(deps),
+      serializeMigrationList([]),
+    );
+    await finish(deps, []);
+    return { kind: "nothing-found", ...none };
   }
 
   const at = deps.nowMs();

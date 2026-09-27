@@ -82,6 +82,28 @@ function composeSection(begin: string, body: string, end: string): string {
 //   deepest one speaking about its own path, no rule above can undo
 //   that — verified against git with `!`-rules planted in the root
 //   file, in <configDir>/.gitignore, and in both at once.
+// Every line we have ever written into `<configDir>/plugins/.gitignore`,
+// BOTH toggle states at once.
+//
+// Exported for the §8.1 migration, which must not carry OUR OWN template
+// into the root file. Both states, deliberately: the file on disk may sit
+// in either, and a device that last wrote the other one is not a special
+// case — it is the ordinary state of a per-device switch.
+//
+// Field report 2026-09-28: without this the migration hoisted the whole
+// managed file into the proposal. Not a leak — measured against git, the
+// deeper per-device file still speaks last, so the toggle held — but it
+// duplicated our rules into the SHARED root file, which is exactly what
+// §8.1's second presupposition forbids, and it put lines in front of the
+// user that they have no way to judge.
+export const PLUGINS_DIR_MANAGED_LINES: readonly string[] = [
+  '# git-easy-sync: per-device switch "Sync plugins data.json".',
+  "# Managed file - edit the setting, not this.",
+  "/.gitignore",
+  "!*/data.json",
+  "*/data.json",
+];
+
 function pluginsDirGitignore(pushPluginsDataJson: boolean): string {
   return `# git-easy-sync: per-device switch "Sync plugins data.json".
 # Managed file - edit the setting, not this.

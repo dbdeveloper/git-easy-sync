@@ -101,6 +101,27 @@ export function translateRule(rule: string, dir: string): string {
   return `${prefix}${path}${suffix}`;
 }
 
+// Strip OUR OWN template out of `<configDir>/plugins/.gitignore` before
+// translating it.
+//
+// That file is in migration scope because `enforce()` rewrites it WHOLE,
+// so any user content in it would be destroyed — but its ordinary content
+// is ours, and carrying that into the root file would duplicate our rules
+// into a SHARED file (§8.1 presupposition 2) and put lines in front of the
+// user that they cannot judge. What must travel is only what is NOT ours
+// (owner, field report 2026-09-28).
+//
+// Applied ONLY to this path. Every other candidate is a foreign file, and
+// a filter that struck familiar-looking lines out of those would remove
+// something a user wrote.
+export function stripOurPluginsDirTemplate(content: string): string {
+  const managed = new Set(PLUGINS_DIR_MANAGED_LINES);
+  return content
+    .split("\n")
+    .filter((line) => !managed.has(line.replace(/\r$/, "").trim()))
+    .join("\n");
+}
+
 // Translate a whole source file into the lines it contributes, led by a
 // provenance header so the user reading the conflict can see WHERE each
 // group came from and judge it.
@@ -246,7 +267,10 @@ export async function findMigrationCandidates(
 
 // ── §8.1.3 assembling the proposal, and §8.1.4's marker format ───────
 
-import { FINAL_BEGIN } from "./gitignore-invariants";
+import {
+  FINAL_BEGIN,
+  PLUGINS_DIR_MANAGED_LINES,
+} from "./gitignore-invariants";
 
 // Split the assembled root `.gitignore` into the two halves §8.1.3 wraps
 // the migrated rules in: everything ABOVE our `final` section (the
