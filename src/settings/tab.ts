@@ -17,6 +17,7 @@ import { logFileNameFor } from "src/logger";
 import { formatSyncMessage } from "src/sync2/commit-message";
 import { renderTokenHelpBox } from "src/sync2/views/token-help";
 import { pluginsDataJsonToggleState } from "src/settings/toggle-rules";
+import { deconflictDeviceLabel } from "src/sync2/conflict-siblings";
 import { tokenExpiredMessage } from "src/token-expired-flag";
 import {
   probeGitHubConnection,
@@ -355,7 +356,12 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           .setPlaceholder("Obsidian")
           .setValue(this.plugin.settings.deviceLabel ?? "Obsidian")
           .onChange(async (value) => {
-            this.plugin.settings.deviceLabel = value.trim() || "Obsidian";
+            // deconflictDeviceLabel keeps the §8.1 migration's reserved
+            // label out of reach — see conflict-siblings.ts for why a
+            // real device wearing it would jam the pre-sync gate.
+            this.plugin.settings.deviceLabel = deconflictDeviceLabel(
+              value.trim() || "Obsidian",
+            );
             await this.plugin.saveSettings();
             for (const refresh of previews) refresh();
           }),

@@ -22,6 +22,7 @@ import {
 import { GitHubSyncSettings, DEFAULT_SETTINGS } from "./settings/settings";
 import GitHubSyncSettingsTab from "./settings/tab";
 import { pluginsDataJsonToggleState } from "./settings/toggle-rules";
+import { deconflictDeviceLabel } from "./sync2/conflict-siblings";
 import Logger from "./logger";
 import { describeError, calculateGitBlobSHA } from "./utils";
 import GithubClient from "./github/client";
@@ -795,6 +796,7 @@ export default class GitHubSyncPlugin extends Plugin {
       r: this.settings.githubRepo,
       b: this.settings.githubBranch,
       d: this.settings.pushPluginsDataJson,
+      l: this.settings.deviceLabel,
     });
     this.settings.githubToken = (this.settings.githubToken ?? "").trim();
     this.settings.githubOwner = (this.settings.githubOwner ?? "").trim();
@@ -802,6 +804,13 @@ export default class GitHubSyncPlugin extends Plugin {
     // bug-60: an empty branch field defaults to `main` — the branch the
     // first sync creates on a fresh repo, and what the Test-probe assumes.
     this.settings.githubBranch = (this.settings.githubBranch ?? "").trim() || "main";
+    // The §8.1 reserved label, repaired on read for the same reason the
+    // toggle below is: the Settings field polices only what it witnessed,
+    // and a hand-edited data.json carrying the reserved label would jam
+    // the pre-sync gate on every sync.
+    this.settings.deviceLabel = deconflictDeviceLabel(
+      this.settings.deviceLabel ?? "Obsidian",
+    );
     this.settings.pushPluginsDataJson = pluginsDataJsonToggleState(
       this.settings.syncConfigDir ?? true,
       this.settings.pushPluginsDataJson ?? false,
@@ -812,6 +821,7 @@ export default class GitHubSyncPlugin extends Plugin {
       r: this.settings.githubRepo,
       b: this.settings.githubBranch,
       d: this.settings.pushPluginsDataJson,
+      l: this.settings.deviceLabel,
     });
     if (before !== after) await this.saveSettings();
   }

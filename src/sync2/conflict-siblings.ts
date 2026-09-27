@@ -31,6 +31,39 @@ import { calculateGitBlobSHA } from "../utils";
 // label BEFORE calling saveConflictSiblingFile.
 export const UNKNOWN_DEVICE_LABEL = "unknown";
 
+// RESERVED label, and the reason it has to be reserved (DOT-FILES §8.1.5a).
+//
+// The §8.1 migration writes a sibling whose "device" is not a device at
+// all — it is a migration PROPOSAL borrowing the sibling naming
+// convention (and through it, the diff editor) as transport. That label
+// is how the pre-sync gate tells the class apart: a genuine sibling's
+// label names a machine, this one names nothing.
+//
+// `settings.deviceLabel` is user-settable, so a machine carrying this
+// exact label would emit REAL siblings the gate would read as migration
+// proposals — and the gate refuses to sync while one exists. Hence the
+// label is taken out of the user's reach, by amendment rather than
+// rejection: an input that equals it gets the suffix below.
+export const MIGRATION_DEVICE_LABEL = "Old gitignore files";
+
+// U+2047 DOUBLE QUESTION MARK — one char, not "??", because
+// buildSiblingFilePath does NOT run the label through sanitizeFilename
+// (it only maps parens), so a raw `?` would land in a filename where
+// FORBIDDEN_REGEX lists it as Windows FAT/NTFS-invalid. A Unicode
+// stand-in is the same trick sanitizeFilename itself uses (`?` → `？`);
+// this is the glyph the status bar already carries for "unresolved".
+const RESERVED_LABEL_AMENDMENT = " (What⁇)";
+
+// Keep a user-entered device label clear of the reserved one. Exact
+// match only: the gate compares exactly too, so a different casing is
+// already a different label and needs no amendment. Idempotent — an
+// already-amended label no longer equals the reserved string.
+export function deconflictDeviceLabel(label: string): string {
+  return label === MIGRATION_DEVICE_LABEL
+    ? label + RESERVED_LABEL_AMENDMENT
+    : label;
+}
+
 // Narrow slice of the drain's FileInfo this module needs. Field names
 // are camelCase per project style; the spec's `device_label` is
 // `deviceLabel` here.

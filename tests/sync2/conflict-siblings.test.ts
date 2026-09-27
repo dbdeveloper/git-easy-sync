@@ -12,7 +12,10 @@ import {
   findConflictSiblingFilesInVault,
   formatTimestampForFilename,
   UNKNOWN_DEVICE_LABEL,
+  MIGRATION_DEVICE_LABEL,
+  deconflictDeviceLabel,
 } from "../../src/sync2/conflict-siblings";
+import { parseSiblingFilename } from "../../src/diff2/strip-conflict-suffix";
 
 // Phase 2 sibling helpers (NEW-DRAIN §III допоміжні; §VIII C.7-family).
 // The disk-name format is a pre-existing invariant — the strongest
@@ -228,5 +231,53 @@ describe("sibling IO helpers", () => {
       );
       expect(synthetic).toHaveLength(1);
     });
+  });
+});
+
+describe("the §8.1 migration label is reserved (DOT-FILES §8.1.5a)", () => {
+  it("a device label equal to the reserved one is amended, not rejected", () => {
+    // The gate refuses to sync while a migration proposal exists, and it
+    // recognises one BY THIS LABEL. A real machine wearing it would emit
+    // genuine siblings the gate reads as proposals — i.e. a vault that
+    // can never sync again. Amending is gentler than refusing and needs
+    // no error path in the settings field.
+    expect(deconflictDeviceLabel(MIGRATION_DEVICE_LABEL)).not.toBe(
+      MIGRATION_DEVICE_LABEL,
+    );
+    expect(deconflictDeviceLabel(MIGRATION_DEVICE_LABEL)).toContain(
+      MIGRATION_DEVICE_LABEL,
+    );
+  });
+
+  it("🔑 the amended label still yields a FILESYSTEM-VALID sibling name", () => {
+    // The point of the Unicode glyph. buildSiblingFilePath does NOT run
+    // the label through sanitizeFilename — it only maps parens — so a
+    // literal "??" in the amendment would put a Windows FAT/NTFS-invalid
+    // `?` straight into a filename. Asserted on the PRODUCED NAME rather
+    // than on the label, because that is where the damage would land.
+    const name = buildSiblingFilePath(
+      ".gitignore",
+      1_700_000_000_000,
+      deconflictDeviceLabel(MIGRATION_DEVICE_LABEL),
+    );
+    // The forbidden set from cross-platform.ts FORBIDDEN_REGEX, minus
+    // `[`/`]` which buildSiblingFilePath deliberately produces from
+    // parens (its own long-standing rule, not this feature's business).
+    expect(name).not.toMatch(/["<>:|?*\\#^]/);
+    // …and it is still a parseable sibling, or the conflict would never
+    // appear at all.
+    expect(parseSiblingFilename(name)?.basePath).toBe(".gitignore");
+  });
+
+  it("any other label passes through, and amending is idempotent", () => {
+    // Without the pass-through half, "always append" would also satisfy
+    // the first test. Exact match only: the gate compares exactly too,
+    // so a different casing is already a different label.
+    expect(deconflictDeviceLabel("Mac")).toBe("Mac");
+    expect(deconflictDeviceLabel("old gitignore files")).toBe(
+      "old gitignore files",
+    );
+    const once = deconflictDeviceLabel(MIGRATION_DEVICE_LABEL);
+    expect(deconflictDeviceLabel(once)).toBe(once);
   });
 });
