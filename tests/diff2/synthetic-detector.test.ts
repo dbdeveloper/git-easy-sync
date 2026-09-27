@@ -16,6 +16,7 @@ import {
   groupByBasePath,
   pendingConflictSummary,
   mergeDotSpaceFindings,
+  findGitignoreDisputes,
   syntheticFromDotSpace,
   type ConflictEntry,
 } from "../../src/diff2/synthetic-detector";
@@ -759,5 +760,90 @@ describe("mergeDotSpaceFindings — the eventual list, N then N+1", () => {
     const merged = mergeDotSpaceFindings(fast, []);
     expect(merged.added).toBe(0);
     expect(merged.entries).toBe(fast);
+  });
+});
+
+describe("§8.1.5a findGitignoreDisputes — the pre-sync gate's check", () => {
+  let fx: ReturnType<typeof fixture>;
+  const LABEL = "Old gitignore files";
+
+  beforeEach(async () => {
+    fx = fixture();
+    await fx.store.load();
+  });
+  afterEach(() => cleanup(fx.root));
+
+  const find = () =>
+    findGitignoreDisputes(
+      fx.vault as unknown as import("obsidian").Vault,
+      fx.store,
+      LABEL,
+    );
+
+  it("🔑 the migration proposal is found and marked as one", async () => {
+    // It is a dot-file at the root, which neither the index nor the
+    // dot-DIR walk can see — the gate must not depend on either.
+    const sib = `.gitignore.conflict-from-${LABEL}-2026-09-27T10-00-00Z`;
+    writeFile(fx.root, ".gitignore", ".*\n");
+    writeFile(fx.root, sib, "proposed\n");
+    const found = await find();
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({
+      basePath: ".gitignore",
+      isMigrationProposal: true,
+    });
+  });
+
+  it("🔑 an ORDINARY .gitignore conflict blocks too, proposal or not", async () => {
+    // Wider than the migration on purpose: these rules decide what gets
+    // synced at all, so a two-device dispute over the root file is no
+    // safer than a pending migration.
+    writeFile(fx.root, ".gitignore", ".*\n");
+    writeFile(
+      fx.root,
+      siblingPathFor(".gitignore", "Phone", 1_700_000_000_000),
+      "theirs\n",
+    );
+    const found = await find();
+    expect(found).toHaveLength(1);
+    expect(found[0].isMigrationProposal).toBe(false);
+  });
+
+  it("a conflict on an ordinary FILE is not a .gitignore dispute", async () => {
+    // Without this, the gate would block every sync that has any conflict
+    // at all — which is §24's job, with its own "sync anyway" branch.
+    writeFile(fx.root, "note.md", "ours");
+    writeFile(
+      fx.root,
+      siblingPathFor("note.md", "Phone", 1_700_000_000_000),
+      "theirs",
+    );
+    expect(await find()).toEqual([]);
+  });
+
+  it("a TRACKED .gitignore conflict is found from the store", async () => {
+    // Tracked records are the store's, and their siblings may live where
+    // no listing here would reach; the store is the source that always
+    // sees them.
+    writeFile(fx.root, ".gitignore", ".*\n");
+    await track(fx, ".gitignore", "Phone", 1_700_000_000_000);
+    const found = await find();
+    expect(found.map((d) => d.basePath)).toEqual([".gitignore"]);
+  });
+
+  it("a STAGED proposal is not yet a dispute", async () => {
+    // Mid-write, not a conflict. Blocking on it would block during the
+    // migration's own run.
+    writeFile(
+      fx.root,
+      `.gitignore.conflict-from-${LABEL}-2026-09-27T10-00-00Z.ges-tmp`,
+      "half\n",
+    );
+    expect(await find()).toEqual([]);
+  });
+
+  it("a clean vault reports nothing", async () => {
+    writeFile(fx.root, ".gitignore", ".*\n");
+    expect(await find()).toEqual([]);
   });
 });

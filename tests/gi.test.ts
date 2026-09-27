@@ -761,3 +761,48 @@ describe("D5 whitelist — the gate §5 calls mandatory", () => {
     }
   });
 });
+
+describe("dirIgnored — would git refuse to ENTER this directory (§8.1.1a)", () => {
+  it("🔑 a dir-only pattern matches, which `ignored` on the bare path cannot", () => {
+    // The trap this method exists for: `ignored("a/build")` probes the
+    // final segment WITHOUT a trailing slash, so `build/` misses it.
+    // No mkdir: dirIgnored is path arithmetic and never stats the dir.
+    w(".gitignore", "build/\n");
+    const gi = new GI(root);
+    expect(gi.dirIgnored("build")).toBe(true);
+    expect(gi.ignored("build")).toBe(false); // the very gap
+  });
+
+  it("🔑 `.*/` hides every dot-directory, and a `!` re-admits exactly one", () => {
+    // This pair IS the migration's pruning rule: dot-dirs vanish unless
+    // the user opted one back in, and the same predicate answers both.
+    w(".gitignore", ".*\n.*/\n!/.myconfig/\n");
+    const gi = new GI(root);
+    expect(gi.dirIgnored(".secret")).toBe(true);
+    expect(gi.dirIgnored(".myconfig")).toBe(false);
+  });
+
+  it("an excluded ancestor excludes everything below it (no-descent)", () => {
+    w(".gitignore", "node_modules/\n");
+    const gi = new GI(root);
+    expect(gi.dirIgnored("node_modules")).toBe(true);
+    expect(gi.dirIgnored("node_modules/pkg/sub")).toBe(true);
+  });
+
+  it("a directory's OWN .gitignore cannot re-admit it", () => {
+    // git would have to enter the directory to read that file, so the
+    // negation can never be seen. Honouring it would invent a rule git
+    // does not have.
+    w(".gitignore", "hidden/\n");
+    w("hidden/.gitignore", "!/\n");
+    const gi = new GI(root, undefined, () => true);
+    expect(gi.dirIgnored("hidden")).toBe(true);
+  });
+
+  it("the root and an ordinary directory are not ignored", () => {
+    w(".gitignore", "build/\n");
+    const gi = new GI(root);
+    expect(gi.dirIgnored("")).toBe(false);
+    expect(gi.dirIgnored("notes")).toBe(false);
+  });
+});

@@ -22,14 +22,24 @@ import {
 import { GitHubSyncSettings, DEFAULT_SETTINGS } from "./settings/settings";
 import GitHubSyncSettingsTab from "./settings/tab";
 import { pluginsDataJsonToggleState } from "./settings/toggle-rules";
-import { deconflictDeviceLabel } from "./sync2/conflict-siblings";
+import {
+  deconflictDeviceLabel,
+  MIGRATION_DEVICE_LABEL,
+} from "./sync2/conflict-siblings";
+import {
+  runMigrationFull,
+  runMigrationResume,
+  migrationReportText,
+  type MigrationDeps,
+} from "./sync2/gitignore-migration";
+import { GitignoreEditModal } from "./sync2/views/gitignore-edit-modal";
 import Logger from "./logger";
 import { describeError, calculateGitBlobSHA } from "./utils";
 import GithubClient from "./github/client";
 import GI, { whitelistedGitignoreDirs } from "./gi";
 import HotMetadataStore from "./sync2/hot-metadata";
 import FileBaselinesStore from "./sync2/file-baselines";
-import { AtomicWriteRecovery } from "./sync2/atomic-write";
+import { AtomicWriteRecovery, atomicWriteFile } from "./sync2/atomic-write";
 import ChangeDetector from "./sync2/change-detector";
 import GitignoreInvariants from "./sync2/gitignore-invariants";
 import GitignoreSeedStore from "./sync2/gitignore-seeds";
@@ -93,6 +103,7 @@ import { EditorBusyModal } from "./diff2/recovery-dialog";
 import {
   autosaveIdForEntry,
   findAllConflicts,
+  findGitignoreDisputes,
   pendingConflictSummary,
   syntheticFromDotSpace,
   type ConflictEntry,
@@ -1105,6 +1116,36 @@ export default class GitHubSyncPlugin extends Plugin {
     // with the blank-slate cutover — the new baseline store can never
     // contain monolith-era phantom rows.)
 
+    // DOT-FILES §8.1.4 PHASE 1 — finish an interrupted `.gitignore`
+    // migration. MUST run BEFORE AtomicWriteRecovery.sweep below, for the
+    // same reason recoverAutosaveDirs does: the staged proposal lives under
+    // a `.ges-tmp` name, and the naive sweep drops any unmarked staging
+    // file ("Always safe to drop"). Were it to win the race, the sources
+    // would already be `*.bak` with the staging gone — a state whose rules
+    // cannot be re-derived, so the migration would report success having
+    // moved nothing.
+    //
+    // Only the resume path here: it needs neither the vault walk nor
+    // enforce(), because the staging file is already built and the
+    // in-progress marker's list is the source of truth. The fresh run is
+    // PHASE 2, after the sweep and after enforce().
+    try {
+      const r = await runMigrationResume(this.migrationDeps());
+      if (r.kind !== "already-done") {
+        this.logger.info("gitignore migration resume", r);
+      }
+      if (r.kind === "stalled") {
+        new Notice(
+          `The .gitignore migration did not finish: ${r.sources.length} ` +
+            `file(s) were renamed to .bak but their rules were not saved. ` +
+            `See the log — the .bak files still hold them.`,
+          15000,
+        );
+      }
+    } catch (err) {
+      this.logger.error("gitignore migration resume failed", `${err}`);
+    }
+
     // diff2 [←]-commit recovery (DIFF-EDITOR.md §5.0.a / §4.2). MUST run
     // BEFORE AtomicWriteRecovery.sweep below: commit7Step stages the resolved
     // base+sibling via the SAME .ges-tmp/.ges-bak suffixes the naive sweep
@@ -1156,6 +1197,36 @@ export default class GitHubSyncPlugin extends Plugin {
     } catch (err) {
       this.logger.error("Atomic-write recovery sweep failed", `${err}`);
     }
+
+    // DOT-FILES §8.1.4 PHASE 2 — the fresh migration pass. AFTER the sweep
+    // (enforce() writes through atomicWriteFile, so it must follow a sweep
+    // whose whole purpose is clearing foreign half-writes before the engine
+    // touches the vault) and AFTER enforce() itself, because §8.1.3 builds
+    // the proposal out of the ASSEMBLED root file's own two halves — the
+    // trick does not exist without it.
+    //
+    // ⚠️ Silent when it finds nothing, on the FIRST (automatic) run only
+    // (§8.1.5). The manual Settings button always speaks, so the user can
+    // confirm the operation actually happened.
+    try {
+      await this.invariants?.enforce();
+      const r = await runMigrationFull(this.migrationDeps());
+      if (r.kind !== "already-done" && r.kind !== "nothing-found") {
+        this.logger.info("gitignore migration", r);
+      }
+      if (r.conflictPath !== null) {
+        new Notice(
+          `Your nested .gitignore rules were collected into a proposal ` +
+            `for the vault's root .gitignore (${r.sources.length} file(s) ` +
+            `renamed to .bak). Open the conflicts panel to review it — ` +
+            `syncing is paused until you do.`,
+          15000,
+        );
+      }
+    } catch (err) {
+      this.logger.error("gitignore migration failed", `${err}`);
+    }
+
     // ConflictCounter owns the count formula + debounced recompute;
     // ConflictWatcher just calls counter.markDirty() on relevant
     // vault events; the counter notifies UI surfaces via
@@ -1563,8 +1634,175 @@ export default class GitHubSyncPlugin extends Plugin {
     }
   }
 
+  // The §8.1 migration's dependencies. `dirIgnored` must come from a GI
+  // honouring EVERY level: the shipped matcher carries the D5 whitelist and
+  // structurally cannot answer "would git enter this directory", which is
+  // the only question pruning may be based on (§8.1.1a).
+  private migrationDeps(): MigrationDeps {
+    // Vault-relative mode ("" root), so the reader gets the same paths the
+    // adapter takes.
+    const gi = new GI("", undefined, () => true);
+    const reader = async (
+      abs: string,
+    ): Promise<{ content: string; mtime: number } | null> => {
+      try {
+        if (!(await this.app.vault.adapter.exists(abs))) return null;
+        const stat = await this.app.vault.adapter.stat(abs);
+        return {
+          content: await this.app.vault.adapter.read(abs),
+          mtime: stat?.mtime ?? 0,
+        };
+      } catch {
+        return null;
+      }
+    };
+    return {
+      vault: this.app.vault,
+      configDir: this.app.vault.configDir,
+      selfPluginId: manifest.id,
+      dirIgnored: async (relDir) => {
+        // Levels must be on hand before the sync verdict; the reader is
+        // async because the vault adapter is.
+        await gi.preloadAsync(`${relDir}/.gitignore`, reader);
+        return gi.dirIgnored(relDir);
+      },
+      nowMs: () => Date.now(),
+      logger: {
+        info: (m, d) => this.logger.info(m, d),
+        warn: (m, d) => this.logger.warn(m, d),
+        error: (m, d) => this.logger.error(m, `${d ? JSON.stringify(d) : ""}`),
+      },
+    };
+  }
+
+  // Settings → "Check now" (§8.1.5). FORCED: the done marker gates the
+  // automatic run, and this button exists precisely for what the marker
+  // cannot cover — a nested `.gitignore` added after the first pass.
+  //
+  // ⚠️ Always speaks, unlike the automatic run. The first automatic pass is
+  // silent when it finds nothing, because a notice nobody asked for is
+  // noise; a button press is a question, and silence would read as a
+  // broken button.
+  async runGitignoreCheck(): Promise<void> {
+    try {
+      await this.invariants?.enforce();
+      const result = await runMigrationFull(this.migrationDeps(), {
+        force: true,
+      });
+      this.logger.info("gitignore check (manual)", result);
+      const disputes = this.conflictStoreV2
+        ? await findGitignoreDisputes(
+            this.app.vault,
+            this.conflictStoreV2,
+            MIGRATION_DEVICE_LABEL,
+          )
+        : [];
+      const open = disputes.find((d) => d.isMigrationProposal) ?? disputes[0];
+      const report = migrationReportText(result, open?.siblingPath ?? null);
+      new Notice(`${report.title}
+
+${report.body}`, 20000);
+      if (report.resolvePath !== null) {
+        try {
+          await this.activateDiffEditView();
+        } catch (err) {
+          void this.logger.error(
+            "Failed to open the diff panel after the gitignore check",
+            `${err}`,
+          );
+        }
+      }
+    } catch (err) {
+      this.logger.error("gitignore check failed", `${err}`);
+      new Notice(`Could not check .gitignore files: ${err}`);
+    }
+  }
+
+  // Settings → "Open" (§8.1.5, TODO §4). Obsidian's indexer hides dotted
+  // paths, so there is no TFile to hand an editor tab — see
+  // GitignoreEditModal for the whole reason this is a modal.
+  async openRootGitignore(): Promise<void> {
+    try {
+      // enforce() first so the user edits the assembled file rather than a
+      // version about to be rewritten under them.
+      await this.invariants?.enforce();
+      const path = normalizePath(".gitignore");
+      const current = (await this.app.vault.adapter.exists(path))
+        ? await this.app.vault.adapter.read(path)
+        : "";
+      new GitignoreEditModal(this.app, current, async (content) => {
+        await atomicWriteFile(
+          this.app.vault,
+          path,
+          new TextEncoder().encode(content).buffer as ArrayBuffer,
+        );
+        // enforce() both re-canonicalises anything the user disturbed
+        // inside the managed blocks AND invalidates the matcher's cached
+        // parse for that level — a stale cache would keep applying the
+        // rules they just changed. One call covers both.
+        await this.invariants?.enforce();
+      }).open();
+    } catch (err) {
+      this.logger.error("opening root .gitignore failed", `${err}`);
+      new Notice(`Could not open .gitignore: ${err}`);
+    }
+  }
+
   private async confirmPendingConflictsBeforeSync(): Promise<boolean> {
     if (!this.conflictStoreV2) return true;
+
+    // DOT-FILES §8.1.5a — a `.gitignore` in dispute blocks the sync HARD,
+    // with no "sync anyway" branch. These rules decide WHAT GETS SYNCED AT
+    // ALL, so the collision is not about one file, it is about the scope of
+    // the whole operation: sync first and the user gets the remote
+    // `.gitignore` (possibly already resolved elsewhere) layered on top of
+    // an unresolved local one.
+    //
+    // ⚠️ This is NOT a §24 exception. §24 passes synthetic conflicts
+    // because they are purely-local echoes with no cross-device
+    // consequence — true of echoes, and a `.gitignore` dispute is not one.
+    // Both kinds block here, which is wider than the migration proposal
+    // alone and deliberately so (owner, 2026-09-27).
+    //
+    // Cheap by design (store + one root listing), because it runs on every
+    // sync click; see findGitignoreDisputes for why it must not walk.
+    try {
+      const disputes = await findGitignoreDisputes(
+        this.app.vault,
+        this.conflictStoreV2,
+        MIGRATION_DEVICE_LABEL,
+      );
+      if (disputes.length > 0) {
+        const proposal = disputes.find((d) => d.isMigrationProposal);
+        new Notice(
+          `Reconcile your .gitignore rules before syncing — ` +
+            `${disputes.length} unresolved .gitignore ` +
+            `${disputes.length === 1 ? "conflict" : "conflicts"}. ` +
+            `These rules decide what gets synced at all, so syncing now ` +
+            `could publish or hide the wrong files. Open the conflicts ` +
+            `panel to resolve ` +
+            `${proposal ? "the proposed rule migration" : "it"}.`,
+          12000,
+        );
+        this.logger.warn("sync blocked: .gitignore in conflict", {
+          disputes: disputes.map((d) => d.siblingPath),
+        });
+        try {
+          await this.activateDiffEditView();
+        } catch (err) {
+          void this.logger.error(
+            "Failed to open the diff panel from the gitignore gate",
+            `${err}`,
+          );
+        }
+        return false;
+      }
+    } catch (err) {
+      // A failure here must not open the gate silently — but it must not
+      // wedge the plugin either. Log and fall through to the ordinary
+      // conflict gate, which is the pre-existing behaviour.
+      this.logger.warn("gitignore gate check failed", { err: `${err}` });
+    }
     // Source of truth = pendingConflictSummary → findAllConflicts (live vault siblings) —
     // the SAME source the diff-panel, badge, status bar and menu use — NOT the raw
     // ConflictStore records. A conflict the user already resolved (sibling deleted + base

@@ -393,3 +393,83 @@ export function groupByBasePath(
 // vault.getFiles() returns TFile[], not TAbstractFile[]. We treat
 // every match as a regular file because conflict-from-* names cannot
 // be folders by construction.
+
+// ── DOT-FILES §8.1.5a — the pre-sync gate's `.gitignore` check ───────
+
+export interface GitignoreDispute {
+  siblingPath: string;
+  basePath: string;
+  // A migration PROPOSAL rather than an ordinary conflict — recognised by
+  // the reserved label, which names no device at all (§8.1.5a).
+  isMigrationProposal: boolean;
+}
+
+// Every unresolved conflict on a `.gitignore`, of EITHER kind.
+//
+// ⚠️ Deliberately WIDER than "our migration proposal" (owner, 2026-09-27):
+// these rules decide WHAT GETS SYNCED AT ALL, so syncing while they are in
+// dispute is unsafe whoever raised the dispute. A tracked conflict between
+// two devices' root files is no safer than a pending migration.
+//
+// ⚠️ And deliberately CHEAP, because it runs on every sync click: the
+// store is in memory and the root listing is one call. It does NOT use
+// syntheticFromDotSpace, whose walk was measured at ~22 s on Android for a
+// large configDir — a gate that costs that is a gate users route around.
+//
+// Two sources, and why they suffice:
+//   - the STORE covers every TRACKED conflict wherever it lives;
+//   - a listing of the vault ROOT covers synthetic ones, which is where
+//     they can be. A synthetic conflict under `<configDir>` is impossible
+//     by construction (`_diff3`: "MANUAL_CONFLICT never happens here;
+//     every collision resolves silently", §II.1 п.3.b), and nested
+//     `.gitignore` files are not synced at all, so they cannot conflict.
+//
+// This lives in diff2 rather than sync2 on purpose: conflict detection is
+// diff2's, and `src/sync2/` may never import from `src/diff2/`.
+export async function findGitignoreDisputes(
+  vault: Vault,
+  conflictStore: ConflictStoreV2,
+  migrationLabel: string,
+): Promise<GitignoreDispute[]> {
+  const out = new Map<string, GitignoreDispute>();
+  const consider = (siblingPath: string): void => {
+    const parsed = parseSiblingFilename(siblingPath);
+    if (!parsed) return;
+    if (parsed.basePath.split("/").pop() !== ".gitignore") return;
+    out.set(siblingPath, {
+      siblingPath,
+      basePath: parsed.basePath,
+      isMigrationProposal: parsed.deviceLabel === migrationLabel,
+    });
+  };
+
+  // Tracked: from the store, whose derived names must still exist on disk
+  // — a record whose sibling is gone is resolved-pending-prune, and
+  // blocking on it would be blocking on nothing.
+  for (const [basePath, entry] of conflictStore.getCachedState().entries) {
+    if (basePath.split("/").pop() !== ".gitignore") continue;
+    for (const sibling of entry.siblings) {
+      const siblingPath = buildSiblingFilePath(
+        basePath,
+        sibling.mtime ?? 0,
+        sibling.deviceLabel,
+      );
+      if (!(await vault.adapter.exists(siblingPath))) continue;
+      consider(siblingPath);
+    }
+  }
+
+  try {
+    const { files } = await vault.adapter.list("");
+    for (const f of files) {
+      const p = normalizePath(f);
+      // A staged proposal is mid-write, not yet a conflict.
+      if (p.endsWith(".ges-tmp")) continue;
+      consider(p);
+    }
+  } catch {
+    // An unreadable root must not become "no disputes" — that would open
+    // the gate on an error. What the store gave us still stands.
+  }
+  return [...out.values()];
+}

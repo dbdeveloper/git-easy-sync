@@ -140,6 +140,16 @@ src/
     │                                #  bottom) + the per-device plugins/.gitignore switch;
     │                                #  always-write enforce; §8.0 seed markers; runs before
     │                                #  commit AND drain. SYNC2 §13.2
+    ├── gitignore-migrate.ts         # §8.1 Крок E2/E3, PURE: needsMigration (scope, through
+    │                                #  D5's single definition), translateRule/translateFile
+    │                                #  (root-anchoring; a negated dot-rule is forced anchored),
+    │                                #  findMigrationCandidates (walk + pruning as CORRECTNESS),
+    │                                #  splitAtFinalSection + buildMigrationProposal, marker format
+    ├── gitignore-migration.ts       # §8.1 Крок E4, the PROCEDURE: two markers (in-progress in
+    │                                #  the PLUGIN DIR so it survives RESET, done in .runtime/),
+    │                                #  runMigrationResume (phase 1, BEFORE the sweep) +
+    │                                #  runMigrationFull (phase 2, after sweep AND enforce),
+    │                                #  six recovery cases, migrationReportText
     ├── gitignore-assemble.ts        # LINE-WISE re-seating of those two sections: each template
     │                                #  line is purged from the rest of the file before being
     │                                #  placed (top anchored to line 1, `final` to EOF), so a

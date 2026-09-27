@@ -851,6 +851,57 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
                   });
           });
 
+    // ── .gitignore ──────────────────────────────────────────────────
+    // Its own section (owner, 2026-09-27). The text says ONE thing on
+    // purpose: this plugin reads the vault's ROOT .gitignore. The managed
+    // files under the config folder are not mentioned — Obsidian hides that
+    // folder from the user anyway, so naming them here would explain
+    // something the user cannot see. They belong in the docs.
+    new Setting(containerEl).setName(".gitignore").setHeading();
+
+    new Setting(containerEl)
+      .setName("Rules live in ONE file")
+      .setDesc(
+        "This plugin reads the .gitignore in your vault's ROOT and no other. " +
+          "Plain git reads a .gitignore in every folder, so rules written " +
+          "deeper in the tree would apply for git and be ignored here — " +
+          "which is why they get collected into the root file instead. " +
+          "Dot-files are invisible inside Obsidian, so the button below " +
+          "opens the root .gitignore for editing.",
+      );
+
+    new Setting(containerEl)
+      .setName("Check all .gitignore files")
+      .setDesc(
+        "Look through the whole vault for .gitignore files outside the root, " +
+          "translate their rules into root-anchored form, and offer them as " +
+          "a change to the root .gitignore for you to review. The originals " +
+          "are renamed to .bak — nothing is deleted. Runs once by itself " +
+          "after install; use this after adding a new one by hand.",
+      )
+      .addButton((button) =>
+        button.setButtonText("Check now").onClick(async () => {
+          button.setDisabled(true);
+          try {
+            await this.plugin.runGitignoreCheck();
+          } finally {
+            button.setDisabled(false);
+          }
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Edit the root .gitignore")
+      .setDesc(
+        "Open it in a normal editor tab. Obsidian hides files whose name " +
+          "starts with a dot, so this is the way to reach it from inside the app.",
+      )
+      .addButton((button) =>
+        button.setButtonText("Open").onClick(async () => {
+          await this.plugin.openRootGitignore();
+        }),
+      );
+
     // ── Logging ─────────────────────────────────────────────────────
     new Setting(containerEl).setName("Logging").setHeading();
 

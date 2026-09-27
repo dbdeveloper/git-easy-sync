@@ -62,7 +62,7 @@ export interface MigrationDeps {
   // "Would git refuse to ENTER this directory?" — see
   // findMigrationCandidates for why this must be a DIRECTORY verdict from
   // a GI honouring every level.
-  dirIgnored: (relDir: string) => boolean;
+  dirIgnored: (relDir: string) => boolean | Promise<boolean>;
   nowMs: () => number;
   logger?: {
     info(message: string, data?: unknown): void;
@@ -209,10 +209,17 @@ async function finish(
   deps: MigrationDeps,
   sources: string[],
 ): Promise<void> {
+  // ⚠️ remotePending MERGES with whatever is already recorded. A manual
+  // re-run can land before the drain that consumes the previous run's
+  // list (§8.1.6), and replacing it would silently drop those paths — the
+  // nested `.gitignore` files would stay on the remote forever, which is
+  // the one thing the deletion step exists to prevent.
+  const prior = await readDoneMarker(deps);
+  const pending = new Set([...(prior?.remotePending ?? []), ...sources]);
   const marker: DoneMarker = {
     migratedAt: deps.nowMs(),
-    sources,
-    remotePending: [...sources],
+    sources: [...new Set([...(prior?.sources ?? []), ...sources])],
+    remotePending: [...pending],
   };
   const dir = `${pluginDir(deps)}/.runtime`;
   if (!(await deps.vault.adapter.exists(dir))) {
@@ -309,9 +316,13 @@ export async function runMigrationResume(
 // ── PHASE 2 — the fresh run, AFTER the sweep and AFTER enforce() ────
 export async function runMigrationFull(
   deps: MigrationDeps,
+  opts: { force?: boolean } = {},
 ): Promise<MigrationResult> {
   const none = { sources: [], conflictPath: null };
-  if (await deps.vault.adapter.exists(donePath(deps))) {
+  // The done marker gates the AUTOMATIC run only. The Settings button
+  // (§8.1.5) exists precisely for the case the marker cannot cover: a
+  // user who added a nested `.gitignore` after the first run.
+  if (!opts.force && (await deps.vault.adapter.exists(donePath(deps)))) {
     return { kind: "already-done", ...none };
   }
 
@@ -403,6 +414,86 @@ export async function runMigrationFull(
     proposal,
   });
   return { kind: "migrated", sources, conflictPath: proposal };
+}
+
+// What the Settings button says, for each outcome (§8.1.5). Pure, because
+// the wording is the feature: this is the only surface that reports a
+// `.gitignore` problem on its own, so vague copy here means a user who
+// never learns their rules are in dispute.
+//
+// ⚠️ The three states the owner specified: new files found → say what
+// moved; nothing new but a proposal still unresolved → REMIND, with a way
+// in; nothing at all → say so reassuringly, because "no output" reads as
+// "the button is broken".
+export function migrationReportText(
+  result: MigrationResult,
+  unresolvedProposal: string | null,
+): { title: string; body: string; resolvePath: string | null } {
+  const n = result.sources.length;
+  const files = `${n} .gitignore ${n === 1 ? "file" : "files"}`;
+  switch (result.kind) {
+    case "migrated":
+      return {
+        title: "Rules collected",
+        body:
+          `${files} outside the root were found. Their rules have been ` +
+          `translated and offered as a change to the root .gitignore; the ` +
+          `originals were renamed to .bak, so nothing was deleted. ` +
+          `Syncing stays paused until you accept or discard the change.`,
+        resolvePath: result.conflictPath,
+      };
+    case "already-done":
+    case "nothing-found":
+      return unresolvedProposal !== null
+        ? {
+            title: "One thing still open",
+            body:
+              "No new .gitignore files were found, but an earlier proposed " +
+              "change to the root .gitignore has not been resolved yet. " +
+              "Syncing stays paused until it is.",
+            resolvePath: unresolvedProposal,
+          }
+        : {
+            title: "No problems with .gitignore files",
+            body:
+              "Every .gitignore rule in this vault lives in the root file, " +
+              "which is the only one this plugin reads. Nothing to do.",
+            resolvePath: null,
+          };
+    case "resumed":
+      return {
+        title: "Finished an interrupted check",
+        body: `A previous check was interrupted and has now completed (${files}).`,
+        resolvePath: result.conflictPath ?? unresolvedProposal,
+      };
+    case "incomplete":
+      return {
+        title: "Could not check the whole vault",
+        body:
+          "Part of the vault could not be read, so a .gitignore file may " +
+          "have been missed. Nothing was changed. Try again — the check " +
+          "has NOT been marked as done.",
+        resolvePath: null,
+      };
+    case "refused":
+      return {
+        title: "Root .gitignore is not ready",
+        body:
+          "The plugin's managed block is missing from the root .gitignore, " +
+          "so a change to it cannot be prepared safely. It is rewritten on " +
+          "the next sync — try again after that.",
+        resolvePath: null,
+      };
+    case "stalled":
+      return {
+        title: "A previous check did not finish",
+        body:
+          `${files} were renamed to .bak but their rules were never saved. ` +
+          `The .bak files still hold them and must be restored by hand; ` +
+          `the log lists which.`,
+        resolvePath: null,
+      };
+  }
 }
 
 // Read the done marker, for §8.1.6's remote deletion and for the Settings

@@ -152,7 +152,7 @@ export interface MigrationWalkDeps {
   // In production this comes from a GI honouring EVERY level — the
   // shipped instance carries the D5 whitelist and structurally cannot
   // answer what git would do (§8.1.1a).
-  dirIgnored: (relDir: string) => boolean;
+  dirIgnored: (relDir: string) => boolean | Promise<boolean>;
 }
 
 export interface MigrationWalkResult {
@@ -222,7 +222,7 @@ export async function findMigrationCandidates(
       }
     }
     for (const folder of listing.folders) {
-      if (deps.dirIgnored(folder)) {
+      if (await deps.dirIgnored(folder)) {
         // Not entered at all — which is both the cost saving and the
         // correctness: git does not read a `.gitignore` in here, so its
         // rules affect nothing, and hoisting them to the root would

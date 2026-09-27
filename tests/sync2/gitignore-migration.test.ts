@@ -20,6 +20,7 @@ import {
   runMigrationFull,
   runMigrationResume,
   readDoneMarker,
+  migrationReportText,
   IN_PROGRESS_MARKER_NAME,
   DONE_MARKER_NAME,
   type MigrationDeps,
@@ -428,5 +429,81 @@ describe("§8.1.3 the proposal's shape", () => {
     const split = splitAtFinalSection(ROOT);
     if (!split) throw new Error("fixture must split");
     expect(buildMigrationProposal(split, [[]])).toBe(ROOT);
+  });
+});
+
+describe("§8.1.5 what the Settings button reports", () => {
+  const r = (
+    kind: Parameters<typeof migrationReportText>[0]["kind"],
+    sources: string[] = [],
+    conflictPath: string | null = null,
+  ) => ({ kind, sources, conflictPath });
+
+  it("🔑 nothing found AND nothing open → reassurance, not silence", async () => {
+    // A button that says nothing reads as broken, which is why the owner
+    // asked for this case explicitly.
+    const out = migrationReportText(r("nothing-found"), null);
+    expect(out.title).toContain("No problems");
+    expect(out.resolvePath).toBeNull();
+  });
+
+  it("🔑 nothing found but a proposal STILL open → reminds, with a way in", async () => {
+    // The reason the button matters beyond the first run: it is the only
+    // surface that reports this, since the badge counts tracked only.
+    const out = migrationReportText(r("nothing-found"), "prop");
+    expect(out.title).toContain("still open");
+    expect(out.resolvePath).toBe("prop");
+  });
+
+  it("migrated → says what moved and that sync is paused", async () => {
+    const out = migrationReportText(r("migrated", ["a/.gitignore"], "prop"), null);
+    expect(out.body).toContain("1 .gitignore file");
+    expect(out.body).toContain(".bak");
+    expect(out.body).toContain("paused");
+    expect(out.resolvePath).toBe("prop");
+  });
+
+  it("the failure kinds say what to do, and offer no resolve link", async () => {
+    // Each of these means "nothing changed"; offering a Resolve button
+    // would point at nothing.
+    for (const kind of ["incomplete", "refused", "stalled"] as const) {
+      const out = migrationReportText(r(kind, ["a/.gitignore"]), null);
+      expect(out.resolvePath, kind).toBeNull();
+      expect(out.body.length, kind).toBeGreaterThan(40);
+    }
+  });
+});
+
+describe("§8.1.6 remotePending accumulates across runs", () => {
+  it("🔑 a manual re-run MERGES the pending list instead of replacing it", async () => {
+    // A forced run can land before the drain that consumes the previous
+    // list. Replacing it would silently drop those paths, and the nested
+    // `.gitignore` files would stay on the remote forever — the one thing
+    // the deletion step exists to prevent.
+    const deps = setup({
+      ".gitignore": ROOT,
+      "a/.gitignore": "one\n",
+    });
+    await runMigrationFull(deps);
+    // A second source appears, and the user presses the button.
+    fs.mkdirSync(path.join(root, "b"), { recursive: true });
+    fs.writeFileSync(path.join(root, "b/.gitignore"), "two\n");
+    await runMigrationFull(deps, { force: true });
+
+    const marker = await readDoneMarker(deps);
+    expect(marker?.remotePending?.sort()).toEqual([
+      "a/.gitignore",
+      "b/.gitignore",
+    ]);
+  });
+
+  it("force is what lets the button work at all", async () => {
+    const deps = setup({ ".gitignore": ROOT, "a/.gitignore": "x\n" });
+    await runMigrationFull(deps);
+    expect((await runMigrationFull(deps)).kind).toBe("already-done");
+    fs.writeFileSync(path.join(root, "a/.gitignore"), "again\n");
+    expect((await runMigrationFull(deps, { force: true })).kind).toBe(
+      "migrated",
+    );
   });
 });

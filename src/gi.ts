@@ -190,6 +190,48 @@ export default class GI {
     return this.verdict(nodes, dirs, dirs.length, rel);
   }
 
+  // Would git refuse to ENTER this directory?
+  //
+  // Added for the §8.1 migration walk, which may only prune subtrees git
+  // itself would not read (DOT-FILES §8.1.1a). `ignored()` cannot answer
+  // it: its FINAL probe uses the file form, without a trailing slash, so a
+  // dir-only pattern (`build/`, `.*/`) would not match — the very trap the
+  // ancestor loop below is careful about. And asking about the directory's
+  // `.gitignore` answers a different question, since `.*` hides every
+  // dotted basename while git still HONOURS such a file (ignored ≠ unread).
+  //
+  // Only the ancestor arithmetic is restated here; the RULE stays in
+  // `verdict`, so there is still one encoding of last-match-wins. Load
+  // levels first via `preloadAsync(`${relDir}/.gitignore`, reader)` when the
+  // reader is async.
+  dirIgnored(relDir: string): boolean {
+    const rel = this.toRelative(relDir);
+    if (rel === null || rel === "") return false;
+
+    const parts = rel.split("/");
+    // Every ancestor, plus relDir itself — a directory can be excluded by
+    // its own name in a level above it.
+    const dirs = [""];
+    for (let i = 0; i < parts.length; i++) {
+      dirs.push(parts.slice(0, i + 1).join("/"));
+    }
+    const nodes: Node[] = [];
+    let node = this.root;
+    for (const dir of dirs) {
+      node = this.ensureNode(node, dir);
+      if (this.isGitignoreDir(dir)) this.ensureLoaded(node);
+      nodes.push(node);
+    }
+    // Each level judged by the levels ABOVE it, and probed WITH a trailing
+    // slash — the only form a dir-only pattern matches. A directory's own
+    // `.gitignore` cannot re-admit it, since git would have to enter it to
+    // read that file.
+    for (let i = 1; i < dirs.length; i++) {
+      if (this.verdict(nodes, dirs, i, `${dirs[i]}/`)) return true;
+    }
+    return false;
+  }
+
   // Last-match-wins across the first `levels` .gitignore nodes, each
   // asked about `target` rewritten relative to that node's own dir.
   private verdict(
