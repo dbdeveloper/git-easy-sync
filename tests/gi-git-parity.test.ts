@@ -25,6 +25,7 @@ import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
 import GI, { whitelistedGitignoreDirs } from "../src/gi";
+import { translateFile } from "../src/sync2/gitignore-migrate";
 
 function gitAvailable(): boolean {
   try {
@@ -384,5 +385,134 @@ describe.skipIf(!gitAvailable())("GI ↔ real git parity", () => {
       "notes/a.log": "x",
       "notes/a.md": "x",
     });
+  });
+});
+
+// ── §8.1 Крок E2 — does the TRANSLATION preserve meaning? ────────────
+//
+// The migration's whole purpose is that the plugin and real git agree
+// (§8.1). Testing the translator against our own expectations could only
+// confirm a shared misconception, so it is measured the only way that
+// counts: build the fixture with a NESTED `.gitignore`, ask git what it
+// would track; rebuild it with that file's rules TRANSLATED into the root
+// file and the nested one deleted, and demand the same answer.
+describe.skipIf(!gitAvailable())("§8.1 rule translation ↔ real git", () => {
+  // git's verdicts for a fixture, keyed by path. Only `git` is consulted
+  // here: for the BEFORE fixture our own matcher deliberately ignores a
+  // non-whitelisted `.gitignore` (D5), which is the divergence the
+  // migration exists to remove — comparing it would measure the disease.
+  function gitVerdicts(files: Record<string, string>): Map<string, boolean> {
+    return bothVerdicts(files).git;
+  }
+
+  // Assert that moving `<dir>/.gitignore`'s rules into the root file
+  // leaves git's verdict on every probe path unchanged.
+  function expectTranslationPreservesMeaning(
+    dir: string,
+    nested: string,
+    probes: Record<string, string>,
+  ): void {
+    const before = gitVerdicts({
+      ...probes,
+      [`${dir}/.gitignore`]: nested,
+    });
+    const after = gitVerdicts({
+      ...probes,
+      ".gitignore": translateFile(nested, dir).join("\n") + "\n",
+    });
+    for (const path of Object.keys(probes)) {
+      expect(after.get(path), `verdict for ${path}`).toBe(before.get(path));
+    }
+  }
+
+  it("🔑 bare, anchored, dir-only, internal-slash and `**` rules all survive", () => {
+    // One fixture covering every row of the §8.1.2 table at once, with
+    // probes at BOTH depths — the depth pairs are what catch a bare
+    // pattern wrongly anchored or an anchored one wrongly widened.
+    expectTranslationPreservesMeaning(
+      "dir1",
+      "build\n/dist\ncache/\nsub/keep.md\n**/deep.md\n",
+      {
+        "dir1/build": "x",
+        "dir1/nested/build": "x",
+        "dir1/dist": "x",
+        "dir1/nested/dist": "x",
+        "dir1/cache/f.md": "x",
+        "dir1/nested/cache/f.md": "x",
+        "dir1/sub/keep.md": "x",
+        "dir1/nested/sub/keep.md": "x",
+        "dir1/deep.md": "x",
+        "dir1/a/b/deep.md": "x",
+        "dir1/untouched.md": "x",
+        // Outside the source directory — nothing may start matching here.
+        "other/build": "x",
+        "other/dist": "x",
+      },
+    );
+  });
+
+  it("negation survives, including re-inclusion below an ignored name", () => {
+    expectTranslationPreservesMeaning(
+      "dir1",
+      "*.log\n!keep.log\n/only-here.log\n",
+      {
+        "dir1/a.log": "x",
+        "dir1/keep.log": "x",
+        "dir1/nested/a.log": "x",
+        "dir1/nested/keep.log": "x",
+        "dir1/only-here.log": "x",
+        "other/a.log": "x",
+      },
+    );
+  });
+
+  it("a deeper source directory translates the same way", () => {
+    expectTranslationPreservesMeaning("a/b/c", "tmp\n/fixed\n", {
+      "a/b/c/tmp": "x",
+      "a/b/c/deep/tmp": "x",
+      "a/b/c/fixed": "x",
+      "a/b/c/deep/fixed": "x",
+      "a/b/tmp": "x",
+    });
+  });
+
+  it("⚠️ a negated DOT-rule is DELIBERATELY narrowed — measured, not assumed", () => {
+    // The one row where translation is not literal (§8.1.2): the faithful
+    // `!dir1/**/.cfg/` is rejected by addressedPath as a glob, so D7 would
+    // grant nothing and the rule would be inert. Anchoring makes it work
+    // for us at the cost of DEPTH, and the cost is pinned here rather than
+    // described — so nobody "fixes" the translator later without knowing
+    // it was a decision.
+    //
+    // ⚠️ The fixture needs our own `invariants` section in the root file,
+    // and the first version of this test did not have it: with nothing
+    // hiding dot-paths, a `!`-rule is a no-op and BOTH forms track
+    // everything — the test passed while measuring nothing. Hiding first
+    // is also the real-world state, since `.*`/`.*/` are always there.
+    const HIDE_DOTS = ".*\n.*/\n";
+    const nested = "!.cfg/\n";
+    const probes = {
+      "dir1/.cfg/f.md": "x",
+      "dir1/nested/.cfg/f.md": "x",
+    };
+    const before = gitVerdicts({
+      ...probes,
+      ".gitignore": HIDE_DOTS,
+      "dir1/.gitignore": nested,
+    });
+    const after = gitVerdicts({
+      ...probes,
+      ".gitignore": HIDE_DOTS + translateFile(nested, "dir1").join("\n") + "\n",
+    });
+
+    // One level down — identical, and this is the case that occurs in
+    // practice (a config dir sits where its rule was written).
+    expect(before.get("dir1/.cfg/f.md")).toBe(false); // tracked
+    expect(after.get("dir1/.cfg/f.md")).toBe(false);
+
+    // Deeper — the narrowing, measured: the nested form re-included it at
+    // ANY depth, the translated form only at the one it names.
+    expect(before.get("dir1/nested/.cfg/f.md")).toBe(false); // tracked
+    expect(after.get("dir1/nested/.cfg/f.md")).toBe(true); //  hidden
   });
 });
