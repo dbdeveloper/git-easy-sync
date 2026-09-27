@@ -6,11 +6,17 @@
 // `.gitignore` files must move, and what each of their rules becomes
 // once it lives in the root file instead.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
+import * as crypto from "crypto";
+import { Vault } from "../../mock-obsidian";
 import {
   needsMigration,
   translateRule,
   translateFile,
+  findMigrationCandidates,
 } from "../../src/sync2/gitignore-migrate";
 
 const CONFIG_DIR = ".obsidian";
@@ -170,5 +176,145 @@ describe("translateFile — one source file becomes a labelled block", () => {
       "dir1/**/build",
       "/dir1/dist",
     ]);
+  });
+});
+
+describe("§8.1.1a the walk: every directory, minus what git would not enter", () => {
+  let root: string;
+  afterEach(() => {
+    if (root && fs.existsSync(root)) fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  function vaultWith(files: Record<string, string>): Vault {
+    root = path.join(os.tmpdir(), `mig-walk-${crypto.randomBytes(4).toString("hex")}`);
+    for (const [rel, content] of Object.entries(files)) {
+      const abs = path.join(root, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content);
+    }
+    fs.mkdirSync(path.join(root, CONFIG_DIR), { recursive: true });
+    return new Vault(root);
+  }
+
+  // The production oracle is a GI honouring EVERY level; here it is a
+  // fake so the walk's own logic is what gets tested.
+  const ignoreDirs = (...dirs: string[]) => (relDir: string) =>
+    dirs.some((d) => relDir === d || relDir.startsWith(`${d}/`));
+
+  const walk = (vault: Vault, dirIgnored: (relDir: string) => boolean = () => false) =>
+    findMigrationCandidates({
+      vault: vault as unknown as import("obsidian").Vault,
+      configDir: CONFIG_DIR,
+      dirIgnored,
+    });
+
+  it("finds nested .gitignore files at any depth, and never the root one", async () => {
+    const vault = vaultWith({
+      ".gitignore": ".*\n",
+      "a/.gitignore": "x\n",
+      "a/b/c/.gitignore": "y\n",
+      "a/note.md": "hi",
+    });
+    const r = await walk(vault);
+    expect(r.candidates.map((c) => c.path)).toEqual([
+      "a/.gitignore",
+      "a/b/c/.gitignore",
+    ]);
+    expect(r.completed).toBe(true);
+  });
+
+  it("🔑 orders candidates SHALLOWEST-FIRST — gitignore is last-match-wins", async () => {
+    // Not cosmetic. Flattened into one file, a deeper rule must appear
+    // LATER or it stops overriding the shallower one it overrode in git.
+    const vault = vaultWith({
+      "a/b/c/.gitignore": "deep\n",
+      "a/.gitignore": "shallow\n",
+      "z/.gitignore": "other\n",
+      "a/b/.gitignore": "mid\n",
+    });
+    const r = await walk(vault);
+    expect(r.candidates.map((c) => c.dir)).toEqual(["a", "z", "a/b", "a/b/c"]);
+  });
+
+  it("🔑 an IGNORED directory is not entered, so its .gitignore is not migrated", async () => {
+    // Correctness, not speed (§8.1.1a): git never reads a `.gitignore`
+    // inside an excluded directory, so its rules affect nothing today.
+    // Migrating them to the root would ACTIVATE dead rules — changing
+    // behaviour instead of preserving it.
+    const vault = vaultWith({
+      "keep/.gitignore": "x\n",
+      "node_modules/.gitignore": "y\n",
+      "node_modules/deep/nested/.gitignore": "z\n",
+    });
+    const r = await walk(vault, ignoreDirs("node_modules"));
+    expect(r.candidates.map((c) => c.path)).toEqual(["keep/.gitignore"]);
+    expect(r.dirsPruned).toBe(1);
+  });
+
+  it("…and pruning stops the DESCENT, not just the file", async () => {
+    // The distinction that matters for cost: a pruned subtree is never
+    // listed at all, which is what makes the worst case survivable.
+    //
+    // Measured as a DIFFERENCE rather than an absolute, which is also the
+    // mistake the first version of this test made: it asserted "1 dir
+    // scanned", forgetting that <configDir> is legitimately walked (that
+    // is where plugins/.gitignore lives), so it failed on a correct
+    // implementation.
+    const files = { "big/a/b/c/d/.gitignore": "x\n", "big/f.md": "hi" };
+    const pruned = await walk(vaultWith(files), ignoreDirs("big"));
+    const full = await walk(vaultWith(files));
+
+    expect(pruned.candidates).toEqual([]);
+    expect(full.candidates.map((c) => c.path)).toEqual([
+      "big/a/b/c/d/.gitignore",
+    ]);
+    // five directories of `big/` never listed at all.
+    expect(full.dirsScanned - pruned.dirsScanned).toBe(5);
+    expect(pruned.dirsPruned).toBe(1);
+  });
+
+  it("<configDir>/plugins/.gitignore is reached, and the whitelisted ones are not taken", async () => {
+    const vault = vaultWith({
+      [`${CONFIG_DIR}/.gitignore`]: "a\n",
+      [`${CONFIG_DIR}/plugins/.gitignore`]: "b\n",
+      [`${CONFIG_DIR}/plugins/brat/.gitignore`]: "c\n",
+      [`${CONFIG_DIR}/plugins/brat/sub/.gitignore`]: "d\n",
+    });
+    const r = await walk(vault);
+    expect(r.candidates.map((c) => c.path)).toEqual([
+      `${CONFIG_DIR}/plugins/.gitignore`,
+      `${CONFIG_DIR}/plugins/brat/sub/.gitignore`,
+    ]);
+  });
+
+  it("dot-directories ARE walked — the walk covers hidden dirs too", async () => {
+    // Unlike walkDotDir, which prunes dot-names by D3: this walk answers
+    // "what would git honour", and git has no notion of hidden.
+    // Whether a dot-dir survives is the PRUNER's decision, not the
+    // walker's.
+    const vault = vaultWith({ ".myconfig/.gitignore": "x\n" });
+    const r = await walk(vault);
+    expect(r.candidates.map((c) => c.path)).toEqual([".myconfig/.gitignore"]);
+  });
+
+  it("🔑 a walk that could not finish says so — the caller must not mark done", async () => {
+    // An incomplete walk means "a .gitignore may have been missed", and
+    // a migration that marks itself done on that basis would never look
+    // again. Same contract walkDotDir already carries.
+    const vault = vaultWith({ "a/.gitignore": "x\n" });
+    const broken = {
+      adapter: {
+        list: async () => {
+          throw new Error("EIO");
+        },
+      },
+    };
+    const r = await findMigrationCandidates({
+      vault: broken as unknown as import("obsidian").Vault,
+      configDir: CONFIG_DIR,
+      dirIgnored: () => false,
+    });
+    expect(r.completed).toBe(false);
+    void vault;
   });
 });

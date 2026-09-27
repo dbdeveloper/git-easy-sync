@@ -122,3 +122,124 @@ export function translateFile(content: string, dir: string): string[] {
   }
   return [`# rules from ${dir}/.gitignore`, ...translated];
 }
+
+// ── §8.1.1a the walk ────────────────────────────────────────────────
+
+import type { Vault } from "obsidian";
+
+export interface MigrationCandidate {
+  // Vault-relative path of the source file, e.g. "a/b/.gitignore".
+  path: string;
+  // The directory it governs, e.g. "a/b" — what translateRule needs.
+  dir: string;
+}
+
+export interface MigrationWalkDeps {
+  vault: Vault;
+  configDir: string;
+  // "Would git refuse to ENTER this directory?" — i.e. is it excluded by
+  // a rule above it.
+  //
+  // ⚠️ Injected rather than derived here, and the distinction it draws is
+  // the subtle one. It must be a DIRECTORY verdict: `gi.ignored(dir)`
+  // probes the final segment WITHOUT a trailing slash, so a dir-only
+  // pattern (`build/`, `.*/`) would not match — the trap gi.ts documents
+  // for exactly this reason. And it must not be "is the .gitignore
+  // ignored": `.*` hides every dotted basename, including nested
+  // `.gitignore` files, yet git still HONOURS them (ignored ≠ unread).
+  // Those two different "true"s would collapse into one.
+  //
+  // In production this comes from a GI honouring EVERY level — the
+  // shipped instance carries the D5 whitelist and structurally cannot
+  // answer what git would do (§8.1.1a).
+  dirIgnored: (relDir: string) => boolean;
+}
+
+export interface MigrationWalkResult {
+  // Shallowest-first. ⚠️ ORDER IS SEMANTIC, not presentational: flattened
+  // into one file under last-match-wins, a deeper rule must appear LATER
+  // or it stops overriding the shallower one it overrode in git.
+  candidates: MigrationCandidate[];
+  // Reported, not swallowed: §8.1.1a's cost claim rests on pruning, so
+  // the procedure has to be able to say what it skipped and why.
+  dirsScanned: number;
+  dirsPruned: number;
+  // false when the walk could not finish (unreadable folder, depth cap).
+  // ⚠️ Load-bearing: an incomplete walk means "a `.gitignore` may have
+  // been missed", and a migration that marked itself done on that basis
+  // would never look again. Same contract walkDotDir carries.
+  completed: boolean;
+}
+
+// Mirrors walkDotDir's cap. A symlink loop produces endless DISTINCT
+// paths, so the visited set alone cannot terminate it — the depth cap is
+// what does.
+const MIGRATION_WALK_MAX_DEPTH = 64;
+
+// Collect every `.gitignore` the migration must consolidate.
+//
+// Unlike walkDotDir, dot-directories are NOT pruned by name: this walk
+// answers "what would git honour", and git has no notion of hidden. A
+// dot-directory disappears here only if `dirIgnored` says so — which it
+// will for `.*`/`.*/` unless the user opted the directory back in, and
+// that is precisely the right answer (§8.1.1a).
+export async function findMigrationCandidates(
+  deps: MigrationWalkDeps,
+): Promise<MigrationWalkResult> {
+  const candidates: MigrationCandidate[] = [];
+  const visited = new Set<string>();
+  let dirsScanned = 0;
+  let dirsPruned = 0;
+  let completed = true;
+  const queue: string[] = [""];
+
+  while (queue.length > 0) {
+    const dir = queue.shift() as string;
+    if (visited.has(dir)) continue;
+    visited.add(dir);
+    if (dir !== "" && dir.split("/").length > MIGRATION_WALK_MAX_DEPTH) {
+      completed = false;
+      continue;
+    }
+    let listing: { files: string[]; folders: string[] };
+    try {
+      listing = await deps.vault.adapter.list(dir);
+    } catch {
+      // A folder vanishing mid-walk, a permission error, anything: what
+      // we collected stays usable, but the run is no longer a complete
+      // picture and must not be recorded as one.
+      completed = false;
+      continue;
+    }
+    dirsScanned++;
+    for (const filePath of listing.files) {
+      if (needsMigration(filePath, deps.configDir)) {
+        const slash = filePath.lastIndexOf("/");
+        candidates.push({
+          path: filePath,
+          dir: slash === -1 ? "" : filePath.slice(0, slash),
+        });
+      }
+    }
+    for (const folder of listing.folders) {
+      if (deps.dirIgnored(folder)) {
+        // Not entered at all — which is both the cost saving and the
+        // correctness: git does not read a `.gitignore` in here, so its
+        // rules affect nothing, and hoisting them to the root would
+        // ACTIVATE dead rules rather than preserve live ones.
+        dirsPruned++;
+        continue;
+      }
+      queue.push(folder);
+    }
+  }
+
+  // Breadth-first already yields shallow before deep, but the sort makes
+  // the guarantee independent of the traversal — a later switch to a
+  // stack must not silently invert rule precedence.
+  candidates.sort((a, b) => {
+    const d = a.dir.split("/").length - b.dir.split("/").length;
+    return d !== 0 ? d : a.dir.localeCompare(b.dir);
+  });
+  return { candidates, dirsScanned, dirsPruned, completed };
+}
