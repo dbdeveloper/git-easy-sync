@@ -80,6 +80,14 @@ export interface MigrationDeps {
   // a GI honouring every level.
   dirIgnored: (relDir: string) => boolean | Promise<boolean>;
   nowMs: () => number;
+  // GitignoreInvariants.enforce. ⚠️ The migration CALLS it rather than
+  // being called after it, because the right order is not "enforce then
+  // migrate": enforce REWRITES `<configDir>/plugins/.gitignore` whole, so
+  // running it first destroys the very user content this is meant to
+  // rescue. Only the migration knows that the ROOT file must be assembled
+  // BUT the plugins file must be saved first, so the order lives here, in
+  // one place, where a caller cannot get it wrong.
+  enforce?: () => Promise<void>;
   logger?: {
     info(message: string, data?: unknown): void;
     warn(message: string, data?: unknown): void;
@@ -359,6 +367,49 @@ export async function runMigrationFull(
     return { kind: "already-done", ...none };
   }
 
+  // ── BEFORE enforce: rescue `<configDir>/plugins/.gitignore` ───────
+  //
+  // Field report 2026-09-28: a rule a user added to that file was silently
+  // replaced by our template, with no `.bak` and no mention in the modal.
+  // The cause was the wiring — enforce() ran first and rewrote the file
+  // WHOLE (its own comment: "no user content here to preserve"), so by the
+  // time the walk read it there was nothing left to find.
+  //
+  // Owner's rule: compare with our template; identical → drop it from the
+  // process; different → carry its rules into the proposal, move the file
+  // to `.bak`, and let our template take its place.
+  //
+  // ⚠️ Known window, stated rather than papered over: between the rename
+  // and the staged proposal, a crash leaves the user's bytes in the `.bak`
+  // and nothing pointing at them. Nothing is DESTROYED — that is the point
+  // of renaming first — but the next run would not re-offer them, and the
+  // user would have to find the `.bak` themselves. Closing it would mean a
+  // second recovery path for a single file; the trade is deliberate.
+  const pluginsPath = `${deps.configDir}/plugins/.gitignore`;
+  const pluginsDir = `${deps.configDir}/plugins`;
+  let rescued: string | null = null;
+  const pluginsRaw = await readIfPresent(deps.vault, pluginsPath);
+  if (pluginsRaw !== null) {
+    const stripped = stripOurPluginsDirTemplate(pluginsRaw);
+    // "Identical to our template" is exactly "nothing survives the strip",
+    // and saying it that way makes it tolerant of line order and spacing
+    // instead of demanding a byte match.
+    if (translateFile(stripped, pluginsDir).length > 0) {
+      const bak = await freeBakPath(deps.vault, pluginsPath);
+      await safeRename(deps.vault.adapter, pluginsPath, bak);
+      rescued = stripped;
+      deps.logger?.info("gitignore migration: rescued plugins/.gitignore", {
+        bak,
+      });
+    }
+  }
+
+  // §8.1.3 needs the ASSEMBLED root file — the proposal is built out of its
+  // own two halves — so enforce runs HERE: after the rescue above, before
+  // anything that reads the root. It also recreates the plugins file from
+  // the template, which is the second half of the owner's rule.
+  await deps.enforce?.();
+
   const rootContent = await readIfPresent(deps.vault, ".gitignore");
   const split = rootContent === null ? null : splitAtFinalSection(rootContent);
   if (split === null) {
@@ -394,7 +445,7 @@ export async function runMigrationFull(
     candidates: walk.candidates.length,
   });
 
-  if (walk.candidates.length === 0) {
+  if (walk.candidates.length === 0 && rescued === null) {
     // Steps 1 and 4 are skipped: nothing to stage, nothing to rename. The
     // marker pair still runs, so the protocol has one shape rather than
     // two and recovery's "marker is only 0" branch stays live.
@@ -410,7 +461,22 @@ export async function runMigrationFull(
   // last-match-wins means a deeper rule must land LATER in the file.
   const blocks: string[][] = [];
   const sources: string[] = [];
-  const pluginsDirGitignore = `${deps.configDir}/plugins/.gitignore`;
+  // ⚠️ TWO lists, and conflating them is a real bug the tests caught.
+  // `toRename` drives step 3 and goes into the crash marker; `sources` is
+  // what the user is TOLD about. The rescued plugins file belongs only to
+  // the second: it was already renamed above, and enforce() RECREATED it
+  // from the template — so putting it in step 3's list would rename our
+  // own fresh template to `.bak2` and leave the folder without the file.
+  // The same list drives step 3 on resume, so the exclusion has to be in
+  // the marker, not just in this pass.
+  const toRename: string[] = [];
+  if (rescued !== null) {
+    // Its block goes FIRST: it is the shallowest source there is, and
+    // shallowest-first is semantic here (last-match-wins).
+    blocks.push(translateFile(rescued, pluginsDir));
+    sources.push(pluginsPath);
+  }
+  const pluginsDirGitignore = pluginsPath;
   for (const candidate of walk.candidates) {
     const raw = await readIfPresent(deps.vault, candidate.path);
     if (raw === null) continue; // vanished mid-run — skip-class
@@ -429,8 +495,11 @@ export async function runMigrationFull(
     if (block.length === 0) continue;
     blocks.push(block);
     sources.push(candidate.path);
+    toRename.push(candidate.path);
   }
   if (sources.length === 0) {
+    // (The rescue above would have put a source here, so reaching this
+    // means neither it nor the walk found anything worth moving.)
     // Candidates existed but none carried a rule worth moving — the same
     // outcome as finding none, and it must be recorded the same way or
     // the migration would never stop looking.
@@ -460,10 +529,10 @@ export async function runMigrationFull(
   // sources nobody can explain.
   await deps.vault.adapter.write(
     inProgressPath(deps),
-    serializeMigrationList(sources),
+    serializeMigrationList(toRename),
   );
   // Step 3, then 4.
-  await renameSourcesAway(deps, sources);
+  await renameSourcesAway(deps, toRename);
   await safeRename(deps.vault.adapter, staging, proposal);
   await finish(deps, sources);
 

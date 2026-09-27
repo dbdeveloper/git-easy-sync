@@ -217,6 +217,89 @@ describe("§8.1.4 the forward path", () => {
     expect(exists(`${CONFIG_DIR}/plugins/.gitignore`)).toBe(false);
   });
 
+  it("🔑 FIELD BUG: a user rule in plugins/.gitignore survives enforce()", async () => {
+    // Field report 2026-09-28: a rule added to that file was silently
+    // replaced by our template — no .bak, no mention in the modal.
+    //
+    // The cause was ORDER, not detection: main.ts called enforce() before
+    // the migration, and enforce rewrites that file WHOLE ("no user
+    // content here to preserve"), so the walk arrived after the evidence
+    // was gone. The migration now calls enforce ITSELF, after the rescue.
+    //
+    // This test seeds the exact shape by supplying an `enforce` that does
+    // what the real one does to this file: overwrite it with the template.
+    let enforceCalls = 0;
+    const deps = setup({
+      ".gitignore": ROOT,
+      [`${CONFIG_DIR}/plugins/.gitignore`]: [
+        ...PLUGINS_DIR_MANAGED_LINES.slice(0, 4),
+        "/github-easy-sync/test.md",
+      ].join("\n"),
+    });
+    deps.enforce = async () => {
+      enforceCalls++;
+      fs.writeFileSync(
+        path.join(root, `${CONFIG_DIR}/plugins/.gitignore`),
+        PLUGINS_DIR_MANAGED_LINES.slice(0, 4).join("\n") + "\n",
+      );
+    };
+
+    const r = await runMigrationFull(deps);
+
+    expect(enforceCalls).toBe(1);
+    expect(r.kind).toBe("migrated");
+    expect(r.sources).toContain(`${CONFIG_DIR}/plugins/.gitignore`);
+    // 1. the rule reached the proposal
+    expect(read(PROPOSAL)).toContain("github-easy-sync/test.md");
+    // 2. the ORIGINAL is in the .bak — not the template
+    expect(read(`${CONFIG_DIR}/plugins/.gitignore.bak`)).toContain(
+      "/github-easy-sync/test.md",
+    );
+    // 3. our template took its place, live
+    const live = read(`${CONFIG_DIR}/plugins/.gitignore`);
+    expect(live).toContain("Managed file");
+    expect(live).not.toContain("github-easy-sync/test.md");
+  });
+
+  it("🔑 …and an UNCHANGED plugins/.gitignore is dropped from the process", async () => {
+    // The other half of the owner's rule: identical to our template →
+    // out of the process entirely. No .bak, no proposal entry, and the
+    // file left exactly where enforce put it.
+    const deps = setup({
+      ".gitignore": ROOT,
+      [`${CONFIG_DIR}/plugins/.gitignore`]: PLUGINS_DIR_MANAGED_LINES.slice(
+        0,
+        4,
+      ).join("\n"),
+    });
+    deps.enforce = async () => {};
+    const r = await runMigrationFull(deps);
+
+    expect(r.kind).toBe("nothing-found");
+    expect(exists(`${CONFIG_DIR}/plugins/.gitignore`)).toBe(true);
+    expect(exists(`${CONFIG_DIR}/plugins/.gitignore.bak`)).toBe(false);
+  });
+
+  it("🔑 the rescue happens BEFORE enforce, not after", async () => {
+    // The ordering itself, pinned: if enforce ran first the file it saw
+    // would already be the template. Asserted by recording what was on
+    // disk at the moment enforce was called.
+    let seenAtEnforce: string | null = null;
+    const deps = setup({
+      ".gitignore": ROOT,
+      [`${CONFIG_DIR}/plugins/.gitignore`]: "/mine.md\n",
+    });
+    deps.enforce = async () => {
+      const p = path.join(root, `${CONFIG_DIR}/plugins/.gitignore`);
+      seenAtEnforce = fs.existsSync(p) ? fs.readFileSync(p, "utf8") : null;
+    };
+    await runMigrationFull(deps);
+    // Already moved aside by the time enforce ran — which is why enforce
+    // recreating it is harmless.
+    expect(seenAtEnforce).toBeNull();
+    expect(read(`${CONFIG_DIR}/plugins/.gitignore.bak`)).toBe("/mine.md\n");
+  });
+
   it("🔑 OUR OWN template in plugins/.gitignore is not migrated, and the file is not renamed", async () => {
     // Field report 2026-09-28: the whole managed file was hoisted into
     // the proposal. Not a leak — measured against git, the deeper

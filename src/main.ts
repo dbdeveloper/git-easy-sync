@@ -1211,7 +1211,10 @@ export default class GitHubSyncPlugin extends Plugin {
     // (§8.1.5). The manual Settings button always speaks, so the user can
     // confirm the operation actually happened.
     try {
-      await this.invariants?.enforce();
+      // ⚠️ NO enforce() here: the migration calls it itself, at the one
+      // point that is correct. Calling it first destroyed the user content
+      // in <configDir>/plugins/.gitignore before the rescue could read it
+      // (field report 2026-09-28).
       const r = await runMigrationFull(this.migrationDeps());
       if (r.kind !== "already-done" && r.kind !== "nothing-found") {
         this.logger.info("gitignore migration", r);
@@ -1669,6 +1672,9 @@ export default class GitHubSyncPlugin extends Plugin {
         return gi.dirIgnored(relDir);
       },
       nowMs: () => Date.now(),
+      enforce: async () => {
+        await this.invariants?.enforce();
+      },
       logger: {
         info: (m, d) => this.logger.info(m, d),
         warn: (m, d) => this.logger.warn(m, d),
@@ -1743,7 +1749,7 @@ export default class GitHubSyncPlugin extends Plugin {
   // broken button.
   async runGitignoreCheck(): Promise<void> {
     try {
-      await this.invariants?.enforce();
+      // enforce() is the migration's own step — see runMigrationFull.
       const result = await runMigrationFull(this.migrationDeps(), {
         force: true,
       });
