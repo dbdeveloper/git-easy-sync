@@ -129,6 +129,27 @@ describe("§8.1.4 the forward path", () => {
     expect(marker?.remotePending).toEqual(r.sources);
   });
 
+  it("🔑 the rescued plugins/.gitignore is NOT queued for remote deletion", async () => {
+    // It never travels: its own canonical content begins with
+    // `/.gitignore`, which hides it. Queuing it was harmless — the tree
+    // filter drops what is not on the server — but the field log showed it
+    // sitting in `pending`, where a reader would reasonably wonder what it
+    // was doing there.
+    const deps = setup({
+      ".gitignore": ROOT,
+      [`${CONFIG_DIR}/plugins/.gitignore`]: "/mine.md\n",
+      "a/.gitignore": "build\n",
+    });
+    deps.enforce = async () => {};
+    const r = await runMigrationFull(deps);
+
+    // Reported to the user…
+    expect(r.sources).toContain(`${CONFIG_DIR}/plugins/.gitignore`);
+    // …but not asked about on the server.
+    const marker = await readDoneMarker(deps);
+    expect(marker?.remotePending).toEqual(["a/.gitignore"]);
+  });
+
   it("🔑 deeper rules land LATER in the proposal — last-match-wins", async () => {
     // Order is the whole reason the walk sorts. If `a/b` came first, its
     // rules would stop overriding `a`'s, silently.

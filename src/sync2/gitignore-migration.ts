@@ -534,7 +534,13 @@ export async function runMigrationFull(
   // Step 3, then 4.
   await renameSourcesAway(deps, toRename);
   await safeRename(deps.vault.adapter, staging, proposal);
-  await finish(deps, sources);
+  // ⚠️ `toRename`, not `sources`: §8.1.6 deletes from the REMOTE, and the
+  // rescued `<configDir>/plugins/.gitignore` never travels there — its own
+  // canonical content starts with `/.gitignore`, which hides it. Passing it
+  // was harmless (the tree filter drops what is not on the server) but it
+  // is a path we would be asking about for no reason, and the field log
+  // showed it sitting in `pending` where a reader would wonder why.
+  await finish(deps, toRename);
 
   deps.logger?.info("gitignore migration: done", {
     sources,

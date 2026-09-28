@@ -228,6 +228,10 @@ export default class GitHubSyncPlugin extends Plugin {
   conflictCounter!: ConflictCounter;
   // diff2 trash subsystem (see docs/DIFF2_IMPLEMENTATION_PLAN.md §R3).
   private trashWatcher: TrashWatcher | null = null;
+  // Set when a self-reload has been scheduled (the plugin's own files were
+  // just updated by a sync). Work that needs the network must not start
+  // after this: the reload kills the worker underneath it.
+  private selfReloadPending = false;
   logger!: Logger;
   // E1 (TODO §5) — persistent `.runtime/token_expired` marker; in-memory authoritative,
   // file best-effort. Set/cleared per-drain (note()) + on the settings probe;
@@ -1689,6 +1693,18 @@ export default class GitHubSyncPlugin extends Plugin {
   private async cleanupMigratedGitignoresOnRemote(): Promise<void> {
     const client = this.githubClient;
     if (!client) return;
+    // ⚠️ The drain may have just pulled a new build of THIS plugin and
+    // scheduled a self-reload. Starting network work into that window is
+    // guaranteed to be cut off half-way ("WorkerClient terminated" in the
+    // field log), and while the outcome is safe — the pending list is kept
+    // and retried — a failure that was certain in advance should not be
+    // attempted. The next sync does it.
+    if (this.selfReloadPending) {
+      this.logger.info(
+        "gitignore remote cleanup deferred: a plugin self-reload is pending",
+      );
+      return;
+    }
     const r = await deleteMigratedFromRemote({
       migration: this.migrationDeps(),
       client,
@@ -2720,6 +2736,11 @@ export default class GitHubSyncPlugin extends Plugin {
         ? `Plugin "${willReload[0]}" updated`
         : `${willReload.length} plugins updated`;
     new Notice(label, 3000);
+    // ⚠️ Anything that wants the network AFTER this point will be cut off
+    // mid-flight: the reload tears this instance down, taking the
+    // WorkerClient with it (field log 2026-09-28 —
+    // "gitignore remote cleanup failed … WorkerClient terminated").
+    if (willReload.includes(manifest.id)) this.selfReloadPending = true;
     this.logger?.info("BRAT-style reload scheduled", { ids: willReload });
   }
 
