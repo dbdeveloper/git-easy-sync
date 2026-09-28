@@ -32,6 +32,7 @@ import {
   migrationReportText,
   isMigrationDone,
   type MigrationDeps,
+  type MigrationResult,
 } from "./sync2/gitignore-migration";
 import { GitignoreAnalysisModal } from "./sync2/views/gitignore-analysis-modal";
 import { GitignoreEditModal } from "./sync2/views/gitignore-edit-modal";
@@ -137,6 +138,10 @@ const BRIEF_NOTICE_MS = 700;
 // §II.16 — how long a sync may stay silent before it starts reporting.
 // Owner decision 2026-09-25: the complaint was "pauses over 3-4 seconds
 // feel burdensome", so the notice appears BEFORE that becomes true.
+// §8.1.5b — how long a Sync click waits for the analysis before saying so.
+// The same 3 s the owner named: below it a dialog is noise, above it
+// silence is a hang.
+const ANALYSIS_QUIET_MS = 3000;
 const SYNC_PROGRESS_DELAY_MS = 2000;
 // How long the closing line ("Sync done — …") stays after the operation
 // ends. The user has been watching this notice, so it does not need the
@@ -1811,15 +1816,19 @@ export default class GitHubSyncPlugin extends Plugin {
   // `analysisPromise` doubles as the "is it running" flag AND as what the
   // waiting modal races against, so there is one source of truth rather
   // than a boolean that can disagree with reality.
-  private analysisPromise: Promise<void> | null = null;
+  private analysisPromise: Promise<MigrationResult | null> | null = null;
   private analysisDirs = 0;
 
-  private startMigrationAnalysis(): Promise<void> {
-    // Already running: join it. Starting a second walk would double the
-    // work and, worse, let two migrations write at once.
+  // ⚠️ Resolves when the MIGRATION finishes — NOT after its report window
+  // is dismissed. The waiting modal races against this, and folding the
+  // report into it would leave the "still checking…" window up underneath
+  // the very window that replaces it.
+  private startMigrationAnalysis(): Promise<MigrationResult | null> {
+    // Already running: join it. A second walk would double the work and,
+    // worse, let two migrations write at once.
     if (this.analysisPromise !== null) return this.analysisPromise;
     this.analysisDirs = 0;
-    const run = (async () => {
+    const run = (async (): Promise<MigrationResult | null> => {
       try {
         const r = await runMigrationFull({
           ...this.migrationDeps(),
@@ -1830,17 +1839,21 @@ export default class GitHubSyncPlugin extends Plugin {
         if (r.kind !== "already-done" && r.kind !== "nothing-found") {
           this.logger.info("gitignore migration", r);
         }
-        if (r.conflictPath !== null) {
-          await this.showGitignoreMigrationModal(r.sources);
-        }
+        return r;
       } catch (err) {
         this.logger.error("gitignore migration failed", `${err}`);
+        return null;
       }
     })();
-    this.analysisPromise = run.finally(() => {
+    this.analysisPromise = run;
+    // The report window is shown AFTER, and outside the raced promise.
+    void run.then(async (r) => {
       this.analysisPromise = null;
+      if (r?.conflictPath != null) {
+        await this.showGitignoreMigrationModal(r.sources);
+      }
     });
-    return this.analysisPromise;
+    return run;
   }
 
   // The migration's own report (§8.1.5). A modal rather than a toast: the
@@ -2048,24 +2061,52 @@ export default class GitHubSyncPlugin extends Plugin {
         this.logger.info("sync skipped: initial vault analysis in progress");
         return false;
       }
-      // A RACE, not a question (owner, 2026-09-28): whichever comes first
-      // decides. Finishing closes the window and lets the click CONTINUE —
-      // straight into the conflict check below, which either raises the
-      // proposal modal or lets the sync run. [Back] CANCELS the sync; it
-      // does not mean "wait longer" and it does not mean "go ahead".
-      const waiter = new GitignoreAnalysisModal(
-        this.app,
-        () => this.analysisDirs,
-      );
-      const outcome = await Promise.race([
-        waiter.prompt(),
-        analysis.then(() => "finished" as const),
+      // ⚠️ Wait QUIETLY first. On desktop the whole walk is ~300 ms (P8),
+      // so a click almost always lands inside this window — and flashing a
+      // dialog for a third of a second would be worse than the wait it
+      // reports. The modal is for the mobile case, where the same walk
+      // takes tens of seconds (METAFILE §1).
+      let settled = false;
+      const finished = analysis.then((r) => {
+        settled = true;
+        return r;
+      });
+      await Promise.race([
+        finished,
+        new Promise((r) => setTimeout(r, ANALYSIS_QUIET_MS)),
       ]);
-      // No-op when the user already closed it; needed when the analysis
-      // won the race and the window is still up.
-      waiter.finish();
-      if (outcome !== "finished") {
-        this.logger.info("sync cancelled from the analysis wait");
+
+      let result: MigrationResult | null = null;
+      if (settled) {
+        result = await finished;
+      } else {
+        // A RACE, not a question (owner): whichever comes first decides.
+        // [Back] CANCELS the sync — not "wait longer", not "go ahead".
+        const waiter = new GitignoreAnalysisModal(
+          this.app,
+          () => this.analysisDirs,
+        );
+        const outcome = await Promise.race([
+          waiter.prompt(),
+          finished.then(() => "finished" as const),
+        ]);
+        // No-op when the user already closed it; needed when the analysis
+        // won the race and the window is still up.
+        waiter.finish();
+        if (outcome !== "finished") {
+          this.logger.info("sync cancelled from the analysis wait");
+          return false;
+        }
+        result = await finished;
+      }
+
+      // ⚠️ A proposal means the SCAN-RESULT window is already on its way
+      // (startMigrationAnalysis shows it). The sync stops here WITHOUT the
+      // "Sync paused" modal: that one is for a LATER click against an
+      // existing conflict, and showing both would put two windows in front
+      // of one event (owner, 2026-09-28).
+      if (result?.conflictPath != null) {
+        this.logger.info("sync stopped: the analysis raised a proposal");
         return false;
       }
     }
@@ -2772,6 +2813,14 @@ export default class GitHubSyncPlugin extends Plugin {
   // without triggering drain. Uses Sync2Manager.commitOnly() which
   // runs the change-detection + enqueue path and stops there.
   async commit(): Promise<void> {
+    // ⚠️ The SAME gate as a sync, and for the same reason (owner,
+    // 2026-09-28): a commit builds its batch FROM the .gitignore rules, so
+    // committing while those rules are in dispute — or while the one-time
+    // analysis is still deciding them — enqueues files chosen by rules
+    // that are about to change. This path used to skip the gate entirely,
+    // which is also how a [Commit] during the background analysis could
+    // put a second enforce() on the same files.
+    if (!(await this.confirmPendingConflictsBeforeSync())) return;
     try {
       await this.sync2Manager.commitOnly();
     } catch (err) {
@@ -2840,6 +2889,9 @@ export default class GitHubSyncPlugin extends Plugin {
       new Notice("No active file to commit", 5000);
       return;
     }
+    // Same gate as commit() above — one file or all of them, the rules
+    // deciding what may travel are the same rules.
+    if (!(await this.confirmPendingConflictsBeforeSync())) return;
     try {
       const outcome = await this.sync2Manager.commitFile(path);
       if (outcome.kind === "ignored") {

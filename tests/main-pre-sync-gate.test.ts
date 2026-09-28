@@ -460,10 +460,13 @@ describe("§8.1.5a the .gitignore gate is a MODAL and blocks unconditionally", (
 });
 
 
+const ANALYSIS_QUIET_MS = 3000; // mirrors main.ts
+
 describe("§8.1.5b the analysis wait", () => {
   let fx: ReturnType<typeof fixture>;
 
   beforeEach(async () => {
+    vi.useFakeTimers();
     fx = fixture();
     await fx.store.load();
     waitModal.constructed = 0;
@@ -473,14 +476,15 @@ describe("§8.1.5b the analysis wait", () => {
     giModal.decision = "dismiss";
   });
   afterEach(() => {
+    vi.useRealTimers();
     if (fs.existsSync(fx.root)) fs.rmSync(fx.root, { recursive: true, force: true });
   });
 
   // A gate instance whose analysis is under the test's control.
   function makeWaitingGate(done: boolean) {
     const { plugin, activateSpy } = makeGate(fx.vault, fx.store);
-    let release: (() => void) | null = null;
-    const analysis = new Promise<void>((r) => {
+    let release: ((r: unknown) => void) | null = null;
+    const analysis = new Promise<unknown>((r) => {
       release = r;
     });
     migration.done = done;
@@ -489,7 +493,13 @@ describe("§8.1.5b the analysis wait", () => {
       startMigrationAnalysis: () => analysis,
       analysisDirs: 7,
     });
-    return { plugin, activateSpy, release: () => release?.() };
+    return {
+      plugin,
+      activateSpy,
+      // `conflictPath` is what decides whether the sync continues.
+      release: (conflictPath: string | null = null) =>
+        release?.({ kind: "migrated", sources: [], conflictPath }),
+    };
   }
 
   it("🔑 [Back] CANCELS the sync — it is not 'wait longer'", async () => {
@@ -497,45 +507,52 @@ describe("§8.1.5b the analysis wait", () => {
     // leave a user who dismissed a dialog wondering whether a sync ran.
     const { plugin, release } = makeWaitingGate(false);
     const gate = plugin.confirmPendingConflictsBeforeSync("user");
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(ANALYSIS_QUIET_MS + 10);
     waitModal.resolve?.("cancelled");
     expect(await gate).toBe(false);
-    release();
+    release(null);
   });
 
-  it("🔑 finishing CONTINUES the click — the window closes itself", async () => {
-    // Nothing in dispute afterwards, so the sync is allowed to proceed.
+  it("🔑 finishing with NO proposal CONTINUES the click — the sync runs", async () => {
     const { plugin, release } = makeWaitingGate(false);
     const gate = plugin.confirmPendingConflictsBeforeSync("user");
-    await Promise.resolve();
-    release();
+    await vi.advanceTimersByTimeAsync(ANALYSIS_QUIET_MS + 10);
+    release(null);
     expect(await gate).toBe(true);
     // Closed from the outside rather than left on screen.
     expect(waitModal.finished).toBeGreaterThan(0);
   });
 
-  it("🔑 …and hands over to the CONFLICT modal when the scan raised one", async () => {
-    // The second half of "continue": finishing is not the same as
-    // "sync now" if the analysis produced a proposal.
-    writeFile(fx.root, ".gitignore", ".*\n");
-    writeFile(
-      fx.root,
-      ".gitignore.conflict-from-Old gitignore files-2026-09-28T10-00-00Z",
-      "proposed\n",
-    );
+  it("🔑 a proposal STOPS the sync, and does NOT add a second window", async () => {
+    // The owner was explicit: after the analysis it is the SCAN-RESULT
+    // window that speaks — the one the background pass shows — not the
+    // "Sync paused" one, which is for a LATER click against a conflict
+    // that already exists. Two windows for one event is the bug.
     const { plugin, release } = makeWaitingGate(false);
     const gate = plugin.confirmPendingConflictsBeforeSync("user");
-    await Promise.resolve();
-    release();
+    await vi.advanceTimersByTimeAsync(ANALYSIS_QUIET_MS + 10);
+    release("proposal-path");
     expect(await gate).toBe(false);
-    expect(giModal.constructed).toBe(1);
+    expect(giModal.constructed).toBe(0);
+  });
+
+  it("🔑 a click inside the QUIET window shows no dialog at all", async () => {
+    // Desktop finishes the whole walk in ~300 ms, so a click almost always
+    // lands here. Flashing a dialog for a third of a second would be worse
+    // than the wait it announces.
+    const { plugin, release } = makeWaitingGate(false);
+    const gate = plugin.confirmPendingConflictsBeforeSync("user");
+    await vi.advanceTimersByTimeAsync(100);
+    release(null);
+    expect(await gate).toBe(true);
+    expect(waitModal.constructed).toBe(0);
   });
 
   it("a BACKGROUND tick never opens the wait — it just skips", async () => {
     const { plugin, release } = makeWaitingGate(false);
     expect(await plugin.confirmPendingConflictsBeforeSync("auto")).toBe(false);
     expect(waitModal.constructed).toBe(0);
-    release();
+    release(null);
   });
 
   it("once the marker is down the wait never appears again", async () => {
