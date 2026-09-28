@@ -1823,11 +1823,48 @@ export default class GitHubSyncPlugin extends Plugin {
     try {
       const setting = (
         this.app as unknown as {
-          setting?: { containerEl?: HTMLElement; close?: () => void };
+          setting?: {
+            containerEl?: HTMLElement;
+            modalEl?: HTMLElement;
+            close?: () => void;
+          };
         }
       ).setting;
-      if (!setting?.containerEl?.isConnected) return;
-      setting.close?.();
+      // ⚠️ DIAGNOSTIC (2026-09-28). The `isConnected` guard was a guess and
+      // the field says it did not work, so the next step is evidence
+      // rather than another guess: this records exactly which assumption
+      // is false — that `app.setting` is reachable, that it carries a
+      // containerEl, that the containerEl is in the document while the
+      // dialog is on screen, and that close() is callable.
+      const container = setting?.containerEl;
+      const modal = setting?.modalEl;
+      const openByDom =
+        document.querySelector(".modal-container .mod-settings") !== null;
+      this.logger.info("settings-dialog close probe", {
+        hasSetting: setting !== undefined,
+        hasContainerEl: container !== undefined,
+        containerConnected: container?.isConnected ?? null,
+        containerParent: container?.parentElement?.className ?? null,
+        modalConnected: modal?.isConnected ?? null,
+        modalClass: modal?.className ?? null,
+        settingsVisibleInDom: openByDom,
+        closeIsFunction: typeof setting?.close === "function",
+      });
+      // Open-check widened: `isConnected` alone was the failing assumption
+      // candidate, so the DOM probe stands beside it. Either one saying
+      // "on screen" is enough — the danger this guard exists for is
+      // calling close() on a CLOSED dialog (Modal.close pops a keymap
+      // scope unconditionally), and both signals agree on that case.
+      if (!container?.isConnected && !openByDom) {
+        this.logger.info("settings-dialog close probe: not open, skipping");
+        return;
+      }
+      setting?.close?.();
+      this.logger.info("settings-dialog close probe: close() called", {
+        stillConnectedAfter: container?.isConnected ?? null,
+        stillVisibleAfter:
+          document.querySelector(".modal-container .mod-settings") !== null,
+      });
     } catch (err) {
       this.logger.warn("could not close the settings dialog", {
         err: `${err}`,
