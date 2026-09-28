@@ -82,7 +82,7 @@ interface GateHandle {
   app: unknown;
   conflictStoreV2: unknown;
   logger: unknown;
-  confirmPendingConflictsBeforeSync(): Promise<boolean>;
+  confirmPendingConflictsBeforeSync(origin?: "user" | "auto"): Promise<boolean>;
 }
 function bareInstance(): GateHandle {
   return Object.create(GitHubSyncPlugin.prototype) as unknown as GateHandle;
@@ -372,6 +372,44 @@ describe("§8.1.5a the .gitignore gate is a MODAL and blocks unconditionally", (
     expect(giModal.opts?.paths).toEqual([".gitignore"]);
     expect(giModal.opts?.resolveLabel).toBe("Solve conflict");
     expect(giModal.opts?.dismissLabel).toBe("Cancel");
+  });
+
+  it("🔑 a BACKGROUND tick never opens a dialog — it skips quietly", async () => {
+    // The contract was already written, in PreSyncConflictModal's own
+    // header: "Background drains (interval tick, watchdog, onload
+    // startup) skip the modal — they're not user-driven and a blocking
+    // dialog would surprise the user." Nothing enforced it, for either
+    // gate, so an interval tick popped a modal at whatever the user
+    // happened to be doing.
+    writeFile(fx.root, ".gitignore", ".*\n");
+    writeFile(fx.root, PROPOSAL, "proposed\n");
+    const { plugin, activateSpy } = makeGate(fx.vault, fx.store);
+
+    expect(await plugin.confirmPendingConflictsBeforeSync("auto")).toBe(false);
+    expect(giModal.constructed).toBe(0);
+    expect(activateSpy).not.toHaveBeenCalled();
+  });
+
+  it("…and the TRACKED gate is quiet on background too", async () => {
+    // Same defect one layer down: §24's modal fronted every path,
+    // background included.
+    writeFile(fx.root, "note.md", "ours");
+    await createTracked(fx, "note.md", "Phone");
+    const { plugin } = makeGate(fx.vault, fx.store);
+
+    expect(await plugin.confirmPendingConflictsBeforeSync("auto")).toBe(false);
+    expect(modal.constructed).toBe(0);
+  });
+
+  it("the OUTCOME is unchanged — background was already being skipped", async () => {
+    // Removing a dialog must not quietly start letting syncs through:
+    // the modal's default decision was "cancel", so a background tick
+    // with conflicts was refused before this change too.
+    writeFile(fx.root, "note.md", "ours");
+    await createTracked(fx, "note.md", "Phone");
+    const { plugin } = makeGate(fx.vault, fx.store);
+    modal.decision = "cancel";
+    expect(await plugin.confirmPendingConflictsBeforeSync("user")).toBe(false);
   });
 
   it("a clean vault never shows it, and the ordinary gate still runs", async () => {

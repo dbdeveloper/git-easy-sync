@@ -1501,7 +1501,13 @@ export default class GitHubSyncPlugin extends Plugin {
       modal.open();
       return;
     }
-    if (!(await this.confirmPendingConflictsBeforeSync())) return;
+    if (
+      !(await this.confirmPendingConflictsBeforeSync(
+        background ? "auto" : "user",
+      ))
+    ) {
+      return;
+    }
     try {
       // Learn the git identity BEFORE the first push, so the very first
       // commit carries a real address rather than the derived no-reply
@@ -1973,7 +1979,25 @@ export default class GitHubSyncPlugin extends Plugin {
     }
   }
 
-  private async confirmPendingConflictsBeforeSync(): Promise<boolean> {
+  // `origin` follows the §35 convention next door (gateOnTokenExpired):
+  // "user" may open a dialog, "auto" may not.
+  //
+  // ⚠️ It had no origin at all, so an interval tick popped a MODAL —
+  // contradicting the contract written in PreSyncConflictModal's own
+  // header: "Background drains (interval tick, watchdog, onload startup)
+  // skip the modal — they're not user-driven and a blocking dialog would
+  // surprise the user." Documented and unenforced, for both this gate and
+  // the §24 one it fronts.
+  //
+  // The OUTCOME is unchanged on purpose: the modal's default decision was
+  // already "cancel", so a background tick with conflicts was skipped
+  // anyway — it just showed a dialog first. Now it skips quietly and says
+  // so in the log. Whether a background tick SHOULD proceed instead is a
+  // separate question about §24's semantics, and not one to settle as a
+  // side effect of removing a dialog.
+  private async confirmPendingConflictsBeforeSync(
+    origin: "user" | "auto" = "user",
+  ): Promise<boolean> {
     if (!this.conflictStoreV2) return true;
 
     // DOT-FILES §8.1.5a — a `.gitignore` in dispute blocks the sync HARD,
@@ -1999,8 +2023,10 @@ export default class GitHubSyncPlugin extends Plugin {
       );
       if (disputes.length > 0) {
         this.logger.warn("sync blocked: .gitignore in conflict", {
+          origin,
           disputes: disputes.map((d) => d.siblingPath),
         });
+        if (origin === "auto") return false;
         const proposal = disputes.find((d) => d.isMigrationProposal);
         const n = disputes.length;
         // A MODAL, not a toast (owner, 2026-09-28): this explains why a
@@ -2057,6 +2083,12 @@ export default class GitHubSyncPlugin extends Plugin {
       this.conflictStoreV2,
     );
     if (!summary) return true;
+    if (origin === "auto") {
+      this.logger.info("sync skipped: tracked conflicts (background)", {
+        paths: summary.trackedPaths,
+      });
+      return false;
+    }
     const decision = await new PreSyncConflictModal(
       this.app,
       summary.trackedPaths,
