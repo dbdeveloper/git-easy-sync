@@ -613,6 +613,64 @@ export default class GithubClient {
    * drift, we re-target the in-flight batch onto the new head, which
    * requires the head's tree SHA as `base_tree`.
    */
+  // The authenticated account, for the one-time git-identity default
+  // (git-identity.ts). Returns null on ANY failure — a missing default is
+  // not an error, because the fallback identity is already valid, and this
+  // must never be able to fail a sync.
+  async getAuthenticatedUser(): Promise<{
+    login: string;
+    name: string | null;
+    email: string | null;
+  } | null> {
+    try {
+      const response = await this.timed(
+        { url: "https://api.github.com/user", headers: this.headers(), throw: false },
+        "user",
+      );
+      if (response.status < 200 || response.status >= 300) return null;
+      const j = response.json as Record<string, unknown> | undefined;
+      if (typeof j?.login !== "string") return null;
+      return {
+        login: j.login,
+        name: typeof j.name === "string" ? j.name : null,
+        email: typeof j.email === "string" ? j.email : null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // The author of the branch's most recent commit — what PREVIOUS syncs
+  // signed with. Same never-throws contract and the same reason.
+  async getLatestCommitAuthor(): Promise<{
+    name: string;
+    email: string;
+  } | null> {
+    try {
+      const branch = encodeURIComponent(this.settings.githubBranch || "main");
+      const response = await this.timed(
+        {
+          url:
+            `https://api.github.com/repos/${this.settings.githubOwner}/` +
+            `${this.settings.githubRepo}/commits?sha=${branch}&per_page=1`,
+          headers: this.headers(),
+          throw: false,
+        },
+        "commits?per_page=1",
+      );
+      if (response.status < 200 || response.status >= 300) return null;
+      const list = response.json as Array<Record<string, unknown>> | undefined;
+      const author = (
+        list?.[0]?.commit as { author?: { name?: unknown; email?: unknown } }
+      )?.author;
+      if (typeof author?.name !== "string") return null;
+      if (typeof author?.email !== "string") return null;
+      return { name: author.name, email: author.email };
+    } catch {
+      return null;
+    }
+  }
+
   async getCommit({
     sha,
     retry = false,

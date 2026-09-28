@@ -35,6 +35,10 @@ import {
 import { GitignoreEditModal } from "./sync2/views/gitignore-edit-modal";
 import { GitignoreDecisionModal } from "./sync2/views/gitignore-modal";
 import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
+import {
+  learnGitIdentity,
+  resolveGitIdentity,
+} from "./sync2/git-identity";
 import Logger from "./logger";
 import { describeError, calculateGitBlobSHA } from "./utils";
 import GithubClient from "./github/client";
@@ -1303,13 +1307,14 @@ export default class GitHubSyncPlugin extends Plugin {
       // main pushes stamp date=batch.createdAt — the mtime invariant
       // records the EDIT moment). Live getter; NAME defaults to the
       // GitHub Owner when the dedicated field is empty.
-      gitAuthor: () => {
-        const name =
-          this.settings.gitAuthorName?.trim() ||
-          this.settings.githubOwner?.trim();
-        const email = this.settings.gitAuthorEmail?.trim();
-        return name && email ? { name, email } : null;
-      },
+      // ⚠️ NEVER null. It used to be — `name && email ? {...} : null` — and
+      // that silent null skipped the author object entirely, so GitHub
+      // stamped PUSH time instead of the batch's creation time and the
+      // `.obsidian/` mtime tiebreak compared push-time against edit-time.
+      // A documented data-integrity invariant (SYNC2 §4.4) was hanging on
+      // whether the user had filled in an optional Settings field. See
+      // git-identity.ts for the measurements behind this.
+      gitAuthor: () => resolveGitIdentity(this.settings),
       maxAutoMergeFileSize: () =>
         this.settings.maxAutoMergeSizeBytes ?? 1_000_000,
       accumulateOfflineSyncs: () => this.settings.consolidateCommits ?? false,
@@ -1498,6 +1503,11 @@ export default class GitHubSyncPlugin extends Plugin {
     }
     if (!(await this.confirmPendingConflictsBeforeSync())) return;
     try {
+      // Learn the git identity BEFORE the first push, so the very first
+      // commit carries a real address rather than the derived no-reply
+      // one. One request, and only while both fields are empty — i.e.
+      // once in the life of an install.
+      await this.learnGitIdentityOnce();
       // Stage 7: master toggle controls semantic
       //   true  (default) → commit + drain (syncAll)
       //   false           → drain only (resumeQueue)
@@ -1685,6 +1695,37 @@ export default class GitHubSyncPlugin extends Plugin {
         error: (m, d) => this.logger.error(m, `${d ? JSON.stringify(d) : ""}`),
       },
     };
+  }
+
+  // Fill the git-identity Settings fields from the account, ONCE, so a user
+  // sees real values there instead of blanks — and can change them.
+  //
+  // Best-effort by design: the push identity is already valid without this
+  // (resolveGitIdentity is total), so a failure here costs nothing and must
+  // never fail a sync. Runs only while BOTH fields are empty, so it can
+  // never overwrite what the user chose.
+  private async learnGitIdentityOnce(): Promise<void> {
+    if (
+      (this.settings.gitAuthorName?.trim() ?? "") !== "" ||
+      (this.settings.gitAuthorEmail?.trim() ?? "") !== ""
+    ) {
+      return;
+    }
+    const client = this.githubClient;
+    if (!client) return;
+    const learned = await learnGitIdentity(client);
+    if (learned.name === undefined && learned.email === undefined) return;
+    if (learned.name !== undefined) this.settings.gitAuthorName = learned.name;
+    if (learned.email !== undefined) {
+      this.settings.gitAuthorEmail = learned.email;
+    }
+    await this.saveSettings();
+    this.logger.info("git identity learned from GitHub", {
+      name: this.settings.gitAuthorName,
+      // The address goes into a permanent public record, so the user is
+      // told which one was adopted.
+      email: this.settings.gitAuthorEmail,
+    });
   }
 
   // §8.1.6 — see deleteMigratedFromRemote for why this cannot be part of

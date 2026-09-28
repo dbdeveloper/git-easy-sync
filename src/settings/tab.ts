@@ -376,15 +376,23 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     // Optional git author identity (SYNC2.md §4.4). When BOTH are
     // filled, commits carry this name/email + the local commit time
     // as git's author/committer, so the GitHub commit date reflects
-    // when you committed rather than when it pushed. Empty = no
-    // override (GitHub uses the token's user + push time).
+    // when you committed rather than when it pushed.
+    //
+    // ⚠️ NOT optional any more, and the labels dropped "(optional)" to
+    // match. "Empty = GitHub uses the token's user + push time" was true
+    // and was a data-loss hazard: the API refuses a date without a
+    // name+email, so an empty pair meant no date at all, and the
+    // `.obsidian/` mtime tiebreak then compared push-time against
+    // edit-time. Field bug 2026-09-28 — an older build, stuck behind an
+    // expired token, overwrote a freshly built one. The values are learned
+    // from the account on first sync and fall back to a derived no-reply
+    // address; see sync2/git-identity.ts.
     new Setting(containerEl)
-      .setName("Git author name (optional)")
+      .setName("Git author name")
       .setDesc(
-        "Like `git config user.name`. Defaults to the `Owner` property above " +
-          "when empty, so usually you only need to fill the email " +
-          "below to stamp commits with your identity + local commit " +
-          "time. Leave both empty to use the token's GitHub account.",
+        "Like `git config user.name`. Filled in automatically from your " +
+          "GitHub account on the first sync; change it here if you would " +
+          "rather use something else. Falls back to the `Owner` above.",
       )
       .addText((text) =>
         text
@@ -396,12 +404,17 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           }),
       );
     new Setting(containerEl)
-      .setName("Git author email (optional)")
+      .setName("Git author email")
       .setDesc(
-        "Like `git config user.email`. Must be a VERIFIED email on " +
-          "your GitHub account for commits to be attributed to you " +
-          "(otherwise they still commit, just without contribution-" +
-          "graph credit — same as plain git).",
+        "Like `git config user.email`. Filled in automatically from your " +
+          "GitHub account on the first sync. Use a VERIFIED email on that " +
+          "account for commits to be attributed to you — otherwise they " +
+          "still commit, just without contribution-graph credit, same as " +
+          "plain git. If nothing can be read, a @users.noreply.github.com " +
+          "address derived from the Owner is used: these two fields are " +
+          "never left blank, because the commit DATE travels with them, " +
+          "and without a date GitHub stamps the push time instead of when " +
+          "you actually edited.",
       )
       .addText((text) =>
         text
