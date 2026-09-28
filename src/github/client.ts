@@ -640,37 +640,6 @@ export default class GithubClient {
     }
   }
 
-  // The author of the branch's most recent commit — what PREVIOUS syncs
-  // signed with. Same never-throws contract and the same reason.
-  async getLatestCommitAuthor(): Promise<{
-    name: string;
-    email: string;
-  } | null> {
-    try {
-      const branch = encodeURIComponent(this.settings.githubBranch || "main");
-      const response = await this.timed(
-        {
-          url:
-            `https://api.github.com/repos/${this.settings.githubOwner}/` +
-            `${this.settings.githubRepo}/commits?sha=${branch}&per_page=1`,
-          headers: this.headers(),
-          throw: false,
-        },
-        "commits?per_page=1",
-      );
-      if (response.status < 200 || response.status >= 300) return null;
-      const list = response.json as Array<Record<string, unknown>> | undefined;
-      const author = (
-        list?.[0]?.commit as { author?: { name?: unknown; email?: unknown } }
-      )?.author;
-      if (typeof author?.name !== "string") return null;
-      if (typeof author?.email !== "string") return null;
-      return { name: author.name, email: author.email };
-    } catch {
-      return null;
-    }
-  }
-
   async getCommit({
     sha,
     retry = false,

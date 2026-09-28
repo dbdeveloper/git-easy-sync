@@ -56,52 +56,38 @@ describe("resolveGitIdentity is TOTAL — a push is never left without a date", 
   });
 });
 
-describe("learnGitIdentity — best effort, never fatal", () => {
+describe("learnGitIdentity — best effort, and only ever THIS account", () => {
   const client = (
     user: Awaited<ReturnType<IdentityProbeClient["getAuthenticatedUser"]>>,
-    repo: Awaited<ReturnType<IdentityProbeClient["getLatestCommitAuthor"]>> = null,
-  ): IdentityProbeClient & { repoCalls: () => number } => {
-    let repoCalls = 0;
-    return {
-      getAuthenticatedUser: async () => user,
-      getLatestCommitAuthor: async () => {
-        repoCalls++;
-        return repo;
-      },
-      repoCalls: () => repoCalls,
-    };
-  };
+  ): IdentityProbeClient => ({ getAuthenticatedUser: async () => user });
 
   it("takes the account's name and email when the profile exposes them", async () => {
-    const c = client({ login: "acme", name: "Ada L", email: "ada@x.io" });
-    expect(await learnGitIdentity(c)).toEqual({
-      name: "Ada L",
-      email: "ada@x.io",
-    });
-    // The repo is not consulted when the account already answered.
-    expect(c.repoCalls()).toBe(0);
+    expect(
+      await learnGitIdentity(client({ login: "acme", name: "Ada L", email: "ada@x.io" })),
+    ).toEqual({ name: "Ada L", email: "ada@x.io" });
   });
 
-  it("🔑 a PRIVATE profile email falls back to the repo's own history", async () => {
-    // Measured as the common case: `GET /user` answers with email: null,
-    // and `GET /user/emails` is denied to a fine-grained token
-    // ("Resource not accessible by personal access token"). The repo's own
-    // last commit is the better answer anyway — it keeps one repository's
-    // history on ONE identity instead of introducing a second halfway
-    // through.
-    const c = client({ login: "acme", name: "Ada L", email: null }, {
-      name: "Ada Lovelace",
-      email: "ada@repo.io",
-    });
-    expect(await learnGitIdentity(c)).toEqual({
-      name: "Ada L",
-      email: "ada@repo.io",
-    });
+  it("🔑 a PRIVATE profile email becomes OUR OWN login's no-reply address", async () => {
+    // Measured: `GET /user` answers email: null for a private profile, and
+    // `GET /user/emails` is denied to a fine-grained token ("Resource not
+    // accessible by personal access token").
+    //
+    // ⚠️ An earlier version fell back to the REPO's last commit author
+    // here, reasoning that it keeps a repository's history on one
+    // identity. That silently assumed a single-author repo — the owner
+    // asked what happens with ten people pushing, and the answer was that
+    // this device would stamp its commits with A COLLEAGUE'S name and
+    // email. The no-reply form derived from our OWN login looks worse and
+    // is strictly more honest.
+    expect(
+      await learnGitIdentity(client({ login: "acme", name: "Ada L", email: null })),
+    ).toEqual({ name: "Ada L", email: noreplyEmailFor("acme") });
   });
 
   it("uses the login when the profile has no display name", async () => {
-    const c = client({ login: "acme", name: null, email: "a@b.c" });
-    expect(await learnGitIdentity(c)).toEqual({ name: "acme", email: "a@b.c" });
+    expect(
+      await learnGitIdentity(client({ login: "acme", name: null, email: "a@b.c" })),
+    ).toEqual({ name: "acme", email: "a@b.c" });
   });
 
   it("🔑 learns NOTHING rather than throwing, and that is not an error", async () => {
@@ -112,16 +98,8 @@ describe("learnGitIdentity — best effort, never fatal", () => {
       getAuthenticatedUser: async () => {
         throw new Error("offline");
       },
-      getLatestCommitAuthor: async () => null,
     };
     await expect(learnGitIdentity(throwing)).resolves.toEqual({});
     await expect(learnGitIdentity(client(null))).resolves.toEqual({});
-  });
-
-  it("returns a partial when only one half is knowable", async () => {
-    // Without this the caller could not fill the name it DID learn, and
-    // would fall back to the bare login for no reason.
-    const c = client({ login: "acme", name: "Ada L", email: null });
-    expect(await learnGitIdentity(c)).toEqual({ name: "Ada L" });
   });
 });

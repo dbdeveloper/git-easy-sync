@@ -44,6 +44,13 @@ export function noreplyEmailFor(owner: string): string {
 //
 // Preference order, most specific first: what the user typed, then the
 // account we are pushing as, then the derived no-reply address.
+// ⚠️ `githubOwner` is the LAST resort and it is not always this person:
+// on a repo owned by an organisation or by a colleague it names THEM. It
+// stands because it is the only identifier available with no network at
+// all, and because naming an org is a far smaller wrong than naming
+// another individual — but it is meant to be short-lived. `learnGitIdentity`
+// fills both fields from the authenticated account on the first sync, and
+// from then on this branch is unreachable.
 export function resolveGitIdentity(settings: {
   gitAuthorName?: string;
   gitAuthorEmail?: string;
@@ -56,17 +63,15 @@ export function resolveGitIdentity(settings: {
 }
 
 export interface IdentityProbeClient {
-  // GET /user — the authenticated account. `email` is null when the
-  // profile keeps it private, which is ordinary and not an error.
+  // GET /user — the authenticated account, i.e. WHOSE TOKEN THIS IS: the
+  // person at this device. That is the only identity we may ever stamp.
+  // `email` is null when the profile keeps it private, which is ordinary
+  // and not an error.
   getAuthenticatedUser(): Promise<{
     login: string;
     name: string | null;
     email: string | null;
   } | null>;
-  // The most recent commit's author on the sync branch — what PREVIOUS
-  // syncs actually wrote, so adopting it keeps one repo's history
-  // consistent instead of introducing a second identity halfway through.
-  getLatestCommitAuthor(): Promise<GitIdentity | null>;
 }
 
 // Best-effort: learn a real identity to OFFER the user, so the Settings
@@ -84,28 +89,28 @@ export async function learnGitIdentity(
   client: IdentityProbeClient,
 ): Promise<Partial<GitIdentity>> {
   // PARTIAL on purpose: the two fields are learned independently, and a
-  // name without an email is still better than falling back to the bare
-  // account login. An empty object means "nothing better to offer" — not
-  // an error, because the derived default is already valid.
+  // name without an email is still better than falling back to a repo
+  // owner who may not be this person at all. An empty object means
+  // "nothing better to offer" — not an error, because the derived default
+  // is already valid.
+  //
+  // ⚠️ ONE source, deliberately: the authenticated account. An earlier
+  // version also fell back to the REPO's most recent commit author, on the
+  // reasoning that it keeps a repository's history on one identity. That
+  // reasoning silently assumed a single-author repo. With ten people
+  // pushing, the last commit is whoever pushed last — so this device would
+  // have stamped its commits with A COLLEAGUE'S NAME AND EMAIL, a false
+  // attribution in a permanent public record. A no-reply address derived
+  // from OUR OWN login is worse-looking and strictly more honest.
   const out: Partial<GitIdentity> = {};
   try {
     const user = await client.getAuthenticatedUser();
-    if (user) {
-      const name = user.name?.trim() || user.login.trim();
-      if (name) out.name = name;
-      if (user.email) out.email = user.email;
-    }
-    if (out.email === undefined) {
-      // A private profile email is ordinary, and the repo itself still
-      // knows what its own commits were signed with — which is the better
-      // answer anyway: it keeps one repo's history on one identity instead
-      // of introducing a second halfway through.
-      const fromRepo = await client.getLatestCommitAuthor();
-      if (fromRepo?.email) {
-        out.email = fromRepo.email;
-        if (out.name === undefined && fromRepo.name) out.name = fromRepo.name;
-      }
-    }
+    if (!user) return out;
+    const name = user.name?.trim() || user.login.trim();
+    if (name) out.name = name;
+    // A private profile email is ordinary; the no-reply form derived from
+    // this same login still points at this same account.
+    out.email = user.email?.trim() || noreplyEmailFor(user.login.trim());
   } catch {
     // Offline, an expired token, a tightened scope: all ordinary, and the
     // fallback covers every one of them.

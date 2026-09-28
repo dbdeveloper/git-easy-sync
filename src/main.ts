@@ -1630,7 +1630,44 @@ export default class GitHubSyncPlugin extends Plugin {
   // badge. Skipped while a drain runs — the drain reconciles at every
   // restart itself, and two concurrent writers of conflicts.json would
   // just last-wins-clobber each other.
+  // ⚠️ SERIALISED. Two callers overlap in the ordinary case: onload fires
+  // this un-awaited (`void this.reconcileConflictsV2()`) while the
+  // restored diff2 panel calls it through its deps — so two runs raced to
+  // `conflictStoreV2.save()`, i.e. two atomic writes to the same file.
+  // Field log, 15 occurrences since 2026-09-26, both symptoms of exactly
+  // that: "Destination file already exists!" (the other run created the
+  // destination between our check and our rename) and "ENOENT … unlink
+  // conflicts.ges-bak.json" (the other run had already cleaned the backup).
+  //
+  // ⚠️ Note what that first message disproves: the rename-overwrite
+  // hazard was documented as a CAPACITOR trait ("POSIX rename overwrites
+  // silently"). These lines are from macOS. Obsidian's adapter checks the
+  // destination itself, on every platform.
+  //
+  // COALESCING, not queueing — the same shape DiffPanelView.refreshConflicts
+  // uses: a second trigger during a run sets a flag and the current run
+  // repeats once at the end. Stacking them would let a burst of triggers
+  // queue several full passes over the vault.
+  private reconciling = false;
+  private reconcileAgain = false;
+
   private async reconcileConflictsV2(): Promise<void> {
+    if (this.reconciling) {
+      this.reconcileAgain = true;
+      return;
+    }
+    this.reconciling = true;
+    try {
+      do {
+        this.reconcileAgain = false;
+        await this.reconcileConflictsV2Once();
+      } while (this.reconcileAgain);
+    } finally {
+      this.reconciling = false;
+    }
+  }
+
+  private async reconcileConflictsV2Once(): Promise<void> {
     if (!this.conflictStoreV2) return;
     // "No manager yet" (the onload site runs BEFORE Sync2Manager is
     // constructed) counts as idle — only a RUNNING drain skips.
