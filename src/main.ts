@@ -1823,57 +1823,25 @@ export default class GitHubSyncPlugin extends Plugin {
     try {
       const setting = (
         this.app as unknown as {
-          setting?: {
-            containerEl?: HTMLElement;
-            modalEl?: HTMLElement;
-            close?: () => void;
-          };
+          setting?: { modalEl?: HTMLElement; close?: () => void };
         }
       ).setting;
-      // ⚠️ DIAGNOSTIC (2026-09-28). The `isConnected` guard was a guess and
-      // the field says it did not work, so the next step is evidence
-      // rather than another guess: this records exactly which assumption
-      // is false — that `app.setting` is reachable, that it carries a
-      // containerEl, that the containerEl is in the document while the
-      // dialog is on screen, and that close() is callable.
-      const container = setting?.containerEl;
-      const modal = setting?.modalEl;
-      // MEASURED 2026-09-28, not assumed: `mod-settings` sits on the modal
-      // element ITSELF ("modal mod-settings mod-sidebar-layout"), not on a
-      // wrapper, so the earlier `.modal-container .mod-settings` selector
-      // matched nothing even with the dialog plainly on screen.
-      const openByDom = document.querySelector(".modal.mod-settings") !== null;
-      this.logger.info("settings-dialog close probe", {
-        hasSetting: setting !== undefined,
-        hasContainerEl: container !== undefined,
-        containerConnected: container?.isConnected ?? null,
-        containerParent: container?.parentElement?.className ?? null,
-        modalConnected: modal?.isConnected ?? null,
-        modalClass: modal?.className ?? null,
-        settingsVisibleInDom: openByDom,
-        closeIsFunction: typeof setting?.close === "function",
-      });
-      // ⚠️ `modalEl`, NOT `containerEl`. The probe answered plainly: with
-      // the dialog open, `containerEl.isConnected` was FALSE and
-      // `modalEl.isConnected` was TRUE. Guarding on containerEl — which is
-      // what I had inferred from Modal.close detaching it, without ever
-      // finding the matching Modal.open — meant the guard decided "closed"
-      // every time and skipped the call it was protecting.
+      // ⚠️ `modalEl`, and every word of this was MEASURED on device
+      // (2026-09-28) after two guesses failed in the field:
       //
-      // The guard still earns its place: Modal.close pops a keymap scope
-      // unconditionally, so calling it on an already-closed dialog
-      // corrupts that stack. It just has to ask the right element.
-      if (!modal?.isConnected && !container?.isConnected && !openByDom) {
-        this.logger.info("settings-dialog close probe: not open, skipping");
-        return;
-      }
-      setting?.close?.();
-      this.logger.info("settings-dialog close probe: close() called", {
-        modalConnectedAfter: modal?.isConnected ?? null,
-        containerConnectedAfter: container?.isConnected ?? null,
-        stillVisibleAfter:
-          document.querySelector(".modal.mod-settings") !== null,
-      });
+      //   containerConnected  : false   ← what the guard first read
+      //   modalConnected      : true    ← the element actually attached
+      //   modalClass          : "modal mod-settings mod-sidebar-layout"
+      //
+      // `containerEl` was inferred from Modal.close detaching it, without
+      // finding the matching Modal.open — wrong for this dialog. A
+      // `document.querySelector(".modal.mod-settings")` fallback was tried
+      // and logged FALSE while the dialog was plainly open, so the element
+      // lives in another document (pop-out windows) — a fallback that
+      // never matches is worse than none, because it reads as protection.
+      // Hence one signal, the one proven to work.
+      if (!setting?.modalEl?.isConnected) return;
+      setting.close?.();
     } catch (err) {
       this.logger.warn("could not close the settings dialog", {
         err: `${err}`,
