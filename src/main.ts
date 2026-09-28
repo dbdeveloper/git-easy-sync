@@ -1838,8 +1838,11 @@ export default class GitHubSyncPlugin extends Plugin {
       // dialog is on screen, and that close() is callable.
       const container = setting?.containerEl;
       const modal = setting?.modalEl;
-      const openByDom =
-        document.querySelector(".modal-container .mod-settings") !== null;
+      // MEASURED 2026-09-28, not assumed: `mod-settings` sits on the modal
+      // element ITSELF ("modal mod-settings mod-sidebar-layout"), not on a
+      // wrapper, so the earlier `.modal-container .mod-settings` selector
+      // matched nothing even with the dialog plainly on screen.
+      const openByDom = document.querySelector(".modal.mod-settings") !== null;
       this.logger.info("settings-dialog close probe", {
         hasSetting: setting !== undefined,
         hasContainerEl: container !== undefined,
@@ -1850,20 +1853,26 @@ export default class GitHubSyncPlugin extends Plugin {
         settingsVisibleInDom: openByDom,
         closeIsFunction: typeof setting?.close === "function",
       });
-      // Open-check widened: `isConnected` alone was the failing assumption
-      // candidate, so the DOM probe stands beside it. Either one saying
-      // "on screen" is enough — the danger this guard exists for is
-      // calling close() on a CLOSED dialog (Modal.close pops a keymap
-      // scope unconditionally), and both signals agree on that case.
-      if (!container?.isConnected && !openByDom) {
+      // ⚠️ `modalEl`, NOT `containerEl`. The probe answered plainly: with
+      // the dialog open, `containerEl.isConnected` was FALSE and
+      // `modalEl.isConnected` was TRUE. Guarding on containerEl — which is
+      // what I had inferred from Modal.close detaching it, without ever
+      // finding the matching Modal.open — meant the guard decided "closed"
+      // every time and skipped the call it was protecting.
+      //
+      // The guard still earns its place: Modal.close pops a keymap scope
+      // unconditionally, so calling it on an already-closed dialog
+      // corrupts that stack. It just has to ask the right element.
+      if (!modal?.isConnected && !container?.isConnected && !openByDom) {
         this.logger.info("settings-dialog close probe: not open, skipping");
         return;
       }
       setting?.close?.();
       this.logger.info("settings-dialog close probe: close() called", {
-        stillConnectedAfter: container?.isConnected ?? null,
+        modalConnectedAfter: modal?.isConnected ?? null,
+        containerConnectedAfter: container?.isConnected ?? null,
         stillVisibleAfter:
-          document.querySelector(".modal-container .mod-settings") !== null,
+          document.querySelector(".modal.mod-settings") !== null,
       });
     } catch (err) {
       this.logger.warn("could not close the settings dialog", {
