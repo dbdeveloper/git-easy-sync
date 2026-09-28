@@ -433,7 +433,31 @@ export default class GitignoreInvariants {
   // Cost when nothing moved is one `adapter.list` of the plugins folder
   // plus one `stat` per file — no reads, no hashing. That is what makes
   // it affordable on every operation.
+  // ⚠️ SERIALISED. enforce() rewrites several managed files through
+  // atomicWriteFile, which is NOT safe for two writers on one path — they
+  // share the same `.ges-tmp` staging name, so one renames it away and the
+  // other finds it gone. Callers are plural and independent: the commit
+  // pass, the drain, the migration (which calls it between its own steps),
+  // the Settings editor and the data.json toggle. Nothing coordinated
+  // them, and the moment the migration started running in the BACKGROUND
+  // a user pressing [Commit] would have produced exactly that collision —
+  // `commit()` does not go through the pre-sync gate.
+  //
+  // Same shape and same reasoning as ConflictStoreV2.save: put the guard
+  // where the invariant lives, not in whichever caller happened to be
+  // noticed. QUEUED, because each pass must actually run — a later one may
+  // be writing a different toggle state than the one before it.
+  private enforceChain: Promise<void> = Promise.resolve();
+
   async enforce(): Promise<void> {
+    const run = this.enforceChain.then(() => this.enforceNow());
+    // The `.catch` keeps a failure from freezing every later pass while
+    // still handing THIS caller its own error.
+    this.enforceChain = run.catch(() => {});
+    return run;
+  }
+
+  private async enforceNow(): Promise<void> {
     await this.enforceConfigDirGitignore();
     await this.enforceSelfPluginGitignore();
     await this.enforcePluginsDirGitignore();

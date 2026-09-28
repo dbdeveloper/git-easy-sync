@@ -1215,3 +1215,11 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
     flex-shrink: 0;
     margin-top: 0.75em;
 }
+
+/* §8.1.5b — the running count in the analysis wait. Muted and monospaced
+ * so a number that changes every 400ms reads as progress rather than as
+ * the text jittering. */
+.git-easy-sync-analysis-count {
+    color: var(--text-muted);
+    font-family: var(--font-monospace);
+}

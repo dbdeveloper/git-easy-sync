@@ -30,8 +30,10 @@ import {
   runMigrationFull,
   runMigrationResume,
   migrationReportText,
+  isMigrationDone,
   type MigrationDeps,
 } from "./sync2/gitignore-migration";
+import { GitignoreAnalysisModal } from "./sync2/views/gitignore-analysis-modal";
 import { GitignoreEditModal } from "./sync2/views/gitignore-edit-modal";
 import { GitignoreDecisionModal } from "./sync2/views/gitignore-modal";
 import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
@@ -1218,21 +1220,18 @@ export default class GitHubSyncPlugin extends Plugin {
     // ⚠️ Silent when it finds nothing, on the FIRST (automatic) run only
     // (§8.1.5). The manual Settings button always speaks, so the user can
     // confirm the operation actually happened.
-    try {
-      // ⚠️ NO enforce() here: the migration calls it itself, at the one
-      // point that is correct. Calling it first destroyed the user content
-      // in <configDir>/plugins/.gitignore before the rescue could read it
-      // (field report 2026-09-28).
-      const r = await runMigrationFull(this.migrationDeps());
-      if (r.kind !== "already-done" && r.kind !== "nothing-found") {
-        this.logger.info("gitignore migration", r);
-      }
-      if (r.conflictPath !== null) {
-        await this.showGitignoreMigrationModal(r.sources);
-      }
-    } catch (err) {
-      this.logger.error("gitignore migration failed", `${err}`);
-    }
+    // ⚠️ NOT awaited (owner, 2026-09-28). The walk is ~300 ms on desktop
+    // but tens of seconds on a phone (METAFILE §1), and holding onload for
+    // that would make the plugin look hung at the worst possible moment.
+    // The vault stays editable; only SYNC waits, because the rules being
+    // scanned decide what gets synced at all.
+    //
+    // The alternative — an undismissable progress dialog — was rejected
+    // for a reason specific to mobile: iOS and Android kill background
+    // apps routinely, and the WALK does not resume, it restarts. A phone
+    // killed at 15 s of a 20 s scan would meet that dialog again every
+    // launch and never finish.
+    void this.startMigrationAnalysis();
 
     // ConflictCounter owns the count formula + debounced recompute;
     // ConflictWatcher just calls counter.markDirty() on relevant
@@ -1807,6 +1806,43 @@ export default class GitHubSyncPlugin extends Plugin {
     }
   }
 
+  // §8.1.5b — the one-time analysis, run in the background.
+  //
+  // `analysisPromise` doubles as the "is it running" flag AND as what the
+  // waiting modal races against, so there is one source of truth rather
+  // than a boolean that can disagree with reality.
+  private analysisPromise: Promise<void> | null = null;
+  private analysisDirs = 0;
+
+  private startMigrationAnalysis(): Promise<void> {
+    // Already running: join it. Starting a second walk would double the
+    // work and, worse, let two migrations write at once.
+    if (this.analysisPromise !== null) return this.analysisPromise;
+    this.analysisDirs = 0;
+    const run = (async () => {
+      try {
+        const r = await runMigrationFull({
+          ...this.migrationDeps(),
+          onProgress: (dirs) => {
+            this.analysisDirs = dirs;
+          },
+        });
+        if (r.kind !== "already-done" && r.kind !== "nothing-found") {
+          this.logger.info("gitignore migration", r);
+        }
+        if (r.conflictPath !== null) {
+          await this.showGitignoreMigrationModal(r.sources);
+        }
+      } catch (err) {
+        this.logger.error("gitignore migration failed", `${err}`);
+      }
+    })();
+    this.analysisPromise = run.finally(() => {
+      this.analysisPromise = null;
+    });
+    return this.analysisPromise;
+  }
+
   // The migration's own report (§8.1.5). A modal rather than a toast: the
   // user is handed a change to accept or discard, which is a QUESTION, and
   // a question that fades unread has not been asked.
@@ -1999,6 +2035,40 @@ export default class GitHubSyncPlugin extends Plugin {
     origin: "user" | "auto" = "user",
   ): Promise<boolean> {
     if (!this.conflictStoreV2) return true;
+
+    // §8.1.5b — the one-time analysis must FINISH before a sync runs. The
+    // marker is the question asked every click, so an interrupted run is
+    // simply picked up again rather than remembered in memory.
+    if (!(await isMigrationDone(this.migrationDeps()))) {
+      // Start it if nobody has — an earlier attempt may have failed, and
+      // without this the user would have no way back except the Settings
+      // button. Joins the running one otherwise; never a second walk.
+      const analysis = this.startMigrationAnalysis();
+      if (origin === "auto") {
+        this.logger.info("sync skipped: initial vault analysis in progress");
+        return false;
+      }
+      // A RACE, not a question (owner, 2026-09-28): whichever comes first
+      // decides. Finishing closes the window and lets the click CONTINUE —
+      // straight into the conflict check below, which either raises the
+      // proposal modal or lets the sync run. [Back] CANCELS the sync; it
+      // does not mean "wait longer" and it does not mean "go ahead".
+      const waiter = new GitignoreAnalysisModal(
+        this.app,
+        () => this.analysisDirs,
+      );
+      const outcome = await Promise.race([
+        waiter.prompt(),
+        analysis.then(() => "finished" as const),
+      ]);
+      // No-op when the user already closed it; needed when the analysis
+      // won the race and the window is still up.
+      waiter.finish();
+      if (outcome !== "finished") {
+        this.logger.info("sync cancelled from the analysis wait");
+        return false;
+      }
+    }
 
     // DOT-FILES §8.1.5a — a `.gitignore` in dispute blocks the sync HARD,
     // with no "sync anyway" branch. These rules decide WHAT GETS SYNCED AT

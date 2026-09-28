@@ -42,6 +42,43 @@ const giModal = vi.hoisted(() => ({
   constructed: 0,
   decision: "dismiss" as "resolve" | "dismiss",
 }));
+// §8.1.5b — only the "has it finished?" question is faked; the rest of the
+// migration module stays real, so a change to it still reaches this file.
+// Defaults to DONE: every other block in this file is about the conflict
+// gate, and the §8.1.5b wait sits in front of it. Only the wait tests turn
+// it off.
+const migration = vi.hoisted(() => ({ done: true }));
+vi.mock("../src/sync2/gitignore-migration", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../src/sync2/gitignore-migration")
+  >()),
+  isMigrationDone: async () => migration.done,
+}));
+
+// The §8.1.5b analysis wait. Its `prompt()` resolves only when the test
+// says so, which is what lets a test drive the RACE deliberately instead
+// of hoping about timing.
+const waitModal = vi.hoisted(() => ({
+  constructed: 0,
+  finished: 0,
+  resolve: null as null | ((o: "finished" | "cancelled") => void),
+}));
+vi.mock("../src/sync2/views/gitignore-analysis-modal", () => ({
+  GitignoreAnalysisModal: class {
+    constructor() {
+      waitModal.constructed++;
+    }
+    finish() {
+      waitModal.finished++;
+      waitModal.resolve?.("finished");
+    }
+    prompt() {
+      return new Promise((r) => {
+        waitModal.resolve = r as (o: "finished" | "cancelled") => void;
+      });
+    }
+  },
+}));
 vi.mock("../src/sync2/views/gitignore-modal", () => ({
   GitignoreDecisionModal: class {
     constructor(_app: unknown, opts: never) {
@@ -419,5 +456,93 @@ describe("§8.1.5a the .gitignore gate is a MODAL and blocks unconditionally", (
     const { plugin } = makeGate(fx.vault, fx.store);
     expect(await plugin.confirmPendingConflictsBeforeSync()).toBe(true);
     expect(giModal.constructed).toBe(0);
+  });
+});
+
+
+describe("§8.1.5b the analysis wait", () => {
+  let fx: ReturnType<typeof fixture>;
+
+  beforeEach(async () => {
+    fx = fixture();
+    await fx.store.load();
+    waitModal.constructed = 0;
+    waitModal.finished = 0;
+    waitModal.resolve = null;
+    giModal.constructed = 0;
+    giModal.decision = "dismiss";
+  });
+  afterEach(() => {
+    if (fs.existsSync(fx.root)) fs.rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  // A gate instance whose analysis is under the test's control.
+  function makeWaitingGate(done: boolean) {
+    const { plugin, activateSpy } = makeGate(fx.vault, fx.store);
+    let release: (() => void) | null = null;
+    const analysis = new Promise<void>((r) => {
+      release = r;
+    });
+    migration.done = done;
+    Object.assign(plugin, {
+      migrationDeps: () => ({}),
+      startMigrationAnalysis: () => analysis,
+      analysisDirs: 7,
+    });
+    return { plugin, activateSpy, release: () => release?.() };
+  }
+
+  it("🔑 [Back] CANCELS the sync — it is not 'wait longer'", async () => {
+    // The owner was explicit: the click is undone. Anything else would
+    // leave a user who dismissed a dialog wondering whether a sync ran.
+    const { plugin, release } = makeWaitingGate(false);
+    const gate = plugin.confirmPendingConflictsBeforeSync("user");
+    await Promise.resolve();
+    waitModal.resolve?.("cancelled");
+    expect(await gate).toBe(false);
+    release();
+  });
+
+  it("🔑 finishing CONTINUES the click — the window closes itself", async () => {
+    // Nothing in dispute afterwards, so the sync is allowed to proceed.
+    const { plugin, release } = makeWaitingGate(false);
+    const gate = plugin.confirmPendingConflictsBeforeSync("user");
+    await Promise.resolve();
+    release();
+    expect(await gate).toBe(true);
+    // Closed from the outside rather than left on screen.
+    expect(waitModal.finished).toBeGreaterThan(0);
+  });
+
+  it("🔑 …and hands over to the CONFLICT modal when the scan raised one", async () => {
+    // The second half of "continue": finishing is not the same as
+    // "sync now" if the analysis produced a proposal.
+    writeFile(fx.root, ".gitignore", ".*\n");
+    writeFile(
+      fx.root,
+      ".gitignore.conflict-from-Old gitignore files-2026-09-28T10-00-00Z",
+      "proposed\n",
+    );
+    const { plugin, release } = makeWaitingGate(false);
+    const gate = plugin.confirmPendingConflictsBeforeSync("user");
+    await Promise.resolve();
+    release();
+    expect(await gate).toBe(false);
+    expect(giModal.constructed).toBe(1);
+  });
+
+  it("a BACKGROUND tick never opens the wait — it just skips", async () => {
+    const { plugin, release } = makeWaitingGate(false);
+    expect(await plugin.confirmPendingConflictsBeforeSync("auto")).toBe(false);
+    expect(waitModal.constructed).toBe(0);
+    release();
+  });
+
+  it("once the marker is down the wait never appears again", async () => {
+    // Without this, "always wait" would satisfy every test above while
+    // making every sync in the product stop for a dialog.
+    const { plugin } = makeWaitingGate(true);
+    expect(await plugin.confirmPendingConflictsBeforeSync("user")).toBe(true);
+    expect(waitModal.constructed).toBe(0);
   });
 });

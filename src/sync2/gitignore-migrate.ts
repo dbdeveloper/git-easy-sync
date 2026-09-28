@@ -174,6 +174,13 @@ export interface MigrationWalkDeps {
   // shipped instance carries the D5 whitelist and structurally cannot
   // answer what git would do (§8.1.1a).
   dirIgnored: (relDir: string) => boolean | Promise<boolean>;
+  // Called after each directory is listed, with the running count.
+  //
+  // DIRECTORIES, not files, and no total: the walk discovers the tree as
+  // it goes, so it cannot honestly say "N of M" — and a fake denominator
+  // is worse than none. Counting what we actually count is the only
+  // number we can stand behind.
+  onProgress?: (dirsScanned: number) => void;
 }
 
 export interface MigrationWalkResult {
@@ -233,6 +240,7 @@ export async function findMigrationCandidates(
       continue;
     }
     dirsScanned++;
+    deps.onProgress?.(dirsScanned);
     for (const filePath of listing.files) {
       if (needsMigration(filePath, deps.configDir)) {
         const slash = filePath.lastIndexOf("/");

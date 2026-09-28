@@ -80,6 +80,9 @@ export interface MigrationDeps {
   // a GI honouring every level.
   dirIgnored: (relDir: string) => boolean | Promise<boolean>;
   nowMs: () => number;
+  // Progress for the "analysis in progress" surface (§8.1.5b). Directories,
+  // no total — see MigrationWalkDeps.onProgress.
+  onProgress?: (dirsScanned: number) => void;
   // GitignoreInvariants.enforce. ⚠️ The migration CALLS it rather than
   // being called after it, because the right order is not "enforce then
   // migrate": enforce REWRITES `<configDir>/plugins/.gitignore` whole, so
@@ -429,6 +432,7 @@ export async function runMigrationFull(
     vault: deps.vault,
     configDir: deps.configDir,
     dirIgnored: deps.dirIgnored,
+    onProgress: deps.onProgress,
   });
   if (!walk.completed) {
     // A `.gitignore` may have been missed, so the done marker must NOT go
@@ -642,6 +646,12 @@ export async function clearRemotePending(deps: MigrationDeps): Promise<void> {
     donePath(deps),
     JSON.stringify({ ...marker, remotePending: [] }, null, 2),
   );
+}
+
+// Has the one-time analysis already completed? Cheap (one or two
+// `exists`), because a Sync click asks this every time.
+export async function isMigrationDone(deps: MigrationDeps): Promise<boolean> {
+  return doneMarkerExists(deps);
 }
 
 // Read the done marker, for §8.1.6's remote deletion and for the Settings
