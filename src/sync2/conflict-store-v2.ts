@@ -196,15 +196,50 @@ export default class ConflictStoreV2 {
         conflicts,
       }),
     );
+    const payload = bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength,
+    ) as ArrayBuffer;
+
+    // ⚠️ SERIALISED, and this is where it belongs: the store is the single
+    // mutation point for conflicts, so the "one writer at a time" rule has
+    // to be enforced HERE rather than trusted to every caller. It was
+    // trusted, and the trust failed 15 times in the field log since
+    // 2026-09-26 — `reconcileConflictsV2` is fired un-awaited at onload
+    // while the restored diff2 panel calls it too, and the two passes
+    // raced. atomicWriteFile is not safe for two writers on one path: they
+    // share the same `.ges-tmp` staging name, so one renames it away and
+    // the other finds it gone ("ENOENT … rename conflicts.ges-tmp.json")
+    // or finds the destination already taken ("Destination file already
+    // exists!").
+    //
+    // QUEUED, not coalesced — the opposite choice to the reconcile caller,
+    // and deliberately: each save carries a DIFFERENT state, so dropping
+    // one would silently lose a conflict record. Order decides the winner.
+    //
+    // The cache rebuild above stays synchronous so a caller that reads
+    // getCachedState() right after save() still sees its own write; the
+    // chain preserves call order, so cache and disk agree either way.
+    const run = this.saveChain.then(() => this.writeNow(payload));
+    // ⚠️ The `.catch` is what keeps a failure from poisoning the queue:
+    // the NEXT caller waits on a chain that always settles, while THIS
+    // caller still receives its own error through `run`. A transient
+    // failure must not freeze conflicts.json for the rest of the session.
+    //
+    // (An earlier version also passed a rejection handler to `.then`. A
+    // probe showed removing it changed nothing, and it could not have:
+    // `saveChain` is already the caught promise, so that handler was
+    // unreachable. Dead code removed rather than given a test it could
+    // never fail.)
+    this.saveChain = run.catch(() => {});
+    return run;
+  }
+
+  private saveChain: Promise<void> = Promise.resolve();
+
+  private async writeNow(payload: ArrayBuffer): Promise<void> {
     await this.ensureRuntimeDir();
-    await atomicWriteFile(
-      this.vault,
-      this.filePath(),
-      bytes.buffer.slice(
-        bytes.byteOffset,
-        bytes.byteOffset + bytes.byteLength,
-      ) as ArrayBuffer,
-    );
+    await atomicWriteFile(this.vault, this.filePath(), payload);
   }
 
   // Sweep source №4 (§12.5.D): while a conflict lives, its
