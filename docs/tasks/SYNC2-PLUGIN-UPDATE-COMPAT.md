@@ -22,6 +22,56 @@
 
 ---
 
+
+## ⚠️ FIELD BUG 2026-09-28 — the 3.a seam ignored the base (FIXED, and it narrows this doc's scope)
+
+One device, one user, nothing incoming from the server — and a freshly built
+`main.js` was overwritten by a stale one. Worth recording here because the seam
+this document is about is what caused it.
+
+**What happened.** An expired token left one commit's batch unpushed. Once the
+token was fixed, the drain pushed TWO batches in a row. Batch 1 carried the OLD
+`main.js` and moved the head. Batch 2 then read `main.js` at the NEW head — our
+own bytes from seconds earlier — and `isPluginCoreCollision` called it a
+collision, because it asked only whether **both sides exist**, never whether the
+remote had **moved**:
+
+```js
+PLUGIN_CORE_FILE.test(path) && local.sha !== null && remote.sha !== null
+```
+
+The mtime tiebreak then handed the vault the stale build.
+
+**The chaining and the rolling base were NOT at fault.** The log shows batch 2
+reading the correct new head, and `tracked.remote` carrying our own push — all
+the machinery that makes "our own push is never a foreign change" work. It lives
+in rule 3.b, and this seam was jumping in front of it. The comment above the seam
+has claimed "a genuine two-sided collision" since THE SWITCH; the code only
+checked EXISTENCE, and "differ" is not "both changed".
+
+**Fix:** the seam now also requires `local.sha !== base.sha && remote.sha !==
+base.sha` — the same base-awareness 3.b already had. Reproduced as a RED test
+first (`diff3.test.ts`, both one-sided directions), with the mtimes set so that
+reaching the tiebreak GIVES REMOTE THE WIN, so a regression fails loudly instead
+of passing by luck.
+
+**Scope note, measured rather than assumed:** the general `.obsidian/`
+conflict-free path (3.b) is NOT in the same state. `remoteUnmovedLocalLive` and
+`localUnmovedRemoteLive` both take `base` and compare against it, so one-sided
+changes there are answered correctly and the mtime fallback fires only when both
+sides genuinely moved. Only 3.a — the interim plugin-core seam this document
+replaces — was base-blind.
+
+⚠️ **Still open, and independent of the above:** the mtime fallback's INPUT can be
+wrong. `remote.mtime` comes from the commit's `committer.date`, which is only the
+edit moment because the engine injects `date = batch.createdAt`. That injection is
+skipped whenever `gitAuthor()` returns null — i.e. whenever the optional
+`gitAuthorEmail` setting is empty — so GitHub stamps PUSH time instead. Measured
+against the live API: a date-only author is REJECTED ("email", "name" weren't
+supplied), and name+email+date IS honoured. So a data-integrity invariant
+currently hangs on an optional cosmetic field. Owner decision pending.
+
+
 ## 1. Інцидент 2026-08-02, з якого все почалося
 
 З телефона (`VladPixel 6 Pro`, коміт `bd9d02d9`) приїхало оновлення Templater

@@ -121,11 +121,34 @@ const PLUGIN_CORE_FILE = /^\.obsidian\/plugins\/[^/]+\/(manifest\.json|main\.js|
 // One definition, two readers.
 function isPluginCoreCollision(
   path: string,
+  base: FileInfo,
   local: FileInfo,
   remote: FileInfo,
 ): boolean {
   return (
-    PLUGIN_CORE_FILE.test(path) && local.sha !== null && remote.sha !== null
+    PLUGIN_CORE_FILE.test(path) &&
+    local.sha !== null &&
+    remote.sha !== null &&
+    // ⚠️ BOTH sides must have MOVED from the base. Existing-and-differing
+    // is not a collision — it is what an ordinary one-sided change looks
+    // like, and 3.b below already answers those correctly.
+    //
+    // Field bug, 2026-09-28, one device and one user: a drain pushed two
+    // accumulated batches in a row (an older one had been stuck behind an
+    // expired token). Batch 1 moved the head; batch 2 read the file at the
+    // NEW head — our own bytes from seconds earlier — and this predicate
+    // called it a collision, because it never asked whether the remote had
+    // moved. The mtime tiebreak then handed the vault the stale build,
+    // overwriting the fresh one.
+    //
+    // The chaining and the rolling base were doing their job: batch 2 read
+    // the correct new head, and `tracked.remote` carried our own push. All
+    // of that reasoning lives in 3.b — which this seam was jumping in
+    // front of. The comment below has claimed "a genuine two-sided
+    // collision" since THE SWITCH; the code only checked that both sides
+    // EXIST, and "differ" is not "both changed".
+    local.sha !== base.sha &&
+    remote.sha !== base.sha
   );
 }
 
@@ -193,7 +216,7 @@ export async function _diff3(
 
   // ── §II.1 п.3 — the .obsidian/ special branch ───────────────────
   if (path.startsWith(".obsidian/")) {
-    if (isPluginCoreCollision(path, local, remote)) {
+    if (isPluginCoreCollision(path, base, local, remote)) {
       // 3.a — plugin core files route to their own rules
       // (SYNC2-PLUGIN-UPDATE-COMPAT). ⚠️ NARROWED at THE SWITCH gate
       // (2026-08-31, gate finding): the seam fires ONLY on a genuine
@@ -458,7 +481,7 @@ export function needsObsidianMtimeTiebreak(
     return false;
   }
   if (local.sha === null && remote.sha === null) return false;
-  if (isPluginCoreCollision(path, local, remote)) return false; // 3.a
+  if (isPluginCoreCollision(path, base, local, remote)) return false; // 3.a
   if (remoteUnmovedLocalLive(base, local, remote)) return false; // 3.b.1.a
   if (localUnmovedRemoteLive(base, local, remote)) return false; // 3.b.1.b
   // delete-vs-edit (3.b.*.c/d) — the LIVE side wins, no mtime involved.

@@ -591,6 +591,50 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
     }
   });
 
+  it("🔑 FIELD BUG 2026-09-28: remote UNCHANGED + local edited is NOT a collision", async () => {
+    // Reproduces a one-device, one-user data loss.
+    //
+    // Two batches went out in one drain (an older one had been stuck
+    // behind an expired token). Batch 1 pushed the OLD main.js, moving the
+    // head. Batch 2 then read main.js at the NEW head — our own bytes from
+    // seconds earlier — and 3.a called it a collision, because
+    // isPluginCoreCollision asks only whether BOTH SIDES EXIST, never
+    // whether the remote actually MOVED. The mtime tiebreak then handed
+    // the vault the stale build, overwriting the fresh one.
+    //
+    // `base === remote` is the whole point: the server did not change.
+    // That is an ordinary local edit, which 3.b already answers
+    // correctly — the seam must not intercept it.
+    //
+    // mtimes are set so that reaching the tiebreak GIVES REMOTE THE WIN,
+    // exactly as in the field: if this ever regresses, it fails loudly
+    // rather than passing by luck.
+    const p = ".obsidian/plugins/some-plugin/main.js";
+    const unchanged = side(p, "OLD", { mtime: 9999 });
+    const r = await _diff3(
+      makeDeps(),
+      t(side(p, "OLD"), unchanged),
+      side(p, "NEW", { mtime: 1 }),
+      HEAD,
+    );
+    expect(r.kind).toBe("file");
+    expect((r as { file: FileInfo }).file.sha).toBe(side(p, "NEW").sha);
+  });
+
+  it("…and the mirror: local UNCHANGED + remote moved is an ordinary pull", async () => {
+    // The other one-sided case, stated so a fix cannot satisfy the test
+    // above by simply always returning local.
+    const p = ".obsidian/plugins/some-plugin/main.js";
+    const r = await _diff3(
+      makeDeps(),
+      t(side(p, "OLD"), side(p, "NEW", { mtime: 1 })),
+      side(p, "OLD", { mtime: 9999 }),
+      HEAD,
+    );
+    expect(r.kind).toBe("file");
+    expect((r as { file: FileInfo }).file.sha).toBe(side(p, "NEW").sha);
+  });
+
   it("gate fix 2026-08-31: a ONE-SIDED plugin-core change is ordinary 3.b traffic, NOT a dispatch (the wide seam made plugin files never sync — I2)", async () => {
     const p = ".obsidian/plugins/some-plugin/main.js";
     // New local plugin file, remote absent → local wins (3.b.1.a).
