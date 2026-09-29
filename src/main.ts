@@ -1727,14 +1727,6 @@ export default class GitHubSyncPlugin extends Plugin {
       configDir: this.app.vault.configDir,
       selfPluginId: manifest.id,
       dirIgnored: async (relDir) => {
-        // DEV-ONLY throttle (settings.debugAnalysisDelayMs, not in the UI):
-        // makes the background analysis and its waiting window observable
-        // on a small vault. Hooked here rather than in the walk itself so
-        // the pure module stays free of test scaffolding.
-        const delay = this.settings.debugAnalysisDelayMs ?? 0;
-        if (delay > 0) {
-          await new Promise((r) => setTimeout(r, delay));
-        }
         // Levels must be on hand before the sync verdict; the reader is
         // async because the vault adapter is.
         await gi.preloadAsync(`${relDir}/.gitignore`, reader);

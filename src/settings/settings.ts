@@ -118,16 +118,6 @@ export interface GitHubSyncSettings {
   // verified on your GitHub account for commits to be attributed to
   // you (same rule as real git); an unverified email still commits,
   // just without contribution-graph credit. See SYNC2.md §4.4.
-  // DEV-ONLY, and deliberately absent from the Settings UI: milliseconds
-  // to pause per directory during the §8.1 vault analysis, so the
-  // background pass and its waiting window can be SEEN on a small vault.
-  // A real one large enough to take tens of seconds is exactly what a
-  // developer does not have to hand, and "it looked right in my head" is
-  // how the two-windows-for-one-event bug shipped.
-  //
-  // Set it by hand in data.json (e.g. 150) and remove it afterwards; 0 or
-  // absent means no delay, which is every ordinary install.
-  debugAnalysisDelayMs?: number;
   gitAuthorName?: string;
   gitAuthorEmail?: string;
 
