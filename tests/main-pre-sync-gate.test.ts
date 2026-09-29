@@ -492,6 +492,10 @@ describe("§8.1.5b the analysis wait", () => {
       migrationDeps: () => ({}),
       startMigrationAnalysis: () => analysis,
       analysisDirs: 7,
+      // The quiet window is measured from the ANALYSIS start, so the stub
+      // has to say when that was — leaving it 0 reads as "running since
+      // the epoch" and the modal appears at once.
+      analysisStartedAt: Date.now(),
     });
     return {
       plugin,
@@ -534,6 +538,28 @@ describe("§8.1.5b the analysis wait", () => {
     release("proposal-path");
     expect(await gate).toBe(false);
     expect(giModal.constructed).toBe(0);
+  });
+
+  it("🔑 a REPEAT click does not buy another quiet window", async () => {
+    // Owner's point 4: pressing [Sync] again before the scan ends must
+    // bring the window straight back. Measured from the ANALYSIS start,
+    // not from the click — otherwise a second press thirty seconds in
+    // would sit through three more seconds of silence, and by then the
+    // scan has plainly announced itself as slow.
+    const { plugin, release } = makeWaitingGate(false);
+    const first = plugin.confirmPendingConflictsBeforeSync("user");
+    await vi.advanceTimersByTimeAsync(ANALYSIS_QUIET_MS + 10);
+    waitModal.resolve?.("cancelled");
+    expect(await first).toBe(false);
+    expect(waitModal.constructed).toBe(1);
+
+    // Second click: no further quiet period, the window is back at once.
+    const second = plugin.confirmPendingConflictsBeforeSync("user");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(waitModal.constructed).toBe(2);
+    waitModal.resolve?.("cancelled");
+    expect(await second).toBe(false);
+    release(null);
   });
 
   it("🔑 a click inside the QUIET window shows no dialog at all", async () => {

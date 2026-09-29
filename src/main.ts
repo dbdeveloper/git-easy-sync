@@ -1727,6 +1727,14 @@ export default class GitHubSyncPlugin extends Plugin {
       configDir: this.app.vault.configDir,
       selfPluginId: manifest.id,
       dirIgnored: async (relDir) => {
+        // DEV-ONLY throttle (settings.debugAnalysisDelayMs, not in the UI):
+        // makes the background analysis and its waiting window observable
+        // on a small vault. Hooked here rather than in the walk itself so
+        // the pure module stays free of test scaffolding.
+        const delay = this.settings.debugAnalysisDelayMs ?? 0;
+        if (delay > 0) {
+          await new Promise((r) => setTimeout(r, delay));
+        }
         // Levels must be on hand before the sync verdict; the reader is
         // async because the vault adapter is.
         await gi.preloadAsync(`${relDir}/.gitignore`, reader);
@@ -1818,6 +1826,7 @@ export default class GitHubSyncPlugin extends Plugin {
   // than a boolean that can disagree with reality.
   private analysisPromise: Promise<MigrationResult | null> | null = null;
   private analysisDirs = 0;
+  private analysisStartedAt = 0;
 
   // ⚠️ Resolves when the MIGRATION finishes — NOT after its report window
   // is dismissed. The waiting modal races against this, and folding the
@@ -1828,6 +1837,7 @@ export default class GitHubSyncPlugin extends Plugin {
     // worse, let two migrations write at once.
     if (this.analysisPromise !== null) return this.analysisPromise;
     this.analysisDirs = 0;
+    this.analysisStartedAt = Date.now();
     const run = (async (): Promise<MigrationResult | null> => {
       try {
         const r = await runMigrationFull({
@@ -1850,43 +1860,44 @@ export default class GitHubSyncPlugin extends Plugin {
     void run.then(async (r) => {
       this.analysisPromise = null;
       if (r?.conflictPath != null) {
-        await this.showGitignoreMigrationModal(r.sources);
+        await this.showMigrationReport(r, null);
       }
     });
     return run;
   }
 
-  // The migration's own report (§8.1.5). A modal rather than a toast: the
-  // user is handed a change to accept or discard, which is a QUESTION, and
-  // a question that fades unread has not been asked.
-  private async showGitignoreMigrationModal(sources: string[]): Promise<void> {
-    const n = sources.length;
+  // The migration's report — the SAME window whether the run was
+  // automatic or came from Settings → [Check now] (owner, 2026-09-29).
+  //
+  // ⚠️ It was two windows saying different things about one event: the
+  // automatic pass had its own hardcoded copy while the button went
+  // through migrationReportText. Copy that exists twice drifts, and a user
+  // who saw both would reasonably wonder which had happened.
+  //
+  // A modal rather than a toast: the user is handed a change to accept or
+  // discard, which is a QUESTION, and a question that fades unread has not
+  // been asked.
+  private async showMigrationReport(
+    result: MigrationResult,
+    unresolvedProposal: string | null,
+  ): Promise<void> {
+    const report = migrationReportText(result, unresolvedProposal);
     const decision = await new GitignoreDecisionModal(this.app, {
-      title: "Rules found outside the root .gitignore",
-      body: [
-        `${n} .gitignore ${n === 1 ? "file" : "files"} outside the vault ` +
-          `root ${n === 1 ? "was" : "were"} found. Plain git honours ` +
-          `${n === 1 ? "it" : "them"}, but this plugin reads only the root ` +
-          `file — so the rules were translated and offered as a change to ` +
-          `the root .gitignore for you to review.`,
-        "The originals were renamed to .bak; nothing was deleted. Syncing " +
-          "stays paused until you accept or discard the change.",
-      ],
-      paths: sources,
-      resolveLabel: "Solve conflict",
-      dismissLabel: "Skip",
+      title: report.title,
+      body: [report.body],
+      paths: result.sources,
+      // Nothing to act on → a statement, so one button and no "Solve
+      // conflict" pointing at nothing.
+      resolveLabel: report.resolvePath !== null ? "Solve conflict" : undefined,
+      dismissLabel: report.resolvePath !== null ? "Skip" : "Close",
     }).prompt();
     if (decision === "resolve") {
-      // Enabling the plugin from Settings → Community plugins runs this
-      // with the Settings dialog still in front (field report
-      // 2026-09-28); on an ordinary start it is closed and this is a
-      // no-op, guarded inside.
       this.closeSettingsDialog();
       try {
         await this.activateDiffEditView();
       } catch (err) {
         void this.logger.error(
-          "Failed to open the diff panel from the migration modal",
+          "Failed to open the diff panel from the migration report",
           `${err}`,
         );
       }
@@ -1916,30 +1927,7 @@ export default class GitHubSyncPlugin extends Plugin {
           )
         : [];
       const open = disputes.find((d) => d.isMigrationProposal) ?? disputes[0];
-      const report = migrationReportText(result, open?.siblingPath ?? null);
-      const decision = await new GitignoreDecisionModal(this.app, {
-        title: report.title,
-        body: [report.body],
-        paths: result.sources,
-        // Nothing to act on → a statement, so one button and no
-        // "Solve conflict" pointing at nothing.
-        resolveLabel:
-          report.resolvePath !== null ? "Solve conflict" : undefined,
-        dismissLabel: report.resolvePath !== null ? "Skip" : "Close",
-      }).prompt();
-      if (decision === "resolve") {
-        // The Settings dialog is modal and would otherwise stay in front
-        // of the panel the user just asked for (field report 2026-09-28).
-        this.closeSettingsDialog();
-        try {
-          await this.activateDiffEditView();
-        } catch (err) {
-          void this.logger.error(
-            "Failed to open the diff panel after the gitignore check",
-            `${err}`,
-          );
-        }
-      }
+      await this.showMigrationReport(result, open?.siblingPath ?? null);
     } catch (err) {
       this.logger.error("gitignore check failed", `${err}`);
       new Notice(`Could not check .gitignore files: ${err}`);
@@ -2071,10 +2059,18 @@ export default class GitHubSyncPlugin extends Plugin {
         settled = true;
         return r;
       });
-      await Promise.race([
-        finished,
-        new Promise((r) => setTimeout(r, ANALYSIS_QUIET_MS)),
-      ]);
+      // ⚠️ Measured from when the ANALYSIS started, not from this click.
+      // A second click thirty seconds in must not buy another three
+      // seconds of silence — by then the scan has plainly announced
+      // itself as slow, and the window belongs on screen at once.
+      const quietLeft =
+        ANALYSIS_QUIET_MS - (Date.now() - this.analysisStartedAt);
+      if (quietLeft > 0) {
+        await Promise.race([
+          finished,
+          new Promise((r) => setTimeout(r, quietLeft)),
+        ]);
+      }
 
       let result: MigrationResult | null = null;
       if (settled) {
