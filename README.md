@@ -470,6 +470,34 @@ Settings tab layout matches what you'll see in Obsidian under
   multi-device users typically don't want one machine's layout
   overwriting another's. See
   [Bonus: cloning plugins](#bonus-cloning-plugins-and-their-settings-to-the-new-device).
+### `.gitignore`
+
+This plugin reads the `.gitignore` in your vault's **root** and no other. Plain git
+reads one in every folder, so rules written deeper in the tree would apply for git and
+be invisible here — which is why the plugin offers to collect them into the root file
+instead.
+
+The first time it runs it checks the whole vault for `.gitignore` files outside the
+root. If it finds any, their rules are translated into root-anchored form and offered
+as a **change to the root `.gitignore`**, which you accept, edit or discard in the
+normal conflict editor. The originals are renamed to `.bak` — nothing is deleted.
+
+While that check is running the vault stays fully editable; only **syncing** waits,
+because those rules decide which files are synced at all. Press Sync during the check
+and you get a small window with a running count and a **Back** button; Back cancels
+that sync, and pressing Sync again brings the window back until the check is done.
+
+Two buttons live in Settings under **.gitignore**:
+
+- **Check now** — run the same check again, for a `.gitignore` you added by hand later.
+  It always reports, even when there is nothing to do.
+- **Open** — edit the root `.gitignore`. Obsidian hides files whose name starts with a
+  dot, so this is the way to reach it from inside the app.
+
+> **Syncing is refused while any `.gitignore` conflict is unresolved**, with no
+> "sync anyway". These rules decide what travels, so syncing while they disagree could
+> publish files you meant to keep private, or hide files you meant to keep.
+
 - **Sync plugins data.json** — when on, the `data.json` files of
   *other* community plugins are also synced. Off by default —
   these files frequently store API tokens, account credentials,

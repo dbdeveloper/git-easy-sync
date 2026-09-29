@@ -73,6 +73,7 @@ src/
 │   │                                #  parent OFF forces it off + greys it, ON only makes it
 │   │                                #  reachable. Pure, because tab.ts has no render harness.
 │   └── tab.ts                       # Settings UI (trim onChange, Reset modal, GitHub sync status section,
+│                                    #  + the `.gitignore` section: [Check now] and the root-file editor).
 │                                    #  Performance group with max-auto-merge KB input).
 │                                    #  ⚠️ ToggleComponent.setValue FIRES onChange (verified vs
 │                                    #  obsidian.asar) — driving one toggle from another needs a guard.
@@ -150,6 +151,13 @@ src/
     │                                #  runMigrationResume (phase 1, BEFORE the sweep) +
     │                                #  runMigrationFull (phase 2, after sweep AND enforce),
     │                                #  six recovery cases, migrationReportText
+    ├── git-identity.ts              # The author every push is stamped with. resolveGitIdentity
+    │                                #  is TOTAL (never null) because the API refuses a date
+    │                                #  without a name+email, and no date = GitHub stamps PUSH
+    │                                #  time = the .obsidian mtime tiebreak weighs the wrong
+    │                                #  thing. learnGitIdentity fills Settings once from
+    │                                #  GET /user — this account ONLY, never the repo's last
+    │                                #  committer (that would stamp a colleague on a shared repo)
     ├── gitignore-remote-cleanup.ts  # §8.1.6 Крок E6: deletes the consolidated nested
     │                                #  .gitignore files from the REMOTE on the first
     │                                #  successful drain. Filters against a freshly-read tree
@@ -180,6 +188,14 @@ src/
     ├── types.ts                     # FileChange + shared shapes
     └── views/
         ├── pre-sync-conflict-modal.ts     # Pre-Sync confirmation modal
+        ├── gitignore-modal.ts             # §8.1.5 the two .gitignore DECISIONS (migration report /
+        │                                  #  blocked sync). A toast reports; both of these ASK.
+        ├── gitignore-analysis-modal.ts    # §8.1.5b the wait a Sync click meets while the one-time
+        │                                  #  scan is still walking. A RACE, not a question: finishing
+        │                                  #  closes it and the click continues, [Back] CANCELS the sync
+        ├── gitignore-edit-modal.ts        # The root `.gitignore` editor. A modal, not a tab, and FORCED:
+        │                                  #  Obsidian's indexer hides dotted paths, so the file is not a
+        │                                  #  TFile and leaf.openFile has nothing to open
         └── token-expired-modal.ts         # 401/403 recovery dialog (Stage 7/§35): class-aware intro + shorter mobile layout
 ```
 
