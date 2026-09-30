@@ -30,6 +30,8 @@ import * as path from "path";
 // leak. A test that exercises both should use describe.each with the
 // two values.
 
+import { compareSemver } from "./src/sync2/semver";
+
 export type MockPlatform = "desktop" | "mobile";
 
 let currentPlatform: MockPlatform = "desktop";
@@ -40,6 +42,55 @@ export function setMockPlatform(mode: MockPlatform): void {
 
 export function getMockPlatform(): MockPlatform {
   return currentPlatform;
+}
+
+// `Platform`, driven by the SAME switch as the rename semantics above —
+// one knob, not two. Production reads `isMobile` (touch-mode defaults,
+// leaf placement, the token modal's layout) and PLUGIN-UPDATE-COMPAT
+// §4.1 reads `isDesktopApp`, which is half of Obsidian's own real gate:
+// `!isDesktopApp && manifest.isDesktopOnly → refuse to enable`.
+export const Platform = {
+  get isDesktopApp(): boolean {
+    return currentPlatform === "desktop";
+  },
+  get isMobileApp(): boolean {
+    return currentPlatform === "mobile";
+  },
+  get isMobile(): boolean {
+    return currentPlatform === "mobile";
+  },
+  get isDesktop(): boolean {
+    return currentPlatform === "desktop";
+  },
+};
+
+// ── apiVersion / requireApiVersion (PLUGIN-UPDATE-COMPAT §6.0) ───────
+//
+// The reload gate asks "is this Obsidian new enough for the plugin whose
+// files just landed?", so a test has to be able to SAY which Obsidian it
+// is. Default is a version recent enough that tests which do not care
+// are unaffected.
+//
+// ⚠️ The comparison is the plugin's OWN `compareSemver`, deliberately.
+// The rejected alternative is a stub that truncates to major.minor: it
+// turns the whole §6.2 table green while testing nothing, because
+// `1.13.4` and `1.13.0` would fold into "1.13" and compare equal — the
+// exact false-pass the gate must not have. Sharing the real comparison
+// means the mock cannot be wrong in a way the product is right.
+let currentApiVersion = "1.13.4";
+
+export let apiVersion = currentApiVersion;
+
+export function setMockApiVersion(version: string): void {
+  currentApiVersion = version;
+  apiVersion = version;
+}
+
+export function requireApiVersion(version: string): boolean {
+  const c = compareSemver(currentApiVersion, version);
+  // Unreadable input is NOT "new enough" — the fail-safe direction, and
+  // the same one `newerVersionIn` takes for a corrupt stamp.
+  return c !== null && c >= 0;
 }
 
 // Obsidian patches Array.prototype with `.contains()` (an alias for
