@@ -11,6 +11,10 @@ import {
   applyForeignSilencer,
   ManagedSection,
 } from "../../src/sync2/gitignore-assemble";
+import {
+  foreignSilencerComment,
+  parseForeignSilencer,
+} from "../../src/sync2/gitignore-markers";
 
 // Shapes deliberately close to the real ones: the top section carries a
 // blank line in the middle (the blank-line hazard), and BOTH sections
@@ -257,8 +261,12 @@ describe("§3.1.5 single-section files", () => {
 
 describe("applyForeignSilencer — a third-party plugin's own .gitignore", () => {
   const C = "# syncConfigDir is OFF on this device (git-easy-sync).";
-  const add = (content: string) => applyForeignSilencer(content, C, true);
-  const drop = (content: string) => applyForeignSilencer(content, C, false);
+  // Fixture silencer: exact-match recognition, the way it behaved before
+  // versions entered the line. The production one recognises any
+  // version of itself — see the cross-version block below.
+  const S = { line: C, matches: (l: string) => l === C };
+  const add = (content: string) => applyForeignSilencer(content, S, true);
+  const drop = (content: string) => applyForeignSilencer(content, S, false);
 
   it("adds exactly two lines, with one blank separating them from their content", () => {
     expect(add("*.map\n")).toBe(`*.map\n\n${C}\n*\n`);
@@ -307,5 +315,51 @@ describe("applyForeignSilencer — a third-party plugin's own .gitignore", () =>
 
   it("removal that empties the file leaves it empty, not a stray newline", () => {
     expect(drop(`${C}\n*\n`)).toBe("");
+  });
+});
+
+// §5.11 in a file that is NOT ours. Measured 2026-09-30: with exact-text
+// recognition, two plugin versions whose silencer comments differ do not
+// ping-pong — they ACCUMULATE, two lines per pass, in a third party's
+// file. And a build asked to REMOVE another version's silencer leaves it
+// there, with its `*` still hiding that plugin's folder from every
+// device.
+//
+// The fix is recognition, not a yield: each build must recognise any
+// version of our pair. Nothing is rewritten when a recognised pair is
+// already present — that would be a rewrite war of its own, and this
+// file belongs to its author.
+describe("🔴 our silencer across plugin versions (§5.11)", () => {
+  const OLD = foreignSilencerComment("2.0.0");
+  const NEW = foreignSilencerComment("2.1.0");
+  const LEGACY = "# syncConfigDir is OFF on this device (git-easy-sync).";
+  const sil = (line: string) => ({
+    line,
+    matches: (l: string) => parseForeignSilencer(l) !== null,
+  });
+
+  it("🔑 does NOT accumulate — a newer build leaves an older build's pair alone", () => {
+    const theirs = "*.map\n";
+    const afterOld = applyForeignSilencer(theirs, sil(OLD), true);
+    expect(applyForeignSilencer(afterOld, sil(NEW), true)).toBe(afterOld);
+    expect(applyForeignSilencer(afterOld, sil(OLD), true)).toBe(afterOld);
+  });
+
+  it("🔑 a newer build can REMOVE an older build's silencer", () => {
+    const theirs = "*.map\n";
+    const afterOld = applyForeignSilencer(theirs, sil(OLD), true);
+    expect(applyForeignSilencer(afterOld, sil(NEW), false)).toBe(theirs);
+  });
+
+  it("the PRE-VERSION form is ours too — it is what is on disk today", () => {
+    const theirs = "*.map\n";
+    const legacy = `${theirs}\n${LEGACY}\n*\n`;
+    expect(applyForeignSilencer(legacy, sil(NEW), true)).toBe(legacy);
+    expect(applyForeignSilencer(legacy, sil(NEW), false)).toBe(theirs);
+  });
+
+  it("someone else's similar-looking comment is still THEIRS", () => {
+    const theirs = "*.map\n\n# syncConfigDir is OFF (some other plugin).\n*\n";
+    expect(applyForeignSilencer(theirs, sil(NEW), false)).toBe(theirs);
   });
 });

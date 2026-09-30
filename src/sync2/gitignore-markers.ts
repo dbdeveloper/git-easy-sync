@@ -115,6 +115,50 @@ export function parseOwnedFileHeader(line: string): string | null {
   return m[1] ?? null;
 }
 
+// ── Our two lines inside SOMEONE ELSE'S file ────────────────────────
+//
+// A third-party plugin's own `.gitignore` gets a silencer when
+// syncConfigDir is OFF: our comment, then `*`. The comment IS the
+// signature — there are no markers in a file that is not ours.
+//
+// ⚠️ Recognition here is worth MORE than in our own files, and the
+// measurement (2026-09-30) says why: with exact-text matching, two
+// builds whose comments differ do not alternate — they ACCUMULATE, two
+// lines per pass, in a file belonging to someone else. And a build
+// asked to REMOVE another version's silencer cannot see it, so the `*`
+// stays and keeps that plugin's folder hidden on every device. Both are
+// worse than the ping-pong the section rule exists for.
+//
+// So the fix here is recognition alone, and deliberately NOT a yield:
+// when a recognised pair is already present and wanted, we leave it
+// exactly as we found it, whatever version wrote it. Rewriting it to
+// our own spelling would be a rewrite war in a file we promised to
+// touch minimally.
+//
+// 🔒 Frozen on the same terms as the other two recognizers: the version
+// group is optional, so the pre-stamp spelling — the one on every disk
+// today — still reads as ours.
+const FOREIGN_SILENCER_RE =
+  /^# syncConfigDir is OFF on this device \(git-easy-sync(?: v([^\s)]+))?\)\.$/;
+
+export function foreignSilencerComment(version: string | null): string {
+  const stamp = version === null ? "" : ` v${version}`;
+  return `# syncConfigDir is OFF on this device (git-easy-sync${stamp}).`;
+}
+
+// The version stamped in our silencer comment, `null` when the line is
+// ours but unstamped, and `undefined` when the line is not ours at all.
+// Three outcomes, because "not ours" and "ours, no version" must not
+// collapse: the first means keep your hands off, the second means we
+// wrote it before stamps existed.
+export function parseForeignSilencer(
+  line: string,
+): { version: string | null } | null {
+  const m = FOREIGN_SILENCER_RE.exec(line.replace(/\s+$/, ""));
+  if (m === null) return null;
+  return { version: m[1] ?? null };
+}
+
 // The version that tells us to keep our hands off this file, or null
 // when we may write.
 //

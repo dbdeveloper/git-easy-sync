@@ -30,7 +30,11 @@ import {
 } from "../../src/sync2/atomic-write";
 import { Vault } from "../../mock-obsidian";
 import GI, { whitelistedGitignoreDirs } from "../../src/gi";
-import { beginMarker, ownedFileHeader } from "../../src/sync2/gitignore-markers";
+import {
+  beginMarker,
+  foreignSilencerComment,
+  ownedFileHeader,
+} from "../../src/sync2/gitignore-markers";
 import { isUnhonouredGitignore } from "../../src/sync2/change-detector";
 import { calculateGitBlobSHA } from "../../src/utils";
 
@@ -644,7 +648,7 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
     fs.cpSync(f.root, off.root, { recursive: true });
     await off.inv.enforce();
     expect(fs.readFileSync(foreign(off.root), "utf8")).toContain(
-      "# syncConfigDir is OFF on this device (git-easy-sync).",
+      foreignSilencerComment(TEST_VERSION),
     );
   });
 
@@ -666,7 +670,9 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
     fs.mkdirSync(foreignDir(f.root), { recursive: true });
     fs.writeFileSync(
       foreign(f.root),
-      `*.map\n\n# syncConfigDir is OFF on this device (git-easy-sync).\n*\n`,
+      // Written by a build from BEFORE the stamp — removing it is the
+      // §5.11 cross-version case, at the level where it runs.
+      `*.map\n\n${foreignSilencerComment(null)}\n*\n`,
     );
     await f.inv.enforce();
     expect(fs.readFileSync(foreign(f.root), "utf8")).toBe("*.map\n");
@@ -947,9 +953,9 @@ describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () =>
     );
     expect(foreign).toContain("*.map");
     expect(foreign).not.toContain(FINAL_BEGIN);
-    expect(foreign.endsWith(
-      "# syncConfigDir is OFF on this device (git-easy-sync).\n*\n",
-    )).toBe(true);
+    expect(
+      foreign.endsWith(`${foreignSilencerComment(TEST_VERSION)}\n*\n`),
+    ).toBe(true);
   });
 
   it("and the matcher agrees: nothing under configDir is visible", async () => {

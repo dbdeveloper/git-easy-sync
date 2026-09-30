@@ -393,11 +393,26 @@ export function assembleManagedSections(
 //
 // The strictness is the feature. A looser match would eventually delete
 // a line an author wrote, and this file is theirs.
+//
+// ⚠️ STRICT IS NOT THE SAME AS EXACT-TEXT (§5.11, measured 2026-09-30).
+// The comment is recognised through `silencer.matches`, so a pair
+// written by ANY version of the plugin is ours: exact-text matching made
+// two builds ACCUMULATE pairs here, two lines per pass, and made a
+// removal silently skip another version's `*`. What stays strict is the
+// SHAPE — last line `*`, our comment directly above it, nothing after.
 export const FOREIGN_SILENCER_RULE = "*";
+
+// The line we would write, and how we recognise one already there. Two
+// fields rather than one string because they answer different
+// questions, and conflating them is precisely the defect above.
+export interface ForeignSilencer {
+  line: string;
+  matches: (line: string) => boolean;
+}
 
 export function applyForeignSilencer(
   content: string,
-  comment: string,
+  silencer: ForeignSilencer,
   want: boolean,
 ): string {
   // An EMPTY file behaves exactly like a missing one: we do nothing
@@ -415,8 +430,15 @@ export function applyForeignSilencer(
 
   const n = lines.length;
   const present =
-    n >= 2 && lines[n - 1] === FOREIGN_SILENCER_RULE && lines[n - 2] === comment;
+    n >= 2 &&
+    lines[n - 1] === FOREIGN_SILENCER_RULE &&
+    silencer.matches(lines[n - 2]);
 
+  // ⚠️ Covers the case that matters most here: a pair from ANOTHER
+  // version, already present and still wanted. We return the file
+  // untouched rather than rewriting it into our own spelling — the
+  // rewrite would be undone by that other device on its next pass, and
+  // this file belongs to its author, not to either of us.
   if (want === present) return content; // nothing to do — do nothing
 
   if (want) {
@@ -426,7 +448,7 @@ export function applyForeignSilencer(
     if (lines.length > 0 && lines[lines.length - 1].trim() !== "") {
       lines.push("");
     }
-    lines.push(comment, FOREIGN_SILENCER_RULE);
+    lines.push(silencer.line, FOREIGN_SILENCER_RULE);
   } else {
     lines.splice(n - 2, 2);
     // Take the separator back with them, or the file grows a blank line

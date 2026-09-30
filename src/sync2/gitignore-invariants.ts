@@ -15,8 +15,10 @@ import {
   beginMarker,
   beginPattern,
   endMarker,
+  foreignSilencerComment,
   newerVersionIn,
   ownedFileHeader,
+  parseForeignSilencer,
 } from "./gitignore-markers";
 
 // Markers of the managed `invariants` section. Editing anything between
@@ -186,8 +188,13 @@ community-plugins.json`;
 // everything under their folder, so an allowlist of theirs (`!main.js`
 // and friends) would otherwise survive the `*` we put in <configDir>.
 // The one line that marks the silencer as OURS in a file that is not.
-const FOREIGN_SILENCER_COMMENT =
-  "# syncConfigDir is OFF on this device (git-easy-sync).";
+//
+// ⚠️ UNVERSIONED here, and only here: this value composes the `final`
+// section inside OUR OWN <self>/.gitignore, where the owned-file header
+// already carries the stamp (§5.11) and two stamps would be two answers
+// to one question. What goes into a THIRD PARTY's file comes from
+// `foreignSilencerComment(version)` at the write site below.
+const FOREIGN_SILENCER_COMMENT = foreignSilencerComment(null);
 
 function foreignPluginFinalBodyFor(syncConfigDir: boolean): string | null {
   if (syncConfigDir) return null;
@@ -878,7 +885,15 @@ export default class GitignoreInvariants {
     // applyForeignSilencer for why this file gets no section machinery.
     const fixed = applyForeignSilencer(
       content,
-      FOREIGN_SILENCER_COMMENT,
+      {
+        // Written WITH this build's version, so the next investigation
+        // can tell which build touched a file that is not ours...
+        line: foreignSilencerComment(this.pluginVersion),
+        // ...and recognised WITHOUT regard to version, so no build ever
+        // stacks its pair on top of another's, or fails to clean one up
+        // (§5.11 — measured, not supposed).
+        matches: (l) => parseForeignSilencer(l) !== null,
+      },
       body !== null,
     );
     if (fixed === content) {
