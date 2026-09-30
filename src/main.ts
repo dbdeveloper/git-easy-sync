@@ -171,51 +171,85 @@ const STARTUP_SYNC_DELAY_MS = 5000;
 // typings; we feature-detect each.
 interface ObsidianPluginManager {
   enabledPlugins?: Set<string>;
-  reloadPlugin?: (id: string) => Promise<void>;
   disablePlugin?: (id: string) => Promise<void>;
-  enablePlugin?: (id: string) => Promise<void>;
+  // ⚠️ Returns `false` on failure rather than throwing (§2.3, verified
+  // in 1.12.7 and 1.13.4). Typed as possibly-void because that is an
+  // internal detail and not a contract — see reloadPluginById.
+  enablePlugin?: (id: string) => Promise<boolean | undefined | void>;
+  // The live instance map. `loadPlugin` writes it BEFORE awaiting
+  // `onload()`, so its presence is necessary but not sufficient (§4.2).
+  plugins?: Record<string, unknown>;
 }
 
 function pluginManagerOf(app: App): ObsidianPluginManager | undefined {
   return (app as unknown as { plugins?: ObsidianPluginManager }).plugins;
 }
 
-// True when SOME reload mechanism is available — `reloadPlugin`
-// (desktop) OR the `disablePlugin` + `enablePlugin` pair (universal,
-// including Obsidian Mobile, where `reloadPlugin` does NOT exist —
-// the field-reported 2026-05-31 bug).
+// True when the reload mechanism is available: the `disablePlugin` +
+// `enablePlugin` pair.
+//
+// ⚠️ `reloadPlugin` is NOT looked for any more (§2.4). It has ZERO
+// occurrences in 1.12.7 and 1.13.4 alike, so the feature-detect we used
+// to run always fell through — including on desktop, contrary to the
+// comment that lived here. Keeping it would also have cost us the
+// report: it returns void, so a path through it could never be judged.
 function canReloadPlugins(pm: ObsidianPluginManager | undefined): boolean {
   if (!pm) return false;
-  if (typeof pm.reloadPlugin === "function") return true;
   return (
     typeof pm.disablePlugin === "function" &&
     typeof pm.enablePlugin === "function"
   );
 }
 
-// Reload a plugin by id. Prefers the single-call `reloadPlugin` when
-// present; otherwise falls back to disable-then-enable, which is what
-// BRAT uses and what works on Obsidian Mobile. For self-reload the
-// caller schedules this on a timeout so the current stack unwinds
-// before `disablePlugin(self)` tears the running instance down; the
-// new code is already on disk (the marker swap completed), so
-// `enablePlugin` loads it.
-async function reloadPluginById(app: App, id: string): Promise<void> {
+// What a reload attempt actually did. `reason` is for the log; the
+// Notice says something the user can act on instead.
+type ReloadOutcome = { ok: true } | { ok: false; reason: string };
+
+// Reload a plugin by id: disable, then enable — what BRAT does, and the
+// only mechanism that exists (§2.4). The caller schedules this on a
+// timeout so the current stack unwinds before `disablePlugin(self)`
+// tears the running instance down; the new code is already on disk (the
+// marker swap completed), so `enablePlugin` loads it.
+//
+// ⚠️ THE RESULT IS NOT DISCARDED ANY MORE (§4.2) — that is the whole
+// point of this function's shape. It used to return `Promise<void>`, so
+// `.then(() => log("done"))` printed a guaranteed false green: the
+// incident of 2026-08-02 logged exactly that line over a plugin that had
+// just been unloaded and could not be loaded back.
+//
+// Failure is a DISJUNCTION of two weak signals, because neither is
+// trustworthy alone (§2.7 — this is all observed behaviour, not a
+// contract):
+//
+//   • `enablePlugin` returning false — correct today, but an internal
+//     detail that could become `void` tomorrow;
+//   • `pm.plugins[id]` missing — has its own hole, since `loadPlugin`
+//     assigns the map entry BEFORE awaiting `onload()`, so a plugin
+//     that throws in onload stays in the map.
+//
+// A genuine success makes both false, so the conjunction raises no
+// spurious alarm.
+//
+// ⚠️ NEVER `enabledPlugins.has(id)`: bare disable/enable do not touch
+// that set (§2.5), so it answers `true` no matter what happened.
+async function reloadPluginById(app: App, id: string): Promise<ReloadOutcome> {
   const pm = pluginManagerOf(app);
-  if (!pm) throw new Error("app.plugins unavailable");
-  if (typeof pm.reloadPlugin === "function") {
-    await pm.reloadPlugin(id);
-    return;
-  }
+  if (!pm) return { ok: false, reason: "app.plugins unavailable" };
   if (
-    typeof pm.disablePlugin === "function" &&
-    typeof pm.enablePlugin === "function"
+    typeof pm.disablePlugin !== "function" ||
+    typeof pm.enablePlugin !== "function"
   ) {
-    await pm.disablePlugin(id);
-    await pm.enablePlugin(id);
-    return;
+    return { ok: false, reason: "no disablePlugin/enablePlugin pair" };
   }
-  throw new Error("no reload mechanism available (reloadPlugin / disable+enable)");
+  await pm.disablePlugin(id);
+  const result = await pm.enablePlugin(id);
+  if (result === false) {
+    return { ok: false, reason: "enablePlugin returned false" };
+  }
+  if (pm.plugins !== undefined && pm.plugins[id] === undefined) {
+    return { ok: false, reason: "no plugin instance after enable" };
+  }
+  return { ok: true };
 }
 
 // Plugin entry point. Orchestrates Sync2Manager + ConflictStore;
@@ -2936,36 +2970,73 @@ export default class GitHubSyncPlugin extends Plugin {
       willReload.push(id);
     }
     if (willReload.length === 0) return;
-    // Reload each affected plugin (disable+enable — the BRAT mechanism). Scheduled on a
-    // 500ms timeout so the drain stack frame unwinds before a self-reload tears this
-    // instance down. Our OWN windows are restored by the SEPARATE onunload→onload marker
-    // (saveDiff2Layout/restoreDiff2Layout, §4.5.3) — untouched by this. A reloaded plugin's
-    // OWN windows close (same as when BRAT itself updates it — expected).
-    for (const id of willReload) {
-      setTimeout(() => {
-        reloadPluginById(this.app, id)
-          .then(() => {
-            this.logger?.info("BRAT-style reload done", { id });
-          })
-          .catch((err) => {
-            this.logger?.error("reloadPlugin failed", {
-              id,
-              err: describeError(err),
-            });
-          });
-      }, 500);
-    }
-    const label =
-      willReload.length === 1
-        ? `Plugin "${willReload[0]}" updated`
-        : `${willReload.length} plugins updated`;
-    new Notice(label, 3000);
     // ⚠️ Anything that wants the network AFTER this point will be cut off
     // mid-flight: the reload tears this instance down, taking the
     // WorkerClient with it (field log 2026-09-28 —
     // "gitignore remote cleanup failed … WorkerClient terminated").
     if (willReload.includes(manifest.id)) this.selfReloadPending = true;
     this.logger?.info("BRAT-style reload scheduled", { ids: willReload });
+    // Scheduled on a 500 ms timeout so the drain stack frame unwinds
+    // before a self-reload tears this instance down. Our OWN windows are
+    // restored by the SEPARATE onunload→onload marker
+    // (saveDiff2Layout/restoreDiff2Layout, §4.5.3) — untouched by this.
+    // A reloaded plugin's OWN windows close (same as when BRAT itself
+    // updates it — expected).
+    setTimeout(() => {
+      void this.reloadAffectedPlugins(willReload);
+    }, 500);
+  }
+
+  // Reload each plugin and SAY what happened (§4.2, §4.3).
+  //
+  // Sequential, and OUR OWN id goes last. Reloading self tears this
+  // instance down mid-loop, so anything after it would never run —
+  // with the old per-plugin timers that was a race, and a race whose
+  // losers are silently not-updated plugins.
+  private async reloadAffectedPlugins(ids: string[]): Promise<void> {
+    const ordered = [
+      ...ids.filter((id) => id !== manifest.id),
+      ...ids.filter((id) => id === manifest.id),
+    ];
+    const reloaded: string[] = [];
+    for (const id of ordered) {
+      let outcome: ReloadOutcome;
+      try {
+        outcome = await reloadPluginById(this.app, id);
+      } catch (err) {
+        // `describeError` gives a structured object; `reason` is one
+        // log line, so stringify here rather than widen the type for a
+        // single call site.
+        outcome = { ok: false, reason: JSON.stringify(describeError(err)) };
+      }
+      if (outcome.ok) {
+        reloaded.push(id);
+        this.logger?.info("BRAT-style reload done", { id });
+        continue;
+      }
+      // ⚠️ error, not warn: a plugin the user was running is now
+      // unloaded, and only a restart brings it back. The 2026-08-02
+      // investigation ran entirely on the log — without this line the
+      // next one starts from nothing.
+      this.logger?.error("BRAT-style reload FAILED", {
+        id,
+        reason: outcome.reason,
+      });
+      new Notice(
+        `"${id}" could not be reloaded after an update. Restart ` +
+          `Obsidian to finish updating it.`,
+        10000,
+      );
+    }
+    // Reported AFTER the fact and counting only what worked. The old
+    // copy was shown BEFORE any reload was attempted, which is how a
+    // torn-down plugin came with a "Plugin updated" toast (§4.3).
+    if (reloaded.length === 0) return;
+    const label =
+      reloaded.length === 1
+        ? `Plugin "${reloaded[0]}" updated`
+        : `${reloaded.length} plugins updated`;
+    new Notice(label, 3000);
   }
 
   // 2.0.2-beta2: cancel the currently-running drain. Silently
