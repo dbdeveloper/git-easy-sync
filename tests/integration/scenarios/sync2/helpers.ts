@@ -53,7 +53,7 @@ const CONFIG_DIR = ".obsidian";
 // here. PINNED, deliberately not `manifest.version`: these scenarios
 // compare .gitignore BYTES against GitHub, and tying them to the real
 // version would break every one of them on the next release.
-const HARNESS_PLUGIN_VERSION = "0.0.0-harness";
+export const HARNESS_PLUGIN_VERSION = "0.0.0-harness";
 
 export interface Sync2ClientOpts {
   branch: string;
