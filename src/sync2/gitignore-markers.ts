@@ -75,6 +75,46 @@ export function parseBeginMarker(
   return { kind: m[1] as SectionKind, version: m[2] ?? null };
 }
 
+// ── Files that are OURS OUTRIGHT ────────────────────────────────────
+//
+// `<configDir>/plugins/<self>/.gitignore` has no sections: every byte of
+// it is ours and it is rewritten whole. So there is no marker PAIR to
+// stamp — but the file travels between devices like any other, and two
+// builds with different constants would rewrite it for each other
+// forever, in the one file the section rule cannot reach.
+//
+// It gets a HEADER instead (owner, 2026-09-30): a line that says what
+// the file is — so a reader who opens it is not left guessing — and
+// carries the same version stamp, which brings the file under the same
+// yield rule. `ownedFileHeader` is its only writer.
+//
+// 🔒 The recognizer below is frozen on the same terms as the section
+// one: the version group is optional so a future unstamped spelling
+// still reads as ours, and narrowing it orphans every file already
+// written.
+const OWNED_HEADER_RE =
+  /^# ===== git-easy-sync (?:v([^\s]+) )?- managed file, DO NOT EDIT =====$/;
+
+export function ownedFileHeader(version: string | null): string[] {
+  const stamp = version === null ? "" : `v${version} `;
+  return [
+    `# ===== git-easy-sync ${stamp}- managed file, DO NOT EDIT =====`,
+    "# This is the plugin's own folder. Everything here is local state -",
+    "# your token, the sync queue, conflict records - and must never",
+    "# leave this device. Only the files that ARE the plugin travel.",
+    "# Edit the plugin's settings, not this file: it is rewritten whole",
+    "# on every load.",
+  ];
+}
+
+// The version stamped in an owned-file header line, or null when the
+// line is not one.
+export function parseOwnedFileHeader(line: string): string | null {
+  const m = OWNED_HEADER_RE.exec(line.replace(/\s+$/, ""));
+  if (m === null) return null;
+  return m[1] ?? null;
+}
+
 // The version that tells us to keep our hands off this file, or null
 // when we may write.
 //
@@ -91,17 +131,21 @@ export function parseBeginMarker(
 //     leaves a state with no automatic way out (the same reasoning
 //     §7.1.1 applies to a corrupt manifest); overwriting it restores a
 //     canonical stamp on the spot.
-export function newerSectionVersion(
+// ONE function for every managed file, whichever way it is stamped: a
+// section's BEGIN marker or an owned file's header. The caller does not
+// have to know which kind of file it holds, and a new kind of stamp is
+// added here rather than at each call site.
+export function newerVersionIn(
   content: string,
   ownVersion: string,
 ): string | null {
   let newest: string | null = null;
   for (const line of content.split("\n")) {
-    const m = parseBeginMarker(line);
-    if (m === null || m.version === null) continue;
-    if (compareSemver(m.version, ownVersion) !== 1) continue;
-    if (newest === null || compareSemver(m.version, newest) === 1) {
-      newest = m.version;
+    const version = parseBeginMarker(line)?.version ?? parseOwnedFileHeader(line);
+    if (version === null) continue;
+    if (compareSemver(version, ownVersion) !== 1) continue;
+    if (newest === null || compareSemver(version, newest) === 1) {
+      newest = version;
     }
   }
   return newest;

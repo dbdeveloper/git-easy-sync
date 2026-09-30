@@ -14,7 +14,9 @@ import {
   endMarker,
   beginPattern,
   parseBeginMarker,
-  newerSectionVersion,
+  newerVersionIn,
+  ownedFileHeader,
+  parseOwnedFileHeader,
 } from "../../src/sync2/gitignore-markers";
 import {
   assembleManagedSections,
@@ -81,6 +83,41 @@ describe("the BEGIN marker carries the version (§5.11)", () => {
   });
 });
 
+// §5.11 — a file that is OURS OUTRIGHT (no sections, no user content:
+// <self>/.gitignore) has nowhere to put a section marker, but it has
+// exactly the same problem: two plugin versions with different
+// constants would rewrite it for each other forever. It gets a HEADER
+// instead — one that says what the file is for, and carries the stamp.
+describe("the owned-file header (§5.11)", () => {
+  it("says what the file is, and stamps who wrote it", () => {
+    const header = ownedFileHeader("2.1.0");
+    expect(header[0]).toBe(
+      "# ===== git-easy-sync v2.1.0 - managed file, DO NOT EDIT =====",
+    );
+    // The point of the owner's request: a reader who opens this file
+    // must be able to tell what it does without going looking.
+    expect(header.join("\n")).toContain("plugin's own folder");
+  });
+
+  it("is recognised whatever version wrote it — and NOT when it is someone else's line", () => {
+    expect(parseOwnedFileHeader(ownedFileHeader("9.9.9")[0])).toBe("9.9.9");
+    expect(parseOwnedFileHeader("# just a comment")).toBeNull();
+    expect(
+      parseOwnedFileHeader("# ===== git-easy-sync invariants - DO NOT EDIT ====="),
+    ).toBeNull();
+  });
+
+  it("🔑 the SAME yield rule covers it — an older build leaves the file alone", () => {
+    const newer = [...ownedFileHeader("9.9.9"), "*", "!main.js"].join("\n");
+    expect(newerVersionIn(newer, "2.1.0")).toBe("9.9.9");
+    expect(newerVersionIn(newer, "9.9.9")).toBeNull();
+    // A file from before the header existed carries no stamp at all →
+    // v0 → we write, which is how the header gets there in the first
+    // place.
+    expect(newerVersionIn("*\n!main.js\n", "2.1.0")).toBeNull();
+  });
+});
+
 describe("the yield rule — an older plugin does not touch a newer section", () => {
   const fileAt = (version: string | null): string =>
     [beginMarker("invariants", version), ".*", endMarker("invariants")].join(
@@ -88,31 +125,31 @@ describe("the yield rule — an older plugin does not touch a newer section", ()
     );
 
   it("a NEWER stamp in the file wins — we report it and write nothing", () => {
-    expect(newerSectionVersion(fileAt("2.2.0"), "2.1.0")).toBe("2.2.0");
+    expect(newerVersionIn(fileAt("2.2.0"), "2.1.0")).toBe("2.2.0");
   });
 
   it("our own version, or older, does not yield", () => {
-    expect(newerSectionVersion(fileAt("2.1.0"), "2.1.0")).toBeNull();
-    expect(newerSectionVersion(fileAt("2.0.0"), "2.1.0")).toBeNull();
+    expect(newerVersionIn(fileAt("2.1.0"), "2.1.0")).toBeNull();
+    expect(newerVersionIn(fileAt("2.0.0"), "2.1.0")).toBeNull();
   });
 
   it("🔑 NO stamp reads as v0 — we win, and the pre-stamp body gets updated", () => {
     // The opposite choice ("unknown → leave alone") would freeze every
     // file written before the stamp existed, forever.
-    expect(newerSectionVersion(fileAt(null), "2.1.0")).toBeNull();
-    expect(newerSectionVersion("just user rules\n.*\n", "2.1.0")).toBeNull();
+    expect(newerVersionIn(fileAt(null), "2.1.0")).toBeNull();
+    expect(newerVersionIn("just user rules\n.*\n", "2.1.0")).toBeNull();
   });
 
   it("a prerelease of the same version is NOT newer", () => {
-    expect(newerSectionVersion(fileAt("2.1.0-beta"), "2.1.0")).toBeNull();
-    expect(newerSectionVersion(fileAt("2.1.0"), "2.1.0-beta")).toBe("2.1.0");
+    expect(newerVersionIn(fileAt("2.1.0-beta"), "2.1.0")).toBeNull();
+    expect(newerVersionIn(fileAt("2.1.0"), "2.1.0-beta")).toBe("2.1.0");
   });
 
   it("🔑 a GARBAGE stamp does not win — it would have no way out", () => {
     // Yielding to an unreadable version freezes the file until someone
     // edits it by hand; writing over it restores a canonical stamp on
     // the spot. Same direction as §7.1.1 for a corrupt manifest.
-    expect(newerSectionVersion(fileAt("not-a-version"), "2.1.0")).toBeNull();
+    expect(newerVersionIn(fileAt("not-a-version"), "2.1.0")).toBeNull();
   });
 
   it("the HIGHEST stamp in the file decides, whichever section carries it", () => {
@@ -125,7 +162,7 @@ describe("the yield rule — an older plugin does not touch a newer section", ()
       "!.obsidian/",
       endMarker("final"),
     ].join("\n");
-    expect(newerSectionVersion(mixed, "2.1.0")).toBe("3.0.0");
+    expect(newerVersionIn(mixed, "2.1.0")).toBe("3.0.0");
   });
 });
 
@@ -148,7 +185,7 @@ describe("🔴 alternating enforce between two plugin versions CONVERGES", () =>
 
   // One device's pass: yield if the file is newer, otherwise assemble.
   const pass = (content: string, v: { version: string; body: string }) => {
-    if (newerSectionVersion(content, v.version) !== null) return content;
+    if (newerVersionIn(content, v.version) !== null) return content;
     return assembleManagedSections(content, {
       invariants: sectionAt(v.version, v.body),
     }).content;

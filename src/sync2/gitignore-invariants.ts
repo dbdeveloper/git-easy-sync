@@ -15,7 +15,8 @@ import {
   beginMarker,
   beginPattern,
   endMarker,
-  newerSectionVersion,
+  newerVersionIn,
+  ownedFileHeader,
 } from "./gitignore-markers";
 
 // Markers of the managed `invariants` section. Editing anything between
@@ -53,9 +54,10 @@ export const INVARIANTS_END = endMarker("invariants");
 // invited to tune from below, `final` is not up for discussion. One pair
 // could not express that, since in gitignore position IS strength.
 // ⚠️ FINAL_BEGIN is also what `selfPluginGitignore` composes into
-// <self>/.gitignore, and THAT one stays UNVERSIONED on purpose: the file
-// is a constant the plugin owns outright and rewrites whole, so there is
-// nothing to arbitrate and a stamp would only churn it once per release.
+// <self>/.gitignore, and THAT one stays UNVERSIONED: in that file the
+// version lives in the owned-file HEADER instead (§5.11), which is what
+// the yield rule reads there. Two stamps in one file would be two
+// answers to one question.
 export const FINAL_BEGIN = beginMarker("final", null);
 export const FINAL_END = endMarker("final");
 
@@ -210,8 +212,24 @@ plugins/*/*
 // Canonical content of <configDir>/plugins/<self>/.gitignore. Unlike
 // the configDir gitignore, the plugin owns this file outright — full
 // rewrite each time, no user content carried over.
-function selfPluginGitignore(syncConfigDir: boolean): string {
-  const allowlist = `*
+//
+// ⚙️ 2026-09-30 (§5.11, owner): it opens with a HEADER that says what
+// the file is and carries this build's version. Two reasons, and the
+// second is not cosmetic:
+//
+//   - the file is four cryptic lines that decide whether a token ever
+//     leaves the device; a reader who opens it deserves a sentence;
+//   - the stamp brings this file under the SAME yield rule as the
+//     sectioned ones. Without it, a future change to this constant
+//     would have two plugin versions rewriting it for each other
+//     forever — the one file where the section rule cannot reach,
+//     because there is no section here to mark.
+function selfPluginGitignore(
+  syncConfigDir: boolean,
+  pluginVersion: string,
+): string {
+  const allowlist = `${ownedFileHeader(pluginVersion).join("\n")}
+*
 !main.js
 !manifest.json
 !styles.css
@@ -644,7 +662,10 @@ export default class GitignoreInvariants {
 
   private async enforceSelfPluginGitignore(): Promise<void> {
     const path = this.selfPluginGitignorePath;
-    const canonical = selfPluginGitignore(this.syncConfigDir());
+    const canonical = selfPluginGitignore(
+      this.syncConfigDir(),
+      this.pluginVersion,
+    );
 
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
@@ -660,6 +681,18 @@ export default class GitignoreInvariants {
     const content = await this.vault.adapter.read(path);
     if (content === canonical) {
       // Already canonical — refresh cache only.
+      return;
+    }
+
+    // §5.11 — the same yield as the sectioned files, reaching the one
+    // file that has no sections. This file TRAVELS (the configDir block
+    // re-admits `plugins/*/.gitignore`), so without this a newer build's
+    // constant and ours would be rewritten for each other on every sync.
+    // "Ours outright" says the USER may not edit it; it never meant a
+    // newer version of ourselves.
+    const newer = newerVersionIn(content, this.pluginVersion);
+    if (newer !== null) {
+      this.noteYield(path, newer);
       return;
     }
 
@@ -715,7 +748,7 @@ export default class GitignoreInvariants {
     // bottom pass purge a line out of the section we promised not to
     // touch. Per-file is also the owner's rule as stated: an older
     // plugin does not update these conditions AT ALL.
-    const newer = newerSectionVersion(content, this.pluginVersion);
+    const newer = newerVersionIn(content, this.pluginVersion);
     if (newer !== null) {
       this.noteYield(path, newer);
       return content;

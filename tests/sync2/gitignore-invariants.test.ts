@@ -30,7 +30,7 @@ import {
 } from "../../src/sync2/atomic-write";
 import { Vault } from "../../mock-obsidian";
 import GI, { whitelistedGitignoreDirs } from "../../src/gi";
-import { beginMarker } from "../../src/sync2/gitignore-markers";
+import { beginMarker, ownedFileHeader } from "../../src/sync2/gitignore-markers";
 import { isUnhonouredGitignore } from "../../src/sync2/change-detector";
 import { calculateGitBlobSHA } from "../../src/utils";
 
@@ -763,6 +763,46 @@ describe("§5.11 the yield: a section stamped by a NEWER plugin is left alone", 
     await f.seeds.load();
     await f.inv.enforce();
     expect(f.seeds.get(".gitignore")).toBeUndefined();
+  });
+
+  it("🔑 reaches <self>/.gitignore too — the file with no sections to stamp", async () => {
+    // It TRAVELS (the configDir block re-admits plugins/*/.gitignore),
+    // so "ours outright" was never protection from a newer version of
+    // ourselves: two builds with different constants would rewrite it
+    // for each other on every sync.
+    const selfPath = selfGitignore(f.root);
+    const newer =
+      [...ownedFileHeader("9.9.9"), "*", "!main.js", "!something-new"].join(
+        "\n",
+      ) + "\n";
+    fs.writeFileSync(selfPath, newer);
+    await f.inv.enforce();
+    expect(fs.readFileSync(selfPath, "utf8")).toBe(newer);
+    expect(
+      f.anomalies.filter((a) => a.anomaly === "yielded-to-newer"),
+    ).toHaveLength(1);
+  });
+
+  it("<self>/.gitignore says what it is, and carries this build's stamp", async () => {
+    await f.inv.enforce();
+    const self = fs.readFileSync(selfGitignore(f.root), "utf8");
+    expect(self.startsWith(ownedFileHeader(TEST_VERSION)[0])).toBe(true);
+    expect(self).toContain("must never");
+    // The rules still follow, in order, and nothing was lost to the
+    // header: this file is what keeps the token off GitHub.
+    expect(self).toContain("*\n!main.js\n!manifest.json\n!styles.css\n!.gitignore");
+  });
+
+  it("an OLDER stamp in <self>/.gitignore is overwritten, header and all", async () => {
+    const selfPath = selfGitignore(f.root);
+    fs.writeFileSync(
+      selfPath,
+      [...ownedFileHeader("1.0.0"), "*", "!main.js"].join("\n") + "\n",
+    );
+    await f.inv.enforce();
+    const after = fs.readFileSync(selfPath, "utf8");
+    expect(after).toContain(ownedFileHeader(TEST_VERSION)[0]);
+    expect(after).toContain("!styles.css"); // the canonical rules are back
   });
 
   it("an OLDER or equal stamp does not yield — the file is brought to canonical", async () => {

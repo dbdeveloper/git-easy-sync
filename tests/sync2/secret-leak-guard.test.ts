@@ -49,6 +49,7 @@ import GitignoreSeedStore from "../../src/sync2/gitignore-seeds";
 import { isSyncable } from "../../src/sync2/change-detector";
 import GI, { whitelistedGitignoreDirs } from "../../src/gi";
 import { Vault } from "../../mock-obsidian";
+import { ownedFileHeader } from "../../src/sync2/gitignore-markers";
 
 const CONFIG_DIR = ".obsidian";
 const SELF = "git-easy-sync";
@@ -60,12 +61,25 @@ const OLD_SELF = "github-easy-sync";
 // stands between its data.json and the repo, and the user may lift it.
 const OTHER = "obsidian42-brat";
 
+// §5.11 — pinned: what this suite checks is what LEAKS, not which
+// version stamped the file.
+const TEST_VERSION = "2.1.0";
+
 // The allowlist file both sync plugins ship in their own folder.
-const SHIPPED_ALLOWLIST = "*\n!main.js\n!manifest.json\n!styles.css\n!.gitignore\n";
+// The rules that ARE the guard — what decides whether a token can
+// leave the device. Written by hand, deliberately: deriving them from
+// the module would make this test agree with any future mistake.
+const SHIPPED_ALLOWLIST_RULES =
+  "*\n!main.js\n!manifest.json\n!styles.css\n!.gitignore\n";
+// What enforce() actually writes: the §5.11 header (prose + this
+// build's stamp, taken from the module because it is not the subject
+// here) followed by those rules, in that order.
+const SHIPPED_ALLOWLIST = `${ownedFileHeader(TEST_VERSION).join("\n")}\n${SHIPPED_ALLOWLIST_RULES}`;
 
 // A syntactically real-looking PAT so a failing assertion reads like
 // the incident it prevents. Never a real token.
 const FAKE_TOKEN = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+
 
 interface Fixture {
   root: string;
@@ -103,13 +117,13 @@ function makeFixture(initialPushDataJson = false): Fixture {
     JSON.stringify({ githubToken: FAKE_TOKEN }),
   );
   write(`${CONFIG_DIR}/plugins/${SELF}/main.js`, "// our build\n");
-  write(`${CONFIG_DIR}/plugins/${SELF}/.gitignore`, SHIPPED_ALLOWLIST);
+  write(`${CONFIG_DIR}/plugins/${SELF}/.gitignore`, SHIPPED_ALLOWLIST_RULES);
   write(
     `${CONFIG_DIR}/plugins/${OLD_SELF}/data.json`,
     JSON.stringify({ githubToken: FAKE_TOKEN }),
   );
   write(`${CONFIG_DIR}/plugins/${OLD_SELF}/main.js`, "// old build\n");
-  write(`${CONFIG_DIR}/plugins/${OLD_SELF}/.gitignore`, SHIPPED_ALLOWLIST);
+  write(`${CONFIG_DIR}/plugins/${OLD_SELF}/.gitignore`, SHIPPED_ALLOWLIST_RULES);
   write(
     `${CONFIG_DIR}/plugins/${OTHER}/data.json`,
     JSON.stringify({ apiKey: FAKE_TOKEN }),
@@ -134,7 +148,7 @@ function makeFixture(initialPushDataJson = false): Fixture {
     onAnomaly: () => {},
     // §5.11 — pinned: what this suite checks is what LEAKS, not which
     // version stamped the section.
-    pluginVersion: "2.1.0",
+    pluginVersion: TEST_VERSION,
   });
 
   const reader = async (abs: string) => {
