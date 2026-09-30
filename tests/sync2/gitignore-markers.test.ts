@@ -195,6 +195,36 @@ describe("🔴 alternating enforce between two plugin versions CONVERGES", () =>
   });
 });
 
+describe("a STRAY marker from another version is removed AND reported", () => {
+  // Found by a mutation probe: counting duplicates by exact text rather
+  // than by the pattern left this case silent. The line still
+  // disappeared — the purge matches by pattern — but nothing said so,
+  // and "we deleted a line and told no one" is the defect class §4.2
+  // exists to prevent. Our own stale marker is not the user's line, but
+  // a marker with no section is precisely what a reader would puzzle
+  // over, so its removal belongs in the report too.
+  it("an extra BEGIN of another version counts as a duplicate of ours", () => {
+    const section: ManagedSection = {
+      begin: beginMarker("invariants", "2.1.0"),
+      beginPattern: beginPattern("invariants"),
+      end: endMarker("invariants"),
+      body: ".*",
+    };
+    const input = [
+      beginMarker("invariants", "2.1.0"),
+      ".*",
+      endMarker("invariants"),
+      "",
+      "user.md",
+      beginMarker("invariants", "1.0.0"), // stray: a lone marker, no pair
+    ].join("\n");
+    const r = assembleManagedSections(input, { invariants: section });
+    expect(r.content).not.toContain(beginMarker("invariants", "1.0.0"));
+    expect(r.removed).toEqual([beginMarker("invariants", "2.1.0")]);
+    expect(r.content).toContain("user.md");
+  });
+});
+
 describe("an older version's section is REPLACED, not left behind", () => {
   it("the stale BEGIN line does not survive as litter", () => {
     // Before the recognizer this was the failure mode: the old BEGIN
