@@ -249,6 +249,61 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
 
   // ── B: rolling base / chaining ───────────────────────────────────
 
+  // ⚠️ OUR OWN plugin's loadable files never reach the vault write
+  // (owner, 2026-10-01). Every other torn write here is repaired at
+  // our next onload; this one cannot be, because the repair code lives
+  // inside the file that would be broken. So the drain stages, and the
+  // bootloader applies at the top of the next start — the one moment
+  // the file Obsidian loads can be replaced by code that is running
+  // and healthy.
+  it("SELF: an incoming main.js is STAGED, and the live file is not touched", async () => {
+    const SELF_MAIN = `.obsidian/plugins/${PLUGIN_ID}/main.js`;
+    baseCommit = await world.commitFiles({ [SELF_MAIN]: "OLD CODE" });
+    const oldSha = await sha("OLD CODE");
+    baselines.set(SELF_MAIN, { baselineSha: oldSha, mtime: 50, size: 8 });
+    vaultFiles.files.set(SELF_MAIN, { content: "OLD CODE", mtime: 50 });
+    await world.commitFiles({ [SELF_MAIN]: "NEW CODE" });
+
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+
+    // The running code is still the running code.
+    expect(vaultFiles.files.get(SELF_MAIN)!.content).toBe("OLD CODE");
+    expect(vaultFiles.writes).not.toContain(SELF_MAIN);
+    expect(r.vaultStepWrites).not.toContain(SELF_MAIN);
+    // ...and the update is waiting where the bootloader looks.
+    expect(vaultFiles.staged.get(SELF_MAIN)?.content).toBe("NEW CODE");
+    expect(r.selfUpdateStaged).toContain(SELF_MAIN);
+
+    // 🔴 THE TRAP, and it is silent without this line. Recording the
+    // NEW sha as the baseline while the disk still holds the OLD bytes
+    // makes the next findChanges read the RUNNING version as a local
+    // edit — and push it. That publishes a downgrade of our own plugin
+    // to every device, which is §5.9.1's scenario arriving through a
+    // different door. Baseline and disk must stay consistent: both
+    // OLD, until the bootloader makes both NEW.
+    expect(baselines.get(SELF_MAIN)!.baselineSha).toBe(oldSha);
+  });
+
+  it("SELF: a staged update is not re-downloaded on the next sync", async () => {
+    // The pending update outlives the drain that fetched it — on a
+    // phone, re-pulling a megabyte on every sync until the user
+    // restarts is the difference between waiting and paying.
+    const SELF_MAIN = `.obsidian/plugins/${PLUGIN_ID}/main.js`;
+    baseCommit = await world.commitFiles({ [SELF_MAIN]: "OLD CODE" });
+    const oldSha = await sha("OLD CODE");
+    baselines.set(SELF_MAIN, { baselineSha: oldSha, mtime: 50, size: 8 });
+    vaultFiles.files.set(SELF_MAIN, { content: "OLD CODE", mtime: 50 });
+    await world.commitFiles({ [SELF_MAIN]: "NEW CODE" });
+
+    await drainOnce(makeDeps());
+    const blobReadsAfterFirst = world.blobReads.length;
+    // Same head, same staged bytes: the second run must not fetch.
+    baseCommit = null;
+    await drainOnce(makeDeps());
+    expect(world.blobReads.length).toBe(blobReadsAfterFirst);
+  });
+
   it("B.1 + B.7: chain C1..C3 with no remote changes → each D_i = C_i, three commits, base rolls, vault untouched", async () => {
     await setupAligned();
     await stageBatch({ "note.md": "C1\n" });

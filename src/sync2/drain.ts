@@ -53,6 +53,7 @@
 // remaining epilogue item, together with the §VIII D/K crash matrix.
 
 import { arrayBufferToBase64, type Vault } from "obsidian";
+import { isOwnPluginRecoverableFile } from "./plugin-update-bootloader";
 import { NewTreeRequestItem } from "../github/client";
 import ConflictStoreV2, {
   ConflictsState,
@@ -212,6 +213,19 @@ export interface VaultFileReader {
   // Vault-step apply: write merged/remote bytes, or delete the path.
   write(path: string, bytes: ArrayBuffer): Promise<void>;
   remove(path: string): Promise<void>;
+  // ⚠️ OUR OWN plugin's loadable files (main.js, manifest.json,
+  // styles.css) never take the two calls above. They are staged beside
+  // the live file with a completion marker, and the BOOTLOADER applies
+  // them at the top of the next onload — the only moment at which the
+  // file Obsidian loads can be replaced by code that is still running
+  // and healthy. Written live, a crash leaves us damaged or absent,
+  // and every repair mechanism we own lives inside the file that is
+  // broken (owner, 2026-10-01).
+  stageSelfUpdate(path: string, bytes: ArrayBuffer): Promise<void>;
+  // "Are these exact bytes already staged AND complete?" — asked
+  // before the blob is fetched, so an update waiting for a restart is
+  // not re-downloaded on every sync.
+  isSelfUpdateStaged(path: string, sha: string): Promise<boolean>;
 }
 
 export interface DrainDeps {
@@ -361,6 +375,9 @@ export interface DrainResult {
   // remote name needed sanitization).
   vaultStepWrites: string[];
   vaultStepRemoves: string[];
+  // Paths staged for the bootloader (our own plugin's loadable files).
+  // Reported for the log — the update is pending, not applied.
+  selfUpdateStaged: string[];
   // Set when status === "token-expired": the original 401/403 — the
   // manager's latch needs the class (invalid vs scope, §35).
   authErrorStatus?: 401 | 403;
@@ -401,6 +418,13 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   const pushedCommits: string[] = [];
   const vaultStepWrites: string[] = [];
   const vaultStepRemoves: string[] = [];
+  // Our own plugin's files put beside the live ones for the bootloader
+  // to apply at the next start. NOT part of vaultStepWrites on
+  // purpose: that list drives the plugin-reload signal, and there is
+  // nothing to reload — the running code is still the old code, by
+  // design.
+  const selfUpdateStaged: string[] = [];
+  const configDir = deps.vault.configDir;
   let finalizedMergeSha: string | null = null;
 
   const result = (status: DrainStatus): DrainResult => ({
@@ -412,6 +436,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     finalizedMergeSha,
     vaultStepWrites,
     vaultStepRemoves,
+    selfUpdateStaged,
   });
 
   // S1: git identity per push site (main = batch.createdAt; conflict
@@ -1939,6 +1964,17 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       tracked.base = tracked.remote;
       continue;
     }
+    // ⚠️ OUR OWN plugin's loadable files are STAGED, never written
+    // live (owner, 2026-10-01). Asked BEFORE the blob is fetched so an
+    // update waiting for the user's next restart is not re-downloaded
+    // on every sync — which on a phone is the difference between a
+    // pending update and a recurring megabyte.
+    const isSelf =
+      v.sha !== null &&
+      isOwnPluginRecoverableFile(path, configDir, deps.selfPluginId);
+    if (isSelf && (await deps.vaultFiles.isSelfUpdateStaged(path, v.sha!))) {
+      continue;
+    }
     if (v.mode === DELETED || v.sha === DELETED_SHA_HASH) {
       if (vaultEntry !== null) {
         await deps.vaultFiles.remove(path);
@@ -1979,6 +2015,32 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     // store — its role dissolved into the honest baseline. Conflicts
     // cannot be born on P (the local side never exists), so the
     // sibling-name path never carries forbidden chars from here.
+    if (isSelf) {
+      await deps.vaultFiles.stageSelfUpdate(path, bytes);
+      selfUpdateStaged.push(path);
+      deps.logger?.info("self-update staged for the next start", { path });
+      // 🔴 THE TRAP, and it is silent without the test that pins it.
+      // The live file still holds the OLD bytes, so the baseline must
+      // keep saying OLD. Recording the staged (NEW) sha would make the
+      // next findChanges read the RUNNING version as a local edit and
+      // PUSH it — publishing a downgrade of our own plugin to every
+      // device, which is §5.9.1's scenario arriving through another
+      // door.
+      //
+      // ⚠️ Dropping the tracked record is what achieves that, NOT
+      // leaving `tracked.base` alone: the epilogue's baseline transfer
+      // reads `tracked.remote`, so a record left behind would carry
+      // the new sha into the baseline no matter what `base` says.
+      // Found by a mutation probe — the version without this line
+      // passed every other test in the suite.
+      //
+      // Losing the record costs nothing: the head has not moved, so
+      // the next discovery does not re-report the path, and once the
+      // bootloader applies the update the next scan sees disk ==
+      // remote and settles the baseline in one no-op pass.
+      state.trackedFiles.delete(path);
+      continue;
+    }
     let writePath = path;
     if (needsSanitization(path)) {
       const canonical = sanitizeFilename(path);

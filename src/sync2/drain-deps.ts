@@ -546,6 +546,9 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
       computeSha,
       trashHooks: args.trashHooks,
       logger: args.logger,
+      // The ONE folder whose loadable files are staged for the
+      // bootloader instead of written live.
+      selfPluginId: args.selfPluginId,
     }),
     mergeBlobs: makeWorkerMergeBlobs(args.worker),
     computeSha,

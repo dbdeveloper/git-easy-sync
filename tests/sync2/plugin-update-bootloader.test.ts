@@ -616,3 +616,123 @@ describe("isOwnPluginRecoverableFile — write-side bootloader routing", () => {
     expect(isOwnPluginRecoverableFile("notes/a.md", cfg, self)).toBe(false);
   });
 });
+
+// ⚠️ THE WINDOW IN WHICH OUR OWN PLUGIN CAN CEASE TO EXIST
+// ─────────────────────────────────────────────────────────
+// Owner, 2026-10-01, after the question "so the file was there and —
+// oops — it's gone?": yes, and that is the one failure no code of ours
+// can recover from, because every recovery mechanism we have lives
+// INSIDE the file being replaced. If `main.js` is absent, Obsidian
+// does not load us, so nothing of ours runs to put it back.
+//
+// The apply used to be `rename(main.js → bak)` then
+// `rename(tmp → main.js)`. Between those two calls the plugin does not
+// exist on disk. On DESKTOP that window is removable outright: POSIX
+// `rename` OVERWRITES, so the backup can be taken with a COPY — which
+// leaves the live file in place — and the swap becomes ONE atomic call.
+//
+// On mobile it is not removable: Capacitor's rename refuses an
+// existing destination, so the live file must be removed first. The
+// fallback below is that path, entered by catching the refusal rather
+// than by asking the platform — one code path, and the platform
+// decides which branch it takes.
+describe("the apply never takes the live file away first (owner, 2026-10-01)", () => {
+  it("🔑 desktop: main.js is NEVER absent — the backup is a copy, the swap one rename", async () => {
+    const f = makeFixture();
+    try {
+      await setup(f.adapter, f.pluginDir, {
+        [FILES.main.final]: "OLD",
+        [FILES.main.tmp]: "NEW",
+        [FILES.main.marker]: "",
+      });
+
+      // Watch the live path across every adapter call. `rename(final →
+      // anything)` is the move that creates the window, so its absence
+      // IS the property under test — asserting on the end state alone
+      // would pass for both implementations.
+      const renames: Array<[string, string]> = [];
+      const realRename = f.adapter.rename.bind(f.adapter);
+      f.adapter.rename = async (from: string, to: string) => {
+        renames.push([from, to]);
+        return realRename(from, to);
+      };
+
+      const r = captureReload();
+      const out = await runSelfUpdateBootloader({
+        adapter: f.adapter,
+        pluginDir: f.pluginDir,
+        reloadPlugin: r.reloadPlugin,
+        scheduleReload: r.scheduleReload,
+      });
+
+      expect(out.action).toBe("applied");
+      expect(await f.adapter.read(`${f.pluginDir}/${FILES.main.final}`)).toBe(
+        "NEW",
+      );
+      // The live file was never the SOURCE of a rename.
+      expect(
+        renames.filter(([from]) => from.endsWith(`/${FILES.main.final}`)),
+      ).toEqual([]);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("mobile: the refusal to overwrite is caught, and the swap still lands", async () => {
+    const f = makeFixture();
+    const { setMockPlatform } = await import("../../mock-obsidian");
+    try {
+      await setup(f.adapter, f.pluginDir, {
+        [FILES.main.final]: "OLD",
+        [FILES.main.tmp]: "NEW",
+        [FILES.main.marker]: "",
+      });
+      setMockPlatform("mobile");
+
+      const r = captureReload();
+      const out = await runSelfUpdateBootloader({
+        adapter: f.adapter,
+        pluginDir: f.pluginDir,
+        reloadPlugin: r.reloadPlugin,
+        scheduleReload: r.scheduleReload,
+      });
+
+      expect(out.action).toBe("applied");
+      expect(await f.adapter.read(`${f.pluginDir}/${FILES.main.final}`)).toBe(
+        "NEW",
+      );
+    } finally {
+      setMockPlatform("desktop");
+      f.cleanup();
+    }
+  });
+
+  it("the previous version is still there afterwards, under .ges-bak", async () => {
+    // Not housekeeping: it is the ONE thing a user can act on when the
+    // window does fire on a phone. README says to rename it back.
+    const f = makeFixture();
+    try {
+      await setup(f.adapter, f.pluginDir, {
+        [FILES.main.final]: "OLD",
+        [FILES.main.tmp]: "NEW",
+        [FILES.main.marker]: "",
+      });
+      const r = captureReload();
+      await runSelfUpdateBootloader({
+        adapter: f.adapter,
+        pluginDir: f.pluginDir,
+        reloadPlugin: r.reloadPlugin,
+        scheduleReload: r.scheduleReload,
+        keepBackup: true,
+      });
+      expect(await f.adapter.exists(`${f.pluginDir}/${FILES.main.bak}`)).toBe(
+        true,
+      );
+      expect(await f.adapter.read(`${f.pluginDir}/${FILES.main.bak}`)).toBe(
+        "OLD",
+      );
+    } finally {
+      f.cleanup();
+    }
+  });
+});

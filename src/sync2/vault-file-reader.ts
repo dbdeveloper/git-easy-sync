@@ -35,6 +35,10 @@ import {
 } from "./text-normalize";
 import type { TrashHooks } from "./trash-hooks";
 import type { VaultFileReader } from "./drain";
+import {
+  markerNameFor,
+  stagingNameFor,
+} from "./plugin-update-bootloader";
 
 export interface VaultFileReaderDeps {
   vault: Vault;
@@ -48,6 +52,9 @@ export interface VaultFileReaderDeps {
   // (trash-hooks.ts contract: failures are logged and swallowed).
   trashHooks?: TrashHooks | null;
   logger?: { warn(message: string, data?: unknown): void };
+  // Our own plugin's id — the ONE folder whose loadable files are
+  // staged instead of written (see `stageSelfUpdate`).
+  selfPluginId: string;
 }
 
 async function ensureParentDir(vault: Vault, filePath: string): Promise<void> {
@@ -68,7 +75,57 @@ async function ensureParentDir(vault: Vault, filePath: string): Promise<void> {
 export function makeVaultFileReader(
   deps: VaultFileReaderDeps,
 ): VaultFileReader {
+  // Where the bootloader will look at the top of the next onload.
+  const stagedPaths = (path: string): { tmp: string; marker: string } => {
+    const slash = path.lastIndexOf("/");
+    const dir = path.slice(0, slash);
+    const name = path.slice(slash + 1);
+    return {
+      tmp: `${dir}/${stagingNameFor(name, "ges-tmp")}`,
+      marker: `${dir}/${markerNameFor(name)}`,
+    };
+  };
+
   return {
+    // ⚠️ OUR OWN plugin's loadable files are STAGED, never written.
+    //
+    // Every other torn write in this vault is repaired at our next
+    // onload. This one cannot be: if `main.js` is damaged or missing,
+    // Obsidian does not load us, the repair code never runs, and the
+    // user is left reinstalling by hand. So the live file is touched at
+    // exactly one moment — the top of onload, by the bootloader, while
+    // the OLD code is running and healthy.
+    //
+    // ORDER IS THE INTEGRITY CONTRACT: bytes first, marker second. The
+    // marker means "the staging file beside me is COMPLETE"; raised
+    // first, it would make the bootloader apply a half-written file
+    // over working code (bootloader case C exists for exactly this).
+    async stageSelfUpdate(path, bytes) {
+      const normalized = normalizePath(path);
+      const { tmp, marker } = stagedPaths(normalized);
+      await ensureParentDir(deps.vault, tmp);
+      await deps.vault.adapter.writeBinary(tmp, bytes);
+      await deps.vault.adapter.write(marker, "");
+    },
+
+    // Is THIS content already staged and complete? Asked before the
+    // blob is fetched, so an update that lands before the user
+    // restarts is not re-downloaded on every sync. `false` for a
+    // staging file with no marker — that is a torn write, not an
+    // update (the bootloader drops it).
+    async isSelfUpdateStaged(path, sha) {
+      const normalized = normalizePath(path);
+      const { tmp, marker } = stagedPaths(normalized);
+      if (!(await deps.vault.adapter.exists(marker))) return false;
+      if (!(await deps.vault.adapter.exists(tmp))) return false;
+      try {
+        const bytes = await deps.vault.adapter.readBinary(tmp);
+        return (await deps.computeSha(bytes)) === sha;
+      } catch {
+        return false;
+      }
+    },
+
     async stat(path) {
       const s = await deps.vault.adapter.stat(normalizePath(path));
       if (s === null || s.type !== "file") return null;

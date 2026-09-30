@@ -30,6 +30,7 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
 
     const reader = (opts?: { explodingCapture?: boolean }) =>
       makeVaultFileReader({
+    selfPluginId: "git-easy-sync",
         vault: vault as never,
         computeSha: calculateGitBlobSHA,
         trashHooks: {
@@ -94,6 +95,7 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
     it("write: pull-side canonicalize (toggle ON) strips BOM + CRLF; OFF writes verbatim; invalid UTF-8 passes UNTOUCHED", async () => {
       const withToggle = (on: boolean) =>
         makeVaultFileReader({
+    selfPluginId: "git-easy-sync",
           vault: vault as never,
           autoCanonicalize: () => on,
           computeSha: calculateGitBlobSHA,

@@ -56,6 +56,12 @@ import type { DataAdapter } from "obsidian";
 const SELF_UPDATE_FILES = ["main.js", "manifest.json", "styles.css"];
 
 export interface BootloaderDeps {
+  // Keep `<file>.ges-bak` after a successful apply. Default false —
+  // the backup is scaffolding, and leaving it would put a stale copy
+  // of our own code in the plugin folder forever. Set on the ONE
+  // platform where the swap window cannot be closed, so a user whose
+  // phone died mid-swap has something to rename back.
+  keepBackup?: boolean;
   adapter: DataAdapter;
   pluginDir: string; // e.g. ".obsidian/plugins/git-easy-sync"
   // Closure that invokes app.plugins.reloadPlugin(<self id>). Wrapped
@@ -94,7 +100,7 @@ export type BootloaderResult =
 
 // Derives the staging filename for an original. main.js →
 // main.ges-tmp.js. manifest.json → manifest.ges-tmp.json.
-function stagingNameFor(
+export function stagingNameFor(
   fileName: string,
   suffix: "ges-tmp" | "ges-bak",
 ): string {
@@ -106,7 +112,7 @@ function stagingNameFor(
 }
 
 // Derives the marker filename: .<basename>.<ext>.ges-tmp.
-function markerNameFor(fileName: string): string {
+export function markerNameFor(fileName: string): string {
   return `.${fileName}.ges-tmp.`;
 }
 
@@ -126,22 +132,48 @@ async function recoverOneFile(
   // Case A: marker + ges-tmp → apply forward
   if (markerExists && tmpExists) {
     try {
+      // ⚠️ THE BACKUP IS A COPY, NOT A RENAME — owner, 2026-10-01, and
+      // this is the one place in the plugin where that distinction is
+      // existential rather than stylistic.
+      //
+      // Renaming the live file aside leaves a window in which
+      // `main.js` DOES NOT EXIST. Every other torn write in this vault
+      // is repaired at our next onload; this one cannot be, because
+      // the repair code lives inside the file that is missing —
+      // Obsidian simply does not load us, and the user is left to
+      // reinstall by hand. A copy leaves the live file untouched, so
+      // the swap below is the FIRST moment anything happens to it.
       if (await adapter.exists(finalPath)) {
         if (await adapter.exists(bakPath)) {
           await adapter.remove(bakPath);
         }
-        await adapter.rename(finalPath, bakPath);
+        await copyOrRename(adapter, finalPath, bakPath);
       }
-      await adapter.rename(tmpPath, finalPath);
+      // ONE call on desktop: POSIX rename overwrites atomically, so
+      // there is no instant in which the path is empty. Capacitor
+      // REFUSES an existing destination (iOS/Android), and that
+      // refusal — not a platform check — is what selects the fallback:
+      // one code path, the platform decides which branch it takes.
+      // The mobile window is one syscall wide and cannot be removed
+      // through the adapter; `.ges-bak` beside the file is what a
+      // human can act on if it ever fires.
+      try {
+        await adapter.rename(tmpPath, finalPath);
+      } catch {
+        await adapter.remove(finalPath);
+        await adapter.rename(tmpPath, finalPath);
+      }
       try {
         await adapter.remove(markerPath);
       } catch {
         // best-effort
       }
-      try {
-        await adapter.remove(bakPath);
-      } catch {
-        // best-effort
+      if (deps.keepBackup !== true) {
+        try {
+          await adapter.remove(bakPath);
+        } catch {
+          // best-effort
+        }
       }
     } catch (err) {
       log?.(`Self-update bootloader: ${fileName} apply failed`, {
@@ -248,6 +280,24 @@ export async function runSelfUpdateBootloader(
     appliedFiles,
   });
   return { action: "applied", appliedFiles };
+}
+
+// `copy` is the Obsidian DataAdapter API we want; a runtime that does
+// not expose it (older builds, a test double) falls back to the rename
+// that was here before. Degrading is better than throwing: the window
+// comes back, which is exactly where we were yesterday.
+async function copyOrRename(
+  adapter: DataAdapter,
+  from: string,
+  to: string,
+): Promise<void> {
+  const copy = (adapter as { copy?: (a: string, b: string) => Promise<void> })
+    .copy;
+  if (typeof copy === "function") {
+    await copy.call(adapter, from, to);
+    return;
+  }
+  await adapter.rename(from, to);
 }
 
 // Helper: parses a path under the vault root and returns the plugin

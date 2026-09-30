@@ -30,6 +30,10 @@ export class FakeWorld {
   // were asked one at a time, and which commits were read in bulk.
   readonly metadataReads: string[] = [];
   readonly treeReads: string[] = [];
+  // Blob transport accounting — what the drain actually DOWNLOADED.
+  // A pending self-update must not be re-fetched on every sync while
+  // it waits for the user's next restart.
+  readonly blobReads: string[] = [];
   // Models GitHub's truncated response — a tree that must be refused.
   truncateTrees = false;
   readonly commitParents = new Map<string, string[]>();
@@ -176,7 +180,10 @@ export class FakeWorld {
         }));
         return { files, truncated: this.truncateTrees };
       },
-      getBlobFromRepo: async (s) => this.blobs.get(s) ?? null,
+      getBlobFromRepo: async (s) => {
+        this.blobReads.push(s);
+        return this.blobs.get(s) ?? null;
+      },
       getBranchHeadSha: async (branch) => this.branchHeads.get(branch) ?? null,
       // Bare-repo seed (Contents API in production): creates the
       // FIRST commit carrying exactly that file, exactly like
@@ -256,6 +263,23 @@ export class FakeVaultFiles {
   reads = 0;
   writes: string[] = [];
   removed: string[] = [];
+
+  // Self-update staging (owner, 2026-10-01). Modelled, not stubbed:
+  // the drain must be able to prove it put the bytes BESIDE the live
+  // file rather than over it, and a stub returning void would let a
+  // regression through unseen.
+  readonly staged = new Map<string, { content: string; sha: string }>();
+
+  async stageSelfUpdate(p: string, bytes: ArrayBuffer): Promise<void> {
+    this.staged.set(p, {
+      content: dec(bytes),
+      sha: await calculateGitBlobSHA(bytes),
+    });
+  }
+
+  async isSelfUpdateStaged(p: string, sha: string): Promise<boolean> {
+    return this.staged.get(p)?.sha === sha;
+  }
 
   async stat(p: string): Promise<{ size: number; mtime: number } | null> {
     const f = this.files.get(p);

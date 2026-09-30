@@ -77,6 +77,23 @@ class MemVaultFiles implements VaultFileReader {
   async remove(p: string) {
     this.files.delete(p);
   }
+
+  // Self-update staging (owner, 2026-10-01). Modelled, not stubbed:
+  // the drain must be able to prove it put the bytes BESIDE the live
+  // file rather than over it, and a stub returning void would let a
+  // regression through unseen.
+  readonly staged = new Map<string, { content: string; sha: string }>();
+
+  async stageSelfUpdate(p: string, bytes: ArrayBuffer): Promise<void> {
+    this.staged.set(p, {
+      content: dec(bytes),
+      sha: await calculateGitBlobSHA(bytes),
+    });
+  }
+
+  async isSelfUpdateStaged(p: string, sha: string): Promise<boolean> {
+    return this.staged.get(p)?.sha === sha;
+  }
 }
 
 function adaptClient(client: GithubClient): DrainClient {

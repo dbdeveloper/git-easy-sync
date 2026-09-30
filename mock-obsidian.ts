@@ -316,6 +316,20 @@ export class Vault {
         await fs.rename(fromAbs, toAbs);
       },
 
+      // Mirrors Obsidian's adapter.copy. Non-destructive to the
+      // SOURCE — which is the whole reason the self-update swap uses
+      // it for the backup step instead of a rename: a rename would
+      // take the live file away and leave a window in which
+      // `main.js` does not exist, and no code of ours can recover
+      // from that (every recovery mechanism we have lives inside the
+      // file being replaced).
+      copy: async (src: string, dst: string) => {
+        const fromAbs = path.join(this.rootPath, src);
+        const toAbs = path.join(this.rootPath, dst);
+        mkdirSync(path.dirname(toAbs), { recursive: true });
+        await fs.copyFile(fromAbs, toAbs);
+      },
+
       // Mirrors Obsidian's adapter.rmdir(path, recursive). Recursive
       // mode (the only mode sync2 uses) removes the directory and
       // everything beneath it.

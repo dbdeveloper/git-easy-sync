@@ -41,6 +41,7 @@ const okResult = (over?: Partial<DrainResult>): DrainResult => ({
   finalizedMergeSha: null,
   vaultStepWrites: [],
   vaultStepRemoves: [],
+  selfUpdateStaged: [],
   ...over,
 });
 
