@@ -106,6 +106,10 @@ Triggered by a pushed tag matching `[0-9].[0-9]+.[0-9]+*`; a `-beta` suffix cuts
 
 **`manifest-beta.json` is NOT auto-synced.** When bumping to a `-beta` version, edit it manually to match.
 
+**Raising OUR OWN `minAppVersion` is a decision, not a version bump.** It is `1.7.7` today and has never moved. The moment it does, devices on an older Obsidian stop being able to load the build that arrives through sync — and unlike a third-party plugin, a dead copy of *us* means **sync itself is dead** on that device, with no mechanism of ours left running to say so. Before raising it, confirm one of the two covers is in place: PLUGIN-UPDATE-COMPAT Фаза 2 freezes `<configDir>/plugins/<self>/` (so the incompatible build never reaches the disk), or — at minimum — the §4.1 reload gate is present, which keeps the running instance alive until the next restart. The gate landed 2026-09-30; Фаза 2 has not. Rationale: [`SYNC2-PLUGIN-UPDATE-COMPAT.md`](./docs/tasks/SYNC2-PLUGIN-UPDATE-COMPAT.md) §4.4.
+
+**Every managed `.gitignore` carries the build's version** (§5.11), so the first sync after a release rewrites three files and produces ONE `.gitignore` commit. That commit is expected, not a defect — it is what lets an older device know to keep its hands off rules a newer one wrote.
+
 ---
 
 ## Where to find things
