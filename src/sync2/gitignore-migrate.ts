@@ -276,7 +276,7 @@ export async function findMigrationCandidates(
 // ── §8.1.3 assembling the proposal, and §8.1.4's marker format ───────
 
 import {
-  FINAL_BEGIN,
+  findBeginLine,
   PLUGINS_DIR_MANAGED_LINES,
 } from "./gitignore-invariants";
 
@@ -295,9 +295,18 @@ import {
 export function splitAtFinalSection(
   rootContent: string,
 ): { top: string; bottom: string } | null {
-  const idx = rootContent.indexOf(FINAL_BEGIN);
-  if (idx === -1) return null;
-  return { top: rootContent.slice(0, idx), bottom: rootContent.slice(idx) };
+  // §5.11: the marker on disk may carry a version stamp, so the split
+  // point is found by the frozen recognizer, not by a literal. A
+  // version-blind `indexOf` would answer "no final section" for a file
+  // written by any other build — and the caller's refusal, correct as it
+  // is, would then fire on a perfectly healthy file and block the
+  // migration forever.
+  const found = findBeginLine(rootContent, "final");
+  if (found === null) return null;
+  return {
+    top: rootContent.slice(0, found.at),
+    bottom: rootContent.slice(found.at),
+  };
 }
 
 // The proposal's bytes: the root file's own top half, the migrated rules,

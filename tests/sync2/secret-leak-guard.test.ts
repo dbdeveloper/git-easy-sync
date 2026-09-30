@@ -132,6 +132,9 @@ function makeFixture(initialPushDataJson = false): Fixture {
     syncConfigDir: () => true,
     gi: { invalidate: () => {} },
     onAnomaly: () => {},
+    // §5.11 — pinned: what this suite checks is what LEAKS, not which
+    // version stamped the section.
+    pluginVersion: "2.1.0",
   });
 
   const reader = async (abs: string) => {

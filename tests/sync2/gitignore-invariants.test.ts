@@ -18,6 +18,7 @@ import GitignoreInvariants, {
   type SectionMarkers,
   type SectionAnomalyReport,
   extractSection,
+  findBeginLine,
   FINAL_SECTION,
   blockHasAllowLine,
 } from "../../src/sync2/gitignore-invariants";
@@ -29,11 +30,22 @@ import {
 } from "../../src/sync2/atomic-write";
 import { Vault } from "../../mock-obsidian";
 import GI, { whitelistedGitignoreDirs } from "../../src/gi";
+import { beginMarker } from "../../src/sync2/gitignore-markers";
 import { isUnhonouredGitignore } from "../../src/sync2/change-detector";
 import { calculateGitBlobSHA } from "../../src/utils";
 
 const CONFIG_DIR = ".obsidian";
 const SELF = "git-easy-sync";
+// §5.11 — the version this fixture stamps into the BEGIN markers.
+// PINNED, not `manifest.version`: these tests assert bytes, and reading
+// the shipped version would rewrite every expectation on each release.
+const TEST_VERSION = "2.1.0";
+// What enforce() WRITES. The unversioned `INVARIANTS_BEGIN` /
+// `FINAL_BEGIN` constants still name the same sections and are still
+// recognised — they are used below wherever a fixture stands in for a
+// file an OLDER build left behind.
+const I_BEGIN = beginMarker("invariants", TEST_VERSION);
+const F_BEGIN = beginMarker("final", TEST_VERSION);
 
 function fixture(syncConfigDir = true, pushDataJson = false) {
   const root = path.join(
@@ -59,6 +71,7 @@ function fixture(syncConfigDir = true, pushDataJson = false) {
     syncConfigDir: () => syncConfigDir,
     gi: { invalidate: () => {} },
     onAnomaly: (report) => anomalies.push(report),
+    pluginVersion: TEST_VERSION,
   });
   return { root, vault, seeds, inv, anomalies };
 }
@@ -78,7 +91,7 @@ const extractSection2 = (content: string) =>
   extractSection(content, FINAL_SECTION);
 
 const sect = (body: string) =>
-  `${INVARIANTS_BEGIN}\n${body}\n${INVARIANTS_END}`;
+  `${I_BEGIN}\n${body}\n${INVARIANTS_END}`;
 
 // A `final`-shaped section for the placement cases, with throwaway
 // marker text: what is under test here is that placement is a parameter
@@ -108,9 +121,11 @@ describe("GitignoreInvariants.enforce", () => {
     const content = fs.readFileSync(cdGitignore(f.root), "utf8");
     // Only a `final` section here — nothing we write into configDir is
     // a default the user may overrule (DOT-FILES §3.1.1).
-    expect(content).toContain(FINAL_BEGIN);
+    expect(content).toContain(F_BEGIN);
     expect(content).toContain(FINAL_END);
-    expect(content).not.toContain(INVARIANTS_BEGIN);
+    // Recognizer, not literal: "no invariants section" must hold for a
+    // marker stamped by ANY version, including the unversioned form.
+    expect(findBeginLine(content, "invariants")).toBeNull();
     expect(content).toContain("workspace.json");
     expect(content).toContain("Recommended defaults");
     expect(content).toContain("plugins/*/*");
@@ -118,7 +133,7 @@ describe("GitignoreInvariants.enforce", () => {
     // the catch-all in those defaults. This ordering is the whole fix
     // for the two formerly-pinned toggle defects (§3.4.1).
     expect(content.indexOf("plugins/*/*")).toBeLessThan(
-      content.indexOf(FINAL_BEGIN),
+      content.indexOf(F_BEGIN),
     );
     // `*.log` rule moved from configDir to root .gitignore — the
     // plugin's log lives at the vault root now, so the matching
@@ -133,7 +148,7 @@ describe("GitignoreInvariants.enforce", () => {
     const content = fs.readFileSync(rootGitignorePath, "utf8");
     // Invariant block: conflict-sibling files + atomic-write
     // staging/backup artifacts must never propagate across devices.
-    expect(content).toContain(INVARIANTS_BEGIN);
+    expect(content).toContain(I_BEGIN);
     expect(content).toContain("*.conflict-from-*");
     expect(content).toContain("*.ges-tmp");
     expect(content).toContain("*.ges-bak");
@@ -188,10 +203,10 @@ describe("GitignoreInvariants.enforce", () => {
     );
     await f.inv.enforce();
     const content = fs.readFileSync(cdPath, "utf8");
-    expect(content).not.toContain(INVARIANTS_BEGIN);
+    expect(findBeginLine(content, "invariants")).toBeNull();
     expect(content).not.toContain("stale-per-device-rule");
     expect(content).toContain("*.user-rule"); // the user's own line stays
-    expect(content).toContain(FINAL_BEGIN); // and ours is in place
+    expect(content).toContain(F_BEGIN); // and ours is in place
   });
 
   it("appends the final section BELOW a pre-existing user file", async () => {
@@ -199,10 +214,10 @@ describe("GitignoreInvariants.enforce", () => {
     fs.writeFileSync(cdPath, "*.user-rule\n");
     await f.inv.enforce();
     const content = fs.readFileSync(cdPath, "utf8");
-    expect(content).toContain(FINAL_BEGIN);
+    expect(content).toContain(F_BEGIN);
     expect(content).toContain("*.user-rule");
     expect(content.indexOf("*.user-rule")).toBeLessThan(
-      content.indexOf(FINAL_BEGIN),
+      content.indexOf(F_BEGIN),
     );
     // Recommended defaults should NOT appear — file existed beforehand.
     expect(content).not.toContain("Recommended defaults");
@@ -548,7 +563,7 @@ describe("managed .gitignore writes are crash-safe (DOT-FILES §3.1.3)", () => {
     // Whatever the sweep chose, the file exists and is not truncated:
     // the invariant section is intact, markers and all.
     const recovered = fs.readFileSync(rootPath, "utf8");
-    expect(recovered).toContain(INVARIANTS_BEGIN);
+    expect(recovered).toContain(I_BEGIN);
     expect(recovered).toContain(INVARIANTS_END);
     expect(recovered).toContain("*.conflict-from-*");
 
@@ -556,7 +571,7 @@ describe("managed .gitignore writes are crash-safe (DOT-FILES §3.1.3)", () => {
     // below our section survives rather than being re-seeded over.
     await f.inv.enforce();
     const after = fs.readFileSync(rootPath, "utf8");
-    expect(after).toContain(INVARIANTS_BEGIN);
+    expect(after).toContain(I_BEGIN);
     expect(after).toContain("*.log"); // recommended defaults still there
     expect(fs.existsSync(path.join(f.root, ".gitignore.ges-tmp"))).toBe(false);
   });
@@ -610,6 +625,7 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
       syncConfigDir: () => true,
       gi: { invalidate: (dir) => invalidated.push(dir) },
       onAnomaly: () => {},
+      pluginVersion: TEST_VERSION,
     });
     await inv.enforce();
     expect(invalidated).toContain(""); // root
@@ -692,6 +708,86 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
   });
 });
 
+// PLUGIN-UPDATE-COMPAT §5.11 — at the level where it actually runs.
+// The pure rule is pinned in gitignore-markers.test.ts; what is checked
+// here is that enforce() OBEYS it: nothing written, the log says why,
+// and the seed claim is dropped because the file is no longer ours.
+describe("§5.11 the yield: a section stamped by a NEWER plugin is left alone", () => {
+  let f: ReturnType<typeof fixture>;
+  beforeEach(() => {
+    f = fixture();
+  });
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  const newerRootFile = () =>
+    [
+      beginMarker("invariants", "9.9.9"),
+      "# rules this build has never heard of",
+      ".*",
+      "!/.future-thing",
+      INVARIANTS_END,
+      "",
+      "*.user-rule",
+    ].join("\n") + "\n";
+
+  it("🔑 writes NOTHING — not the body, not the layout, not a trailing newline", async () => {
+    const rootPath = path.join(f.root, ".gitignore");
+    const before = newerRootFile();
+    fs.writeFileSync(rootPath, before);
+    await f.inv.enforce();
+    expect(fs.readFileSync(rootPath, "utf8")).toBe(before);
+    // The rule it did NOT do: our own `final` section is missing from
+    // this file and stays missing. Half-enforcing would be the worst
+    // outcome — the newer device's layout, our bottom half.
+    expect(fs.readFileSync(rootPath, "utf8")).not.toContain(F_BEGIN);
+  });
+
+  it("reports the version it yielded to — ONCE, not once per pass", async () => {
+    fs.writeFileSync(path.join(f.root, ".gitignore"), newerRootFile());
+    await f.inv.enforce();
+    await f.inv.enforce();
+    await f.inv.enforce();
+    const yields = f.anomalies.filter((a) => a.anomaly === "yielded-to-newer");
+    expect(yields).toHaveLength(1);
+    expect(yields[0].version).toBe("9.9.9");
+    expect(yields[0].path).toBe(".gitignore");
+  });
+
+  it("drops the seed claim — a file we did not write is not our proposal", async () => {
+    // §8.0's marker means "byte-identical to what WE would seed". While
+    // yielding that is false, and a stale claim would let the drain use
+    // someone else's bytes as a fake ancestor.
+    fs.writeFileSync(path.join(f.root, ".gitignore"), newerRootFile());
+    await f.seeds.load();
+    await f.inv.enforce();
+    expect(f.seeds.get(".gitignore")).toBeUndefined();
+  });
+
+  it("an OLDER or equal stamp does not yield — the file is brought to canonical", async () => {
+    const rootPath = path.join(f.root, ".gitignore");
+    fs.writeFileSync(
+      rootPath,
+      [
+        beginMarker("invariants", "1.0.0"),
+        "ancient-rule",
+        INVARIANTS_END,
+        "",
+        "*.user-rule",
+      ].join("\n") + "\n",
+    );
+    await f.inv.enforce();
+    const after = fs.readFileSync(rootPath, "utf8");
+    expect(after).toContain(I_BEGIN);
+    expect(after).not.toContain("ancient-rule");
+    expect(after).toContain("*.user-rule");
+    expect(
+      f.anomalies.filter((a) => a.anomaly === "yielded-to-newer"),
+    ).toHaveLength(0);
+  });
+});
+
 describe("section CONTENT: two strengths in the root file (DOT-FILES §3.1)", () => {
   let f: ReturnType<typeof fixture>;
 
@@ -708,14 +804,14 @@ describe("section CONTENT: two strengths in the root file (DOT-FILES §3.1)", ()
   it("lays the root file out as policy / user zone / final", async () => {
     await f.inv.enforce();
     const c = rootFile();
-    expect(c.indexOf(INVARIANTS_BEGIN)).toBe(0);
+    expect(c.indexOf(I_BEGIN)).toBe(0);
     expect(c).toContain(".*\n");
     expect(c).toContain("!/.gitignore");
     // The user's zone sits between the two sections.
     expect(c.indexOf("Recommended defaults")).toBeGreaterThan(
       c.indexOf(INVARIANTS_END),
     );
-    expect(c.indexOf(FINAL_BEGIN)).toBeGreaterThan(
+    expect(c.indexOf(F_BEGIN)).toBeGreaterThan(
       c.indexOf("Recommended defaults"),
     );
     // The final rules, and nothing of them left up top.
@@ -725,7 +821,7 @@ describe("section CONTENT: two strengths in the root file (DOT-FILES §3.1)", ()
     expect(c).toContain(`!/${CONFIG_DIR}/`);
     expect(c).toContain("*.conflict-from-*");
     expect(c.indexOf("*.conflict-from-*")).toBeGreaterThan(
-      c.indexOf(FINAL_BEGIN),
+      c.indexOf(F_BEGIN),
     );
     expect(c.trimEnd().endsWith(FINAL_END)).toBe(true);
   });
@@ -740,8 +836,8 @@ describe("section CONTENT: two strengths in the root file (DOT-FILES §3.1)", ()
     fs.writeFileSync(
       rootPath,
       c.replace(
-        FINAL_BEGIN,
-        `!.editorconfig\n!*.conflict-from-*\n\n${FINAL_BEGIN}`,
+        F_BEGIN,
+        `!.editorconfig\n!*.conflict-from-*\n\n${F_BEGIN}`,
       ),
     );
 
@@ -797,6 +893,9 @@ describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () =>
     // allowlist would otherwise keep main.js visible.
     const self = fs.readFileSync(selfGitignore(f.root), "utf8");
     expect(self).toContain("!main.js");
+    // ⚠️ UNVERSIONED here, on purpose (§5.11): this file is a constant
+    // the plugin owns outright and rewrites whole, so there is nothing
+    // to arbitrate and a stamp would only churn it once per release.
     expect(self).toContain(FINAL_BEGIN);
     expect(self.indexOf("!main.js")).toBeLessThan(self.indexOf(FINAL_BEGIN));
 
@@ -836,6 +935,7 @@ describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () =>
       syncConfigDir: () => true,
       gi: { invalidate: () => {} },
       onAnomaly: () => {},
+      pluginVersion: TEST_VERSION,
     });
     await inv.enforce();
 
@@ -872,7 +972,7 @@ describe("§12 Крок A done-criteria that the content tests above do not cove
     const before = fs.readFileSync(rootPath, "utf8");
     fs.writeFileSync(
       rootPath,
-      before.replace(FINAL_BEGIN, `/.gitignore\n\n${FINAL_BEGIN}`),
+      before.replace(F_BEGIN, `/.gitignore\n\n${F_BEGIN}`),
     );
 
     // (a) the file leaves scope...
@@ -883,8 +983,8 @@ describe("§12 Крок A done-criteria that the content tests above do not cove
     await f.inv.enforce();
     const after = fs.readFileSync(rootPath, "utf8");
     expect(after).toContain("/.gitignore\n");
-    expect(after).toContain(INVARIANTS_BEGIN);
-    expect(after).toContain(FINAL_BEGIN);
+    expect(after).toContain(I_BEGIN);
+    expect(after).toContain(F_BEGIN);
     expect(new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR)).ignored("notes/.hidden/x.md")).toBe(true);
   });
 
@@ -955,6 +1055,7 @@ describe("the per-device data.json switch (DOT-FILES §3.1.4)", () => {
       syncConfigDir: () => syncConfigDir,
       gi: { invalidate: () => {} },
       onAnomaly: () => {},
+      pluginVersion: TEST_VERSION,
     });
 
   const verdict = (p: string) =>

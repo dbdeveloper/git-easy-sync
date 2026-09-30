@@ -1095,6 +1095,10 @@ export default class GitHubSyncPlugin extends Plugin {
       // to change what the next pass writes.
       syncConfigDir: () => this.settings.syncConfigDir ?? true,
       pushPluginsDataJson: () => this.settings.pushPluginsDataJson ?? false,
+      // §5.11: stamped into the BEGIN marker, and compared against the
+      // stamp already in the file so an older build never rewrites a
+      // newer build's rules.
+      pluginVersion: manifest.version,
       // DOT-FILES §3.1.3. Everything here is logged; only the case we
       // cannot fix ourselves reaches the user, because only they can
       // finish it — we refuse to guess where a damaged section ended,

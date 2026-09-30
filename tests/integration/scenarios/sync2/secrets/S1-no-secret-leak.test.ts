@@ -165,6 +165,9 @@ describe.skipIf(!integrationEnabled())("sync2 S1 — no secret leak", () => {
       // own composition (helpers.ts), which is wired to the real GI.
       gi: { invalidate: () => {} },
       onAnomaly: () => {},
+      // §5.11 — pinned, like the rest of the harness: these scenarios
+      // assert bytes, so the stamp must not move with the release.
+      pluginVersion: "0.0.0-harness",
     });
 
   beforeAll(async () => {

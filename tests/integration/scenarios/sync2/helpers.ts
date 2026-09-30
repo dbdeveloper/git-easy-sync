@@ -49,6 +49,11 @@ import manifest from "../../../../manifest.json";
 
 const SELF_PLUGIN_ID = manifest.id;
 const CONFIG_DIR = ".obsidian";
+// §5.11 — the version stamped into the managed sections' BEGIN markers
+// here. PINNED, deliberately not `manifest.version`: these scenarios
+// compare .gitignore BYTES against GitHub, and tying them to the real
+// version would break every one of them on the next release.
+const HARNESS_PLUGIN_VERSION = "0.0.0-harness";
 
 export interface Sync2ClientOpts {
   branch: string;
@@ -213,6 +218,11 @@ export async function createSync2Client(
     // under timing — i.e. it would not fail loudly, it would flake.
     gi,
     onAnomaly: () => {},
+    // §5.11 — the stamp this fixture writes into the BEGIN marker. A
+    // fixed version, not the manifest's: these scenarios assert BYTES,
+    // and reading the real version would make every expectation change
+    // on the next release for no reason the test is about.
+    pluginVersion: HARNESS_PLUGIN_VERSION,
   });
 
   // The Deleted bin — always wired into the fixture so a delete

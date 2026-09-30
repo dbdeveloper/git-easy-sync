@@ -11,6 +11,12 @@ import {
   ManagedSection,
 } from "./gitignore-assemble";
 import { atomicWriteFile } from "./atomic-write";
+import {
+  beginMarker,
+  beginPattern,
+  endMarker,
+  newerSectionVersion,
+} from "./gitignore-markers";
 
 // Markers of the managed `invariants` section. Editing anything between
 // BEGIN and END on disk triggers a rewrite back to canonical on the next
@@ -28,10 +34,17 @@ import { atomicWriteFile } from "./atomic-write";
 // Same class of act as the rename: cheap then, impossible after. Em-dash
 // sections already on disk are NOT recognised and are removed by hand; no
 // legacy-marker list lives in this code, by decision.
-export const INVARIANTS_BEGIN =
-  "# ===== git-easy-sync invariants - DO NOT EDIT =====";
-export const INVARIANTS_END =
-  "# ===== end of git-easy-sync invariants =====";
+//
+// ⚙️ 2026-09-30 (PLUGIN-UPDATE-COMPAT §5.11): the BEGIN line we WRITE now
+// carries this build's version, and recognition moved to a frozen regexp
+// whose version part is optional. The constants below are the
+// UNVERSIONED form — the identity of the section, byte-identical to what
+// every existing install already holds. What goes on disk comes from
+// `beginMarker(kind, version)`; what is recognised comes from
+// `beginPattern(kind)`. Both live in gitignore-markers.ts, now the one
+// place that knows the shape of a marker.
+export const INVARIANTS_BEGIN = beginMarker("invariants", null);
+export const INVARIANTS_END = endMarker("invariants");
 
 // Markers of the managed `final` section — the one nothing may override.
 // Same 🔒 frozen contract as the pair above, same 2026-09-21 birthday.
@@ -39,8 +52,12 @@ export const INVARIANTS_END =
 // about user authority (§3.1): `invariants` is a default the user is
 // invited to tune from below, `final` is not up for discussion. One pair
 // could not express that, since in gitignore position IS strength.
-export const FINAL_BEGIN = "# ===== git-easy-sync final - DO NOT EDIT =====";
-export const FINAL_END = "# ===== end of git-easy-sync final =====";
+// ⚠️ FINAL_BEGIN is also what `selfPluginGitignore` composes into
+// <self>/.gitignore, and THAT one stays UNVERSIONED on purpose: the file
+// is a constant the plugin owns outright and rewrites whole, so there is
+// nothing to arbitrate and a stamp would only churn it once per release.
+export const FINAL_BEGIN = beginMarker("final", null);
+export const FINAL_END = endMarker("final");
 
 // Markers + body are DELIBERATELY separate values (DOT-FILES §3.1.3). The
 // two halves have opposite life cycles — markers are frozen forever, bodies
@@ -342,6 +359,15 @@ export interface GitignoreInvariantsDeps {
   // rather than enforced in isSyncable, so a plugin's own .gitignore
   // can still overrule it.
   pushPluginsDataJson: () => boolean;
+  // This build's version, from the manifest — stamped into the BEGIN
+  // marker and compared against whatever stamp the file already carries
+  // (PLUGIN-UPDATE-COMPAT §5.11).
+  //
+  // REQUIRED, for the same reason `seeds` and `onAnomaly` are: a default
+  // would be a version that is nobody's, so every device would either
+  // always yield or never yield — and the silence would look exactly
+  // like the rule working.
+  pluginVersion: string;
 }
 
 export interface GitignoreMatcherCache {
@@ -370,6 +396,11 @@ export interface SectionAnomalyReport {
   // own space. The removal is deliberate (§3.1.5) and therefore has to
   // be legible — which means naming the line, not just the event.
   line?: string;
+  // Set for "yielded-to-newer": the version stamped in the file, which
+  // is what a future investigation needs — "why is this device's
+  // .gitignore not canonical" has exactly one answer here, and it is
+  // this number.
+  version?: string;
 }
 
 // Owner of the two managed gitignore files. Public surface:
@@ -392,6 +423,13 @@ export default class GitignoreInvariants {
   private readonly pushPluginsDataJson: () => boolean;
   private readonly configDir: string;
   private readonly pluginsDirGitignorePath: string;
+  private readonly pluginVersion: string;
+  // Last version we yielded to, per path — so the log records the STATE
+  // CHANGE rather than one line per sync for as long as this device
+  // stays behind. A yield is a normal, possibly long-lived condition,
+  // and a message repeated every pass would be noise in the one place we
+  // go looking when asking "why is this device's .gitignore different".
+  private readonly yieldedTo = new Map<string, string>();
 
   constructor(deps: GitignoreInvariantsDeps) {
     this.vault = deps.vault;
@@ -400,6 +438,7 @@ export default class GitignoreInvariants {
     this.gi = deps.gi;
     this.syncConfigDir = deps.syncConfigDir;
     this.pushPluginsDataJson = deps.pushPluginsDataJson;
+    this.pluginVersion = deps.pluginVersion;
     this.configDir = deps.configDir;
     this.configDirGitignorePath = `${deps.configDir}/.gitignore`;
     this.pluginsDir = `${deps.configDir}/plugins`;
@@ -664,11 +703,41 @@ export default class GitignoreInvariants {
   private assemble(path: string, content: string): string {
     const sections = this.sectionsFor(path);
     if (sections === null) return content;
+
+    // §5.11 — THE YIELD. A section stamped by a NEWER plugin than this
+    // one is not ours to rewrite: we would replace rules we know nothing
+    // about, the newer device would put them straight back, and the two
+    // would trade commits on every sync forever, silently (`.obsidian/`
+    // collisions resolve without telling anyone).
+    //
+    // PER FILE, not per section, deliberately. The two sections share
+    // lines, so assembling one while preserving the other would have the
+    // bottom pass purge a line out of the section we promised not to
+    // touch. Per-file is also the owner's rule as stated: an older
+    // plugin does not update these conditions AT ALL.
+    const newer = newerSectionVersion(content, this.pluginVersion);
+    if (newer !== null) {
+      this.noteYield(path, newer);
+      return content;
+    }
+
     const r = assembleManagedSections(content, sections);
     for (const line of r.removed) {
       this.onAnomaly({ path, section: "invariants", anomaly: "duplicate-removed", line });
     }
     return r.content;
+  }
+
+  // Report a yield once per (path, version) — see `yieldedTo`.
+  private noteYield(path: string, version: string): void {
+    if (this.yieldedTo.get(path) === version) return;
+    this.yieldedTo.set(path, version);
+    this.onAnomaly({
+      path,
+      section: "invariants",
+      anomaly: "yielded-to-newer",
+      version,
+    });
   }
 
   private seedFor(path: string): string | null {
@@ -686,12 +755,14 @@ export default class GitignoreInvariants {
     if (path === this.rootGitignorePath) {
       return {
         invariants: {
-          begin: INVARIANTS_BEGIN,
+          begin: beginMarker("invariants", this.pluginVersion),
+          beginPattern: beginPattern("invariants"),
           end: INVARIANTS_END,
           body: ROOT_INVARIANTS_BODY,
         },
         final: {
-          begin: FINAL_BEGIN,
+          begin: beginMarker("final", this.pluginVersion),
+          beginPattern: beginPattern("final"),
           end: FINAL_END,
           body: rootFinalBody(this.configDir),
         },
@@ -705,12 +776,18 @@ export default class GitignoreInvariants {
       // above the section meant to be the only authority in this file.
       return {
         final: {
-          begin: FINAL_BEGIN,
+          begin: beginMarker("final", this.pluginVersion),
+          beginPattern: beginPattern("final"),
           end: FINAL_END,
           body: configDirFinalBody({ syncConfigDir: this.syncConfigDir() }),
         },
         remove: [
-          { begin: INVARIANTS_BEGIN, end: INVARIANTS_END, body: "" },
+          {
+            begin: INVARIANTS_BEGIN,
+            beginPattern: beginPattern("invariants"),
+            end: INVARIANTS_END,
+            body: "",
+          },
         ],
       };
     }
@@ -901,7 +978,13 @@ export type SpliceAnomaly =
   // space and deleted. Deliberate (presupposition 2) and therefore
   // reported — a silent deletion of someone's line is the defect class
   // §4.2 had to fix.
-  | "duplicate-removed";
+  | "duplicate-removed"
+  // §5.11: the file carries a section stamped by a NEWER plugin, so we
+  // left the whole file alone. NOT a fault — the rule working — but it
+  // is the one condition that makes this device's managed files differ
+  // from canonical on purpose, and an investigation that cannot see it
+  // starts from zero.
+  | "yielded-to-newer";
 
 export interface SpliceResult {
   content: string;
@@ -923,10 +1006,31 @@ export function extractSection(
   fileContent: string,
   markers: SectionMarkers,
 ): string | null {
-  const beginIdx = fileContent.indexOf(markers.begin);
+  // Version-aware since §5.11: the BEGIN line on disk may carry a stamp
+  // this build has never seen, and a literal `indexOf` would answer "no
+  // section" for a section that is plainly there.
+  const found = findBeginLine(fileContent, markers.id);
+  if (found === null) return null;
   const endIdx = fileContent.indexOf(markers.end);
-  if (beginIdx === -1 || endIdx === -1 || endIdx < beginIdx) return null;
-  return fileContent.substring(beginIdx + markers.begin.length, endIdx);
+  if (endIdx === -1 || endIdx < found.at) return null;
+  return fileContent.substring(found.at + found.line.length, endIdx);
+}
+
+// Where our BEGIN line of `kind` starts in `content`, whatever version
+// wrote it, plus the exact line found — callers need its LENGTH, which
+// is no longer a constant.
+export function findBeginLine(
+  content: string,
+  kind: SectionId,
+): { at: number; line: string } | null {
+  const re = beginPattern(kind);
+  let at = 0;
+  for (const line of content.split("\n")) {
+    const trimmed = line.replace(/\s+$/, "");
+    if (re.test(trimmed)) return { at, line: trimmed };
+    at += line.length + 1; // the newline split() consumed
+  }
+  return null;
 }
 
 // Returns the toggle state encoded in `blockContent`:

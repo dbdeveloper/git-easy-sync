@@ -31,11 +31,39 @@
 // directly — which §8.0's seed marker depends on.
 
 export interface ManagedSection {
+  // The BEGIN line we WRITE — carrying this build's version stamp
+  // (PLUGIN-UPDATE-COMPAT §5.11).
   begin: string;
+  // How a BEGIN line of this section is RECOGNISED, whatever version
+  // wrote it. Required, not optional: every comparison against `begin`
+  // in this file goes through it, and a section that arrived without one
+  // would silently fall back to "only my own exact text is mine" — the
+  // very defect the stamp exists to fix, reintroduced by omission. The
+  // pattern is frozen forever; see gitignore-markers.ts.
+  beginPattern: RegExp;
   end: string;
   // The lines between the markers. May contain blank lines; they are
   // CONSTRUCTED from this template, never searched for (see below).
   body: string;
+}
+
+// A template line paired with the question "is THIS file line the same
+// line?". For every line but BEGIN the answer is plain text equality;
+// for BEGIN it is the frozen pattern, so an older version's stamp is
+// recognised as ours and gets REPLACED instead of surviving as litter
+// beside the one we insert.
+interface TemplateLine {
+  text: string;
+  matches: (line: string) => boolean;
+}
+
+function templateOf(section: ManagedSection): TemplateLine[] {
+  const exact = (text: string) => (line: string) => norm(line) === norm(text);
+  return [
+    { text: section.begin, matches: (l) => section.beginPattern.test(norm(l)) },
+    ...section.body.split("\n").map((text) => ({ text, matches: exact(text) })),
+    { text: section.end, matches: exact(section.end) },
+  ];
 }
 
 export interface AssembleResult {
@@ -100,14 +128,13 @@ function removeLineAt(lines: string[], idx: number, lowerBound: number): void {
 // deletion mechanics can answer.
 function purge(
   lines: string[],
-  text: string,
+  matches: (line: string) => boolean,
   from: number,
   until: () => number,
 ): void {
-  const want = norm(text);
   let i = from;
   while (i < until()) {
-    if (norm(lines[i]) === want) {
+    if (matches(lines[i])) {
       removeLineAt(lines, i, from);
       continue; // do not advance: the array shifted under us
     }
@@ -132,7 +159,7 @@ function dropSectionInterior(
   lines: string[],
   section: ManagedSection,
 ): boolean {
-  const b = lines.findIndex((l) => norm(l) === norm(section.begin));
+  const b = lines.findIndex((l) => section.beginPattern.test(norm(l)));
   if (b < 0) return false;
   const e = lines.findIndex(
     (l, i) => i > b && norm(l) === norm(section.end),
@@ -152,18 +179,23 @@ function dropSectionInterior(
 // the user's formatting into a wall. They exist in the template to be
 // CONSTRUCTED, nothing more.
 function placeTop(lines: string[], section: ManagedSection): number {
-  const template = [section.begin, ...section.body.split("\n"), section.end];
-  template.forEach((line, i) => {
+  const template = templateOf(section);
+  template.forEach(({ text: line, matches }, i) => {
     // ⚠️ A line ALREADY at its canonical position is left alone, not
     // cut and re-seated. Both produce the same bytes, but re-seating
     // would report every line of an untouched file as "removed" — and
     // that report is what the user reads to learn what we deleted.
+    //
+    // ⚠️ BYTE-EXACT, even for BEGIN, and the asymmetry with `matches` is
+    // the point: another version's stamp MATCHES (so it is found and
+    // purged) but is NOT in place (so ours replaces it). Loosen this and
+    // the version in the file would never move.
     const inPlace = i < lines.length && sameLine(lines[i], line);
     if (line.trim() === "") {
       if (!inPlace) lines.splice(i, 0, line);
       return;
     }
-    purge(lines, line, inPlace ? i + 1 : i, () => lines.length);
+    purge(lines, matches, inPlace ? i + 1 : i, () => lines.length);
     if (!inPlace) lines.splice(i, 0, line);
   });
   return template.length;
@@ -177,9 +209,9 @@ function placeBottom(
   section: ManagedSection,
   lowerBound: number,
 ): void {
-  const template = [section.begin, ...section.body.split("\n"), section.end];
+  const template = templateOf(section);
   for (let k = 0; k < template.length; k++) {
-    const line = template[template.length - 1 - k];
+    const { text: line, matches } = template[template.length - 1 - k];
     const at = lines.length - k; // where this line must be INSERTED
     const inPlace = at - 1 >= lowerBound && sameLine(lines[at - 1], line);
     if (line.trim() === "") {
@@ -190,7 +222,7 @@ function placeBottom(
     // ⚠️ Computed LIVE: purge shrinks the array under us, and a bound
     // captured before it would point past the end.
     const until = () => lines.length - k - (inPlace ? 1 : 0);
-    purge(lines, line, lowerBound, until);
+    purge(lines, matches, lowerBound, until);
     if (!inPlace) lines.splice(lines.length - k, 0, line);
   }
 }
@@ -204,14 +236,15 @@ function placeBottom(
 // stray lines are at worst inert text in a file that is about to be
 // rewritten anyway.
 function dropSectionEntirely(lines: string[], section: ManagedSection): void {
-  const b = lines.findIndex((l) => sameLine(l, section.begin));
+  const isBegin = (l: string) => section.beginPattern.test(norm(l));
+  const b = lines.findIndex(isBegin);
   const e = lines.findIndex((l, i) => i > b && sameLine(l, section.end));
   if (b >= 0 && e > b) {
     lines.splice(b, e - b + 1);
     return;
   }
-  for (const marker of [section.begin, section.end]) {
-    const i = lines.findIndex((l) => sameLine(l, marker));
+  for (const matches of [isBegin, (l: string) => sameLine(l, section.end)]) {
+    const i = lines.findIndex(matches);
     if (i >= 0) lines.splice(i, 1);
   }
 }
@@ -245,16 +278,25 @@ function separateAbove(lines: string[], at: number): void {
 // count would report one as removed on every single pass — the content
 // would be idempotent while the report was not.
 function countExtras(lines: string[], sections: ManagedSection[]): string[] {
-  const need = new Map<string, number>();
+  const need = new Map<
+    string,
+    { want: number; matches: (line: string) => boolean }
+  >();
   for (const s of sections) {
-    for (const line of [s.begin, ...s.body.split("\n"), s.end]) {
-      if (line.trim() === "") continue;
-      need.set(norm(line), (need.get(norm(line)) ?? 0) + 1);
+    for (const { text, matches } of templateOf(s)) {
+      if (text.trim() === "") continue;
+      const key = norm(text);
+      const seen = need.get(key);
+      need.set(key, { want: (seen?.want ?? 0) + 1, matches });
     }
   }
   const extras: string[] = [];
-  for (const [text, want] of need) {
-    const have = lines.filter((l) => norm(l) === text).length;
+  for (const [text, { want, matches }] of need) {
+    // ⚠️ Counted with the SAME matcher the assembly uses. For BEGIN that
+    // means an older version's stamp counts as a copy of ours — which is
+    // right: two of our markers in one file is one too many whichever
+    // version wrote them, and exactly one survives the assembly.
+    const have = lines.filter(matches).length;
     for (let i = 0; i < have - want; i++) extras.push(text);
   }
   return extras;

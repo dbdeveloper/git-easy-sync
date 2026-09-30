@@ -17,14 +17,21 @@ import {
 // share their second line (the order dependency).
 const SHARED = "# Editing this block triggers a rewrite to canonical on next load.";
 
+// ⚠️ `beginPattern` is REQUIRED (§5.11): every comparison against
+// `begin` goes through it, and the real sections match their own marker
+// whatever version stamped it. These fixtures carry no version, so the
+// pattern is just their own text — which is exactly what the assembler
+// did for everyone before the stamp existed.
 const TOP: ManagedSection = {
   begin: "# ===== plugin invariants - DO NOT EDIT =====",
+  beginPattern: /^# ===== plugin invariants(?: v[^\s]+)? - DO NOT EDIT =====$/,
   end: "# ===== end of plugin invariants =====",
   body: [SHARED, "", ".*", ".*/", "", "!/.gitignore"].join("\n"),
 };
 
 const BOTTOM: ManagedSection = {
   begin: "# ===== plugin final - DO NOT EDIT =====",
+  beginPattern: /^# ===== plugin final(?: v[^\s]+)? - DO NOT EDIT =====$/,
   end: "# ===== end of plugin final =====",
   body: [SHARED, "", "!.obsidian/", "*.conflict-from-*"].join("\n"),
 };
