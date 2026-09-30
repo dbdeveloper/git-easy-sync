@@ -8,6 +8,10 @@ import {
   MarkdownView,
   Menu,
   Platform,
+  // §4.1 — the public API pair. `requireApiVersion` does the comparison
+  // itself, which is why we do not write one here.
+  requireApiVersion,
+  apiVersion,
   Plugin,
   WorkspaceLeaf,
   Notice,
@@ -204,6 +208,63 @@ function canReloadPlugins(pm: ObsidianPluginManager | undefined): boolean {
 // What a reload attempt actually did. `reason` is for the log; the
 // Notice says something the user can act on instead.
 type ReloadOutcome = { ok: true } | { ok: false; reason: string };
+
+// §4.1 — should we leave this plugin alone instead of reloading it?
+//
+// ⚠️ A HEURISTIC, not a mirror of an Obsidian rule, and the two halves
+// differ in kind:
+//
+//   • `minAppVersion` is NOT enforced by Obsidian at all (§2.1 —
+//     verified by grep in 1.12.7 and 1.13.4: the field appears twice in
+//     the whole bundle, neither time in `enablePlugin`). It is the
+//     AUTHOR'S CLAIM about what their code needs, and it correlates
+//     well: Templater raised it to 1.13.0 precisely because it started
+//     using a class that appeared in 1.13.0.
+//   • `isDesktopOnly` on mobile IS Obsidian's own rule
+//     (`!isDesktopApp && manifest.isDesktopOnly → return false`), so
+//     here we are mirroring, not guessing.
+//
+// Both miss in the same harmless direction and the costs are asymmetric:
+// a wrong skip costs the user one restart, a wrong reload costs them a
+// working plugin mid-session. Hence a missing or unreadable manifest
+// skips too — we cannot judge, so we do not touch.
+//
+// The author forgetting to raise `minAppVersion` is the real miss, and
+// nothing here can catch it. That is what §4.2's honest report is for.
+function reloadSkipReason(
+  manifestText: string | null,
+  isDesktopApp: boolean,
+): string | null {
+  if (manifestText === null) return "manifest.json not readable";
+  let manifest: { minAppVersion?: unknown; isDesktopOnly?: unknown };
+  try {
+    manifest = JSON.parse(manifestText) as typeof manifest;
+  } catch {
+    return "manifest.json is not valid JSON";
+  }
+  if (manifest === null || typeof manifest !== "object") {
+    return "manifest.json is not an object";
+  }
+  if (!isDesktopApp && manifest.isDesktopOnly === true) {
+    // Not over-caution: the plugin may be RUNNING on this phone because
+    // an older version had no such flag, in which case it is in
+    // `enabledPlugins` and the "skip disabled plugins" filter never
+    // fires. Reloading would disable it successfully and then fail to
+    // enable it — Obsidian's own gate — killing a working plugin.
+    return "the new version is desktop-only and this is mobile";
+  }
+  const min = manifest.minAppVersion;
+  // Absent is not a problem: plenty of manifests omit it, and Obsidian
+  // never reads it anyway.
+  if (typeof min !== "string" || min.trim() === "") return null;
+  // ⚠️ `requireApiVersion` is the PUBLIC API and does the comparison
+  // itself. Writing our own would reintroduce the major.minor folding
+  // that makes "needs 1.13.4, we have 1.13.0" look satisfied.
+  if (!requireApiVersion(min)) {
+    return `needs Obsidian ${min}, this is ${apiVersion}`;
+  }
+  return null;
+}
 
 // Reload a plugin by id: disable, then enable — what BRAT does, and the
 // only mechanism that exists (§2.4). The caller schedules this on a
@@ -2987,6 +3048,21 @@ export default class GitHubSyncPlugin extends Plugin {
     }, 500);
   }
 
+  // A plugin's manifest AS IT IS ON DISK right now. `null` when it is
+  // missing or unreadable — the caller treats that as "do not touch",
+  // which is the fail-safe direction (§4.1).
+  private async readPluginManifest(id: string): Promise<string | null> {
+    const path = normalizePath(
+      `${this.app.vault.configDir}/plugins/${id}/manifest.json`,
+    );
+    try {
+      if (!(await this.app.vault.adapter.exists(path))) return null;
+      return await this.app.vault.adapter.read(path);
+    } catch {
+      return null;
+    }
+  }
+
   // Reload each plugin and SAY what happened (§4.2, §4.3).
   //
   // Sequential, and OUR OWN id goes last. Reloading self tears this
@@ -3000,6 +3076,19 @@ export default class GitHubSyncPlugin extends Plugin {
     ];
     const reloaded: string[] = [];
     for (const id of ordered) {
+      // §4.1 — the gate, and it has to be HERE: before `disablePlugin`,
+      // which is the act that does the damage. Read at reload time, from
+      // disk, because the disk holds the version Obsidian will actually
+      // load (the resolver may have kept ours, §28) — not the manifest
+      // cache Obsidian filled at ITS startup.
+      const skip = reloadSkipReason(
+        await this.readPluginManifest(id),
+        Platform.isDesktopApp,
+      );
+      if (skip !== null) {
+        this.logger?.info("BRAT-style reload skipped", { id, reason: skip });
+        continue;
+      }
       let outcome: ReloadOutcome;
       try {
         outcome = await reloadPluginById(this.app, id);

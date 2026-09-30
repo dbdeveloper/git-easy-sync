@@ -31,6 +31,8 @@ import GitHubSyncPlugin from "../src/main";
 import {
   recordedNotices,
   clearRecordedNotices,
+  setMockApiVersion,
+  setMockPlatform,
   App,
   Vault,
 } from "../mock-obsidian";
@@ -99,7 +101,10 @@ interface LogLine {
   data: unknown;
 }
 
-function fixture(pm: ReturnType<typeof makePM>) {
+// `ids` get a manifest this Obsidian satisfies, so the §4.1 gate is a
+// no-op and the test can be about what comes after it. A test that
+// wants the gate to FIRE writes its own manifest instead.
+function fixture(pm: ReturnType<typeof makePM>, ids: string[] = []) {
   const root = path.join(
     os.tmpdir(),
     `reload-test-${crypto.randomBytes(4).toString("hex")}`,
@@ -108,6 +113,10 @@ function fixture(pm: ReturnType<typeof makePM>) {
   const vault = new Vault(root);
   const app = new App(vault) as unknown as Record<string, unknown>;
   app.plugins = pm;
+
+  for (const id of ids) {
+    writeManifest(root, id, { id, minAppVersion: "0.0.1" });
+  }
 
   const lines: LogLine[] = [];
   const plugin = Object.create(GitHubSyncPlugin.prototype) as unknown as {
@@ -146,6 +155,183 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  setMockApiVersion("1.13.4");
+  setMockPlatform("desktop");
+});
+
+// Write a plugin's manifest where §4.1 looks for it: ON DISK, which is
+// where Obsidian will read it from at load time. NOT
+// `app.plugins.manifests`, a cache filled at Obsidian's startup.
+function writeManifest(
+  root: string,
+  id: string,
+  manifest: Record<string, unknown> | string,
+): void {
+  const dir = path.join(root, ".obsidian", "plugins", id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "manifest.json"),
+    typeof manifest === "string" ? manifest : JSON.stringify(manifest),
+  );
+}
+
+// ── §4.1 the gate BEFORE the reload ─────────────────────────────────
+//
+// Phase 1's other half, and the one that prevents the damage rather
+// than reporting it. The claim under test is always the same and it is
+// deliberately not "the plugin still works": `disablePlugin` must NOT
+// have been called. Calling it IS the harm — everything after is
+// consequence.
+describe("§4.1 — the reload is skipped when this Obsidian is too old", () => {
+  it("6.2.1 manifest asks 1.13.0, we are 1.12.7 → the plugin is NOT touched", async () => {
+    setMockApiVersion("1.12.7");
+    const pm = makePM({
+      enabledPlugins: ["templater-obsidian"],
+      enableResult: { "templater-obsidian": true },
+      keepInMap: { "templater-obsidian": true },
+    });
+    const f = fixture(pm);
+    writeManifest(f.root, "templater-obsidian", {
+      id: "templater-obsidian",
+      version: "2.24.3",
+      minAppVersion: "1.13.0",
+    });
+    f.plugin.handlePluginsAffectedReload(["templater-obsidian"]);
+    await runScheduled();
+
+    expect(pm.disableCalls).toEqual([]);
+    expect(pm.enableCalls).toEqual([]);
+    expect(f.said("skipped")).toHaveLength(1);
+  });
+
+  it("6.2.2 a manifest we satisfy reloads as usual", async () => {
+    setMockApiVersion("1.12.7");
+    const pm = makePM({
+      enabledPlugins: ["fine"],
+      enableResult: { fine: true },
+      keepInMap: { fine: true },
+    });
+    const f = fixture(pm);
+    writeManifest(f.root, "fine", { id: "fine", minAppVersion: "1.12.2" });
+    f.plugin.handlePluginsAffectedReload(["fine"]);
+    await runScheduled();
+
+    expect(pm.disableCalls).toEqual(["fine"]);
+    expect(f.said("reload done")).toHaveLength(1);
+  });
+
+  it("6.2.3 🔑 the DISK is read, not app.plugins.manifests", async () => {
+    // The cache is filled at Obsidian's startup and says whatever was
+    // true then; the file on disk is what `enablePlugin` will actually
+    // read. A gate consulting the cache would wave through exactly the
+    // update that just landed.
+    setMockApiVersion("1.12.7");
+    const pm = makePM({
+      enabledPlugins: ["stale-cache"],
+      enableResult: { "stale-cache": true },
+      keepInMap: { "stale-cache": true },
+    });
+    const f = fixture(pm);
+    (pm as unknown as { manifests: Record<string, unknown> }).manifests = {
+      "stale-cache": { id: "stale-cache", minAppVersion: "1.7.7" },
+    };
+    writeManifest(f.root, "stale-cache", {
+      id: "stale-cache",
+      minAppVersion: "1.13.0",
+    });
+    f.plugin.handlePluginsAffectedReload(["stale-cache"]);
+    await runScheduled();
+
+    expect(pm.disableCalls).toEqual([]);
+  });
+
+  it("6.2.4 🔑 1.13.4 required against 1.13.0 → skipped (no major.minor folding)", async () => {
+    setMockApiVersion("1.13.0");
+    const pm = makePM({
+      enabledPlugins: ["picky"],
+      enableResult: { picky: true },
+      keepInMap: { picky: true },
+    });
+    const f = fixture(pm);
+    writeManifest(f.root, "picky", { id: "picky", minAppVersion: "1.13.4" });
+    f.plugin.handlePluginsAffectedReload(["picky"]);
+    await runScheduled();
+
+    expect(pm.disableCalls).toEqual([]);
+  });
+
+  it("6.2.5 a missing or corrupt manifest → skip, and say so", async () => {
+    // Fail-safe direction: the cost of a wrong SKIP is one restart; the
+    // cost of a wrong reload is the incident this phase exists for.
+    setMockApiVersion("1.13.4");
+    const pm = makePM({
+      enabledPlugins: ["nomanifest", "broken-json"],
+      enableResult: { nomanifest: true, "broken-json": true },
+      keepInMap: { nomanifest: true, "broken-json": true },
+    });
+    const f = fixture(pm);
+    writeManifest(f.root, "broken-json", "{ not json");
+    f.plugin.handlePluginsAffectedReload(["nomanifest", "broken-json"]);
+    await runScheduled();
+
+    expect(pm.disableCalls).toEqual([]);
+    expect(f.said("skipped")).toHaveLength(2);
+  });
+
+  it("6.2.6 a manifest with no minAppVersion reloads — the field is optional de facto", async () => {
+    setMockApiVersion("1.13.4");
+    const pm = makePM({
+      enabledPlugins: ["oldschool"],
+      enableResult: { oldschool: true },
+      keepInMap: { oldschool: true },
+    });
+    const f = fixture(pm);
+    writeManifest(f.root, "oldschool", { id: "oldschool", version: "1.0.0" });
+    f.plugin.handlePluginsAffectedReload(["oldschool"]);
+    await runScheduled();
+
+    expect(pm.disableCalls).toEqual(["oldschool"]);
+  });
+
+  it("6.2.7 🔑 isDesktopOnly ADDED by the new version, on mobile → skipped", async () => {
+    // The case the filter above cannot catch: the plugin IS enabled and
+    // running, so "skip disabled plugins" does not fire — but
+    // `enablePlugin` would refuse it (`!isDesktopApp && isDesktopOnly`,
+    // Obsidian's own rule, §2.1), and a working plugin dies mid-session.
+    setMockPlatform("mobile");
+    const pm = makePM({
+      enabledPlugins: ["went-desktop-only"],
+      enableResult: { "went-desktop-only": false },
+      keepInMap: { "went-desktop-only": false },
+    });
+    const f = fixture(pm);
+    writeManifest(f.root, "went-desktop-only", {
+      id: "went-desktop-only",
+      isDesktopOnly: true,
+    });
+    f.plugin.handlePluginsAffectedReload(["went-desktop-only"]);
+    await runScheduled();
+
+    expect(pm.disableCalls).toEqual([]);
+  });
+
+  it("6.2.8 the same plugin on DESKTOP reloads normally", async () => {
+    setMockPlatform("desktop");
+    const pm = makePM({
+      enabledPlugins: ["desktop-only"],
+      enableResult: { "desktop-only": true },
+      keepInMap: { "desktop-only": true },
+    });
+    const f = fixture(pm);
+    writeManifest(f.root, "desktop-only", {
+      id: "desktop-only",
+      isDesktopOnly: true,
+    });
+    f.plugin.handlePluginsAffectedReload(["desktop-only"]);
+    await runScheduled();
+
+    expect(pm.disableCalls).toEqual(["desktop-only"]);
+  });
 });
 
 describe("§4.2 — the reload's postcondition is checked, both halves", () => {
@@ -155,7 +341,7 @@ describe("§4.2 — the reload's postcondition is checked, both halves", () => {
       enableResult: { "templater-obsidian": true },
       keepInMap: { "templater-obsidian": true },
     });
-    const f = fixture(pm);
+    const f = fixture(pm, ["templater-obsidian"]);
     f.plugin.handlePluginsAffectedReload(["templater-obsidian"]);
     await runScheduled();
 
@@ -173,7 +359,7 @@ describe("§4.2 — the reload's postcondition is checked, both halves", () => {
       enableResult: { broken: false },
       keepInMap: { broken: true },
     });
-    const f = fixture(pm);
+    const f = fixture(pm, ["broken"]);
     f.plugin.handlePluginsAffectedReload(["broken"]);
     await runScheduled();
 
@@ -187,7 +373,7 @@ describe("§4.2 — the reload's postcondition is checked, both halves", () => {
       enableResult: { "templater-obsidian": false },
       keepInMap: { "templater-obsidian": false },
     });
-    const f = fixture(pm);
+    const f = fixture(pm, ["templater-obsidian"]);
     f.plugin.handlePluginsAffectedReload(["templater-obsidian"]);
     await runScheduled();
 
@@ -206,7 +392,7 @@ describe("§4.2 — the reload's postcondition is checked, both halves", () => {
       enableResult: { futureproof: undefined },
       keepInMap: { futureproof: false },
     });
-    const f = fixture(pm);
+    const f = fixture(pm, ["futureproof"]);
     f.plugin.handlePluginsAffectedReload(["futureproof"]);
     await runScheduled();
 
@@ -223,7 +409,7 @@ describe("§4.3 — what the user is told", () => {
       enableResult: { "templater-obsidian": false },
       keepInMap: { "templater-obsidian": false },
     });
-    const f = fixture(pm);
+    const f = fixture(pm, ["templater-obsidian"]);
     f.plugin.handlePluginsAffectedReload(["templater-obsidian"]);
     await runScheduled();
 
@@ -240,7 +426,7 @@ describe("§4.3 — what the user is told", () => {
       enableResult: { "good-a": true, bad: false, "good-b": true },
       keepInMap: { "good-a": true, bad: false, "good-b": true },
     });
-    const f = fixture(pm);
+    const f = fixture(pm, ["good-a", "bad", "good-b"]);
     f.plugin.handlePluginsAffectedReload(["good-a", "bad", "good-b"]);
     await runScheduled();
 
@@ -262,7 +448,7 @@ describe("§4.3 — what the user is told", () => {
       enableResult: { dormant: true },
       keepInMap: { dormant: true },
     });
-    const f = fixture(pm);
+    const f = fixture(pm, ["dormant"]);
     f.plugin.handlePluginsAffectedReload(["dormant"]);
     await runScheduled();
 
