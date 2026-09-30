@@ -1,0 +1,9 @@
+{
+  "id": "git-easy-sync-reload-probe",
+  "name": "Reload probe (git-easy-sync test fixture)",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Test fixture for PLUGIN-UPDATE-COMPAT Фаза 1. Does nothing. Swap its main.js to reproduce a plugin that cannot load.",
+  "author": "git-easy-sync",
+  "isDesktopOnly": false
+}
