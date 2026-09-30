@@ -272,6 +272,67 @@ describe("HotMetadataStore", () => {
     expect(seqOf("b")).toBe(1);
   });
 
+  // PLUGIN-UPDATE-COMPAT §5.5 — the held-updates record lives HERE,
+  // beside the sync pointers, and not in a file of its own. The record
+  // and the baselines it rescues must move together: erase a baseline
+  // and you must already hold the copy; restore it and you must drop
+  // the record. Two files would leave a window where a crash lands
+  // between those halves.
+  it("heldPluginUpdates survives a reload, record and rescued baselines together", async () => {
+    await store.update({
+      heldPluginUpdates: {
+        "templater-obsidian": {
+          minAppVersion: "1.13.0",
+          heldVersion: "2.24.3",
+          baselines: [
+            {
+              path: ".obsidian/plugins/templater-obsidian/main.js",
+              baselineSha: "abc",
+              mtime: 111,
+              size: 222,
+            },
+          ],
+        },
+      },
+    });
+    const fresh = new HotMetadataStore({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+    });
+    await fresh.load();
+    const held = fresh.getHeldPluginUpdates();
+    expect(Object.keys(held)).toEqual(["templater-obsidian"]);
+    expect(held["templater-obsidian"].minAppVersion).toBe("1.13.0");
+    expect(held["templater-obsidian"].baselines).toHaveLength(1);
+    expect(held["templater-obsidian"].baselines[0].baselineSha).toBe("abc");
+  });
+
+  it("🔑 a malformed held record degrades to 'nothing held', not to garbage", async () => {
+    // Fail-safe direction: forgetting a hold costs one re-decision (the
+    // condition is recomputed from the incoming manifest anyway), while
+    // acting on half a record could hold paths whose baselines we no
+    // longer have — and THAT is the downgrade §5.4 is about.
+    fs.mkdirSync(path.dirname(slotFile("a")), { recursive: true });
+    fs.writeFileSync(
+      slotFile("a"),
+      JSON.stringify({
+        seq: 3,
+        heldPluginUpdates: {
+          ok: { minAppVersion: "1.13.0", heldVersion: "1", baselines: [] },
+          brokenNoVersion: { heldVersion: "1", baselines: [] },
+          brokenBaselines: { minAppVersion: "1.13.0", heldVersion: "1" },
+          notAnObject: 42,
+        },
+      }),
+    );
+    const fresh = new HotMetadataStore({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+    });
+    await fresh.load();
+    expect(Object.keys(fresh.getHeldPluginUpdates())).toEqual(["ok"]);
+  });
+
   it("seq tie (externally seeded identical slots) → target is a", async () => {
     // The only legitimate tie: both slots carry identical bytes (§2.1
     // NOTE 1) — rewriting either loses nothing.

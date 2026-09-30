@@ -34,6 +34,7 @@
 // mistaken for a discriminator.
 
 import { normalizePath, type Vault } from "obsidian";
+import type { HeldPluginUpdate, HeldPluginUpdates } from "./held-plugins";
 
 // (owner, repo, branch) the metadata was built against. The manager
 // compares this to current settings at the start of every syncAll; a
@@ -60,6 +61,17 @@ export interface HotFields {
   lastCommitMtime: number | null;
   remoteIdentity: RemoteIdentity | null;
   conflictBranch: ConflictBranchState | null;
+  // PLUGIN-UPDATE-COMPAT §5.5 — plugin updates held back because this
+  // Obsidian cannot load them yet. Keyed by plugin id; `{}` means
+  // nothing is held, which is the normal state.
+  //
+  // ⚠️ It lives HERE, beside the sync pointers, rather than in a file of
+  // its own — and that is the reason, not the convenience: the record
+  // and the per-file baselines it rescues have to change TOGETHER
+  // (erase a baseline only when the copy is safe; drop the record only
+  // once the baseline is back). Two files would leave a window where a
+  // crash lands between those halves.
+  heldPluginUpdates: HeldPluginUpdates;
 }
 
 const DEFAULTS: HotFields = {
@@ -68,6 +80,7 @@ const DEFAULTS: HotFields = {
   lastCommitMtime: null,
   remoteIdentity: null,
   conflictBranch: null,
+  heldPluginUpdates: {},
 };
 
 type Slot = "a" | "b";
@@ -105,6 +118,38 @@ function fieldsFromRaw(raw: Record<string, unknown>): HotFields {
     typeof cb.head === "string"
   ) {
     out.conflictBranch = { name: cb.name, head: cb.head };
+  }
+  out.heldPluginUpdates = heldFromRaw(raw.heldPluginUpdates);
+  return out;
+}
+
+// Per-RECORD leniency, not per-field: a record missing `minAppVersion`
+// has no condition to ever lift it, and one missing `baselines` cannot
+// restore what freezing erased — so a half-record is dropped whole.
+//
+// Fail-safe direction (§5.4): forgetting a hold costs one re-decision,
+// because the condition is recomputed from the incoming manifest anyway.
+// ACTING on half a record would hold paths whose baselines we no longer
+// have, and that is the downgrade this record exists to prevent.
+function heldFromRaw(raw: unknown): HeldPluginUpdates {
+  const out: HeldPluginUpdates = {};
+  if (raw === null || typeof raw !== "object") return out;
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (value === null || typeof value !== "object") continue;
+    const v = value as Partial<HeldPluginUpdate>;
+    if (typeof v.minAppVersion !== "string") continue;
+    if (!Array.isArray(v.baselines)) continue;
+    out[id] = {
+      minAppVersion: v.minAppVersion,
+      heldVersion: typeof v.heldVersion === "string" ? v.heldVersion : "",
+      baselines: v.baselines.filter(
+        (b): b is HeldPluginUpdate["baselines"][number] =>
+          b !== null &&
+          typeof b === "object" &&
+          typeof (b as { path?: unknown }).path === "string" &&
+          typeof (b as { baselineSha?: unknown }).baselineSha === "string",
+      ),
+    };
   }
   return out;
 }
@@ -176,6 +221,13 @@ export default class HotMetadataStore {
 
   getRemoteIdentity(): RemoteIdentity | null {
     return this.state.remoteIdentity;
+  }
+
+  // `{}` when nothing is held. Returned by reference — callers READ it;
+  // every mutation goes through `update()` so the pair's ping-pong
+  // stays the only writer.
+  getHeldPluginUpdates(): HeldPluginUpdates {
+    return this.state.heldPluginUpdates;
   }
 
   getConflictBranch(): ConflictBranchState | null {

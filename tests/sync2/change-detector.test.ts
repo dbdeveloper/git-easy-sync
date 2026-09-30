@@ -1343,3 +1343,59 @@ describe("D6a end to end — keeping the root .gitignore to one machine", () => 
     expect(fs.existsSync(path.join(f.root, ".gitignore"))).toBe(true);
   });
 });
+
+// PLUGIN-UPDATE-COMPAT Фаза 2, Крок 4 — a held plugin's paths are
+// invisible in BOTH directions (§5.3).
+//
+// Tested directly rather than only through its consequences. The
+// mistake this guards against is implementing the hold as a filter on
+// the PULL side alone: everything downstream would look right, while a
+// user's hand-installed (therefore OLDER) copy quietly travelled to the
+// repo and rolled the update back on every healthy device.
+describe("§5.3 a held plugin is invisible to sync, both ways", () => {
+  let f: ReturnType<typeof fixture>;
+  const HELD = `${CONFIG_DIR}/plugins/templater-obsidian`;
+
+  beforeEach(async () => {
+    f = fixture();
+    await f.hot.update({
+      heldPluginUpdates: {
+        "templater-obsidian": {
+          minAppVersion: "1.13.0",
+          heldVersion: "2.24.3",
+          baselines: [],
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  it("PULL: checkSyncable says no for every path under the held folder", async () => {
+    // ⚠️ No `beginScan()` here, on purpose. Every OTHER dot-path answer
+    // needs the opt-in set and fails loud without it (DOT-FILES §5);
+    // the hold is decided before that, because it is a path rule that
+    // no scan could change and the drain asks it from contexts that
+    // have not begun one.
+    expect(await f.detector.checkSyncable(`${HELD}/main.js`)).toBe(false);
+    expect(await f.detector.checkSyncable(`${HELD}/manifest.json`)).toBe(false);
+    expect(await f.detector.checkSyncable(`${HELD}/data.json`)).toBe(false);
+  });
+
+  it("PUSH: a local edit under the held folder is not emitted as a change", async () => {
+    writeFile(f.root, `${HELD}/main.js`, "locally installed older build");
+    const changes = await f.detector.findChanges();
+    expect(changes.map((c) => c.path)).not.toContain(`${HELD}/main.js`);
+  });
+
+  it("a DIFFERENT plugin is unaffected — the hold is per plugin, not per configDir", async () => {
+    const other = `${CONFIG_DIR}/plugins/dataview/main.js`;
+    await f.detector.beginScan();
+    expect(await f.detector.checkSyncable(other)).toBe(true);
+    writeFile(f.root, other, "x");
+    const changes = await f.detector.findChanges();
+    expect(changes.map((c) => c.path)).toContain(other);
+  });
+});

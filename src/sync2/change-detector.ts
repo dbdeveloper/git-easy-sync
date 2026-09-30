@@ -3,6 +3,7 @@
 // AGPL-3.0 — see LICENSE.
 
 import { TFile, Vault } from "obsidian";
+import { isHeldPath } from "./held-plugins";
 import GI, { isWhitelistedGitignoreDir } from "../gi";
 import {
   OptInSet,
@@ -702,6 +703,21 @@ export default class ChangeDetector {
   // remote-driven paths arriving via compare(). Same predicate that
   // findChanges/findChangeForPath consult internally.
   async checkSyncable(path: string): Promise<boolean> {
+    // PLUGIN-UPDATE-COMPAT §5.3 — a plugin update held back for this
+    // Obsidian is invisible to sync in BOTH directions, and this one
+    // insertion is the whole mechanism: every caller reaches the
+    // predicate through here (Pass 1, Pass 2, findChangeForPath, and
+    // the drain via main.ts's `isSyncable` dep), so pull discovery and
+    // the push scan go blind together.
+    //
+    // ⚠️ The symmetry is a REQUIREMENT, not a convenience. Under a hold
+    // the only version a user can install by hand is a compatible one —
+    // i.e. an OLDER one — and a pull-side-only filter would let it
+    // travel to the repo and roll the update back on every device that
+    // was fine.
+    if (isHeldPath(path, this.configDir, this.hotMeta.getHeldPluginUpdates())) {
+      return false;
+    }
     return isSyncable(
       path,
       this.configDir,
