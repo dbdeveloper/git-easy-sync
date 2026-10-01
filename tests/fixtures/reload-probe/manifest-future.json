@@ -3,7 +3,7 @@
   "name": "Reload probe (git-easy-sync test fixture)",
   "version": "2.0.0",
   "minAppVersion": "99.0.0",
-  "description": "Same fixture with an unreachable minAppVersion — exercises the §4.1 gate instead of the §4.2 report.",
+  "description": "Same fixture under an unreachable minAppVersion. Serves TWO runs: the reload gate (Фаза 1 §4.1) and the hold (Фаза 2 §5.12).",
   "author": "git-easy-sync",
   "isDesktopOnly": false
 }

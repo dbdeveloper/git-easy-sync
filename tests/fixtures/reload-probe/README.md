@@ -69,3 +69,95 @@ halves: Run 1 reports damage honestly, Run 2 prevents it.
 
 Disable and delete the plugin folder in the test vault, and remove it from the repo —
 otherwise it travels to every device like any other plugin.
+
+---
+
+# Фаза 2 — the hold (§5.12)
+
+A different claim from the two runs above, and the one that matters more:
+an update meant for a newer Obsidian must **never reach the disk**. Not
+"land and fail to load" — not arrive at all, in either direction.
+
+Same fixture, one more payload: `main-v2.js` loads perfectly well. That
+is deliberate — if the hold fails, version B loads and announces itself
+in the console, so a failure is visible rather than inferred.
+
+## Run 3 — the hold
+
+1. Set the probe up as in Run 1 (manifest.json + `main-ok.js` as
+   `main.js`), enable it, Sync so it reaches the repo. The console says
+   `version A`.
+2. In the repo, on your sync branch, change **both** files of
+   `.obsidian/plugins/git-easy-sync-reload-probe/`:
+   - `manifest.json` ← the contents of `manifest-future.json`
+     (`minAppVersion: 99.0.0`)
+   - `main.js` ← the contents of `main-v2.js`
+3. In Obsidian — **Sync**.
+
+**Expected**, in `<vault>/git-easy-sync.log`:
+
+```
+plugin update HELD for this Obsidian   id=... heldVersion=2.0.0 needs=99.0.0 files=2
+```
+
+…and all of this, which is the actual claim:
+
+- `main.js` on disk is **unchanged** — still version A. The console has
+  NOT printed `version B`;
+- the probe keeps working. Nothing was disabled, no Notice appeared;
+- **the repo is untouched** by this device. Check on GitHub: the commit
+  history gains nothing for that folder. This is the symmetry half
+  (§5.3) — a device that holds must not push its older copy back.
+
+## Run 4 — nothing of ours travels while the hold is on
+
+While the hold is in place, edit the probe's `main.js` locally (any
+change — this stands in for installing an older build by hand) and
+**Sync**.
+
+**Expected**: the log says `batch entry skipped: plugin update held`,
+and GitHub still shows version B. This is the one change the plugin
+deliberately does NOT push (owner, 2026-10-01): under a hold the only
+version installable by hand is a COMPATIBLE, i.e. OLDER, one, and
+letting it travel would roll the update back on every healthy device.
+
+## Run 5 — the lift
+
+The hold lifts when **Obsidian** catches up, which you cannot stage on
+demand for `99.0.0`. So move the condition instead — to our code the two
+are indistinguishable, since the record is its only input:
+
+1. **Quit Obsidian** (the hot pair is cached in memory; editing it while
+   the plugin runs would be overwritten).
+2. Open `<vault>/.obsidian/plugins/git-easy-sync/.runtime/` and compare
+   `metadata-a.json` and `metadata-b.json`: take the one with the
+   **higher `seq`** — that is the live slot.
+3. In it, find `heldPluginUpdates` and change the probe's
+   `minAppVersion` from `"99.0.0"` to `"1.0.0"`. Leave `baselines`
+   exactly as they are — they are what the lift restores.
+4. Start Obsidian, **Sync**.
+
+**Expected**:
+
+```
+plugin update hold LIFTED   id=... minAppVersion=1.0.0
+```
+
+- `main.js` on disk is now version B, and the console says
+  `version B (THE HOLD DID NOT HOLD)` — here that line means the lift
+  worked, not that the hold failed;
+- the probe was reloaded (it is in the affected set), so no restart was
+  needed;
+- the next Sync is quiet: no commits, no re-download. That is the
+  baselines having been restored correctly — if they had not been, this
+  sync would push version A back and you would see a commit.
+
+⚠️ If step 4 reports nothing at all, check that you edited the slot with
+the higher `seq`. The other one is the next write target and is about to
+be overwritten.
+
+## Cleanup
+
+As in Run 1–2, plus: if a `heldPluginUpdates` entry for the probe is
+still in the metadata, remove the plugin's folder from the repo and
+Sync — the record is dropped when the lift completes.
