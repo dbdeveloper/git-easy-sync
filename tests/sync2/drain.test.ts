@@ -24,6 +24,7 @@ import {
 } from "../../src/sync2/discovery";
 import { NetworkError, ValidationError } from "../../src/errors";
 import { calculateGitBlobSHA } from "../../src/utils";
+import { setMockApiVersion } from "../../mock-obsidian";
 
 // §VIII B (rolling base / chaining, §II.3-II.5) + P.1-12/27-29
 // (Layer 2 + the lying-discovery model) + L (sequential per-file,
@@ -67,11 +68,17 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     ((base: string | null, head: string) => Promise<DiscoveryResult>) | null;
   let progressLog: Array<[number, number]>;
   let batchSeq: number;
+  // PARTIAL since the hold gate (§5.5): a write may carry only
+  // `heldPluginUpdates`, mid-run, so every field is optional.
   let hotUpdates: Array<{
-    lastSyncCommitSha: string | null;
-    lastSyncTreeSha: string | null;
-    conflictBranchName: string | null;
+    lastSyncCommitSha?: string | null;
+    lastSyncTreeSha?: string | null;
+    conflictBranchName?: string | null;
+    heldPluginUpdates?: Record<string, unknown>;
   }>;
+  // PLUGIN-UPDATE-COMPAT Фаза 2 — the hot pair's held-updates field,
+  // read back by the fake below exactly as production reads it.
+  let heldState: Record<string, unknown>;
 
   beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), "drain-test-"));
@@ -105,6 +112,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     progressLog = [];
     batchSeq = 0;
     hotUpdates = [];
+    heldState = {};
   });
 
   afterEach(() => {
@@ -196,6 +204,13 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     },
     baselines: {
       get: async (p) => baselines.get(p),
+      // §5.4 — REAL, over the same map: a hold has to rescue the
+      // folder's baselines, and a stub returning [] would make the
+      // rescue look like it worked while rescuing nothing.
+      listUnder: async (prefix: string) =>
+        [...baselines]
+          .filter(([p]) => p.startsWith(prefix))
+          .map(([path, b]) => ({ path, ...b })),
       setMany: async (entries) => {
         for (const e of entries) {
           baselines.set(e.path, {
@@ -215,8 +230,12 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       getLastSyncCommitSha: () => baseCommit,
       getLastSyncTreeSha: () => null,
       getConflictBranch: () => null,
+      getHeldPluginUpdates: () => heldState as never,
       update: async (f) => {
         hotUpdates.push(f);
+        if (f.heldPluginUpdates !== undefined) {
+          heldState = f.heldPluginUpdates as Record<string, unknown>;
+        }
       },
     },
     conflictStore,
@@ -246,6 +265,199 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     });
     vaultFiles.files.set("note.md", { content: V0, mtime: 50 });
   };
+
+
+  // ── PLUGIN-UPDATE-COMPAT Фаза 2 (§5.12) ──────────────────────────
+  //
+  // A plugin update meant for a newer Obsidian than this device runs
+  // must not reach the disk AT ALL. The files would land correctly and
+  // the plugin would then fail to load — on this restart and every
+  // one after it, until the app catches up. That was the 2026-08-02
+  // incident, and the sync engine was blameless in it.
+  describe("holding a plugin update this Obsidian cannot load", () => {
+    const ID = "templater-obsidian";
+    const DIR = `.obsidian/plugins/${ID}`;
+    const MAIN = `${DIR}/main.js`;
+    const MANIFEST = `${DIR}/manifest.json`;
+
+    const manifestAt = (version: string, min: string) =>
+      JSON.stringify({ id: ID, version, minAppVersion: min });
+
+    // The device runs an Obsidian OLDER than what the update wants.
+    beforeEach(() => {
+      setMockApiVersion("1.12.7");
+    });
+    afterEach(() => {
+      setMockApiVersion("1.13.4");
+    });
+
+    const seedInstalled = async (): Promise<void> => {
+      const oldMain = "OLD BUNDLE";
+      const oldManifest = manifestAt("2.20.6", "1.0.0");
+      baseCommit = await world.commitFiles({
+        [MAIN]: oldMain,
+        [MANIFEST]: oldManifest,
+      });
+      baselines.set(MAIN, {
+        baselineSha: await sha(oldMain),
+        mtime: 50,
+        size: enc(oldMain).byteLength,
+      });
+      baselines.set(MANIFEST, {
+        baselineSha: await sha(oldManifest),
+        mtime: 50,
+        size: enc(oldManifest).byteLength,
+      });
+      vaultFiles.files.set(MAIN, { content: oldMain, mtime: 50 });
+      vaultFiles.files.set(MANIFEST, { content: oldManifest, mtime: 50 });
+    };
+
+    it("🎯 6.4.1 the MANIFEST is read, the BUNDLE is never downloaded", async () => {
+      await seedInstalled();
+      const newMain = "NEW BUNDLE THAT NEEDS 1.13";
+      await world.commitFiles({
+        [MAIN]: newMain,
+        [MANIFEST]: manifestAt("2.24.3", "1.13.0"),
+      });
+
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+
+      // THE assertion. Byte-equality of the vault would be a weaker
+      // claim — it stays green even when the bundle was downloaded and
+      // thrown away, which on a phone is the whole cost.
+      const mainSha = await sha(newMain);
+      expect(world.blobReads).not.toContain(mainSha);
+      expect(vaultFiles.files.get(MAIN)!.content).toBe("OLD BUNDLE");
+      expect(vaultFiles.writes).not.toContain(MAIN);
+
+      const held = heldState[ID] as {
+        minAppVersion: string;
+        heldVersion: string;
+        baselines: Array<{ path: string }>;
+      };
+      expect(held.minAppVersion).toBe("1.13.0");
+      expect(held.heldVersion).toBe("2.24.3");
+      // 🔴 §5.4 — the baselines of the WHOLE folder are rescued into
+      // the record. The hold makes every one of them ignored, and the
+      // detector's Pass 2 deletes the baseline of a newly-ignored
+      // path; without this copy the lift would meet Pass 1 with no
+      // baselines, read the local files as new, and PUSH the old
+      // version to every device.
+      expect(held.baselines.map((b) => b.path).sort()).toEqual(
+        [MAIN, MANIFEST].sort(),
+      );
+    });
+
+    it("6.3.2 a version this Obsidian satisfies passes through untouched", async () => {
+      await seedInstalled();
+      await world.commitFiles({
+        [MAIN]: "COMPATIBLE BUNDLE",
+        [MANIFEST]: manifestAt("2.21.0", "1.10.0"),
+      });
+
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.files.get(MAIN)!.content).toBe("COMPATIBLE BUNDLE");
+      expect(heldState[ID]).toBeUndefined();
+    });
+
+    it("🔴 6.5.1 the lift brings an update whose commit is BEHIND the base", async () => {
+      // The reason unfreeze cannot be "let the next drain pull it":
+      // discovery answers with the base…head DELTA, and the commit
+      // that updated this plugin was skipped while the hold was on —
+      // it sits behind the base forever after. Only a state-against-
+      // state read of the subtree can still see it.
+      await seedInstalled();
+      const newMain = "NEW BUNDLE THAT NEEDS 1.13";
+      await world.commitFiles({
+        [MAIN]: newMain,
+        [MANIFEST]: manifestAt("2.24.3", "1.13.0"),
+      });
+      await drainOnce(makeDeps());
+      expect(heldState[ID]).toBeDefined();
+      // The pointer has moved past the update's commit...
+      baseCommit = world.head;
+      // ...and the user finally updates Obsidian.
+      setMockApiVersion("1.13.4");
+
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.files.get(MAIN)!.content).toBe(newMain);
+      expect(heldState[ID]).toBeUndefined();
+      // Baselines land with the applied content, so the next scan does
+      // not read the fresh files as a local change.
+      expect(baselines.get(MAIN)!.baselineSha).toBe(await sha(newMain));
+    });
+
+    it("🔴 §7.1.2 a file deleted in the repo while held is deleted at the lift, not before", async () => {
+      await seedInstalled();
+      const styles = `${DIR}/styles.css`;
+      vaultFiles.files.set(styles, { content: "css", mtime: 50 });
+      baselines.set(styles, {
+        baselineSha: await sha("css"),
+        mtime: 50,
+        size: 3,
+      });
+      await world.commitFiles({
+        [MAIN]: "NEW BUNDLE",
+        [MANIFEST]: manifestAt("2.24.3", "1.13.0"),
+      });
+
+      await drainOnce(makeDeps());
+      // While held, the plugin keeps working locally — including the
+      // file the repo no longer has.
+      expect(vaultFiles.files.has(styles)).toBe(true);
+
+      baseCommit = world.head;
+      setMockApiVersion("1.13.4");
+      await drainOnce(makeDeps());
+      expect(vaultFiles.files.has(styles)).toBe(false);
+    });
+
+    it("⚠️ a truncated tree does NOT lift — absent from a partial list is not absent from the repo", async () => {
+      await seedInstalled();
+      await world.commitFiles({
+        [MAIN]: "NEW BUNDLE",
+        [MANIFEST]: manifestAt("2.24.3", "1.13.0"),
+      });
+      await drainOnce(makeDeps());
+      expect(heldState[ID]).toBeDefined();
+
+      baseCommit = world.head;
+      setMockApiVersion("1.13.4");
+      world.truncateTrees = true;
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      // The record survives: reading the partial list as deletion
+      // would have wiped the plugin's folder.
+      expect(heldState[ID]).toBeDefined();
+      expect(vaultFiles.files.get(MAIN)!.content).toBe("OLD BUNDLE");
+      world.truncateTrees = false;
+    });
+
+    it("a local edit already staged in a batch is SKIPPED, never pushed", async () => {
+      // The one change we deliberately do not push (owner,
+      // 2026-10-01): under a hold the only version installable by hand
+      // is a COMPATIBLE, i.e. OLDER, one, and letting it travel rolls
+      // the update back on every healthy device.
+      await seedInstalled();
+      await world.commitFiles({
+        [MAIN]: "NEW BUNDLE",
+        [MANIFEST]: manifestAt("2.24.3", "1.13.0"),
+      });
+      await drainOnce(makeDeps());
+      expect(heldState[ID]).toBeDefined();
+
+      // The user installs an older build by hand; the commit pass had
+      // already staged it before the hold existed.
+      await stageBatch({ [MAIN]: "HAND-INSTALLED OLDER BUILD" });
+      baseCommit = world.head;
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(dec(world.headFiles().get(MAIN)!.bytes)).toBe("NEW BUNDLE");
+    });
+  });
 
   // ── B: rolling base / chaining ───────────────────────────────────
 
@@ -632,6 +844,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
           getLastSyncCommitSha: () => baseCommit,
           getLastSyncTreeSha: () => world.commitTrees.get(world.head!)!,
           getConflictBranch: () => null,
+          getHeldPluginUpdates: () => ({}),
           update: async (f) => {
             hotUpdates.push(f);
           },
@@ -907,6 +1120,10 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
           vaultFiles: vf,
           baselines: {
             get: async (p) => bl.get(p),
+            listUnder: async (prefix: string) =>
+              [...bl]
+                .filter(([p]) => p.startsWith(prefix))
+                .map(([path, b]) => ({ path, ...b })),
             setMany: async (entries) => {
               for (const e of entries) {
                 bl.set(e.path, {
@@ -924,6 +1141,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
             getLastSyncCommitSha: () => c0,
             getLastSyncTreeSha: () => null,
             getConflictBranch: () => null,
+            getHeldPluginUpdates: () => ({}),
             update: async () => {},
           },
           conflictStore: new ConflictStoreV2({

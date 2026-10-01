@@ -275,10 +275,14 @@ describe("buildDrainDeps — hot-anchor schema mapping + message contracts", () 
       hotMeta: {
         getLastSyncCommitSha: () => "anchor1",
         getLastSyncTreeSha: () => null,
+        getHeldPluginUpdates: () => ({}),
         getConflictBranch: () => storedBranch,
         update: async (f) => {
           hotUpdates.push(f);
-          storedBranch = f.conflictBranch;
+          // PARTIAL writes (§5.5): only act on what the call carried.
+          if (f.conflictBranch !== undefined) {
+            storedBranch = f.conflictBranch;
+          }
         },
       },
       baselines: {

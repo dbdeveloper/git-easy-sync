@@ -303,6 +303,9 @@ describe.skipIf(!integrationEnabled())(
           },
           baselines: {
             get: async (p) => baselines.get(p),
+            // §5.4 — a hold rescues a folder\'s baselines. No fixture
+            // here holds anything, so empty is the honest answer.
+            listUnder: async () => [],
             setMany: (entries) => baselines.setMany(entries),
             removeMany: (paths) => baselines.removeMany(paths),
           },
@@ -324,6 +327,7 @@ describe.skipIf(!integrationEnabled())(
             getLastSyncCommitSha: () => seedCommit,
             getLastSyncTreeSha: () => null,
             getConflictBranch: () => null,
+            getHeldPluginUpdates: () => ({}),
             update: async () => {},
           },
           conflictStore,
@@ -510,6 +514,9 @@ describe.skipIf(!integrationEnabled())(
           },
           baselines: {
             get: async (p) => baselines.get(p),
+            // §5.4 — a hold rescues a folder\'s baselines. No fixture
+            // here holds anything, so empty is the honest answer.
+            listUnder: async () => [],
             setMany: (entries) => baselines.setMany(entries),
             removeMany: (paths) => baselines.removeMany(paths),
           },
@@ -531,6 +538,7 @@ describe.skipIf(!integrationEnabled())(
             getLastSyncCommitSha: () => seedCommit,
             getLastSyncTreeSha: () => null,
             getConflictBranch: () => null,
+            getHeldPluginUpdates: () => ({}),
             update: async () => {},
           },
           conflictStore,

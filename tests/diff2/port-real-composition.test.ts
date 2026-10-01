@@ -166,6 +166,9 @@ describe("diff2 port real composition (drainOnce → conflicts.json → findAllC
     },
     baselines: {
       get: async (p) => baselines.get(p),
+      // §5.4 — a hold rescues a folder\'s baselines. No fixture
+      // here holds anything, so empty is the honest answer.
+      listUnder: async () => [],
       setMany: async (entries) => {
         for (const e of entries) {
           baselines.set(e.path, {
@@ -184,6 +187,7 @@ describe("diff2 port real composition (drainOnce → conflicts.json → findAllC
       getLastSyncCommitSha: () => baseCommit,
       getLastSyncTreeSha: () => null,
       getConflictBranch: () => null,
+      getHeldPluginUpdates: () => ({}),
       update: async () => {},
     },
     conflictStore,

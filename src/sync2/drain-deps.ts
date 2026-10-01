@@ -48,6 +48,7 @@ import BatchClaimer from "./get-batch";
 import { collectQueueReferencedShas } from "./queue-sha-index";
 import NetworkRetry from "./retry-network";
 import SyncStore from "./sync-store";
+import type { HeldPluginUpdates } from "./held-plugins";
 import DrainJournal from "./drain-journal";
 import ConflictStoreV2 from "./conflict-store-v2";
 import SiblingTx from "./sibling-tx";
@@ -411,10 +412,14 @@ export interface BuildDrainDepsArgs {
     getLastSyncCommitSha(): string | null;
     getLastSyncTreeSha(): string | null;
     getConflictBranch(): { name: string } | null;
+    getHeldPluginUpdates(): HeldPluginUpdates;
+    // PARTIAL — see the adapter below: a hold writes its own field
+    // alone, mid-run, and must not blank the sync pointers.
     update(fields: {
-      lastSyncCommitSha: string | null;
-      lastSyncTreeSha: string | null;
-      conflictBranch: { name: string; head: string } | null;
+      lastSyncCommitSha?: string | null;
+      lastSyncTreeSha?: string | null;
+      conflictBranch?: { name: string; head: string } | null;
+      heldPluginUpdates?: HeldPluginUpdates;
     }): Promise<void>;
   };
   baselines: {
@@ -498,6 +503,35 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
       get: (p) => args.baselines.get(p),
       setMany: (entries) => args.baselines.setMany(entries),
       removeMany: (paths) => args.baselines.removeMany(paths),
+      listUnder: async (prefix: string) => {
+        // §5.4 — every baseline under a plugin folder, so a hold can
+        // put them back after the change detector erases them. Built
+        // over `allPaths` + `getMany` rather than a new store query:
+        // it runs once per hold, which is rare by construction.
+        const all = await args.baselines.allPaths();
+        const under = all.filter((p: string) => p.startsWith(prefix));
+        const out: Array<{
+          path: string;
+          baselineSha: string;
+          mtime: number;
+          size: number;
+        }> = [];
+        for (const path of under) {
+          // `get`, not `getMany`: the group read answers with the sha
+          // ALONE, and a hold has to restore `{mtime, size}` too — a
+          // baseline missing those permanently defeats the change
+          // detector's stat short-circuit for that path.
+          const b = await args.baselines.get(path);
+          if (b === undefined) continue;
+          out.push({
+            path,
+            baselineSha: b.baselineSha,
+            mtime: b.mtime,
+            size: b.size,
+          });
+        }
+        return out;
+      },
     },
     discoverChangedFiles: (base, head) =>
       getChangedFilesFromGitHubRepo(
@@ -520,18 +554,33 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
         const cb = args.hotMeta.getConflictBranch();
         return cb === null ? null : { name: cb.name };
       },
+      getHeldPluginUpdates: () => args.hotMeta.getHeldPluginUpdates(),
+      // ⚠️ PARTIAL writes are the point (§5.5): the hold gate updates
+      // `heldPluginUpdates` ALONE, mid-run, because the record and the
+      // baselines it rescues have to land together. Only the fields
+      // actually present are forwarded, so a hold write cannot blank
+      // the sync pointers.
       update: async (f) => {
-        await args.hotMeta.update({
-          lastSyncCommitSha: f.lastSyncCommitSha,
-          lastSyncTreeSha: f.lastSyncTreeSha,
+        const partial: Parameters<typeof args.hotMeta.update>[0] = {};
+        if (f.lastSyncCommitSha !== undefined) {
+          partial.lastSyncCommitSha = f.lastSyncCommitSha;
+        }
+        if (f.lastSyncTreeSha !== undefined) {
+          partial.lastSyncTreeSha = f.lastSyncTreeSha;
+        }
+        if (f.conflictBranchName !== undefined) {
           // `head` is VESTIGIAL: §II.7 — the conflict head is always
           // read live, never persisted. The field exists only because
           // the old engine's schema carries it until THE SWITCH.
-          conflictBranch:
+          partial.conflictBranch =
             f.conflictBranchName === null
               ? null
-              : { name: f.conflictBranchName, head: "" },
-        });
+              : { name: f.conflictBranchName, head: "" };
+        }
+        if (f.heldPluginUpdates !== undefined) {
+          partial.heldPluginUpdates = f.heldPluginUpdates;
+        }
+        await args.hotMeta.update(partial);
       },
     },
     conflictStore: args.conflictStore,

@@ -183,6 +183,9 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
       },
       baselines: {
       get: async (p) => baselines.get(p),
+      // §5.4 — a hold rescues a folder\'s baselines. No fixture
+      // here holds anything, so empty is the honest answer.
+      listUnder: async () => [],
       setMany: async (entries) => {
         for (const e of entries) {
           baselines.set(e.path, {
@@ -201,6 +204,7 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
         getLastSyncCommitSha: () => baseCommit,
         getLastSyncTreeSha: () => null,
         getConflictBranch: () => null,
+        getHeldPluginUpdates: () => ({}),
         update: async () => {},
       },
       conflictStore,
@@ -1031,8 +1035,14 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
         getLastSyncCommitSha: () => baseCommit,
         getLastSyncTreeSha: () => null,
         getConflictBranch: () => null,
+        getHeldPluginUpdates: () => ({}),
         update: async (f) => {
-          carriedForward.push(f.conflictBranchName);
+          // `update` is PARTIAL now — a hold writes its own field
+          // alone — so a run that never touches the branch reports
+          // `undefined` rather than null.
+          if (f.conflictBranchName !== undefined) {
+            carriedForward.push(f.conflictBranchName);
+          }
         },
       },
     });
@@ -1232,10 +1242,13 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
   let batches: Array<{ claimed: ClaimedBatch; removed: boolean }>;
   let baseCommit: string | null;
   let seq: number;
+  // PARTIAL since the hold gate (§5.5): a write may carry only
+  // `heldPluginUpdates`, mid-run, so the fields are optional here too.
   let hotUpdates: Array<{
-    lastSyncCommitSha: string | null;
-    lastSyncTreeSha: string | null;
-    conflictBranchName: string | null;
+    lastSyncCommitSha?: string | null;
+    lastSyncTreeSha?: string | null;
+    conflictBranchName?: string | null;
+    heldPluginUpdates?: Record<string, unknown>;
   }>;
   // The hot pair's conflict-branch field, read back by the fake below.
   let hotConflictBranch: string | null;
@@ -1336,6 +1349,9 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     },
     baselines: {
       get: async (p) => baselines.get(p),
+      // §5.4 — a hold rescues a folder\'s baselines. No fixture
+      // here holds anything, so empty is the honest answer.
+      listUnder: async () => [],
       setMany: async (entries) => {
         for (const e of entries) {
           baselines.set(e.path, {
@@ -1366,9 +1382,12 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
       // rode on.
       getConflictBranch: () =>
         hotConflictBranch === null ? null : { name: hotConflictBranch },
+      getHeldPluginUpdates: () => ({}),
       update: async (f) => {
         hotUpdates.push(f);
-        hotConflictBranch = f.conflictBranchName;
+        if (f.conflictBranchName !== undefined) {
+          hotConflictBranch = f.conflictBranchName;
+        }
       },
     },
     conflictStore,
@@ -1617,6 +1636,7 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
       hot: {
         getLastSyncCommitSha: () => baseCommit,
         getLastSyncTreeSha: () => null,
+        getHeldPluginUpdates: () => ({}),
         getConflictBranch: () => ({ name: "hot-carried-branch" }),
         update: async (f) => {
           hotUpdates.push(f);

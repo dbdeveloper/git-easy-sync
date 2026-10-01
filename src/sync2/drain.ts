@@ -54,6 +54,13 @@
 
 import { arrayBufferToBase64, type Vault } from "obsidian";
 import { isOwnPluginRecoverableFile } from "./plugin-update-bootloader";
+import { requireApiVersion } from "obsidian";
+import {
+  decideHold,
+  isHeldPath,
+  pluginFolderOf,
+  type HeldPluginUpdates,
+} from "./held-plugins";
 import { NewTreeRequestItem } from "../github/client";
 import ConflictStoreV2, {
   ConflictsState,
@@ -256,6 +263,15 @@ export interface DrainDeps {
       }>,
     ): Promise<void>;
     removeMany(paths: string[]): Promise<void>;
+    // Every baseline under a prefix — what a hold has to rescue before
+    // the change detector erases it (§5.4). Folder-shaped on purpose:
+    // the unit of holding is the plugin, and the paths in the incoming
+    // change are only ever a subset of what the hold makes invisible.
+    listUnder(
+      prefix: string,
+    ): Promise<
+      Array<{ path: string; baselineSha: string; mtime: number; size: number }>
+    >;
   };
   // Discovery Layer 1 (§II.12) — wired to discovery.ts in production,
   // a two-eyed fake in tests (P.8-13, truth vs discoveryAnswer).
@@ -273,12 +289,20 @@ export interface DrainDeps {
     // J.2 fallback: the conflict-branch name survives BETWEEN drains
     // without a journal via the hot pair.
     getConflictBranch(): { name: string } | null;
+    // Plugin updates held back because this Obsidian cannot load them
+    // yet (§5.5). `{}` is the normal state, and the drain is the only
+    // place that writes it.
+    getHeldPluginUpdates(): HeldPluginUpdates;
     // Epilogue step 3 — the CONFIRMED anchor, written exactly once
     // per fully-completed drain (§1.C METAFILE), one ping-pong blob.
+    // ⚠️ PARTIAL: the hold gate writes `heldPluginUpdates` alone, mid
+    // run, because the record and the baselines it rescues must land
+    // together (§5.5) — the epilogue is far too late for that.
     update(fields: {
-      lastSyncCommitSha: string | null;
-      lastSyncTreeSha: string | null;
-      conflictBranchName: string | null;
+      lastSyncCommitSha?: string | null;
+      lastSyncTreeSha?: string | null;
+      conflictBranchName?: string | null;
+      heldPluginUpdates?: HeldPluginUpdates;
     }): Promise<void>;
   };
   // formatMergeConflictBranchMessage in production — keeps the
@@ -426,6 +450,213 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   const selfUpdateStaged: string[] = [];
   const configDir = deps.vault.configDir;
   let finalizedMergeSha: string | null = null;
+
+  // ── PLUGIN-UPDATE-COMPAT Фаза 2 (§5.12) — the ONE gate ────────────
+  //
+  // A plugin update meant for a NEWER Obsidian than this device runs
+  // must not reach the disk at all: the files would land correctly,
+  // the plugin would fail to load, and it would keep failing on every
+  // restart until the app catches up. Held paths are then invisible to
+  // sync in BOTH directions (§5.3) — which is what stops a user's
+  // hand-installed (therefore OLDER) copy from travelling back and
+  // rolling the update back on healthy devices.
+  //
+  // The working copy of the record set for THIS run. Mutated in place
+  // and persisted through `hot.update`, which is the only writer.
+  const held: HeldPluginUpdates = { ...deps.hot.getHeldPluginUpdates() };
+
+  // Lifting comes FIRST, before discovery, and the order is not
+  // symmetry: discovery answers with the `base…head` DELTA, and the
+  // commit that updated a held plugin sits BEHIND the base — it was
+  // skipped while the hold was on. Only the subtree read below can
+  // bring it, so it has to happen while there is still a drain to
+  // carry the result (§5.12.3).
+  const liftHolds = async (
+    headHash: string | null,
+  ): Promise<DrainResult | null> => {
+    for (const id of Object.keys(held)) {
+      const record = held[id];
+      // Offline, every drain, costs nothing: the condition is a string
+      // comparison against the running app's version (§5.6).
+      if (!requireApiVersion(record.minAppVersion)) continue;
+      if (headHash === null) {
+        // Empty repo — nothing to lift from. The record stays; there
+        // is no state to reach and no harm in waiting.
+        deps.logger?.info("hold not lifted: empty repo", { id });
+        continue;
+      }
+      const folder = `${configDir}/plugins/${id}`;
+      // 1. BASELINES FIRST (§5.6 step 1). While the hold was on, the
+      //    change detector's Pass 2 deleted every baseline under this
+      //    folder ("gitignore is a two-way mute"). Without putting
+      //    them back, Pass 1 would read every local file as NEW and
+      //    push the OLD version — the §5.4 downgrade.
+      if (record.baselines.length > 0) {
+        await deps.baselines.setMany(record.baselines);
+      }
+      // 2. STATE AGAINST STATE, not a delta (§5.12.3). The subtree at
+      //    `head` versus the baselines we just restored answers every
+      //    shape at once — modified, added, and REMOVED — and has no
+      //    base that can become unreachable after months of holding.
+      const tree = await deps.retry.run(() =>
+        deps.client.getRepoTreeAtCommit(headHash),
+      );
+      if (tree.error !== null) return statusFromError(tree.error, result);
+      if (tree.result!.truncated) {
+        // ⚠️ §II.13.2's trap, inherited whole: an incomplete list
+        // means "absent from the LIST", never "absent from the repo".
+        // Reading it as deletion would wipe the plugin's folder.
+        deps.logger?.warn("hold not lifted: tree truncated", { id });
+        continue;
+      }
+      const prefix = `${folder}/`;
+      const remote = tree.result!.files.filter((f) =>
+        f.path.startsWith(prefix),
+      );
+      const seen = new Set<string>();
+      for (const f of remote) {
+        seen.add(f.path);
+        const live = await deps.vaultFiles.read(f.path);
+        // Already right — do not write, and above all do not trigger a
+        // plugin reload for a file nobody changed.
+        if (live !== null && live.sha === f.sha) continue;
+        const isSelf = isOwnPluginRecoverableFile(
+          f.path,
+          configDir,
+          deps.selfPluginId,
+        );
+        if (isSelf && (await deps.vaultFiles.isSelfUpdateStaged(f.path, f.sha))) {
+          continue;
+        }
+        const blob = await deps.retry.run(() =>
+          deps.client.getBlobFromRepo(f.sha),
+        );
+        if (blob.error !== null) return statusFromError(blob.error, result);
+        if (blob.result === null) {
+          vaultStepErrors.push({
+            path: f.path,
+            error: `held update: blob ${f.sha} not in repo`,
+          });
+          continue;
+        }
+        if (isSelf) {
+          // OUR OWN files are staged even here: the bootloader is the
+          // only writer of the file Obsidian loads (owner 2026-10-01),
+          // and that rule does not bend because the write happens to
+          // come from a lift. The baseline stays OLD for the same
+          // reason it does in the Vault-step.
+          await deps.vaultFiles.stageSelfUpdate(f.path, blob.result);
+          selfUpdateStaged.push(f.path);
+          continue;
+        }
+        await deps.vaultFiles.write(f.path, blob.result);
+        vaultStepWrites.push(f.path);
+        await deps.baselines.setMany([
+          {
+            path: f.path,
+            baselineSha: f.sha,
+            // mtime 0 by the epilogue's convention: a real mtime here
+            // can hide a user edit made DURING the drain behind the
+            // detector's stat short-circuit (D.15).
+            mtime: 0,
+            size: f.size ?? blob.result.byteLength,
+          },
+        ]);
+      }
+      // 3. DELETION, which only state-against-state can express
+      //    (§7.1.2): a file we were holding that is no longer in the
+      //    repo goes now, and not a moment earlier — while the hold
+      //    was on, the plugin kept working locally on purpose.
+      const gone = record.baselines
+        .map((b: { path: string }) => b.path)
+        .filter((p: string) => !seen.has(p));
+      for (const p of gone) {
+        if ((await deps.vaultFiles.stat(p)) !== null) {
+          await deps.vaultFiles.remove(p);
+          vaultStepRemoves.push(p);
+        }
+      }
+      if (gone.length > 0) await deps.baselines.removeMany(gone);
+      // 4. The record goes LAST (§5.6). Until this line the paths are
+      //    still non-syncable, so a crash anywhere above leaves a
+      //    consistent held state and the next drain simply retries.
+      //    Dropping it first and failing afterwards would leave live
+      //    paths with restored-but-stale baselines — the downgrade
+      //    again, in a new wrapper.
+      delete held[id];
+      await deps.hot.update({ heldPluginUpdates: { ...held } });
+      deps.logger?.info("plugin update hold LIFTED", {
+        id,
+        minAppVersion: record.minAppVersion,
+      });
+    }
+    return null;
+  };
+
+  // The gate. Runs after `trackedFiles` is seeded from discovery, so
+  // every incoming path is known — and BEFORE any blob is fetched,
+  // which is what makes "read the manifest, never the bundle" true
+  // (§5.12.2): blobs are pulled lazily at the Vault-step, and a held
+  // folder never gets there.
+  const applyHolds = async (): Promise<DrainResult | null> => {
+    const groups = new Map<string, string[]>();
+    for (const path of state.trackedFiles.keys()) {
+      const owner = pluginFolderOf(path, configDir);
+      if (owner === null) continue;
+      if (held[owner.id] !== undefined) continue; // already held
+      const list = groups.get(owner.id);
+      if (list === undefined) groups.set(owner.id, [path]);
+      else list.push(path);
+    }
+    for (const [id, paths] of groups) {
+      const folder = `${configDir}/plugins/${id}`;
+      const manifestPath = `${folder}/manifest.json`;
+      const manifestTracked = state.trackedFiles.get(manifestPath);
+      let manifestText: string | null = null;
+      if (
+        manifestTracked !== undefined &&
+        manifestTracked.remote.sha !== null &&
+        manifestTracked.remote.sha !== DELETED_SHA_HASH &&
+        manifestTracked.remote.mode !== DELETED
+      ) {
+        // ONE blob, and the smallest file in the bundle. The decision
+        // has to precede `main.js` — which is the whole point: holding
+        // after downloading a megabyte would still be correct and
+        // still be wasteful, and on a phone that waste is the user's
+        // data plan.
+        const blob = await deps.retry.run(() =>
+          deps.client.getBlobFromRepo(manifestTracked.remote.sha!),
+        );
+        if (blob.error !== null) return statusFromError(blob.error, result);
+        if (blob.result !== null) {
+          manifestText = new TextDecoder().decode(blob.result);
+        }
+      }
+      const decision = decideHold(manifestText);
+      if (!decision.hold) continue;
+      // Save the baselines of the WHOLE folder, not just the paths in
+      // this change (§5.4): the hold makes every one of them ignored,
+      // and Pass 2 deletes the baseline of every newly-ignored path.
+      const baselines = await deps.baselines.listUnder(`${folder}/`);
+      held[id] = {
+        minAppVersion: decision.minAppVersion,
+        heldVersion: decision.heldVersion,
+        baselines,
+      };
+      await deps.hot.update({ heldPluginUpdates: { ...held } });
+      // Out of tracking, or the Vault-step would still write them: the
+      // predicate keeps new work away, it does not retract work
+      // already seeded this run.
+      for (const path of paths) state.trackedFiles.delete(path);
+      deps.logger?.info("plugin update HELD for this Obsidian", {
+        id,
+        heldVersion: decision.heldVersion,
+        needs: decision.minAppVersion,
+        files: paths.length,
+      });
+    }
+    return null;
+  };
 
   const result = (status: DrainStatus): DrainResult => ({
     status,
@@ -635,6 +866,15 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         knownHeadTreeSha = null; // live read — the tree is unknown again
       }
 
+      // §5.12.3 — BEFORE discovery, deliberately: discovery answers
+      // with the base…head delta, and the commit that updated a held
+      // plugin lies BEHIND the base. Only the subtree read inside
+      // liftHolds can bring it.
+      {
+        const abort = await liftHolds(headHash);
+        if (abort !== null) return abort;
+      }
+
       let remoteFiles: RemoteFileChange[] = [];
       if (headHash !== null && headHash !== baseHash) {
         const r = await deps.retry.run(() =>
@@ -726,6 +966,15 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             isManualConflict: false,
           });
         }
+      }
+
+      // §5.12.2 — the gate, after seeding and before any blob is
+      // fetched. A folder held here never reaches the Vault-step, so
+      // "read the manifest, never the bundle" needs no special
+      // plumbing: blobs are lazy, and a held path is simply gone.
+      {
+        const abort = await applyHolds();
+        if (abort !== null) return abort;
       }
     }
 
@@ -1015,6 +1264,20 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // can skip it (§II.16).
       countPull(entry.path);
       emitProgress(entry.path);
+
+      // §5.12.2 — a batch staged BEFORE the hold can still carry the
+      // held folder's paths; the predicate cannot retract what is
+      // already claimed. Skipped, never pushed (owner, 2026-10-01):
+      // under a hold the only version installable by hand is a
+      // COMPATIBLE, i.e. OLDER, one, and letting it travel would roll
+      // the update back on every healthy device. The batch still
+      // completes — the entry counts as disposed of.
+      if (isHeldPath(entry.path, configDir, held)) {
+        deps.logger?.info("batch entry skipped: plugin update held", {
+          path: entry.path,
+        });
+        continue;
+      }
 
       const local = await loadLocalFromBatch(deps, entry);
       if (local === null) continue; // §12.5.B: vanished + changed — next detection re-emits
