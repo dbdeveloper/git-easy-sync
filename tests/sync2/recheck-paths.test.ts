@@ -14,6 +14,7 @@ import {
   addRecheckPaths,
   readRecheckPaths,
   clearRecheckPaths,
+  dropRecheckPath,
   recheckMarkerPath,
   RECHECK_PATHS_MARKER,
 } from "../../src/sync2/recheck-paths";
@@ -66,21 +67,75 @@ describe("the recheck note", () => {
     }
   });
 
-  it("🔑 a TORN note falls back to our own files — it is never discarded", async () => {
-    // Discarding is the fail-silent direction, which is the whole
-    // thing this note exists to prevent. The fallback is bounded to
-    // three paths and covers the case that motivated the mechanism.
+  it("🔑 a TORN APPEND loses only its own line — everything recorded before survives", async () => {
+    // The reason the format is lines and not a JSON array. A write
+    // interrupted halfway through a JSON document destroys the whole
+    // list; here it leaves a fragment with no trailing newline, and
+    // only complete lines are read.
     const f = fixture();
     try {
-      await f.adapter.mkdir(`${PLUGIN_DIR}/.runtime`);
-      await f.adapter.write(recheckMarkerPath(PLUGIN_DIR), "{ not json");
+      await addRecheckPaths(f.adapter, PLUGIN_DIR, ["a.md", "b.md"]);
+      // ...and now a third append dies mid-path.
+      await f.adapter.append(recheckMarkerPath(PLUGIN_DIR), "notes/parti");
       const r = await readRecheckPaths(f.adapter, PLUGIN_DIR, PLUGIN_DIR);
+      expect(r.paths).toEqual(["a.md", "b.md"]);
+      expect(r.torn).toBe(false);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("🔑 a note we cannot READ falls back to our own files — never to silence", async () => {
+    // Silence is the one answer this mechanism may not give: it is
+    // indistinguishable from "nothing was skipped", which is the state
+    // the note exists to contradict.
+    const f = fixture();
+    try {
+      await addRecheckPaths(f.adapter, PLUGIN_DIR, ["a.md"]);
+      const adapter = {
+        ...f.adapter,
+        exists: f.adapter.exists.bind(f.adapter),
+        read: async () => {
+          throw new Error("unreadable");
+        },
+      } as unknown as DataAdapter;
+      const r = await readRecheckPaths(adapter, PLUGIN_DIR, PLUGIN_DIR);
       expect(r.torn).toBe(true);
       expect(r.paths).toEqual([
         `${PLUGIN_DIR}/main.js`,
         `${PLUGIN_DIR}/manifest.json`,
         `${PLUGIN_DIR}/styles.css`,
       ]);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("the consumed-path rewrite goes through tmp → rename, never over the live file", async () => {
+    // The ONE rewrite in this file. A half-replaced note would be the
+    // only way to lose requests that were already safely recorded.
+    const f = fixture();
+    const renames: Array<[string, string]> = [];
+    try {
+      await addRecheckPaths(f.adapter, PLUGIN_DIR, ["a.md", "b.md"]);
+      const realRename = f.adapter.rename.bind(f.adapter);
+      const adapter = {
+        ...f.adapter,
+        exists: f.adapter.exists.bind(f.adapter),
+        read: f.adapter.read.bind(f.adapter),
+        write: f.adapter.write.bind(f.adapter),
+        remove: f.adapter.remove.bind(f.adapter),
+        rename: async (from: string, to: string) => {
+          renames.push([from, to]);
+          return realRename(from, to);
+        },
+      } as unknown as DataAdapter;
+      await dropRecheckPath(adapter, PLUGIN_DIR, "a.md");
+      expect(renames).toHaveLength(1);
+      expect(renames[0][1]).toBe(recheckMarkerPath(PLUGIN_DIR));
+      expect(
+        (await readRecheckPaths(f.adapter, PLUGIN_DIR, PLUGIN_DIR)).paths,
+      ).toEqual(["b.md"]);
     } finally {
       f.cleanup();
     }

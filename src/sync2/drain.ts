@@ -461,6 +461,17 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // owner, 2026-10-02: «краще зайвий раз перепитати ніж щось
   // пропустити».
   const recheck = new Set<string>();
+  // ⚠️ WRITE-AHEAD (owner, 2026-10-02): the note goes down BEFORE the
+  // drain moves on from the skip, never at the end of the run. Written
+  // at the end it would carry a window of its own — a run that reached
+  // its epilogue, advanced the pointer and then failed to write the
+  // note would forget the skip forever. Record the intent first, clear
+  // it once the work is confirmed; the self-update marker and the
+  // gitignore migration already work this way.
+  const noteRecheck = async (p: string): Promise<void> => {
+    recheck.add(p);
+    await addRecheckPaths(deps.vault.adapter, selfPluginDir, [p]);
+  };
   // What a PREVIOUS run (or the bootloader) asked us to re-check.
   // Read once; the epilogue replaces the file with whatever THIS run
   // still owes, so a consumed request disappears and a repeated skip
@@ -2024,7 +2035,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // — and the next scan then reads the user's own copy as an
         // edit and PUSHES it over the repo (found 2026-10-02).
           state.trackedFiles.delete(path);
-          recheck.add(path);
+          await noteRecheck(path);
           continue;
         }
         await saveConflictSiblingFile(deps.vault, {
@@ -2060,7 +2071,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // surviving record makes the epilogue claim a baseline the
       // Vault-step never produced.
         state.trackedFiles.delete(path);
-        recheck.add(path);
+        await noteRecheck(path);
         continue;
       }
       // ⚠️ GATE FINDING 2026-08-31: `size` MUST be filled here. A
@@ -2095,7 +2106,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // surviving record makes the epilogue claim a baseline the
         // Vault-step never produced.
         state.trackedFiles.delete(path);
-        recheck.add(path);
+        await noteRecheck(path);
         continue;
       }
 
@@ -2148,7 +2159,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // surviving record makes the epilogue claim a baseline the
       // Vault-step never produced.
             state.trackedFiles.delete(path);
-            recheck.add(path);
+            await noteRecheck(path);
             continue;
           }
           // Proven size for the sibling we are about to persist —
@@ -2181,7 +2192,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // surviving record makes the epilogue claim a baseline the
       // Vault-step never produced.
           state.trackedFiles.delete(path);
-          recheck.add(path);
+          await noteRecheck(path);
           continue;
         }
         await saveConflictSiblingFile(deps.vault, {
@@ -2268,7 +2279,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // surviving record makes the epilogue claim a baseline the
       // Vault-step never produced.
       state.trackedFiles.delete(path);
-      recheck.add(path);
+      await noteRecheck(path);
       continue;
     }
 
@@ -2317,7 +2328,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           error: `remote blob ${tracked.remote.sha} not in repo (conflict not registered)`,
         });
         state.trackedFiles.delete(path);
-        recheck.add(path);
+        await noteRecheck(path);
         continue;
       }
       if (tracked.remote.deviceLabel === null && headHash !== null) {
@@ -2388,7 +2399,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           // a surviving record makes the epilogue claim a baseline the
           // Vault-step never produced.
           state.trackedFiles.delete(path);
-          recheck.add(path);
+          await noteRecheck(path);
           continue;
         }
         if (!(await deps.syncStore.existInSyncStore(v.sha!))) {
@@ -2431,7 +2442,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // bootloader applies the update the next scan sees disk ==
       // remote and settles the baseline in one no-op pass.
       state.trackedFiles.delete(path);
-      recheck.add(path);
+      await noteRecheck(path);
       continue;
     }
     let writePath = path;
@@ -2448,7 +2459,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           { remote: path, local_canonical: canonical },
         );
         state.trackedFiles.delete(path);
-        recheck.add(path);
+        await noteRecheck(path);
         continue;
       }
       deps.logger?.info("Vault-step: sanitized remote forbidden path", {
@@ -2475,14 +2486,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // durable store is the only conflicts carrier); 1/3 are
   // interchangeable under the same redo umbrella.
 
-  // The note for the NEXT run: exactly what THIS run still owes.
-  // Written here, in the epilogue, so a consumed request disappears
-  // and a repeated skip survives — and so a drain that ABORTED leaves
-  // the previous note untouched rather than replacing it with a
-  // half-formed one.
-  if (recheck.size > 0) {
-    await addRecheckPaths(deps.vault.adapter, selfPluginDir, [...recheck]);
-  }
+  // Clearing is the only half that belongs HERE: a request may be
+  // dropped only once the work it asked for is confirmed, and that is
+  // what reaching the epilogue means. A run that aborted leaves every
+  // request standing, and the next one asks again.
   for (const consumed of requestedRecheck.paths) {
     if (recheck.has(consumed)) continue;
     // Asked and answered — drop it from the note. Done one path at a
