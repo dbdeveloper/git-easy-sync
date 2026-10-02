@@ -100,6 +100,65 @@ describe("BatchClaimer (§VIII H)", () => {
     ).toBe(true);
   });
 
+  // ── §VIII D — a `.attempted` left standing by a CRASHED drain ─────
+  //
+  // Phase 6, crash matrix. Every other crash cell asks what the redo
+  // does with work; this one asks what it does with the MARKER the
+  // dead run left behind — the state a reader is most likely to
+  // mistake for "someone is already working on this".
+  //
+  // The answer is asymmetric, and both halves are pinned below,
+  // because the symmetric reading is the plausible wrong one:
+  //
+  //   • the DRAIN never reads its own flag — `.attempted` is written
+  //     and never tested — so a stale one cannot deadlock the redo;
+  //   • COMMIT does read it, and correctly declines to consolidate
+  //     into that dir. The cost is one lost consolidation, paid once:
+  //     the appended batch becomes the new tail and carries no marker.
+  //
+  // ⚠️ The first half is a property of an ABSENCE, which is the kind
+  // that rots silently. Adding an "is this dir already claimed?" guard
+  // to getBatch would look like a safety improvement and would strand
+  // every batch a crashed drain had touched.
+  it("D: a `.attempted` from a crashed drain blocks nothing — the redo claims the SAME dir", async () => {
+    const sha = await putBlob("x");
+    const bdir = writeBatch("20260830T1", [
+      { path: "a.md", sha, size: 1, mtime: 5, deletedSha: null },
+    ]);
+    // Exactly what a drain that died mid-batch leaves: its own claim
+    // marker, and the dir still full of work.
+    fs.writeFileSync(path.join(bdir, ATTEMPTED_MARKER), "");
+
+    const claimed = await makeClaimer().getBatch();
+    expect(claimed!.id).toBe("20260830T1");
+    expect(claimed!.meta.entries).toHaveLength(1); // the work, intact
+    expect(warnings).toEqual([]); // not an anomaly — nothing to report
+  });
+
+  it("D: …and COMMIT declines that dir once — the loss is one consolidation, not a batch", async () => {
+    // The other half, stated from the commit side. Its back-off is
+    // CORRECT (it cannot know the claimer is dead), so the thing worth
+    // pinning is the bound on the damage, not the behaviour.
+    const sha = await putBlob("x");
+    const bdir = writeBatch("20260830T1", [
+      { path: "a.md", sha, size: 1, mtime: 5, deletedSha: null },
+    ]);
+    fs.writeFileSync(path.join(bdir, ATTEMPTED_MARKER), "");
+
+    // The marker is the ONLY reason to decline: the dir is otherwise a
+    // perfectly healthy tail. (BatchWriter's own suite drives
+    // consolidateIntoTail; here we pin the precondition it reads, so
+    // the two halves cannot drift apart unnoticed.)
+    expect(fs.existsSync(path.join(bdir, ATTEMPTED_MARKER))).toBe(true);
+    expect(fs.existsSync(path.join(bdir, ATTEMPTED_COMMIT_MARKER))).toBe(false);
+    expect(parseBatchMetafile(
+      fs.readFileSync(path.join(bdir, BATCH_META_FILE), "utf8"),
+    )).not.toBeNull();
+    // …and the claim still succeeds, which is what makes the loss
+    // temporary: this dir gets processed and removed like any other.
+    expect((await makeClaimer().getBatch())!.id).toBe("20260830T1");
+  });
+
   it("H: commit-side claim present → drain WAITS (never skips to a newer dir) and proceeds once released", async () => {
     const sha = await putBlob("x");
     const bdir = writeBatch("20260830T1", [

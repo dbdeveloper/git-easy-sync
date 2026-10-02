@@ -867,6 +867,54 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(batches[0].removed).toBe(true);
   });
 
+  // ── §VIII D — crash AFTER the claim, BEFORE any push ──────────────
+  //
+  // Phase 6, crash matrix. The window where a batch has been taken out
+  // of the queue but nothing has left the device yet. Its whole claim
+  // is negative — nothing moved, nothing was lost — and that is
+  // exactly why it needs pinning: a defect here is invisible in the
+  // final state of the happy path and shows up only as work that
+  // quietly stopped existing.
+  //
+  // Note what makes it safe: `removeBatchDir` is the LAST statement of
+  // the batch transaction, after both pushes and both persists. The
+  // claim is therefore not a commitment — it is a lease that lapses
+  // when the run dies.
+  it("D: crash after the claim, before any push → nothing moved, the batch is still owed, the redo lands it whole", async () => {
+    await setupAligned();
+    await stageBatch({ "note.md": "C1\n" });
+    vaultFiles.files.set("note.md", { content: "C1\n", mtime: 100 });
+    const commitsBefore = world.commits.length;
+
+    // The first network call the batch makes is the Layer-2 live check
+    // (§II.13), which happens before anything is built, let alone
+    // pushed.
+    const d1 = makeDeps();
+    d1.client.getContentsMetadataAtRef = async () => {
+      throw new Error("power loss after the claim");
+    };
+    await expect(drainOnce(d1)).rejects.toThrow("power loss");
+
+    // THE INTERMEDIATE STATE — the claim really did happen (so the
+    // crash is in the window the name says), and nothing else did.
+    expect(batches).toHaveLength(1); // claimed…
+    expect(batches[0].removed).toBe(false); // …and still owed
+    expect(world.commits.length).toBe(commitsBefore); // nothing pushed
+    expect(await journal.load()).toBeNull(); // nothing persisted
+
+    // The redo takes the same batch and finishes it.
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    expect(r.pushedCommits).toHaveLength(1);
+    expect(world.commits.length).toBe(commitsBefore + 1);
+    expect(dec(world.headFiles().get("note.md")!.bytes)).toBe("C1\n");
+    // The SAME batch — not a rebuilt one. `claimBatch` hands out the
+    // first entry that was never removed, so the lease lapsing and the
+    // redo picking it up are one mechanism, not two.
+    expect(batches).toHaveLength(1);
+    expect(batches[0].removed).toBe(true);
+  });
+
   // ── A1 п.22-25: the drain's half of the .obsidian/ mtime tiebreak ──
   //
   // The pure half lives in diff3.test.ts (the exhaustive sensitivity

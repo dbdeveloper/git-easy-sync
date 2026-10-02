@@ -282,6 +282,62 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     expect(vaultFiles.files.get(NOTE)!.content).toBe(LOCAL_CLASH);
   });
 
+  // ── §VIII D — crash BETWEEN the MAIN push and the CONFLICT push ───
+  //
+  // Phase 6, crash matrix. The scenario above is the one batch that
+  // writes to BOTH refs, so it is also the only place this window
+  // exists: main has taken the commit, the branch has not, and the
+  // journal — which is persisted after both — still describes the
+  // world as it was before either.
+  //
+  // Neighbouring cells cover the ends and left this middle open: B.4
+  // crashes after a main push with no conflict in play, G.3 crashes
+  // after the BRANCH push. What is specific here is the asymmetry —
+  // one ref moved, the other did not, and the redo must finish the
+  // second without doing the first twice.
+  it("D: crash between the MAIN push and the CONFLICT push → the redo lands the branch commit and does NOT duplicate the main one", async () => {
+    await setupAligned({ "clean.md": "clean v0\n" });
+    await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+    await stageBatch({ [NOTE]: LOCAL_CLASH, "clean.md": "clean v1\n" });
+    vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+    vaultFiles.files.set("clean.md", { content: "clean v1\n", mtime: 100 });
+    const commitsBefore = world.commits.length;
+
+    const d1 = makeDeps();
+    d1.client.pushCommitToBranch = async () => {
+      throw new Error("power loss between the two pushes");
+    };
+    await expect(drainOnce(d1)).rejects.toThrow("power loss");
+
+    // ⚠️ THE INTERMEDIATE STATE, asserted before the redo. Without
+    // this the test would also pass if the crash had fired somewhere
+    // else entirely — the vacuity trap this whole category has.
+    expect(world.commits.length).toBe(commitsBefore + 1); // main DID move…
+    expect(dec(world.headFiles().get("clean.md")!.bytes)).toBe("clean v1\n");
+    expect(world.branchHeads.size).toBe(0); // …the branch did NOT
+    expect(batches[0].removed).toBe(false); // the work is still owed
+
+    // The redo. It must finish the half that never happened.
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    const branchNames = [...world.branchHeads.keys()];
+    expect(branchNames).toHaveLength(1);
+    expect(
+      dec(world.filesAt(world.branchHeads.get(branchNames[0])!).get(NOTE)!.bytes),
+    ).toBe(LOCAL_CLASH);
+    // …without doing the half that did: `clean.md` is already on main
+    // byte-for-byte, so the second run must find nothing to push for
+    // it. A duplicate commit here would be B.4's defect wearing a
+    // conflict costume.
+    expect(r2.pushedCommits).toHaveLength(0);
+    expect(dec(world.headFiles().get("clean.md")!.bytes)).toBe("clean v1\n");
+    expect(batches[0].removed).toBe(true);
+    // And the conflict itself survived the crash intact.
+    const rec2 = (await conflictStore.load()).entries.get(NOTE)!;
+    expect(rec2.siblings).toHaveLength(1);
+    expect(vaultFiles.files.get(NOTE)!.content).toBe(LOCAL_CLASH);
+  });
+
   // + G.1 (head-unchanged half): the journal confirms
   // ⚠️ NOT G.1, despite the resemblance — verified by probe
   // 2026-09-20. Re-committing identical content never reaches
