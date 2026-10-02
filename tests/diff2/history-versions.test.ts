@@ -10,7 +10,6 @@ import { Vault } from "../../mock-obsidian";
 import { FileChange } from "../../src/sync2/types";
 import {
   formatSyncMessage,
-  formatResolveConflictMessage,
   parseLocalTimestamp,
 } from "../../src/sync2/commit-message";
 import {
@@ -21,6 +20,23 @@ import {
   type HistoryVersion,
 } from "../../src/diff2/history-versions";
 import { AuthError } from "../../src/errors";
+
+// ⚰️ A FROZEN message from an engine that no longer exists. The verb
+// "Resolve conflict" was retired 2026-10-02 with the synthetic batch
+// that carried it — but commits saying it sit in real repositories, and
+// History lists them like any other version.
+//
+// A literal, NOT a call to a formatter, and that is the whole point: a
+// test built on the formatter would follow the formatter if someone
+// changed it, and go on passing while real history stopped parsing.
+// This string is what GitHub actually returns; only a literal can
+// promise that.
+//
+// The instant is absolute (the offset is IN the string), so this pins
+// identically on a runner in any timezone.
+const RETIRED_RESOLVE_MSG =
+  "Resolve conflict at 2026-07-02 18:00:00.000+03:00 (dev)";
+const RETIRED_RESOLVE_MS = Date.parse("2026-07-02T18:00:00.000+03:00");
 
 // ---------------------------------------------------------------------------
 // mergeVersionList — pure. Uniform row { local, date, id, deviceLabel }.
@@ -96,12 +112,14 @@ describe("mergeVersionList", () => {
     expect(out.map((v) => v.id)).toEqual(["b-11h", "b-10h"]);
   });
 
-  it("parses non-'Sync' verbs too (resolve-conflict message)", () => {
-    const ms = Date.parse("2026-07-02T15:00:00.000Z");
+  it("parses a verb this engine no longer writes (retired 'Resolve conflict')", () => {
     const out = mergeVersionList([], [
-      { sha: "c9", date: "2026-01-01T00:00:00Z", message: formatResolveConflictMessage("dev", ms) },
+      { sha: "c9", date: "2026-01-01T00:00:00Z", message: RETIRED_RESOLVE_MSG },
     ]);
-    expect(out[0]).toMatchObject({ date: ms, deviceLabel: "dev" });
+    expect(out[0]).toMatchObject({
+      date: RETIRED_RESOLVE_MS,
+      deviceLabel: "dev",
+    });
   });
 
   it("does not mutate its inputs", () => {
@@ -118,10 +136,16 @@ describe("mergeVersionList", () => {
 // parseLocalTimestamp is the reverse of formatLocalTimestamp — round-trip it
 // on the real formatter so the two stay format-locked.
 describe("parseLocalTimestamp", () => {
-  it("round-trips every formatX message shape to the authoring ms", () => {
+  it("round-trips a LIVE formatX message shape to the authoring ms", () => {
     const ms = Date.parse("2026-07-03T04:05:06.789Z");
     expect(parseLocalTimestamp(formatSyncMessage("d", ms))).toBe(ms);
-    expect(parseLocalTimestamp(formatResolveConflictMessage("d", ms))).toBe(ms);
+  });
+  // The parser matches `at <date> <time±offset>` and never the word
+  // before it — so a retired verb stays readable with no code of its
+  // own. This is the test that would fail if someone ever anchored the
+  // regex to "Sync".
+  it("reads a RETIRED verb just as well — the regex is verb-agnostic", () => {
+    expect(parseLocalTimestamp(RETIRED_RESOLVE_MSG)).toBe(RETIRED_RESOLVE_MS);
   });
   it("returns null for a message this plugin didn't write", () => {
     expect(parseLocalTimestamp("Edited via web UI")).toBeNull();

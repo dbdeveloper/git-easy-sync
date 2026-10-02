@@ -77,26 +77,6 @@ export function formatSyncMessage(deviceLabel: string, whenMs: number): string {
   return `Sync at ${formatLocalTimestamp(whenMs)} (${safeLabel(deviceLabel)})`;
 }
 
-// ⚠️ NO PRODUCTION CALLER since THE SWITCH, and kept deliberately.
-// It used to name the SYNTHETIC batch the old drain's Phase B built to
-// carry a closed conflict's resolution to main; the new engine has no
-// synthetic batches, so a resolution reaches main inside an ordinary
-// one and reads as "Sync at …".
-//
-// This stays because messages are a PERMANENT artifact: commits saying
-// "Resolve conflict at …" sit in real repositories right now, and the
-// diff2 History view must keep parsing them (its fixture is
-// `tests/diff2/history-versions.test.ts` — the verb this project no
-// longer writes is exactly the one a parser is most likely to forget).
-// Reading an old message and writing a new one are different jobs; only
-// the writing stopped.
-export function formatResolveConflictMessage(
-  deviceLabel: string,
-  whenMs: number,
-): string {
-  return `Resolve conflict at ${formatLocalTimestamp(whenMs)} (${safeLabel(deviceLabel)})`;
-}
-
 // DOT-FILES §8.1.6 — the one commit that removes the nested `.gitignore`
 // files the migration consolidated into the root. Its own message because
 // it is the only commit that deletes paths the engine considers OUT OF
@@ -152,22 +132,37 @@ export function formatInitMessage(
   return `Init at ${formatLocalTimestamp(whenMs)} (${safeLabel(deviceLabel)})`;
 }
 
-// ⚰️ `commitMessageForBatch` lived here until 2026-10-02 — the OLD
-// engine's dispatcher, which asked a batch whether it was SYNTHETIC
-// and picked "Resolve conflict at …" over "Sync at …" accordingly.
-// The new engine has no synthetic batches and nothing dispatches on
-// batch kind, so it had no caller. ⚠️ The function it dispatched TO,
-// `formatResolveConflictMessage`, is still above — see the note there
-// for why reading that verb outlives writing it.
+// ⚰️ THE "Resolve conflict at …" VERB — retired 2026-10-02, by the
+// owner's decision, after the question below was asked and answered.
 //
-// ❓ OPEN QUESTION, recorded rather than decided (owner, 2026-10-02 —
-// asked whether the merge commit should be marked; it already is, by
-// formatMergeConflictBranchMessage, and it carries NO files because it
-// is a reachability merge over the MAIN tree). The narrower question
-// survives: the resolution's CONTENT travels in an ordinary batch and
-// so reads as "Sync at …". Naming it would need the engine to know a
-// batch carries a resolution — the flag that said so died with the old
-// drain — and that is a new mechanism, not a message change.
+// Two functions carried it and both are gone: `commitMessageForBatch`
+// (the old drain's dispatcher — it asked a batch whether it was
+// SYNTHETIC and picked the verb accordingly) and
+// `formatResolveConflictMessage` (what it dispatched to). The new
+// engine has no synthetic batches, so nothing had called either since
+// THE SWITCH.
+//
+// THE QUESTION, since the answer is the reason nothing replaced them:
+// should the commit that lands a user's conflict resolution on MAIN
+// name itself? The FINALIZE merge already does
+// (`formatMergeConflictBranchMessage`) — but that commit carries NO
+// files at all, because it is a REACHABILITY merge over the main tree
+// (§II.14); a content merge there would resurrect the superseded
+// remote version over the resolution. The resolution's content travels
+// separately, in an ordinary batch, and so reads as "Sync at …".
+// Naming THAT would require the engine to know a batch carries a
+// resolution — a new mechanism, not a message change. The owner's
+// call: leave it as "Sync at …".
+//
+// ⚠️ WRITING the verb stopped; READING it must not. Commits saying
+// "Resolve conflict at …" were written by the old engine and sit in
+// real repositories, where the diff2 History view still lists them.
+// `parseLocalTimestamp` below is verb-agnostic by construction — it
+// matches `at <date> <time±offset>` and never the word before it — and
+// `tests/diff2/history-versions.test.ts` pins that against a FROZEN
+// literal of a real old message. Deliberately a literal: a test that
+// called a formatter would follow the formatter if someone changed it,
+// and keep passing while real history broke.
 
 // Inverse of the trailing `(label)` suffix: pulls the device label
 // off any commit message produced by sync2. Falls back to
