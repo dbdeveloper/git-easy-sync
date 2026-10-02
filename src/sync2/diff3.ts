@@ -34,7 +34,7 @@ import { hasTextExtension } from "../utils";
 import { DELETED_SHA_HASH } from "./discovery";
 import SyncStore from "./sync-store";
 import { utf8RoundTrip } from "./text-normalize";
-import { mergeText } from "./three-way-merge";
+import { mergeText, type MergeOutcome } from "./three-way-merge";
 
 // The spec's DELETED mode sentinel. `mode: ""` = ordinary file;
 // `mode: null` = unknown/empty FileInfo.
@@ -498,59 +498,44 @@ export function pickNewestForObsidian(
   return localWins ? local : remote;
 }
 
-// Default main-thread merge seam — the REAL mergeText (with its
-// restore-local's-EOL behaviour, bug-59 algorithm) behind the
-// Diff3Deps.mergeBlobs contract. Production (Phase 4 step 5) wires
-// the worker mirror instead; tests use this one so §VIII A.27-29
-// exercise the true merge path.
+// ── The mergeBlobs seam (ONE body, two wirings) ─────────────────────
 //
-// Text-only: a non-text extension can't be line-merged → conflict.
-// Round-trip gate (same rule as §II.15's inline gate): if decoding
-// and re-encoding ANY input changes its bytes (invalid UTF-8 under a
-// text extension — the cp1251 .csv class), a text merge would
-// silently corrupt content → conflict instead.
-export async function mergeBlobsWithMainThreadDiff3(
-  path: string,
-  base: ArrayBuffer,
-  ours: ArrayBuffer,
-  theirs: ArrayBuffer,
-): Promise<{ kind: "clean"; merged: ArrayBuffer } | { kind: "conflict" }> {
-  if (!hasTextExtension(path)) return { kind: "conflict" };
-  const baseText = utf8RoundTrip(base);
-  const oursText = utf8RoundTrip(ours);
-  const theirsText = utf8RoundTrip(theirs);
-  if (baseText === null || oursText === null || theirsText === null) {
-    return { kind: "conflict" };
-  }
-  const outcome = mergeText(oursText, baseText, theirsText);
-  if (outcome.kind === "conflict") return { kind: "conflict" };
-  const encoded = new TextEncoder().encode(outcome.content);
-  return {
-    kind: "clean",
-    merged: encoded.buffer.slice(
-      encoded.byteOffset,
-      encoded.byteOffset + encoded.byteLength,
-    ) as ArrayBuffer,
-  };
-}
-
-// The production mirror (Phase 5.5 step 2b): same gates, same shape,
-// but the merge itself routes through the worker orchestra
-// (WorkerClient.mergeText — CPU pool above its size threshold, inline
-// fallback below it; both run the SAME node-diff3 call as mergeText,
-// so the two variants are behaviourally one function). The round-trip
-// gate stays on the main thread deliberately: it is a decode+encode
-// pass the worker boundary would pay for in transfer costs anyway.
-export function makeWorkerMergeBlobs(worker: {
-  mergeText(
+// Everything a `Diff3Deps["mergeBlobs"]` does APART from the merge
+// itself: the text-extension gate, the UTF-8 round-trip gate, and the
+// encode-back. The three-way merge is the only parameter, because it
+// is the only thing the two wirings disagree about.
+//
+// It was two hand-written copies until 2026-10-02, and the duplication
+// was never benign: the copies differ by one `await`, so any change to
+// a GATE had to be made twice, and a miss would be a silent divergence
+// between what the tests merge and what the field merges — the one
+// place where that is most expensive.
+//
+// THE GATES, and why each exists:
+//
+//   • TEXT EXTENSION — a line-based merge of binary content is not a
+//     merge, it is corruption. No bytes are even read.
+//   • UTF-8 ROUND-TRIP (same rule as §II.15's inline gate) — if
+//     decoding and re-encoding ANY of the three inputs changes its
+//     bytes, the file is not the UTF-8 its extension claims (the
+//     cp1251 `.csv` class). Merging it would write back a decoded
+//     approximation and silently destroy the original encoding, so the
+//     answer is `conflict`: the user sees it and decides.
+//
+// ⚠️ BOTH GATES FAIL TOWARD `conflict`, never toward a merge. A
+// conflict costs the user one decision; a wrong clean merge costs them
+// content, and they may not notice for weeks.
+//
+// The round-trip gate stays on THIS side of the worker boundary on
+// purpose: it is a decode+encode pass the transfer would pay for
+// anyway, and it decides whether to call the worker at all.
+function makeMergeBlobs(
+  mergeTextFn: (
     ours: string,
     base: string,
     theirs: string,
-  ): Promise<
-    | { kind: "clean"; content: string }
-    | { kind: "conflict"; conflictMarkedContent: string }
-  >;
-}): Diff3Deps["mergeBlobs"] {
+  ) => MergeOutcome | Promise<MergeOutcome>,
+): Diff3Deps["mergeBlobs"] {
   return async (path, base, ours, theirs) => {
     if (!hasTextExtension(path)) return { kind: "conflict" };
     const baseText = utf8RoundTrip(base);
@@ -559,7 +544,11 @@ export function makeWorkerMergeBlobs(worker: {
     if (baseText === null || oursText === null || theirsText === null) {
       return { kind: "conflict" };
     }
-    const outcome = await worker.mergeText(oursText, baseText, theirsText);
+    // ⚠️ ARGUMENT ORDER (ours, base, theirs) — node-diff3's own, and
+    // NOT the (base, ours, theirs) of the signature above. Swapping
+    // the outer pair still merges, still passes a parity check, and
+    // quietly picks the wrong side on every one-sided change.
+    const outcome = await mergeTextFn(oursText, baseText, theirsText);
     if (outcome.kind === "conflict") return { kind: "conflict" };
     const encoded = new TextEncoder().encode(outcome.content);
     return {
@@ -570,4 +559,25 @@ export function makeWorkerMergeBlobs(worker: {
       ) as ArrayBuffer,
     };
   };
+}
+
+// ⚠️ TEST-ONLY WIRING — §VI.0 forbids running diff3 on the main
+// thread in production, and `tests/architecture-boundaries.test.ts`
+// enforces that nothing under `src/` imports this name. It exists so
+// the unit suite (§VIII A.27-29, the bug-59 EOL cases) exercises the
+// REAL mergeText rather than a stub, with no worker to stand up.
+export const mergeBlobsWithMainThreadDiff3: Diff3Deps["mergeBlobs"] =
+  makeMergeBlobs(mergeText);
+
+// The production wiring (Phase 5.5 step 2b): the merge routes through
+// the worker orchestra — WorkerClient.mergeText, CPU pool above its
+// size threshold, inline fallback below it. Both of those run the SAME
+// node-diff3 call as `mergeText`, which is what makes the two wirings
+// above and below one function in behaviour as well as in code.
+export function makeWorkerMergeBlobs(worker: {
+  mergeText(ours: string, base: string, theirs: string): Promise<MergeOutcome>;
+}): Diff3Deps["mergeBlobs"] {
+  return makeMergeBlobs((ours, base, theirs) =>
+    worker.mergeText(ours, base, theirs),
+  );
 }

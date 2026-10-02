@@ -148,3 +148,71 @@ describe("marker-file naming", () => {
     ).toEqual([]);
   });
 });
+
+// §VI.0 — diff3 never runs on the main thread in production.
+//
+// The engine has TWO wirings of one merge seam: the worker one, which
+// production uses, and `mergeBlobsWithMainThreadDiff3`, which exists so
+// the unit suite can exercise the REAL mergeText without standing up a
+// worker. The second is harmless in a test and a freeze on a phone: a
+// three-way merge of a large note on the UI thread is exactly the stall
+// §VI.0 was written to forbid.
+//
+// ⚰️ Written 2026-10-02, when the two wirings were unified into one body
+// (bin 2 of the post-SWITCH cleanup). Before that the separation was
+// kept by a COMMENT saying "tests use this one" — which is to say, by
+// whoever happened to read it. Unification makes the test-only variant
+// a one-line export sitting beside the production one, so the easiest
+// possible mistake is now reaching for the wrong name; this is the test
+// that notices.
+describe("§VI.0 — the main-thread diff3 wiring stays out of src/", () => {
+  const TEST_ONLY = "mergeBlobsWithMainThreadDiff3";
+  const PRODUCTION = "makeWorkerMergeBlobs";
+  const srcFiles = tsFilesUnder(SRC);
+  const DEFINER = path.join(SRC, "sync2", "diff3.ts");
+
+  // Names pulled in by `import { … } from "…"` — the braces only, so a
+  // comment naming the symbol (there are several, deliberately) does not
+  // read as a dependency.
+  function importedNames(source: string): string[] {
+    const out: string[] = [];
+    for (const m of source.matchAll(/\bimport\s*{([^}]*)}\s*from/g)) {
+      for (const raw of m[1].split(",")) {
+        const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0];
+        if (name !== "") out.push(name.trim());
+      }
+    }
+    return out;
+  }
+
+  it("finds the symbols it guards — otherwise this passes vacuously", () => {
+    // Both halves. A rename that this test does not follow would leave
+    // it green while guarding a name that no longer exists.
+    const definer = fs.readFileSync(DEFINER, "utf8");
+    expect(definer).toContain(`export const ${TEST_ONLY}`);
+    expect(definer).toContain(`export function ${PRODUCTION}`);
+    expect(srcFiles.length).toBeGreaterThan(30);
+  });
+
+  it("🔑 no file under src/ imports the main-thread merge wiring", () => {
+    const offenders = srcFiles
+      .filter((f) => f !== DEFINER)
+      .filter((f) => importedNames(fs.readFileSync(f, "utf8")).includes(TEST_ONLY))
+      .map((f) => path.relative(SRC, f));
+    // The fix is never to re-export it or alias it — that keeps the
+    // main-thread merge in the shipped bundle's reachable graph, which
+    // is the thing §VI.0 forbids. Inject `makeWorkerMergeBlobs(worker)`
+    // instead, as drain-deps does.
+    expect(offenders, `production must not use ${TEST_ONLY}`).toEqual([]);
+  });
+
+  it("…and the production wiring IS imported, so the rule is not vacuous", () => {
+    // Without this, deleting the worker seam entirely would satisfy the
+    // test above — a green "nothing uses the main-thread merge" on an
+    // engine that no longer merges at all.
+    const users = srcFiles.filter((f) =>
+      importedNames(fs.readFileSync(f, "utf8")).includes(PRODUCTION),
+    );
+    expect(users.length).toBeGreaterThan(0);
+  });
+});

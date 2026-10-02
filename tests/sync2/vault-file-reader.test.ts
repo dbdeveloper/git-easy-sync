@@ -146,7 +146,18 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
   },
 );
 
-describe("makeWorkerMergeBlobs — behavioural parity with the main-thread variant", () => {
+// ⚠️ WHAT THIS PINS CHANGED ON 2026-10-02, and the old name would lie.
+// The two wirings used to be hand-written copies, and this was their
+// parity check. They are now one body with the merge injected, so
+// parity is structural and a divergence between them is no longer a
+// thing that can happen.
+//
+// It is kept — retitled — because it still catches the move that would
+// bring the divergence back: re-splitting the copies. And it is the
+// only place the WORKER-shaped wiring (async, awaited) is driven
+// end-to-end through both gates at all; the six files that use
+// `mergeBlobsWithMainThreadDiff3` all drive the synchronous one.
+describe("makeWorkerMergeBlobs — the async wiring clears both gates", () => {
   // The fake worker runs the SAME mergeText the fallback does — which
   // is exactly WorkerClient's below-threshold inline path.
   const workerMerge = makeWorkerMergeBlobs({
