@@ -37,6 +37,7 @@ const okResult = (over?: Partial<DrainResult>): DrainResult => ({
   layer2Corrections: [],
   conflictVerdicts: [],
   vaultStepErrors: [],
+  cancelledConflicts: [],
   pushedCommits: [],
   finalizedMergeSha: null,
   vaultStepWrites: [],
@@ -58,6 +59,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
   let writtenBatches: FileChange[][];
   let notices: { committed: number[]; noChanges: number };
   let pluginReloads: string[][];
+  let cancelledConflicts: string[];
   let completed: Array<{
     pushedFiles: number;
     pulledFiles: number;
@@ -154,6 +156,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     drainGate = null;
     notices = { committed: [], noChanges: 0 };
     pluginReloads = [];
+    cancelledConflicts = [];
     completed = [];
     latched = [];
 
@@ -190,6 +193,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       onNoLocalChanges: () => (notices.noChanges += 1),
       onSyncCompleted: (s) => completed.push(s),
       onPluginsAffected: (ids) => pluginReloads.push(ids),
+      onConflictCancelled: (p) => cancelledConflicts.push(p),
       logger: { info: () => {}, warn: () => {}, error: () => {} },
       drainFn: async () => {
         drainCalls += 1;
@@ -523,6 +527,67 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       cancelled: false,
     });
     expect(pluginReloads).toEqual([["other-plugin", "dead-plugin"]]);
+  });
+
+  // ── Which vault-step failures the USER hears about ────────────────
+  //
+  // Owner's rule, 2026-10-02: «там де є сподівання, що наступна
+  // ітерація виправить помилку — можна просто писати в лог. Якщо ж це
+  // зміна поведінки, яку користувач не очікує — писати хоча б щось».
+  //
+  // The two tests below are that rule's two halves, and they are a
+  // PAIR on purpose: the second is what stops the first from being
+  // satisfied by notifying about everything.
+  describe("vault-step failures: log vs tell", () => {
+    it("🔑 an ordinary skip is SILENT — the next sync retries it", async () => {
+      // The commonest cause of this class is GitHub's own eventual
+      // consistency (the open 422 BadObjectState note), which clears
+      // in minutes; the path is also written into `.recheck-paths`, so
+      // the next sync asks about it again without being told to. A
+      // notice here would be noise that teaches the user to ignore the
+      // channel — which costs us the one below.
+      drainResult = okResult({
+        vaultStepErrors: [
+          { path: "note.md", error: "remote blob abc not in repo" },
+        ],
+      });
+      await manager.syncAll();
+      expect(cancelledConflicts).toEqual([]);
+    });
+
+    it("🔑 a CANCELLED conflict is told — nothing will retry it", async () => {
+      // The other half: the engine deleted a conflict record on
+      // purpose (so a later restore cannot resurrect it), and what
+      // disappeared is something the user was looking at. No mechanism
+      // brings it back, so silence here is the engine changing its
+      // mind behind their back.
+      drainResult = okResult({
+        vaultStepErrors: [
+          { path: "a.md", error: "remote blob abc not in repo" },
+          { path: "b.md", error: "conflict content vanished from the repo" },
+        ],
+        cancelledConflicts: ["b.md"],
+      });
+      await manager.syncAll();
+      // ONLY the cancelled one — the neighbour stays a log line.
+      expect(cancelledConflicts).toEqual(["b.md"]);
+    });
+
+    it("reported even when the drain later FAILED — the cancel already happened", async () => {
+      // Status-independent by design: the record was deleted and saved
+      // before the abort, so a later failure does not un-cancel it.
+      // Reporting only on `ok` would hide exactly the runs that went
+      // worst.
+      drainResult = okResult({
+        status: "network-error" as DrainOutcome,
+        cancelledConflicts: ["b.md"],
+      });
+      // The manager turns this status into a throw — which is exactly
+      // the path the report must survive, so the rejection is part of
+      // the scenario rather than something to work around.
+      await expect(manager.syncAll()).rejects.toThrow(/network/i);
+      expect(cancelledConflicts).toEqual(["b.md"]);
+    });
   });
 
   it("token-expired drain: onTokenExpired fires with the 401/403 class AND an AuthError is thrown for the caller's note()", async () => {

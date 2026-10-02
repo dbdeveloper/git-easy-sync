@@ -48,9 +48,11 @@
 //   gets its flag into the journal, which is why it needs no durable
 //   pairing (see the batch-end comment on §VIII D / W1).
 //
-// PHASE 6 (still absent): `vaultStepErrors` reach the LOG only
-// (Sync2Manager.logDrainSummary) — surfacing them in the UI is the
-// remaining epilogue item, together with the §VIII D/K crash matrix.
+// PHASE 6, settled 2026-10-02: `vaultStepErrors` reach the LOG, and
+// exactly ONE of them also reaches the user — see
+// `DrainResult.cancelledConflicts` for the owner's rule and why the
+// other eight sites stay quiet. What remains of Phase 6 here is the
+// §VIII D/K crash matrix.
 
 import { arrayBufferToBase64, type Vault } from "obsidian";
 import { isOwnPluginRecoverableFile } from "./plugin-update-bootloader";
@@ -395,6 +397,26 @@ export interface DrainResult {
   layer2Corrections: Layer2Correction[];
   conflictVerdicts: ConflictVerdict[];
   vaultStepErrors: Array<{ path: string; error: string }>;
+  // ⚠️ THE SUBSET OF `vaultStepErrors` THE USER MUST BE TOLD ABOUT.
+  //
+  // Owner's rule, 2026-10-02: «там де є сподівання, що наступна
+  // ітерація виправить помилку — можна просто писати в лог. Якщо ж це
+  // зміна поведінки, яку користувач не очікує — писати хоча б щось».
+  //
+  // Almost every `vaultStepError` passes the first half: the path is
+  // dropped from tracking and written into `.recheck-paths`, so the
+  // NEXT sync asks about it again — and the commonest cause (GitHub's
+  // own eventual consistency; see the open 422 BadObjectState note)
+  // clears by itself in minutes. Telling the user about those would be
+  // noise that teaches them to ignore the channel.
+  //
+  // This array is the other half, and today exactly one site qualifies:
+  // a conflict whose content is confirmed GONE from the repo has its
+  // conflict mode CANCELLED. Nothing retries it — the record is deleted
+  // on purpose so a later restore cannot resurrect it — and the thing
+  // that vanished is something the user was looking at. Silence there
+  // is the engine changing its mind behind their back.
+  cancelledConflicts: string[];
   pushedCommits: string[]; // main-branch commit shas, in order
   // FINALIZE outcome: the merge commit that closed the conflict
   // branch this run, or null (no finalize / deferred / nothing to do).
@@ -446,6 +468,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   const layer2Corrections: Layer2Correction[] = [];
   const conflictVerdicts: ConflictVerdict[] = [];
   const vaultStepErrors: Array<{ path: string; error: string }> = [];
+  const cancelledConflicts: string[] = [];
   const pushedCommits: string[] = [];
   const vaultStepWrites: string[] = [];
   const vaultStepRemoves: string[] = [];
@@ -824,6 +847,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     layer2Corrections,
     conflictVerdicts,
     vaultStepErrors,
+    cancelledConflicts,
     pushedCommits,
     finalizedMergeSha,
     vaultStepWrites,
@@ -2106,6 +2130,11 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           conflicts!.entries.delete(path);
           tracked.isManualConflict = false;
           await deps.conflictStore.save(conflicts!);
+          // The ONE site that notifies (owner's rule — see
+          // `DrainResult.cancelledConflicts`). Nothing here retries:
+          // the record is deleted deliberately, and what disappeared is
+          // something the user was looking at.
+          cancelledConflicts.push(path);
           vaultStepErrors.push({
             path,
             error:

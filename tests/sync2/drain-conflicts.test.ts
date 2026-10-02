@@ -580,6 +580,12 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     expect(r.vaultStepErrors.some((e) => e.path === NOTE)).toBe(true);
     const durable = await conflictStore.load();
     expect(durable.entries.has(NOTE)).toBe(false); // record removed directly
+    // ⚠️ AND THE USER IS TOLD (owner's rule, 2026-10-02). This is the
+    // one vault-step failure that notifies, because it is the one
+    // nothing retries: the record was deleted on purpose so a later
+    // restore cannot resurrect it. Contrast C.9 below, which skips
+    // with the record intact and stays a log line.
+    expect(r.cancelledConflicts).toEqual([NOTE]);
     // The next commit+drain will re-commit the file and likely birth
     // a fresh, healthy conflict — that is the designed self-heal.
   });
@@ -600,6 +606,9 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     const r2 = await drainOnce(makeDeps());
     expect(r2.status).toBe("ok");
     expect(r2.vaultStepErrors.some((e) => e.path === NOTE)).toBe(true);
+    // ⚠️ The contrast half of C.8: the record SURVIVES, so the next
+    // sync retries — hope exists, and the user is not interrupted.
+    expect(r2.cancelledConflicts).toEqual([]);
     const rec = (await conflictStore.load()).entries.get(NOTE)!;
     expect(rec.siblings).toHaveLength(1); // untouched
     expect(vaultHas(remoteSiblingName(rec.siblings[0].mtime!))).toBe(true);

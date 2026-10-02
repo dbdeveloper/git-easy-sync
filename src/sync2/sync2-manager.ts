@@ -177,6 +177,11 @@ export interface Sync2ManagerDeps {
   onPluginsAffected?(pluginIds: string[]): void;
   // Zero-byte restore guard surfaced a recovery (never silent).
   onZeroByteRestored?(path: string): void;
+  // A conflict was CANCELLED because its content is gone from the repo.
+  // The same "never silent" contract as the line above, and the only
+  // vault-step failure the user hears about (owner's rule, 2026-10-02:
+  // log what the next sync will retry, tell them what it will not).
+  onConflictCancelled?(path: string): void;
   logger: Sync2Logger;
   now?: () => number;
   // Test seam — the shell's unit suite fakes the engine.
@@ -560,6 +565,14 @@ export class Sync2Manager {
       this.pulledFilesThisSync += touched.length;
       const pluginIds = this.derivePluginIds(touched);
       if (pluginIds.length > 0) this.deps.onPluginsAffected?.(pluginIds);
+      // Reported from the SAME status-independent block, and for the
+      // same reason given above: the cancellation already happened —
+      // the record was deleted and saved — so a later abort does not
+      // un-cancel it. Reporting only on "ok" would hide exactly the
+      // runs that went worst.
+      for (const path of r.cancelledConflicts) {
+        this.deps.onConflictCancelled?.(path);
+      }
       await this.fireQueueDepth();
 
       switch (r.status) {

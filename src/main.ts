@@ -1494,6 +1494,21 @@ export default class GitHubSyncPlugin extends Plugin {
       onPluginsAffected: (ids: string[]) => {
         this.handlePluginsAffectedReload(ids);
       },
+      onConflictCancelled: (path: string) => {
+        // Plain language, no engine words (the sync2-engine rule). It
+        // says WHAT changed, that nothing of theirs was touched, and
+        // that this one will not fix itself on the next sync — which
+        // is the whole reason it is a notice and not a log line.
+        new Notice(
+          `The conflict in "${path}" was cancelled — the other version ` +
+            `is no longer in the repository. Your local file is ` +
+            `unchanged. Details are in the log.`,
+          15000,
+        );
+        this.logger?.info("Conflict cancelled: remote content vanished", {
+          path,
+        });
+      },
       onZeroByteRestored: (path: string) => {
         new Notice(
           `Restored "${path}" — the local copy was empty (likely ` +
