@@ -2,9 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   formatLocalTimestamp,
   formatSyncMessage,
-  formatResolveConflictMessage,
   formatInitMessage,
-  commitMessageForBatch,
   parseDeviceSuffix,
   UNKNOWN_DEVICE_LABEL,
 } from "../../src/sync2/commit-message";
@@ -39,25 +37,17 @@ describe("commit-message — message formats carry timestamp + label", () => {
     expect(m).toMatch(new RegExp(`^Sync at ${TS_INNER} \\(Pixel6Pro\\)$`));
   });
 
-  it("formatResolveConflictMessage: 'Resolve conflict at <ts> (label)'", () => {
-    const m = formatResolveConflictMessage("Laptop", 1_747_549_144_352);
-    expect(m).toMatch(
-      new RegExp(`^Resolve conflict at ${TS_INNER} \\(Laptop\\)$`),
-    );
-  });
 
   it("formatInitMessage: 'Init at <ts> (label)'", () => {
     const m = formatInitMessage("Laptop", 0);
     expect(m).toMatch(new RegExp(`^Init at ${TS_INNER} \\(Laptop\\)$`));
   });
 
-  it("commitMessageForBatch picks Sync vs Resolve from `synthetic`", () => {
-    const ts = 1_747_549_144_352;
-    expect(commitMessageForBatch(false, "Dev", ts)).toMatch(/^Sync at /);
-    expect(commitMessageForBatch(true, "Dev", ts)).toMatch(
-      /^Resolve conflict at /,
-    );
-  });
+  // ⚰️ The `commitMessageForBatch` case lived here until 2026-10-02.
+  // It pinned the OLD engine's "synthetic batch → Resolve conflict at
+  // …" rule; the new engine tells that story with separate conflict
+  // and merge commits instead (the open question is recorded at the
+  // deletion site in commit-message.ts).
 
   it("empty device label collapses to the unknown sentinel", () => {
     const m = formatSyncMessage("", 0);
@@ -76,10 +66,6 @@ describe("commit-message — parseDeviceSuffix round-trips the dated format", ()
     expect(parseDeviceSuffix(m)).toBe("Pixel6Pro");
   });
 
-  it("extracts the label from a Resolve-conflict message", () => {
-    const m = formatResolveConflictMessage("My-Laptop", Date.now());
-    expect(parseDeviceSuffix(m)).toBe("My-Laptop");
-  });
 
   it("falls back to the sentinel for a message with no trailing label", () => {
     expect(parseDeviceSuffix("some hand-edited commit")).toBe(

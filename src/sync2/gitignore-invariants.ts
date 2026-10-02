@@ -1034,35 +1034,22 @@ export type SpliceAnomaly =
   // starts from zero.
   | "yielded-to-newer";
 
-export interface SpliceResult {
-  content: string;
-  anomalies: SpliceAnomaly[];
-}
 
-// Pure helpers for the "Push plugins data.json" toggle. Both work
-// on the invariant block (between BEGIN/END markers) only — the
-// toggle never touches anything outside that block, so whatever
-// the user wrote in their recommended-defaults area or below is
-// theirs to keep.
 
-// Extract the body of one managed section from `fileContent`
-// (everything between its BEGIN and END, markers excluded). Returns
-// null when the markers are missing or malformed — the caller treats
-// that as "toggle is OFF, the file will be re-seeded with the canonical
-// section on the next enforce".
-export function extractSection(
-  fileContent: string,
-  markers: SectionMarkers,
-): string | null {
-  // Version-aware since §5.11: the BEGIN line on disk may carry a stamp
-  // this build has never seen, and a literal `indexOf` would answer "no
-  // section" for a section that is plainly there.
-  const found = findBeginLine(fileContent, markers.id);
-  if (found === null) return null;
-  const endIdx = fileContent.indexOf(markers.end);
-  if (endIdx === -1 || endIdx < found.at) return null;
-  return fileContent.substring(found.at + found.line.length, endIdx);
-}
+// ⚰️ `extractSection` and `blockHasAllowLine` lived here until
+// 2026-10-02, with `INVARIANTS_SECTION` / `FINAL_SECTION` /
+// `SectionMarkers` / `SectionPlacement` as their only consumers. They
+// read the "Sync plugins data.json" toggle OUT OF a managed section.
+//
+// ⚠️ The toggle did not disappear — it MOVED, and that is the thing to
+// know here: it is a per-device SETTING now
+// (`settings.pushPluginsDataJson`), materialised by `enforce()` into
+// `<configDir>/plugins/.gitignore` (DOT-FILES D6a), which is one level
+// ABOVE the plugin folders so a plugin's own `.gitignore` can still
+// overrule it in either direction. Nothing reads the value back out of
+// a block any more, which is why these helpers had tests and no
+// callers — green paint over a path that had already been replaced.
+
 
 // Where our BEGIN line of `kind` starts in `content`, whatever version
 // wrote it, plus the exact line found — callers need its LENGTH, which

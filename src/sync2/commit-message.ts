@@ -114,14 +114,11 @@ export function formatConflictMessage(
   return `Conflict at ${formatLocalTimestamp(whenMs)} (${safeLabel(deviceLabel)})`;
 }
 
-// Marker commit on the conflict-branch right before the finalize
-// merge. Preserves the user's live state as the branch tip.
-export function formatFinalStateMessage(
-  deviceLabel: string,
-  whenMs: number,
-): string {
-  return `Final state at ${formatLocalTimestamp(whenMs)} (${safeLabel(deviceLabel)})`;
-}
+// ⚰️ `formatFinalStateMessage` lived here until 2026-10-02 — the
+// "Final state at …" marker commit the OLD engine pushed onto the
+// conflict branch just before finalizing. The new FINALIZE is a
+// reachability merge (§II.14) and pushes no marker, so the message had
+// no writer left.
 
 // Finalize merge-commit on main. Has TWO parents (main.head +
 // branch.head); the merge-commit makes branch.head reachable from
@@ -144,23 +141,18 @@ export function formatInitMessage(
   return `Init at ${formatLocalTimestamp(whenMs)} (${safeLabel(deviceLabel)})`;
 }
 
-// Pick the commit message format for a batch at processBatch time
-// based on its `synthetic` flag. Synthetic = Phase B side-batch from
-// drain conflict-resolution → "Resolve conflict at … ({label})".
-// Non-synthetic = user-driven sync click → "Sync at … ({label})".
-// `whenMs` is the batch's createdAt — the true local-commit moment,
-// NOT push time. Centralised here so the inline derivation in
-// processBatch is a one-liner and the formatX choice stays
-// consistent across call sites.
-export function commitMessageForBatch(
-  synthetic: boolean,
-  deviceLabel: string,
-  whenMs: number,
-): string {
-  return synthetic
-    ? formatResolveConflictMessage(deviceLabel, whenMs)
-    : formatSyncMessage(deviceLabel, whenMs);
-}
+// ⚰️ `commitMessageForBatch` and `formatResolveConflictMessage` lived
+// here until 2026-10-02. They were the OLD engine's pair: a SYNTHETIC
+// batch (one carrying a user's conflict resolution) got "Resolve
+// conflict at … (label)" instead of "Sync at …".
+//
+// ❓ OPEN QUESTION, recorded rather than decided: the new engine tells
+// the conflict story through SEPARATE commits — the conflict-branch
+// push (formatConflictMessage) and the FINALIZE merge
+// (formatMergeConflictBranchMessage) — so a resolution landing on MAIN
+// now reads as an ordinary "Sync at …". Whether that main-branch
+// commit should still name itself a resolution is the owner's call,
+// not something to settle by keeping an uncalled function alive.
 
 // Inverse of the trailing `(label)` suffix: pulls the device label
 // off any commit message produced by sync2. Falls back to

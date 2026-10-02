@@ -12,15 +12,10 @@ import * as crypto from "crypto";
 import GitignoreInvariants, {
   INVARIANTS_BEGIN,
   INVARIANTS_END,
-  INVARIANTS_SECTION,
   FINAL_BEGIN,
   FINAL_END,
-  type SectionMarkers,
   type SectionAnomalyReport,
-  extractSection,
   findBeginLine,
-  FINAL_SECTION,
-  blockHasAllowLine,
 } from "../../src/sync2/gitignore-invariants";
 import GitignoreSeedStore from "../../src/sync2/gitignore-seeds";
 import FileBaselinesStore from "../../src/sync2/file-baselines";
@@ -85,28 +80,11 @@ const cdGitignore = (root: string) =>
 const selfGitignore = (root: string) =>
   path.join(root, CONFIG_DIR, "plugins", SELF, ".gitignore");
 
-// The splice takes a BODY now and composes the markers itself — the
-// frozen half and the mutable half stopped sharing a template
-// (DOT-FILES §3.1.3). `sect` mirrors that composition so the expectations
-// below still read as "what lands on disk".
-// The toggle now lives in the FINAL section, so the pure-helper tests
-// read from there.
-const extractSection2 = (content: string) =>
-  extractSection(content, FINAL_SECTION);
-
+// `sect` mirrors what enforce() composes, so the expectations below
+// read as "what lands on disk". Markers and body are separate values
+// in the product (DOT-FILES §3.1.3) and so they are here.
 const sect = (body: string) =>
   `${I_BEGIN}\n${body}\n${INVARIANTS_END}`;
-
-// A `final`-shaped section for the placement cases, with throwaway
-// marker text: what is under test here is that placement is a parameter
-// and BOTTOM works, not the shipped rule text.
-const BOTTOM: SectionMarkers = {
-  id: "final",
-  begin: "# ===== test tail - DO NOT EDIT =====",
-  end: "# ===== end of test tail =====",
-  placement: "bottom",
-};
-const tail = (body: string) => `${BOTTOM.begin}\n${body}\n${BOTTOM.end}`;
 
 describe("GitignoreInvariants.enforce", () => {
   let f: ReturnType<typeof fixture>;
@@ -325,71 +303,11 @@ describe("GitignoreInvariants.enforce", () => {
   });
 });
 
-describe("extractSection / blockHasAllowLine (pure)", () => {
-  // Canonical OFF block: data.json line present WITHOUT leading `!`
-  // → block rule. Canonical ON block: same line WITH leading `!`
-  // → allow rule. The line is ALWAYS in our block; only the
-  // prefix flips.
-  const blockOff = [
-    FINAL_BEGIN,
-    "# stuff",
-    "git-easy-sync-metadata.json",
-    "plugins/*/data.json",
-    FINAL_END,
-  ].join("\n");
-  const blockOn = [
-    FINAL_BEGIN,
-    "# stuff",
-    "git-easy-sync-metadata.json",
-    "!plugins/*/data.json",
-    FINAL_END,
-  ].join("\n");
-
-  it("extractSection: returns body between markers, exclusive", () => {
-    const body = extractSection2(blockOff);
-    expect(body).not.toBeNull();
-    expect(body).toContain("git-easy-sync-metadata.json");
-    expect(body).not.toContain(FINAL_BEGIN);
-    expect(body).not.toContain(FINAL_END);
-  });
-
-  it("extractSection: returns null when markers missing or out-of-order", () => {
-    expect(extractSection2("no markers anywhere")).toBeNull();
-    expect(extractSection2(FINAL_BEGIN + "\nno end")).toBeNull();
-    expect(
-      extractSection2(FINAL_END + "\nmiddle\n" + FINAL_BEGIN),
-    ).toBeNull();
-  });
-
-  it("blockHasAllowLine: true for ON block (with !)", () => {
-    expect(blockHasAllowLine(extractSection2(blockOn)!)).toBe(true);
-  });
-
-  it("blockHasAllowLine: false for OFF block (without !)", () => {
-    expect(blockHasAllowLine(extractSection2(blockOff)!)).toBe(false);
-  });
-
-  it("blockHasAllowLine: variants are NOT matched (toggle owns the exact line)", () => {
-    // Deeper glob — user-style hand-edit inside our block. Treated
-    // as "not ON"; the next enforce() rewrites the block back to
-    // canonical and clobbers it.
-    const fancier = [
-      FINAL_BEGIN,
-      "!plugins/**/data.json",
-      FINAL_END,
-    ].join("\n");
-    expect(blockHasAllowLine(extractSection2(fancier)!)).toBe(false);
-  });
-
-  it("blockHasAllowLine: matching line OUTSIDE the block is irrelevant", () => {
-    // The caller passes the EXTRACTED body. A matching line OUTSIDE
-    // our block is user territory and stays untouched.
-    const fileWithOutsideMatch =
-      blockOff + "\n\nplugins/*/*\n!plugins/*/data.json\n";
-    const body = extractSection2(fileWithOutsideMatch);
-    expect(blockHasAllowLine(body!)).toBe(false);
-  });
-});
+// ⚰️ The `extractSection` / `blockHasAllowLine` block lived here until
+// 2026-10-02. It tested reading the "Sync plugins data.json" toggle out
+// of a managed section — a path replaced by the per-device
+// `<configDir>/plugins/.gitignore` (D6a) long before. The helpers are
+// gone; the toggle's live behaviour is covered by the D6a tests below.
 
 // DOT-FILES §8.0 — the seed markers. The claim they carry is narrow
 // and must stay narrow: "this file, right now, is byte-identical to

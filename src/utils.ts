@@ -85,37 +85,6 @@ const TEXT_EXTENSIONS = [
   ".jsx",
 ] as const;
 
-/**
- * Decode a base64 string into JS text. ignoreBOM keeps a leading
- * U+FEFF in the output so sync2's text-canonicalisation pipeline
- * can detect and strip it; the platform default eats it silently
- * which would mask "remote has BOM" from the republish trigger.
- */
-export function decodeBase64String(s: string): string {
-  const buffer = base64ToArrayBuffer(s);
-  const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
-  return decoder.decode(buffer);
-}
-
-/**
- * Copies the provided text to the system clipboard. Modern Clipboard
- * API with a textarea+execCommand fallback for older mobile webviews.
- */
-export async function copyToClipboard(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch (err) {
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.setAttribute("readonly", "");
-    textarea.style.position = "absolute";
-    textarea.style.left = "-9999px";
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand("copy");
-    document.body.removeChild(textarea);
-  }
-}
 
 /**
  * Best-guess "is this a text file?" check used by sync2 to decide
@@ -357,3 +326,8 @@ export async function retryUntil<T>(
     delay *= backoffFactor;
   }
 }
+
+// ⚰️ `decodeBase64String` and `copyToClipboard` lived here until
+// 2026-10-02. Both were callers' helpers from before THE SWITCH —
+// base64 decoding moved into the worker path, and the one UI that
+// copied text was replaced. Neither had a caller or a test.
