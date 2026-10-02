@@ -591,6 +591,91 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     });
   });
 
+
+  // ── §28 — a plugin-core collision is decided by SEMVER ───────────
+  //
+  // Until now the interim rule was pure mtime: newest wins, remote on
+  // ambiguity. That is right for ordinary `.obsidian/` files and wrong
+  // for a plugin bundle, where "newer" has a published meaning —
+  // `manifest.json` says which version the bytes belong to, and a
+  // clock says only which device wrote last.
+  describe("§28 plugin-core collisions resolve by version, not by clock", () => {
+    const DIR = ".obsidian/plugins/some-plugin";
+    const MAIN = `${DIR}/main.js`;
+    const MANIFEST = `${DIR}/manifest.json`;
+    const manifestAt = (v: string) =>
+      JSON.stringify({ id: "some-plugin", version: v });
+
+    // Both sides move, and the LOCAL file is the one with the newer
+    // mtime — so a clock-based rule would pick local every time.
+    const bothSidesMoved = async (
+      localVersion: string,
+      remoteVersion: string,
+    ): Promise<void> => {
+      baseCommit = await world.commitFiles({
+        [MAIN]: "BASE BUNDLE",
+        [MANIFEST]: manifestAt("1.0.0"),
+      });
+      for (const [p, c] of [
+        [MAIN, "BASE BUNDLE"],
+        [MANIFEST, manifestAt("1.0.0")],
+      ] as const) {
+        baselines.set(p, {
+          baselineSha: await sha(c),
+          mtime: 50,
+          size: enc(c).byteLength,
+        });
+        vaultFiles.files.set(p, { content: c, mtime: 50 });
+      }
+      await world.commitFiles({
+        [MAIN]: "REMOTE BUNDLE",
+        [MANIFEST]: manifestAt(remoteVersion),
+      });
+      // Local edits, with a mtime far in the FUTURE.
+      vaultFiles.files.set(MAIN, { content: "LOCAL BUNDLE", mtime: 9e12 });
+      vaultFiles.files.set(MANIFEST, {
+        content: manifestAt(localVersion),
+        mtime: 9e12,
+      });
+      // ⚠️ The clock the batch path compares is the BATCH entry's
+      // mtime, not the vault file's — so the "local is newer" premise
+      // has to be expressed where the rule will actually read it.
+      await stageBatch({ [MAIN]: "LOCAL BUNDLE" }, 9e12);
+    };
+
+    it("🔑 the HIGHER remote version wins even though the local file is newer by clock", async () => {
+      await bothSidesMoved("1.0.0", "2.0.0");
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.files.get(MAIN)!.content).toBe("REMOTE BUNDLE");
+      expect(dec(world.headFiles().get(MAIN)!.bytes)).toBe("REMOTE BUNDLE");
+    });
+
+    it("🔑 the HIGHER local version wins and lifts to the repo", async () => {
+      await bothSidesMoved("3.0.0", "1.5.0");
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.files.get(MAIN)!.content).toBe("LOCAL BUNDLE");
+      expect(dec(world.headFiles().get(MAIN)!.bytes)).toBe("LOCAL BUNDLE");
+    });
+
+    it("equal versions fall back to the clock — E4's rule, kept", async () => {
+      // Same version on both sides says nothing about which bundle is
+      // newer, so the old tiebreak is still the honest answer.
+      await bothSidesMoved("2.0.0", "2.0.0");
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.files.get(MAIN)!.content).toBe("LOCAL BUNDLE");
+    });
+
+    it("an unreadable version falls back to the clock, never to a guess", async () => {
+      await bothSidesMoved("not-a-version", "2.0.0");
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.files.get(MAIN)!.content).toBe("LOCAL BUNDLE");
+    });
+  });
+
   // ── B: rolling base / chaining ───────────────────────────────────
 
   // ⚠️ OUR OWN plugin's loadable files never reach the vault write

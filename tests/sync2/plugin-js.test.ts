@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  compareSemver,
   isAtomicPluginFile,
   pluginDirFileRole,
   pluginRootOf,
@@ -105,24 +104,8 @@ describe("readPluginVersion", () => {
   });
 });
 
-describe("compareSemver", () => {
-  it("orders by major, then minor, then patch", () => {
-    expect(compareSemver("1.0.0", "2.0.0")).toBeLessThan(0);
-    expect(compareSemver("2.0.0", "1.0.0")).toBeGreaterThan(0);
-    expect(compareSemver("1.2.0", "1.10.0")).toBeLessThan(0);
-    expect(compareSemver("1.2.5", "1.2.5")).toBe(0);
-  });
-  it("treats missing segments as zero", () => {
-    expect(compareSemver("1", "1.0.0")).toBe(0);
-    expect(compareSemver("1.2", "1.2.0")).toBe(0);
-  });
-  it("ignores pre-release and build metadata", () => {
-    // Tie: caller is expected to fall back to mtime when this returns 0.
-    expect(compareSemver("1.0.0-beta", "1.0.0")).toBe(0);
-    expect(compareSemver("v1.0.0", "1.0.0")).toBe(0);
-    expect(compareSemver("1.0.0+build.1", "1.0.0+build.2")).toBe(0);
-  });
-  it("treats non-numeric segments as zero", () => {
-    expect(compareSemver("1.x.0", "1.0.0")).toBe(0);
-  });
-});
+// `compareSemver` moved to ../../src/sync2/semver.ts (2026-10-02) —
+// one comparison for the whole plugin. Its table lives in
+// semver.test.ts, including the case the two implementations
+// disagreed about: `1.0.0-beta` now sorts BELOW `1.0.0` instead of
+// tying with it.

@@ -54,7 +54,10 @@ const minifiedJs = (n: number): string =>
   // on. Real bundles are megabytes; a short string serves the test.
   `(()=>{"use strict";const VERSION_MARKER=${n};module.exports={VERSION_MARKER};})();`;
 
-describe.skip(
+// ✅ UN-SKIPPED 2026-10-02: the semver resolver landed (§28). The
+// interim mtime rule is gone — `manifest.json` decides, and the clock
+// only breaks ties it cannot.
+describe(
   "sync2 E3 — plugin-js conflict resolved by semver",
   () => {
     let client: Sync2TestClient | undefined;

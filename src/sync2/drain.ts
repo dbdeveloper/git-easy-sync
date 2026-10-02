@@ -54,6 +54,8 @@
 
 import { arrayBufferToBase64, type Vault } from "obsidian";
 import { isOwnPluginRecoverableFile } from "./plugin-update-bootloader";
+import { pluginRootOf, readPluginVersion } from "./plugin-js";
+import { compareSemver } from "./semver";
 import { requireApiVersion } from "obsidian";
 import {
   decideHold,
@@ -709,6 +711,114 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     return null;
   };
 
+  // Discovery leaves `remote.mtime` null; the §II.1 п.3.b.e tiebreak
+  // and the plugin resolver's fallback both need it, and only the
+  // network has it. Hoisted to the run's scope so BOTH callers use the
+  // same one — two hand-copied versions of a lazy fill is how only one
+  // of them ends up correct (the 2026-09-23 field finding).
+  const fillRemoteMtime = async (
+    path: string,
+    tracked: TrackedFile,
+  ): Promise<DrainResult | null> => {
+    if (tracked.remote.mtime !== null || headHash === null) return null;
+    const info = await deps.retry.run(() =>
+      deps.client.getCommitInfoForPath(path, headHash!),
+    );
+    if (info.error !== null) return statusFromError(info.error, result);
+    tracked.remote.mtime = info.result?.committedAtMs ?? tracked.remote.mtime;
+    return null;
+  };
+
+  // ── §28 — a plugin-core collision is decided by VERSION ──────────
+  //
+  // Until PLUGIN-UPDATE-COMPAT this was pure mtime: newest wins,
+  // remote on ambiguity. That rule is right for ordinary `.obsidian/`
+  // files and wrong for a plugin bundle, because here "newer" has a
+  // PUBLISHED meaning. `manifest.json` says which version the bytes
+  // belong to; a clock says only which device wrote last — and the
+  // device that wrote last is routinely the one running the OLDER
+  // build (it re-saved a setting, or BRAT reinstalled a pinned
+  // version).
+  //
+  // The clock is kept as the fallback, not deleted: equal versions,
+  // or a version we cannot read, say nothing about which bundle is
+  // newer, and inventing an answer there would be worse than the
+  // honest tiebreak E4 already pins.
+  const resolvePluginCollision = async (
+    path: string,
+    local: FileInfo,
+    tracked: TrackedFile,
+  ): Promise<{ file: FileInfo } | { abort: DrainResult }> => {
+    const root = pluginRootOf(path, configDir);
+    const byClock = async (
+      reason: string,
+    ): Promise<{ file: FileInfo } | { abort: DrainResult }> => {
+      // Discovery leaves remote.mtime null — fill it LAZILY or the
+      // tiebreak degenerates into "remote always wins" (gate finding,
+      // E4).
+      const abort = await fillRemoteMtime(path, tracked);
+      if (abort !== null) return { abort };
+      deps.logger?.info("plugin-core collision resolved by mtime", {
+        path,
+        reason,
+      });
+      return { file: pickNewestForObsidian(local, tracked.remote) };
+    };
+    if (root === null) return byClock("not under a plugin folder");
+
+    const manifestPath = `${root}/manifest.json`;
+    const localManifest = await deps.vaultFiles.read(manifestPath);
+    const localVersion =
+      localManifest === null
+        ? null
+        : readPluginVersion(new TextDecoder().decode(localManifest.blob));
+
+    // The remote manifest AT HEAD. Preferred from tracking when the
+    // same change already carries it (the ordinary case: a plugin
+    // update moves manifest.json and the bundle together); otherwise
+    // one metadata read, because a collision is rare and a wrong
+    // winner is not.
+    let remoteManifestSha = state.trackedFiles.get(manifestPath)?.remote.sha ?? null;
+    if (remoteManifestSha === null && headHash !== null) {
+      const meta = await deps.retry.run(() =>
+        deps.client.getContentsMetadataAtRef(manifestPath, headHash!),
+      );
+      if (meta.error !== null) return { abort: statusFromError(meta.error, result) };
+      remoteManifestSha = meta.result?.sha ?? null;
+    }
+    let remoteVersion: string | null = null;
+    if (remoteManifestSha !== null && remoteManifestSha !== DELETED_SHA_HASH) {
+      const blob = await deps.retry.run(() =>
+        deps.client.getBlobFromRepo(remoteManifestSha!),
+      );
+      if (blob.error !== null) return { abort: statusFromError(blob.error, result) };
+      if (blob.result !== null) {
+        remoteVersion = readPluginVersion(new TextDecoder().decode(blob.result));
+      }
+    }
+
+    if (localVersion === null || remoteVersion === null) {
+      return byClock(
+        `version unreadable (local=${localVersion ?? "?"}, remote=${remoteVersion ?? "?"})`,
+      );
+    }
+    const cmp = compareSemver(remoteVersion, localVersion);
+    if (cmp === null) {
+      return byClock(`version not comparable (${localVersion} vs ${remoteVersion})`);
+    }
+    if (cmp === 0) {
+      return byClock(`same version on both sides (${localVersion})`);
+    }
+    const winner = cmp > 0 ? "remote" : "local";
+    deps.logger?.info("plugin-core collision resolved by VERSION", {
+      path,
+      localVersion,
+      remoteVersion,
+      winner,
+    });
+    return { file: cmp > 0 ? tracked.remote : local };
+  };
+
   const result = (status: DrainStatus): DrainResult => ({
     status,
     layer2Corrections,
@@ -1212,20 +1322,6 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     // No-ops when the mtime is already known or the repo is empty, so
     // callers may ask freely. Returns an abort result on a network
     // failure, null on success.
-    const fillRemoteMtime = async (
-      path: string,
-      tracked: TrackedFile,
-    ): Promise<DrainResult | null> => {
-      if (tracked.remote.mtime !== null || headHash === null) return null;
-      const info = await deps.retry.run(() =>
-        deps.client.getCommitInfoForPath(path, headHash!),
-      );
-      if (info.error !== null) return statusFromError(info.error, result);
-      tracked.remote.mtime =
-        info.result?.committedAtMs ?? tracked.remote.mtime;
-      return null;
-    };
-
     const conflictCommitEntries: Array<{ path: string; sha: string | null }> =
       [];
     const mainPushTracked: TrackedFile[] = [];
@@ -1550,25 +1646,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       }
       let verdict = await _diff3(diff3Deps, tracked, local, headHash);
       if (verdict.kind === "plugin-dispatch") {
-        // INTERIM (gate decision 2026-08-31): a genuine two-sided
-        // plugin-core collision resolves like the rest of .obsidian —
-        // newest wins, remote on ambiguity (3.b.e). Semver + bundle
-        // atomicity (§28 class) return with PLUGIN-UPDATE-COMPAT.
-        // Discovery leaves remote.mtime null — fetch it LAZILY (same
-        // rule as the conflict-birth sites) or the tiebreak would
-        // degenerate into "remote always wins" (gate finding, E4).
-        {
-          const abort = await fillRemoteMtime(entry.path, tracked);
-          if (abort !== null) return abort;
-        }
-        deps.logger?.warn(
-          "plugin-core collision resolved by mtime (interim until PLUGIN-UPDATE-COMPAT)",
-          { path: entry.path },
-        );
-        verdict = {
-          kind: "file",
-          file: pickNewestForObsidian(local, tracked.remote),
-        };
+        // §28 — the version decides, the clock is only the fallback.
+        const r = await resolvePluginCollision(entry.path, local, tracked);
+        if ("abort" in r) return r.abort;
+        verdict = { kind: "file", file: r.file };
       }
       if (verdict.kind === "manual-conflict") {
         // STEP1 (§II.6) — a NEW manual conflict. The same idempotent
@@ -2284,24 +2365,13 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     }
 
     if (verdict.kind === "plugin-dispatch") {
-      // Same INTERIM rule as the batch site (gate decision), incl.
-      // the lazy remote-mtime fetch.
-      if (tracked.remote.mtime === null && headHash !== null) {
-        const info = await deps.retry.run(() =>
-          deps.client.getCommitInfoForPath(path, headHash!),
-        );
-        if (info.error !== null) return statusFromError(info.error, result);
-        tracked.remote.mtime =
-          info.result?.committedAtMs ?? tracked.remote.mtime;
-      }
-      deps.logger?.warn(
-        "plugin-core collision resolved by mtime in Vault-step (interim)",
-        { path },
-      );
-      verdict = {
-        kind: "file",
-        file: pickNewestForObsidian(local, tracked.remote),
-      };
+      // §28, the same resolver as the batch site — one rule, called
+      // twice. The hand-copied second version of the lazy mtime fetch
+      // that used to live here is gone with it: two copies of a
+      // precondition is how only one of them stays correct (§II.13.1).
+      const r = await resolvePluginCollision(path, local, tracked);
+      if ("abort" in r) return r.abort;
+      verdict = { kind: "file", file: r.file };
     }
     if (verdict.kind === "manual-conflict") {
       // A conflict born ON the Vault-step (delete-vs-modify or

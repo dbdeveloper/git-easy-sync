@@ -70,7 +70,11 @@ function listConflictSiblings(root: string): string[] {
   return out;
 }
 
-describe.skip(
+// ✅ UN-SKIPPED 2026-10-02: the semver resolver landed (§28). Both
+// sides of styles.css moved here, so it is a plugin-core collision and
+// the version decides it — the same answer main.js gets, which is what
+// keeps the bundle together in this scenario.
+describe(
   "sync2 E5 — plugin styles.css resolves atomically, never a conflict sibling",
   () => {
     let client: Sync2TestClient | undefined;

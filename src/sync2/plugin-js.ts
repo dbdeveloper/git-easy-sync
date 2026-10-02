@@ -137,35 +137,17 @@ export function readPluginVersion(manifestJson: string): string | null {
   }
 }
 
-/**
- * Numeric semver compare for the "MAJOR.MINOR.PATCH" form plugins
- * publish. Pre-release tags ("1.0.0-beta") are split off and
- * ignored — a 1.0.0-beta vs 1.0.0 tie falls back to mtime, which is
- * the safe choice (we can't know which beta is newer without
- * out-of-band info). Non-numeric segments default to 0 to keep the
- * comparator total.
- *
- * Returns:
- *   negative if a < b
- *   zero      if a == b
- *   positive  if a > b
- */
-export function compareSemver(a: string, b: string): number {
-  const parse = (s: string): [number, number, number] => {
-    // Strip a leading "v" and anything after a "-" / "+" marker
-    // (pre-release / build metadata).
-    const stripped = s
-      .replace(/^v/, "")
-      .replace(/[-+].*$/, "");
-    const parts = stripped.split(".").map((p) => {
-      const n = parseInt(p, 10);
-      return Number.isFinite(n) ? n : 0;
-    });
-    return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
-  };
-  const [a0, a1, a2] = parse(a);
-  const [b0, b1, b2] = parse(b);
-  if (a0 !== b0) return a0 - b0;
-  if (a1 !== b1) return a1 - b1;
-  return a2 - b2;
-}
+// ⚠️ `compareSemver` USED TO LIVE HERE and was deleted 2026-10-02.
+// There is now exactly one semver comparison in the plugin
+// (`./semver.ts`), because two encodings of one rule drift and the
+// drift is silent — this file's version and the new one already
+// disagreed about `1.0.0-beta` vs `1.0.0`.
+//
+// That disagreement was itself a decision, so it is recorded rather
+// than lost: this version deliberately IGNORED pre-release tags and
+// returned 0 ("we cannot know which beta is newer"), which handed the
+// answer to the mtime tiebreak. The replacement orders them per semver
+// 2.0.0 — a prerelease sorts BELOW the release it leads to — because
+// that ordering is defined rather than guessed, and our own builds are
+// published as `-beta`. A version string neither of them can parse
+// still falls back to the clock.
