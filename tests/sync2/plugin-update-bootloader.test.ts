@@ -13,6 +13,7 @@ import {
   isOwnPluginRecoverableFile,
 } from "../../src/sync2/plugin-update-bootloader";
 import type { DataAdapter } from "obsidian";
+import { calculateGitBlobSHA } from "../../src/utils";
 
 function makeFixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "bootloader-test-"));
@@ -731,6 +732,138 @@ describe("the apply never takes the live file away first (owner, 2026-10-01)", (
       expect(await f.adapter.read(`${f.pluginDir}/${FILES.main.bak}`)).toBe(
         "OLD",
       );
+    } finally {
+      f.cleanup();
+    }
+  });
+});
+
+// ⚠️ THE MARKER NOW CARRIES THE EXPECTED SHA (owner, 2026-10-02).
+//
+// Presence alone only ever proved that `writeBinary` RETURNED — not
+// that the bytes reached the disk. The difference is not theoretical on
+// a phone: a write can return before its data is durable, and Android
+// kills apps routinely. The marker would then be there beside a
+// TRUNCATED staging file, and the atomic rename would install that
+// truncation flawlessly over working code. Atomicity guarantees we
+// install something COMPLETELY; it says nothing about whether what we
+// install is VALID.
+//
+// The sha is free at staging time (the drain already knows the blob's
+// sha) and costs one hash of a few hundred KB at the top of an onload
+// that is applying an update anyway.
+describe("the marker's sha is what makes the staged bytes trustworthy", () => {
+  const shaOf = async (text: string): Promise<string> =>
+    calculateGitBlobSHA(new TextEncoder().encode(text).buffer as ArrayBuffer);
+
+  it("🔑 a staging file TRUNCATED after the marker was written is NOT applied", async () => {
+    const f = makeFixture();
+    try {
+      await setup(f.adapter, f.pluginDir, {
+        [FILES.main.final]: "RUNNING CODE",
+        // What the marker promises...
+        [FILES.main.marker]: await shaOf("COMPLETE NEW CODE"),
+        // ...and what is actually there: the write did not survive.
+        [FILES.main.tmp]: "COMPLETE NEW C",
+      });
+
+      const r = captureReload();
+      const out = await runSelfUpdateBootloader({
+        adapter: f.adapter,
+        pluginDir: f.pluginDir,
+        reloadPlugin: r.reloadPlugin,
+        scheduleReload: r.scheduleReload,
+        computeSha: calculateGitBlobSHA,
+      });
+
+      expect(out.action).toBe("no-pending");
+      // The running code is untouched — this is the whole point.
+      expect(await f.adapter.read(`${f.pluginDir}/${FILES.main.final}`)).toBe(
+        "RUNNING CODE",
+      );
+      // And the unusable pair is cleared, so it cannot be retried into
+      // the same mistake on the next start.
+      expect(await f.adapter.exists(`${f.pluginDir}/${FILES.main.tmp}`)).toBe(
+        false,
+      );
+      expect(
+        await f.adapter.exists(`${f.pluginDir}/${FILES.main.marker}`),
+      ).toBe(false);
+      expect(r.captured.count).toBe(0);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("a pair whose sha matches IS applied", async () => {
+    const f = makeFixture();
+    try {
+      await setup(f.adapter, f.pluginDir, {
+        [FILES.main.final]: "RUNNING CODE",
+        [FILES.main.tmp]: "COMPLETE NEW CODE",
+        [FILES.main.marker]: await shaOf("COMPLETE NEW CODE"),
+      });
+      const r = captureReload();
+      const out = await runSelfUpdateBootloader({
+        adapter: f.adapter,
+        pluginDir: f.pluginDir,
+        reloadPlugin: r.reloadPlugin,
+        scheduleReload: r.scheduleReload,
+        computeSha: calculateGitBlobSHA,
+      });
+      expect(out.action).toBe("applied");
+      expect(await f.adapter.read(`${f.pluginDir}/${FILES.main.final}`)).toBe(
+        "COMPLETE NEW CODE",
+      );
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("an EMPTY marker still applies — that is what a previous build wrote", async () => {
+    // Back-compat, and it costs nothing to state: a build from before
+    // this change staged a pair with a contentless marker, and dropping
+    // such an update would strand it for no reason.
+    const f = makeFixture();
+    try {
+      await setup(f.adapter, f.pluginDir, {
+        [FILES.main.final]: "RUNNING CODE",
+        [FILES.main.tmp]: "NEW CODE",
+        [FILES.main.marker]: "",
+      });
+      const r = captureReload();
+      const out = await runSelfUpdateBootloader({
+        adapter: f.adapter,
+        pluginDir: f.pluginDir,
+        reloadPlugin: r.reloadPlugin,
+        scheduleReload: r.scheduleReload,
+        computeSha: calculateGitBlobSHA,
+      });
+      expect(out.action).toBe("applied");
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("without a sha function the check is skipped, not failed", async () => {
+    // The bootloader runs at the very top of onload; a composition that
+    // cannot hash must still be able to apply, or an unrelated wiring
+    // gap would silently stop every self-update.
+    const f = makeFixture();
+    try {
+      await setup(f.adapter, f.pluginDir, {
+        [FILES.main.final]: "RUNNING CODE",
+        [FILES.main.tmp]: "NEW CODE",
+        [FILES.main.marker]: await shaOf("SOMETHING ELSE"),
+      });
+      const r = captureReload();
+      const out = await runSelfUpdateBootloader({
+        adapter: f.adapter,
+        pluginDir: f.pluginDir,
+        reloadPlugin: r.reloadPlugin,
+        scheduleReload: r.scheduleReload,
+      });
+      expect(out.action).toBe("applied");
     } finally {
       f.cleanup();
     }

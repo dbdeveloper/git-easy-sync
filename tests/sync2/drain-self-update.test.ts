@@ -58,9 +58,13 @@ describe("staging our own plugin's files", () => {
       expect(readFileSync(f.abs(`${DIR}/main.ges-tmp.js`), "utf8")).toBe(
         "NEW CODE",
       );
-      // The marker is the bootloader's integrity signal — without it the
-      // staged bytes are treated as a torn write and dropped.
+      // The marker is the bootloader's integrity signal — and it names
+      // the sha the staged file must hash to, so "the write returned"
+      // cannot be mistaken for "the bytes are on disk".
       expect(existsSync(f.abs(`${DIR}/.main.js.ges-tmp.`))).toBe(true);
+      expect(readFileSync(f.abs(`${DIR}/.main.js.ges-tmp.`), "utf8")).toBe(
+        await calculateGitBlobSHA(enc("NEW CODE")),
+      );
     } finally {
       f.cleanup();
     }

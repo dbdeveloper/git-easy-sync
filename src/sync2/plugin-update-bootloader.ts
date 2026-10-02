@@ -56,6 +56,12 @@ import type { DataAdapter } from "obsidian";
 const SELF_UPDATE_FILES = ["main.js", "manifest.json", "styles.css"];
 
 export interface BootloaderDeps {
+  // Git-blob SHA of the given bytes. OPTIONAL by design: this runs at
+  // the very top of onload, and a composition that cannot hash must
+  // still be able to apply — a wiring gap here would otherwise stop
+  // every self-update silently. Absent → the marker degrades to the
+  // presence-only signal it was before 2026-10-02.
+  computeSha?: (bytes: ArrayBuffer) => Promise<string>;
   // Keep `<file>.ges-bak` after a successful apply. Default false —
   // the backup is scaffolding, and leaving it would put a stale copy
   // of our own code in the plugin folder forever. Set on the ONE
@@ -128,6 +134,49 @@ async function recoverOneFile(
 
   const markerExists = await adapter.exists(markerPath);
   const tmpExists = await adapter.exists(tmpPath);
+
+  // ⚠️ THE MARKER CARRIES THE EXPECTED SHA (owner, 2026-10-02), and
+  // this check is what makes the staged bytes TRUSTWORTHY rather than
+  // merely PRESENT.
+  //
+  // Presence alone only ever proved that `writeBinary` RETURNED — not
+  // that the bytes reached the disk. On a phone that gap is real: a
+  // write can return before its data is durable and Android kills apps
+  // routinely, leaving a complete marker beside a TRUNCATED staging
+  // file. The atomic rename would then install that truncation
+  // flawlessly over working code. Atomicity guarantees we install
+  // something COMPLETELY; it says nothing about whether what we install
+  // is VALID.
+  //
+  // An empty marker is a pair staged by a build from BEFORE this
+  // change: applied as it always was, because dropping it would strand
+  // an update for no reason.
+  if (markerExists && tmpExists && deps.computeSha !== undefined) {
+    const expected = (await readMarkerSha(adapter, markerPath)) ?? "";
+    if (expected !== "") {
+      const actual = await shaOfFile(adapter, deps.computeSha, tmpPath);
+      if (actual !== expected) {
+        log?.(
+          `Self-update bootloader: ${fileName} staged bytes FAILED the sha ` +
+            `the marker promised — dropped, running code untouched`,
+          { expected, actual },
+        );
+        // Both halves go: a pair that cannot be trusted must not be
+        // retried into the same mistake on the next start.
+        try {
+          await adapter.remove(tmpPath);
+        } catch {
+          // best-effort
+        }
+        try {
+          await adapter.remove(markerPath);
+        } catch {
+          // best-effort
+        }
+        return { kind: "drop-orphan-ges-tmp" };
+      }
+    }
+  }
 
   // Case A: marker + ges-tmp → apply forward
   if (markerExists && tmpExists) {
@@ -280,6 +329,31 @@ export async function runSelfUpdateBootloader(
     appliedFiles,
   });
   return { action: "applied", appliedFiles };
+}
+
+// The marker's content, trimmed. Unreadable → treated as empty, i.e.
+// "no promise was made", which falls back to the presence-only rule.
+async function readMarkerSha(
+  adapter: DataAdapter,
+  markerPath: string,
+): Promise<string | null> {
+  try {
+    return (await adapter.read(markerPath)).trim();
+  } catch {
+    return null;
+  }
+}
+
+async function shaOfFile(
+  adapter: DataAdapter,
+  computeSha: (bytes: ArrayBuffer) => Promise<string>,
+  path: string,
+): Promise<string | null> {
+  try {
+    return await computeSha(await adapter.readBinary(path));
+  } catch {
+    return null;
+  }
 }
 
 // `copy` is the Obsidian DataAdapter API we want; a runtime that does

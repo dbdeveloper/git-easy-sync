@@ -487,6 +487,11 @@ export default class GitHubSyncPlugin extends Plugin {
           adapter: this.app.vault.adapter,
           pluginDir: `${this.app.vault.configDir}/plugins/${manifest.id}`,
           pluginLabel: manifest.id,
+          // Main-thread hash, deliberately: this runs before the worker
+          // orchestra exists, and it hashes a few hundred KB only when
+          // an update is actually waiting (measured elsewhere in this
+          // project: 2 MB → ~6 ms).
+          computeSha: calculateGitBlobSHA,
           reloadPlugin: () => {
             void reloadPluginById(this.app, manifest.id).catch((err) => {
               try {

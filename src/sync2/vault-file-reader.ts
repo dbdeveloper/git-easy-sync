@@ -105,7 +105,13 @@ export function makeVaultFileReader(
       const { tmp, marker } = stagedPaths(normalized);
       await ensureParentDir(deps.vault, tmp);
       await deps.vault.adapter.writeBinary(tmp, bytes);
-      await deps.vault.adapter.write(marker, "");
+      // The marker carries the sha the staged file MUST hash to
+      // (owner, 2026-10-02). Its presence alone would only prove that
+      // the write above RETURNED — and on a phone a write can return
+      // before its bytes are durable, leaving a complete marker beside
+      // a truncated file that the atomic swap would then install
+      // flawlessly. Free here: the bytes are already in hand.
+      await deps.vault.adapter.write(marker, await deps.computeSha(bytes));
     },
 
     // Is THIS content already staged and complete? Asked before the
