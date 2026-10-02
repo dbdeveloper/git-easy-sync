@@ -1935,6 +1935,11 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             error:
               "conflict content vanished from the repo — conflict mode cancelled",
           });
+        // 🔴 OUT OF TRACKING, or the epilogue transfers
+        // `tracked.remote` into the baseline for a file nothing wrote
+        // — and the next scan then reads the user's own copy as an
+        // edit and PUSHES it over the repo (found 2026-10-02).
+          state.trackedFiles.delete(path);
           continue;
         }
         await saveConflictSiblingFile(deps.vault, {
@@ -1966,6 +1971,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           path,
           error: "previous sibling file missing from the vault",
         });
+      // 🔴 OUT OF TRACKING — see the note at the first skip site: a
+      // surviving record makes the epilogue claim a baseline the
+      // Vault-step never produced.
+        state.trackedFiles.delete(path);
         continue;
       }
       // ⚠️ GATE FINDING 2026-08-31: `size` MUST be filled here. A
@@ -1996,6 +2005,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // NOT_FOUND class with siblings ≠ [] → skip only, NO mode
         // cancellation — the other tracked siblings still stand (C.9).
         vaultStepErrors.push({ path, error: String(e) });
+        // 🔴 OUT OF TRACKING — see the note at the first skip site: a
+        // surviving record makes the epilogue claim a baseline the
+        // Vault-step never produced.
+        state.trackedFiles.delete(path);
         continue;
       }
 
@@ -2044,6 +2057,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
               path,
               error: `fold result blob ${merged.sha} unavailable`,
             });
+      // 🔴 OUT OF TRACKING — see the note at the first skip site: a
+      // surviving record makes the epilogue claim a baseline the
+      // Vault-step never produced.
+            state.trackedFiles.delete(path);
             continue;
           }
           // Proven size for the sibling we are about to persist —
@@ -2072,6 +2089,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             path,
             error: "remote content for the new sibling vanished (append skipped)",
           });
+      // 🔴 OUT OF TRACKING — see the note at the first skip site: a
+      // surviving record makes the epilogue claim a baseline the
+      // Vault-step never produced.
+          state.trackedFiles.delete(path);
           continue;
         }
         await saveConflictSiblingFile(deps.vault, {
@@ -2154,6 +2175,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // Confirmed-absent data (repo corruption class) — not a network
       // failure, retry won't help: record and move on (§12.5.D).
       vaultStepErrors.push({ path, error: String(e) });
+      // 🔴 OUT OF TRACKING — see the note at the first skip site: a
+      // surviving record makes the epilogue claim a baseline the
+      // Vault-step never produced.
+      state.trackedFiles.delete(path);
       continue;
     }
 
@@ -2188,12 +2213,20 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       if (blob.abort !== null) return blob.abort;
       if (!blob.found) {
         // NOT_FOUND before the record exists → simply don't create it
-        // (same effect as "no conflict this drain"); base NOT
-        // advanced, the next drain retries.
+        // (same effect as "no conflict this drain"), and the next
+        // drain retries.
+        //
+        // ⚠️ This comment used to say "base NOT advanced" and that was
+        // only half true: `tracked.base` indeed stayed, but the
+        // epilogue transfers `tracked.remote` — so the PERSISTED
+        // baseline, which is what the next scan reads, advanced to a
+        // version the vault never received. Dropping the record is
+        // what makes the sentence true (2026-10-02).
         vaultStepErrors.push({
           path,
           error: `remote blob ${tracked.remote.sha} not in repo (conflict not registered)`,
         });
+        state.trackedFiles.delete(path);
         continue;
       }
       if (tracked.remote.deviceLabel === null && headHash !== null) {
@@ -2260,6 +2293,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             path,
             error: `remote blob ${v.sha} not in repo`,
           });
+          // 🔴 OUT OF TRACKING — see the note at the first skip site:
+          // a surviving record makes the epilogue claim a baseline the
+          // Vault-step never produced.
+          state.trackedFiles.delete(path);
           continue;
         }
         if (!(await deps.syncStore.existInSyncStore(v.sha!))) {

@@ -459,6 +459,85 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     });
   });
 
+
+  // ── 🔴 THE BASELINE MAY NOT CLAIM WHAT THE VAULT-STEP DID NOT DO ──
+  //
+  // Found 2026-10-02 while answering "does this affect only our own
+  // plugin?". It affects ANY file.
+  //
+  // The Vault-step has eight places that record a `vaultStepError` and
+  // `continue` — the file is NOT written. But the epilogue transfers
+  // baselines from `tracked.remote` for every surviving record, so the
+  // baseline then says "the vault holds the remote version" about a
+  // file that still holds the old one.
+  //
+  // ⚠️ That lie is not inert. On the next scan the local file differs
+  // from its baseline, so it reads as a LOCAL EDIT; `_diff3` then sees
+  // local moved and remote unmoved, takes the local side, and PUSHES
+  // the stale copy over whatever the repo has. A skip becomes a
+  // silent revert of someone else's change.
+  //
+  // The comment above site 2043 already describes this exact failure
+  // for a neighbouring branch — one instance was fixed, the rest were
+  // left.
+  describe("🔴 a path the Vault-step SKIPPED keeps its old baseline", () => {
+    it("remote blob missing from the repo → error recorded, baseline NOT advanced", async () => {
+      await setupAligned();
+      await world.commitFiles({ "note.md": "REMOTE V2\n" });
+      const remoteSha = await sha("REMOTE V2\n");
+      // The tree names the blob, the blob is gone. Not hypothetical:
+      // this project already carries an open GitHub eventual-consistency
+      // bug (422 BadObjectState on a deletion entry, self-resolving
+      // after ~17 min), so "the object is not there yet" is a state the
+      // engine meets in the field.
+      world.blobs.delete(remoteSha);
+
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(r.vaultStepErrors.map((e) => e.path)).toEqual(["note.md"]);
+      // The vault was not updated...
+      expect(vaultFiles.files.get("note.md")!.content).toBe(V0);
+      // ...so the baseline must still describe what IS on disk.
+      expect(baselines.get("note.md")!.baselineSha).toBe(await sha(V0));
+    });
+
+    it("🔑 the invariant, stated once: no errored path may carry the remote sha as its baseline", async () => {
+      // Written as a property rather than a case so a NEW skip site
+      // added later is covered without anyone remembering to extend a
+      // list.
+      await setupAligned();
+      // A second aligned file, so the property has a neighbour to
+      // prove the skip is per PATH and not per drain.
+      const otherV0 = "other v0\n";
+      await world.commitFiles({ "other.md": otherV0 });
+      baselines.set("other.md", {
+        baselineSha: await sha(otherV0),
+        mtime: 50,
+        size: enc(otherV0).byteLength,
+      });
+      vaultFiles.files.set("other.md", { content: otherV0, mtime: 50 });
+      baseCommit = world.head;
+      await world.commitFiles({
+        "note.md": "REMOTE V2\n",
+        "other.md": "other v1\n",
+      });
+      world.blobs.delete(await sha("REMOTE V2\n"));
+
+      const r = await drainOnce(makeDeps());
+      for (const { path } of r.vaultStepErrors) {
+        const live = vaultFiles.files.get(path);
+        const baseline = baselines.get(path);
+        if (baseline === undefined) continue;
+        expect(baseline.baselineSha).toBe(
+          live === undefined ? baseline.baselineSha : await sha(live.content),
+        );
+      }
+      // ...and the file that DID apply is unaffected by the neighbour's
+      // failure — a skip is per path, not per drain.
+      expect(vaultFiles.files.get("other.md")!.content).toBe("other v1\n");
+    });
+  });
+
   // ── B: rolling base / chaining ───────────────────────────────────
 
   // ⚠️ OUR OWN plugin's loadable files never reach the vault write

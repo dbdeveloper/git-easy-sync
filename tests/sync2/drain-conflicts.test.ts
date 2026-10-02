@@ -291,6 +291,56 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
   // this test green. G.1 (the journal confirms → skip, no network) has
   // its own test in the §VIII G suite, where tracked.base is made to
   // DIFFER so STEP2 is actually entered.
+
+  // ── 🔴 THE SAME LIE, IN THE CONFLICT PATHS ───────────────────────
+  //
+  // The Vault-step's skip sites are mostly HERE: a sibling file gone
+  // from the vault, a fold whose blob is unavailable, a remote that
+  // vanished before the conflict could be registered. Each records a
+  // `vaultStepError` and continues — and the epilogue then transfers
+  // `tracked.remote` into the baseline anyway, about a file nothing
+  // wrote.
+  //
+  // ⚠️ Site 2193 carries a comment claiming "base NOT advanced, the
+  // next drain retries". It is true of `tracked.base` and false of the
+  // PERSISTED baseline, which is what the next scan actually reads —
+  // the same divergence a probe caught in the staging work the day
+  // before.
+  describe("🔴 a conflict path the Vault-step SKIPPED keeps its old baseline", () => {
+    it("a fresh remote whose blob is gone → fold skipped, baseline NOT advanced", async () => {
+      // The conflict must already EXIST for the Vault-step to be the
+      // one that meets the missing blob: inside the batch loop the
+      // same absence makes `_diff3` THROW, which aborts the whole
+      // drain — noisy, but the safe direction (the journal survives
+      // and the next run retries). The quiet, dangerous path is this
+      // one.
+      await setupAligned();
+      await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+      await stageBatch({ [NOTE]: LOCAL_CLASH });
+      vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+      await drainOnce(makeDeps());
+      baseCommit = world.head;
+
+      // A SECOND remote version arrives while the conflict is live,
+      // and its object is not in the repo.
+      const V3 = "REMOTE-3\ntwo\nthree\n";
+      await world.commitFiles({ [NOTE]: V3 });
+      const v3Sha = await sha(V3);
+      world.blobs.delete(v3Sha);
+      const baselineBefore = baselines.get(NOTE)?.baselineSha;
+
+      const r = await drainOnce(makeDeps());
+      expect(r.vaultStepErrors.length).toBeGreaterThan(0);
+      // Nothing of V3 reached the vault — no sibling carries it...
+      for (const f of vaultFiles.files.values()) {
+        expect(f.content).not.toBe(V3);
+      }
+      // ...so the baseline must not have moved to it.
+      expect(baselines.get(NOTE)?.baselineSha).not.toBe(v3Sha);
+      expect(baselines.get(NOTE)?.baselineSha).toBe(baselineBefore);
+    });
+  });
+
   it("C.2: STEP2 dedups the branch push — identical local content is NOT re-pushed; a new edit IS", async () => {
     await setupAligned();
     await world.commitFiles({ [NOTE]: REMOTE_CLASH });
