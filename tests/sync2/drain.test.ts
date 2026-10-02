@@ -629,6 +629,32 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(baselines.get(SELF_MAIN)!.baselineSha).toBe(oldSha);
   });
 
+
+  it("🔴 SELF: a SECOND drain over an already-staged update must not advance the baseline either", async () => {
+    // The skip matrix found this one, and it is mine: the early
+    // "already staged, do not re-download" short-circuit returned
+    // WITHOUT dropping the tracked record, so the epilogue still wrote
+    // the new sha as the baseline while the running `main.js` was
+    // still the old one. The next scan would read the RUNNING version
+    // as a local edit and push it — the self-downgrade the staging
+    // path was built to prevent, one drain later.
+    const SELF_MAIN = `.obsidian/plugins/${PLUGIN_ID}/main.js`;
+    baseCommit = await world.commitFiles({ [SELF_MAIN]: "OLD CODE" });
+    const oldSha = await sha("OLD CODE");
+    baselines.set(SELF_MAIN, { baselineSha: oldSha, mtime: 50, size: 8 });
+    vaultFiles.files.set(SELF_MAIN, { content: "OLD CODE", mtime: 50 });
+    await world.commitFiles({ [SELF_MAIN]: "NEW CODE" });
+
+    await drainOnce(makeDeps());           // stages it
+    baseCommit = world.head;                // the pointer moved on
+    await drainOnce(makeDeps());           // asks again, finds it staged
+
+    // The vault still runs the old code, so the baseline must still
+    // describe the old code.
+    expect(vaultFiles.files.get(SELF_MAIN)!.content).toBe("OLD CODE");
+    expect(baselines.get(SELF_MAIN)!.baselineSha).toBe(oldSha);
+  });
+
   it("SELF: a staged update is not re-downloaded on the next sync", async () => {
     // The pending update outlives the drain that fetched it — on a
     // phone, re-pulling a megabyte on every sync until the user

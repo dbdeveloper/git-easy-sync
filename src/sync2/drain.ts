@@ -2371,6 +2371,18 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       v.sha !== null &&
       isOwnPluginRecoverableFile(path, configDir, deps.selfPluginId);
     if (isSelf && (await deps.vaultFiles.isSelfUpdateStaged(path, v.sha!))) {
+      // 🔴 OUT OF TRACKING, and the same trap as the staging site one
+      // branch below — found by the skip matrix, 2026-10-02. The
+      // update is STAGED, not applied: the running `main.js` is still
+      // the old one. A surviving record makes the epilogue write the
+      // new sha as the baseline, and the next scan then reads the
+      // RUNNING version as a local edit and pushes it — the
+      // self-downgrade the staging path exists to prevent, arriving
+      // one drain later.
+      state.trackedFiles.delete(path);
+      // Still pending, so the question stays open: if the bootloader
+      // later refuses these bytes, the next run must know to ask.
+      await noteRecheck(path);
       continue;
     }
     if (v.mode === DELETED || v.sha === DELETED_SHA_HASH) {
