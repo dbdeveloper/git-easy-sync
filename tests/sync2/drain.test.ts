@@ -915,6 +915,184 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(batches[0].removed).toBe(true);
   });
 
+  // ── §VIII D — crashes BETWEEN the epilogue's steps ────────────────
+  //
+  // Phase 6, crash matrix. The epilogue is five durable writes in a
+  // fixed order — baselines, conflicts, the hot anchor, the journal's
+  // death, the sweep — and the gaps between them are the last places a
+  // run can die. They are also the most dangerous, because by this
+  // point everything has already been PUSHED: a mistake here cannot
+  // lose a commit, it can only make the next run misread what the last
+  // one achieved.
+  //
+  // ⚠️ WHAT THESE CELLS DO *NOT* PROVE, learned by probing them. The
+  // obvious claim to write here is "the redo recovers the Vault-step
+  // work", and it would be VACUOUS: the Vault-step runs to completion
+  // BEFORE the epilogue begins, so at every gap below the vault is
+  // already correct and the assertion passes without the redo doing
+  // anything. The probe that exposed this made the redo ignore the
+  // journal entirely — and the cells stayed green.
+  //
+  // So the real claims are narrower and worth stating plainly:
+  //   • no epilogue gap can lose VAULT work, because there is none
+  //     left to lose by then — that is a property of the ORDER, and
+  //     the order is what the intermediate assertions pin;
+  //   • a redo entered with a half-finished epilogue must be a NO-OP
+  //     that finishes it — it must not push, must not revert, and must
+  //     bury the journal;
+  //   • the journal is still alive at gaps 1→2, 2→3 and 3→4 (it dies
+  //     at step 4), and that presence is what stops the next run from
+  //     reading a half-finished epilogue as a finished one.
+  //
+  // Verified by mutation: swapping steps 3 and 4 kills two of the
+  // three cells on exactly the assertions that describe the order.
+  //
+  // 📌 And the journal's own load-bearing role — that a redo RESUMES
+  // from it rather than starting blank — is pinned where it belongs,
+  // not here: making the drain ignore `journal.load()` fails J.1, J.6,
+  // G.8, B.3 and A1 п.24b, and none of these three. Worth knowing so
+  // nobody "strengthens" these cells into a duplicate of J.1.
+  describe("epilogue crash windows (§III steps 1-5)", () => {
+    // ⚠️ THE SCENARIO NEEDS A PUSH, and finding that out was the point
+    // of writing these cells. A PULL-ONLY drain never persists the
+    // journal at all — only a completed batch does — so on a pull-only
+    // run these four gaps have no journal to recover from. They are
+    // safe there for a different reason: the Vault-step finishes
+    // BEFORE the epilogue starts, so by step 1 there is no vault work
+    // left to lose. The gaps only become interesting once a journal
+    // exists, i.e. once something was pushed.
+    //
+    // So: one local edit (push → the journal gets persisted) plus one
+    // unrelated remote file (pull → there is Vault-step work the redo
+    // could drop).
+    const setupPushAndPull = async (): Promise<void> => {
+      await setupAligned();
+      await stageBatch({ "note.md": "LOCAL\n" });
+      vaultFiles.files.set("note.md", { content: "LOCAL\n", mtime: 100 });
+      await world.commitFiles({ "pulled.md": "REMOTE V1\n" });
+    };
+
+    it("D: crash in the 1→2 gap (baselines written, conflicts not saved) → the redo converges", async () => {
+      await setupPushAndPull();
+      const d1 = makeDeps();
+      let baselinesWritten = false;
+      const origSet = d1.baselines.setMany;
+      d1.baselines.setMany = async (entries) => {
+        baselinesWritten = true;
+        return origSet(entries);
+      };
+      // ⚠️ `d1.conflictStore` IS the shared store, not a copy — the
+      // override has to be undone or it would poison the redo (and
+      // the redo is the half this cell exists to check).
+      const origSave = conflictStore.save.bind(conflictStore);
+      conflictStore.save = async (c) => {
+        // Only the EPILOGUE's save — the per-batch one has already
+        // run by then, and throwing there would be a different cell.
+        if (baselinesWritten) throw new Error("power loss in the 1→2 gap");
+        return origSave(c);
+      };
+      try {
+        await expect(drainOnce(d1)).rejects.toThrow("1→2 gap");
+      } finally {
+        conflictStore.save = origSave;
+      }
+
+      // The intermediate state: step 1 DID land…
+      expect(baselinesWritten).toBe(true);
+      expect(baselines.get("pulled.md")!.baselineSha).toBe(
+        await sha("REMOTE V1\n"),
+      );
+      // …and the journal is still there, which is what makes the rest
+      // recoverable rather than merely undamaged.
+      expect(await journal.load()).not.toBeNull();
+
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.files.get("pulled.md")!.content).toBe("REMOTE V1\n");
+      expect(await journal.load()).toBeNull(); // step 4 finally ran
+    });
+
+    it("D: crash in the 2→3 gap (anchor not moved) → the redo re-reads the same head and converges", async () => {
+      await setupPushAndPull();
+      const d1 = makeDeps();
+      d1.hot.update = async () => {
+        throw new Error("power loss in the 2→3 gap");
+      };
+      await expect(drainOnce(d1)).rejects.toThrow("2→3 gap");
+
+      // The anchor is untouched, so the next discovery asks the SAME
+      // question again and must answer it the same way. This is the
+      // benign direction by construction: re-reporting a remote change
+      // the vault already holds folds to a no-op.
+      expect(await journal.load()).not.toBeNull();
+
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(r.pushedCommits).toHaveLength(0); // nothing invented
+      expect(vaultFiles.files.get("pulled.md")!.content).toBe("REMOTE V1\n");
+    });
+
+    it("🔑 D: crash in the 3→4 gap — the anchor MOVED but the journal lived; the redo is a clean no-op that buries it", async () => {
+      // The sharpest of the three, because the two durable facts
+      // DISAGREE: the anchor says "synced up to here", the journal
+      // says "a run died mid-way". Discovery will report nothing (the
+      // delta is empty by construction), so the redo runs with the
+      // journal as its only description of what happened.
+      //
+      // The danger here is NOT losing the pull — that landed before
+      // the epilogue started. It is the redo deciding to DO something
+      // with a state it misreads: pushing the pulled file back as a
+      // local edit, or reverting it. A no-op is the only correct
+      // outcome, and "no-op" is what the assertions below spell out.
+      await setupPushAndPull();
+      const d1 = makeDeps();
+      // A FAITHFUL fake for this cell: the real hot store persists,
+      // so the moved anchor must survive into the next run. The
+      // default harness records updates without applying them, which
+      // would quietly turn this into the 2→3 cell.
+      d1.hot.update = async (f) => {
+        if (f.lastSyncCommitSha !== undefined) {
+          baseCommit = f.lastSyncCommitSha;
+        }
+      };
+      const origClear = journal.clear.bind(journal);
+      journal.clear = async () => {
+        throw new Error("power loss in the 3→4 gap");
+      };
+      try {
+        await expect(drainOnce(d1)).rejects.toThrow("3→4 gap");
+      } finally {
+        journal.clear = origClear;
+      }
+
+      // The intermediate state that defines this window — the two
+      // durable facts disagreeing, which is the whole point.
+      expect(baseCommit).toBe(world.head); // anchor moved…
+      expect(await journal.load()).not.toBeNull(); // …journal survived
+      // And the pull had ALREADY landed: this is why no epilogue gap
+      // can lose vault work, stated as an assertion rather than left
+      // for the reader to infer.
+      expect(vaultFiles.files.get("pulled.md")!.content).toBe("REMOTE V1\n");
+      const headBefore = world.head;
+      const commitsBefore = world.commits.length;
+
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      // A NO-OP, spelled out: nothing pushed, the head did not move,
+      // the pulled file was neither reverted nor sent back as if it
+      // were a local edit…
+      expect(r.pushedCommits).toHaveLength(0);
+      expect(world.head).toBe(headBefore);
+      expect(world.commits.length).toBe(commitsBefore);
+      expect(vaultFiles.files.get("pulled.md")!.content).toBe("REMOTE V1\n");
+      expect(baselines.get("pulled.md")!.baselineSha).toBe(
+        await sha("REMOTE V1\n"),
+      );
+      // …and the one thing that WAS owed is now done.
+      expect(await journal.load()).toBeNull();
+    });
+  });
+
   // ── A1 п.22-25: the drain's half of the .obsidian/ mtime tiebreak ──
   //
   // The pure half lives in diff3.test.ts (the exhaustive sensitivity
