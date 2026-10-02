@@ -646,6 +646,77 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     // a fresh, healthy conflict — that is the designed self-heal.
   });
 
+  // ── §VIII D — the OTHER RECONCILE window ─────────────────────────
+  //
+  // C.8 cancels a conflict in three statements: drop it from the
+  // in-memory map, lower the tracked flag, save the store. A crash in
+  // the gap loses the first two (they were only ever in memory) and
+  // never performs the third — so the disk still describes a LIVE
+  // conflict, and the journal's flag still matches it.
+  //
+  // That consistency is the whole answer: the pair is the benign one
+  // of W1's four states, so the next run simply does the cancellation
+  // again. Worth a cell precisely because the site looks dangerous —
+  // it is the one place the engine deletes a conflict record outright.
+  //
+  // ⚠️ WHAT THIS CELL DOES *NOT* PIN, found by probing it. The
+  // tempting claim is that the three statements must run in THIS order
+  // (save last). They need not: inverting them — save first, then
+  // delete — changes nothing observable, because the epilogue's step-2
+  // save writes the same map a moment later and is the real backstop.
+  // The probe that inverted the order left all 47 tests green,
+  // including this one.
+  //
+  // Nor does the early save make the window safer. After it succeeds
+  // the disk holds (no record) while the journal still holds (flag) —
+  // W1's forbidden-looking pair, reached legitimately yet again, and
+  // handled by RECONCILE (pinned by the 2→4 cell below). So the early
+  // save narrows the window, it does not remove it, and the cell
+  // claims only what it shows: a crash before the cancel is durable
+  // leaves a LIVE, self-consistent conflict, and the redo reaches the
+  // same verdict and records it.
+  it("D: crash between the in-memory cancel and its durable save → the conflict is still LIVE on disk; the redo cancels it properly", async () => {
+    await setupAligned();
+    await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+    world.blobs.delete(await sha(REMOTE_CLASH));
+
+    // ⚠️ The store is shared, so the override must come back off
+    // before the redo — the redo is the half being checked.
+    const origSave = conflictStore.save.bind(conflictStore);
+    conflictStore.save = async (c) => {
+      // Fire ONLY on the cancelling save: the record is gone from the
+      // map being written, which no other save in this run can say.
+      if (!c.entries.has(NOTE)) {
+        throw new Error("power loss before the cancel became durable");
+      }
+      return origSave(c);
+    };
+    try {
+      await expect(
+        drainOnce(makeDeps({ maxAutoMergeFileSize: () => 1 })),
+      ).rejects.toThrow("power loss before the cancel");
+    } finally {
+      conflictStore.save = origSave;
+    }
+
+    // THE INTERMEDIATE STATE: disk unchanged, so the conflict is still
+    // live — and the journal agrees with it. Benign by construction.
+    const durable = await conflictStore.load();
+    expect(durable.entries.has(NOTE)).toBe(true);
+    const js = await journal.load();
+    expect(js!.trackedFiles.get(NOTE)?.isManualConflict).toBe(true);
+
+    // The redo reaches the same verdict and this time records it.
+    const r2 = await drainOnce(makeDeps({ maxAutoMergeFileSize: () => 1 }));
+    expect(r2.status).toBe("ok");
+    expect(r2.cancelledConflicts).toEqual([NOTE]);
+    expect((await conflictStore.load()).entries.has(NOTE)).toBe(false);
+    // The user's own copy was never touched through any of this.
+    expect(vaultFiles.files.get(NOTE)!.content).toBe(LOCAL_CLASH);
+  });
+
   it("C.9: the same NOT_FOUND with an EXISTING sibling → skip only, the record and the older sibling survive", async () => {
     await setupAligned();
     await world.commitFiles({ [NOTE]: REMOTE_CLASH });
@@ -1538,6 +1609,103 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     expect(r.status).toBe("ok");
     return [...world.branchHeads.keys()][0];
   };
+
+  // ── §VIII D — the two RECONCILE windows ──────────────────────────
+  //
+  // Phase 6, crash matrix. Both are about the pair (journal flag,
+  // durable record), and they are interesting because the SAFE state
+  // and the DESTRUCTIVE one look identical on disk.
+  //
+  // The invariant the batch loop maintains is "a flag readable from
+  // the journal implies a durable record" — W1's lesson, bought with a
+  // silent G9-class clobber. The epilogue BREAKS that invariant on
+  // purpose in its step-2→step-4 gap: step 2 saves a conflicts file
+  // that no longer holds the record, while the journal persisted back
+  // at batch end still carries the flag.
+  //
+  // ⚠️ So the on-disk state here is EXACTLY the one W1 called
+  // destructive — flag, no record — and RECONCILE will do exactly what
+  // it did there: read the empty scan as "resolved externally" and
+  // drop the flag. The difference is not in the state but in how it
+  // was reached: here the record is gone BECAUSE the user genuinely
+  // resolved the conflict, so RECONCILE's conclusion is true. W1's fix
+  // did not teach the engine to tell the two apart — it made the
+  // false one unreachable by ordering. This cell pins that the true
+  // one still works, which is the other half of that bargain.
+  it("🔑 D: crash in the epilogue's 2→4 gap (durable already closed, journal still flagged) → RECONCILE self-heals", async () => {
+    await setup();
+    const branch = await birthConflict();
+    const rec = (await conflictStore.load()).entries.get(NOTE2)!;
+    const sibling = path.join(
+      dir,
+      buildSiblingFilePath(NOTE2, rec.siblings[0].mtime!, "other-device"),
+    );
+
+    // ⚠️ THE TIMING IS THE WHOLE CELL, and the first draft got it
+    // wrong. Resolving BEFORE the drain does not reach this window:
+    // the record is then closed by the scan at drain START, so the
+    // flag is never seeded and the journal persists with it already
+    // down. The forbidden pair needs the conflict to be OPEN when the
+    // batch persists the journal, and CLOSED by the time step 2 saves
+    // — i.e. the sibling has to disappear mid-run. Which it really
+    // can: the Vault-step removes sibling duplicates, and the user can
+    // delete the file at any moment.
+    //
+    // So: an unrelated file gives the run a batch (and with it a
+    // journal carrying the flag), and the sibling vanishes during
+    // epilogue step 1.
+    await stage({ "other.md": "other v1\n" });
+    vaultFiles.files.set("other.md", { content: "other v1\n", mtime: 300 });
+    baseCommit = world.head;
+
+    const d2 = deps();
+    const origSetMany = d2.baselines.setMany;
+    d2.baselines.setMany = async (entries) => {
+      if (fs.existsSync(sibling)) fs.rmSync(sibling); // between steps 1 and 2
+      return origSetMany(entries);
+    };
+
+    // Crash at step 4 — after step 2 has written the now-closed
+    // conflicts file.
+    const origClear = journal.clear.bind(journal);
+    journal.clear = async () => {
+      throw new Error("power loss in the 2→4 gap");
+    };
+    try {
+      await expect(drainOnce(d2)).rejects.toThrow("2→4 gap");
+    } finally {
+      journal.clear = origClear;
+    }
+
+    // THE INTERMEDIATE STATE — the forbidden-looking pair, reached
+    // legitimately. Asserting BOTH halves is the point: either one
+    // alone would also hold in states this cell is not about.
+    expect((await conflictStore.load()).entries.has(NOTE2)).toBe(false);
+    const js = await journal.load();
+    expect(js).not.toBeNull();
+    expect(js!.trackedFiles.get(NOTE2)?.isManualConflict).toBe(true);
+
+    // The redo: RECONCILE must resolve the disagreement in favour of
+    // the durable store, say so out loud, and finish the job.
+    const warnings: string[] = [];
+    const r2 = await drainOnce(
+      deps({
+        logger: { info: () => {}, warn: (m: string) => warnings.push(m) },
+      } as Partial<DrainDeps>),
+    );
+    expect(r2.status).toBe("ok");
+    expect(warnings.some((w) => w.startsWith("RECONCILE:"))).toBe(true);
+    expect(await journal.load()).toBeNull();
+    // …and nothing was clobbered: the conflict closed because its
+    // sibling went away, so main keeps the remote version it already
+    // had. The W1 failure would show up right here, as the LOCAL copy
+    // silently overwriting it.
+    expect(dec(world.headFiles().get(NOTE2)!.bytes)).toBe(REMOTE_B);
+    // The branch was merged and deleted — FINALIZE ran once the flag
+    // came down, which is the behaviour that makes this window close
+    // rather than repeat.
+    expect(world.branchHeads.has(branch)).toBe(false);
+  });
 
   it("§II.17: a cancel landing just before FINALIZE skips the merge — and the NEXT drain does it", async () => {
     // FINALIZE is another multi-request stretch (compare, getCommit,
