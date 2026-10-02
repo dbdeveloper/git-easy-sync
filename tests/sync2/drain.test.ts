@@ -25,6 +25,10 @@ import {
 import { NetworkError, ValidationError } from "../../src/errors";
 import { calculateGitBlobSHA } from "../../src/utils";
 import { setMockApiVersion } from "../../mock-obsidian";
+import {
+  addRecheckPaths,
+  readRecheckPaths,
+} from "../../src/sync2/recheck-paths";
 
 // §VIII B (rolling base / chaining, §II.3-II.5) + P.1-12/27-29
 // (Layer 2 + the lying-discovery model) + L (sequential per-file,
@@ -499,6 +503,55 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       expect(vaultFiles.files.get("note.md")!.content).toBe(V0);
       // ...so the baseline must still describe what IS on disk.
       expect(baselines.get("note.md")!.baselineSha).toBe(await sha(V0));
+    });
+
+
+    it("🔑 a path named in the recheck note is ASKED ABOUT, even though no delta mentions it", async () => {
+      // The stranding, end to end. The remote moved while the path was
+      // being skipped; the pointer then advanced past that commit, so
+      // `compare(base…head)` will never name it again. Without the
+      // note the file stays old forever — silently, because locally
+      // everything agrees.
+      await setupAligned();
+      await world.commitFiles({ "note.md": "REMOTE V2\n" });
+      // We are "already synced" past the commit that changed it.
+      baseCommit = world.head;
+      await addRecheckPaths(
+        vault.adapter as never,
+        `.obsidian/plugins/${PLUGIN_ID}`,
+        ["note.md"],
+      );
+
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.files.get("note.md")!.content).toBe("REMOTE V2\n");
+      expect(baselines.get("note.md")!.baselineSha).toBe(
+        await sha("REMOTE V2\n"),
+      );
+      // The note is consumed by a drain that finished.
+      expect(
+        (
+          await readRecheckPaths(
+            vault.adapter as never,
+            `.obsidian/plugins/${PLUGIN_ID}`,
+            `.obsidian/plugins/${PLUGIN_ID}`,
+          )
+        ).paths,
+      ).toEqual([]);
+    });
+
+    it("a skip LEAVES the note, so the next drain asks", async () => {
+      await setupAligned();
+      await world.commitFiles({ "note.md": "REMOTE V2\n" });
+      world.blobs.delete(await sha("REMOTE V2\n"));
+
+      await drainOnce(makeDeps());
+      const left = await readRecheckPaths(
+        vault.adapter as never,
+        `.obsidian/plugins/${PLUGIN_ID}`,
+        `.obsidian/plugins/${PLUGIN_ID}`,
+      );
+      expect(left.paths).toEqual(["note.md"]);
     });
 
     it("🔑 the invariant, stated once: no errored path may carry the remote sha as its baseline", async () => {

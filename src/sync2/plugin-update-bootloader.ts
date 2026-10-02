@@ -49,6 +49,7 @@
 // causes onload to fall through), the sweep catches the same case.
 
 import type { DataAdapter } from "obsidian";
+import { addRecheckPaths } from "./recheck-paths";
 
 // Files in our plugin's directory the bootloader recovers. Each gets
 // the same 4-case marker logic. data.json is excluded — we don't
@@ -173,6 +174,13 @@ async function recoverOneFile(
         } catch {
           // best-effort
         }
+        // ...and ASK AGAIN. Dropping the pair leaves the update
+        // stranded otherwise: the baseline still describes the file on
+        // disk (correctly — nothing was applied), and the commit that
+        // carried the new version is already behind the sync pointer,
+        // so no future delta will mention it. The note is what makes
+        // the next drain ask the server directly.
+        await addRecheckPaths(adapter, pluginDir, [finalPath]);
         return { kind: "drop-orphan-ges-tmp" };
       }
     }

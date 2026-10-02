@@ -61,6 +61,11 @@ import {
   pluginFolderOf,
   type HeldPluginUpdates,
 } from "./held-plugins";
+import {
+  addRecheckPaths,
+  dropRecheckPath,
+  readRecheckPaths,
+} from "./recheck-paths";
 import { NewTreeRequestItem } from "../github/client";
 import ConflictStoreV2, {
   ConflictsState,
@@ -449,6 +454,28 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // design.
   const selfUpdateStaged: string[] = [];
   const configDir = deps.vault.configDir;
+  const selfPluginDir = `${configDir}/plugins/${deps.selfPluginId}`;
+  // Paths this run SKIPPED. Each one is invisible to every future
+  // delta (the pointer advances past the commit that carried the
+  // change), so the next drain is told to ask about them directly —
+  // owner, 2026-10-02: «краще зайвий раз перепитати ніж щось
+  // пропустити».
+  const recheck = new Set<string>();
+  // What a PREVIOUS run (or the bootloader) asked us to re-check.
+  // Read once; the epilogue replaces the file with whatever THIS run
+  // still owes, so a consumed request disappears and a repeated skip
+  // survives.
+  const requestedRecheck = await readRecheckPaths(
+    deps.vault.adapter,
+    selfPluginDir,
+    selfPluginDir,
+  );
+  if (requestedRecheck.torn) {
+    deps.logger?.warn(
+      "recheck note unreadable — falling back to our own plugin files",
+      { paths: requestedRecheck.paths },
+    );
+  }
   let finalizedMergeSha: string | null = null;
 
   // ── PLUGIN-UPDATE-COMPAT Фаза 2 (§5.12) — the ONE gate ────────────
@@ -514,6 +541,12 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         f.path.startsWith(prefix),
       );
       const seen = new Set<string>();
+      // Any file of the bundle that could not be applied keeps the
+      // whole hold in place. A plugin is not four independent files:
+      // lifting on a PARTIAL apply would leave the folder mixed, with
+      // nothing left to say so — the record is the only thing that
+      // remembers this plugin is waiting.
+      let incomplete = false;
       for (const f of remote) {
         seen.add(f.path);
         const live = await deps.vaultFiles.read(f.path);
@@ -537,6 +570,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             path: f.path,
             error: `held update: blob ${f.sha} not in repo`,
           });
+          incomplete = true;
           continue;
         }
         if (isSelf) {
@@ -583,6 +617,12 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       //    Dropping it first and failing afterwards would leave live
       //    paths with restored-but-stale baselines — the downgrade
       //    again, in a new wrapper.
+      if (incomplete) {
+        deps.logger?.warn("hold NOT lifted: the bundle applied only partly", {
+          id,
+        });
+        continue;
+      }
       delete held[id];
       await deps.hot.update({ heldPluginUpdates: { ...held } });
       deps.logger?.info("plugin update hold LIFTED", {
@@ -964,6 +1004,50 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
               mode: file.deleted ? DELETED : "",
             },
             isManualConflict: false,
+          });
+        }
+      }
+
+      // «Краще зайвий раз перепитати ніж щось пропустити» (owner,
+      // 2026-10-02). A path a previous run SKIPPED is invisible to
+      // every delta from now on — the pointer advanced past the commit
+      // that carried its change — so the only way back is to ask the
+      // server about it DIRECTLY. One metadata request per path, and
+      // only for paths something already went wrong with.
+      if (headHash !== null) {
+        for (const p of requestedRecheck.paths) {
+          if (state.trackedFiles.has(p)) continue; // the delta brought it anyway
+          const meta = await deps.retry.run(() =>
+            deps.client.getContentsMetadataAtRef(p, headHash!),
+          );
+          if (meta.error !== null) return statusFromError(meta.error, result);
+          if (meta.result === null) {
+            // Absent at head. NOT read as a deletion: this note can
+            // name a path that never reached the repo at all, and
+            // inventing a delete from "I asked and got nothing" is how
+            // a skip would turn into data loss. Dropping the question
+            // is safe — the file on disk still matches its baseline.
+            continue;
+          }
+          const baseline = await deps.baselines.get(p);
+          state.trackedFiles.set(p, {
+            base: {
+              ...emptyFileInfo(),
+              path: baseline !== undefined ? p : null,
+              sha: baseline?.baselineSha ?? null,
+              size: baseline?.size ?? null,
+              mtime: baseline?.mtime ?? null,
+            },
+            remote: {
+              ...emptyFileInfo(),
+              path: p,
+              sha: meta.result.sha,
+              size: meta.result.size,
+            },
+            isManualConflict: false,
+          });
+          deps.logger?.info("re-asking about a previously skipped path", {
+            path: p,
           });
         }
       }
@@ -1940,6 +2024,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // — and the next scan then reads the user's own copy as an
         // edit and PUSHES it over the repo (found 2026-10-02).
           state.trackedFiles.delete(path);
+          recheck.add(path);
           continue;
         }
         await saveConflictSiblingFile(deps.vault, {
@@ -1975,6 +2060,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // surviving record makes the epilogue claim a baseline the
       // Vault-step never produced.
         state.trackedFiles.delete(path);
+        recheck.add(path);
         continue;
       }
       // ⚠️ GATE FINDING 2026-08-31: `size` MUST be filled here. A
@@ -2009,6 +2095,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // surviving record makes the epilogue claim a baseline the
         // Vault-step never produced.
         state.trackedFiles.delete(path);
+        recheck.add(path);
         continue;
       }
 
@@ -2061,6 +2148,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // surviving record makes the epilogue claim a baseline the
       // Vault-step never produced.
             state.trackedFiles.delete(path);
+            recheck.add(path);
             continue;
           }
           // Proven size for the sibling we are about to persist —
@@ -2093,6 +2181,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // surviving record makes the epilogue claim a baseline the
       // Vault-step never produced.
           state.trackedFiles.delete(path);
+          recheck.add(path);
           continue;
         }
         await saveConflictSiblingFile(deps.vault, {
@@ -2179,6 +2268,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // surviving record makes the epilogue claim a baseline the
       // Vault-step never produced.
       state.trackedFiles.delete(path);
+      recheck.add(path);
       continue;
     }
 
@@ -2227,6 +2317,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           error: `remote blob ${tracked.remote.sha} not in repo (conflict not registered)`,
         });
         state.trackedFiles.delete(path);
+        recheck.add(path);
         continue;
       }
       if (tracked.remote.deviceLabel === null && headHash !== null) {
@@ -2297,6 +2388,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           // a surviving record makes the epilogue claim a baseline the
           // Vault-step never produced.
           state.trackedFiles.delete(path);
+          recheck.add(path);
           continue;
         }
         if (!(await deps.syncStore.existInSyncStore(v.sha!))) {
@@ -2339,6 +2431,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // bootloader applies the update the next scan sees disk ==
       // remote and settles the baseline in one no-op pass.
       state.trackedFiles.delete(path);
+      recheck.add(path);
       continue;
     }
     let writePath = path;
@@ -2355,6 +2448,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           { remote: path, local_canonical: canonical },
         );
         state.trackedFiles.delete(path);
+        recheck.add(path);
         continue;
       }
       deps.logger?.info("Vault-step: sanitized remote forbidden path", {
@@ -2380,6 +2474,22 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // Order: step 2 MUST precede step 4 (after the journal dies, the
   // durable store is the only conflicts carrier); 1/3 are
   // interchangeable under the same redo umbrella.
+
+  // The note for the NEXT run: exactly what THIS run still owes.
+  // Written here, in the epilogue, so a consumed request disappears
+  // and a repeated skip survives — and so a drain that ABORTED leaves
+  // the previous note untouched rather than replacing it with a
+  // half-formed one.
+  if (recheck.size > 0) {
+    await addRecheckPaths(deps.vault.adapter, selfPluginDir, [...recheck]);
+  }
+  for (const consumed of requestedRecheck.paths) {
+    if (recheck.has(consumed)) continue;
+    // Asked and answered — drop it from the note. Done one path at a
+    // time rather than by wiping the file, because the bootloader may
+    // have added a request WHILE this drain was running.
+    await dropRecheckPath(deps.vault.adapter, selfPluginDir, consumed);
+  }
 
   // Step 1 — baseline transfer: each tracked path's final remote
   // becomes the durable per-file baseline. GROUP ops (§2.2.1) — K
