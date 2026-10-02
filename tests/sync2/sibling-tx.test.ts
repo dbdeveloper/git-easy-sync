@@ -206,6 +206,52 @@ describe("SiblingTx (§II.11 / §VIII C.14-22)", () => {
     expect(fs.existsSync(markAbs())).toBe(false);
   });
 
+  // ── §VIII D — the LAST boundary of the five (Phase 6) ────────────
+  //
+  // C.15-C.17 walk the transaction's first three gaps; this is the
+  // fourth, and the only one the suite had no cell for: steps 1-4 all
+  // happened, the crash landed before the unmark. On disk that is a
+  // mark standing over a transaction that is already COMPLETE — the
+  // old file gone, the new one in place, the store committed.
+  //
+  // It is the quietest of the five and the easiest to leave untested,
+  // because nothing is broken: recovery has to notice there is
+  // nothing to do and still clean up after itself. The failure it
+  // guards against is not corruption but a mark that never goes away
+  // — and a permanent mark means every subsequent drain pays for a
+  // store load it does not need, forever.
+  it("D: crash AFTER deleting the old file, BEFORE the unmark → recovery writes nothing and just clears the mark", async () => {
+    const oldSib = await sibling("old\n", 1000);
+    const newSib = await sibling("merged\n", 2000);
+    // Step 4 already ran: the old evidence is gone.
+    fs.rmSync(siblingAbs(oldSib));
+    const committed = stateWith([{ ...newSib, blob: null }]);
+    committed.lastSiblingTxGuid = "guid-test";
+    await store.save(committed);
+    let saves = 0;
+    const origSave = store.save.bind(store);
+    store.save = async (s) => {
+      saves += 1;
+      return origSave(s);
+    };
+    await (tx as never as { writeMark: (m: unknown) => Promise<void> })[
+      "writeMark"
+    ]({ guid: "guid-test", path: BASE, oldSibling: oldSib, newSibling: newSib });
+
+    await tx.recoverIfNeeded();
+
+    // Nothing written: the guid matches and the new file verifies, so
+    // the forward path finds step 3 done and step 4 a 404-tolerant
+    // no-op.
+    expect(saves).toBe(0);
+    expect((await store.load()).lastSiblingTxGuid).toBe("guid-test");
+    // The new sibling is untouched — recovery must not mistake "the
+    // old file is missing" for "the new one is the thing to roll back".
+    expect(fs.existsSync(siblingAbs(newSib))).toBe(true);
+    // …and the one thing that WAS owed is done.
+    expect(fs.existsSync(markAbs())).toBe(false);
+  });
+
   it("C.18: new file CORRUPT at recovery, old intact on disk, store already committed → rollback to the old sibling, guid nulled", async () => {
     const oldSib = await sibling("old\n", 1000); // intact on disk
     const newSib = await sibling("merged\n", 2000, "phone", false);

@@ -1091,6 +1091,51 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       // …and the one thing that WAS owed is now done.
       expect(await journal.load()).toBeNull();
     });
+
+    it("D: crash in the 4→5 gap (journal already dead, sweep never ran) → the NEXT drain's sweep reaps what was left", async () => {
+      // The last gap, and the only one that cannot be reached by
+      // throwing: `sweepSyncStore` swallows its own errors by design,
+      // so a failure there never escapes. Dying in this window means
+      // the PROCESS died, and the only thing an outside observer can
+      // see afterwards is the effect — the sweep simply did not
+      // happen. So the cell stages the effect, not the throw.
+      //
+      // §IV.2 row 12 is the claim: with the journal gone the next
+      // drain's epilogue is a chain of no-ops, and the sweep is the
+      // one thing it still performs. ⚠️ Since the owner cancelled the
+      // onload sweep (D.22, 2026-10-02) this IS the recovery path —
+      // there is no backstop behind it, so it had better work.
+      //
+      // 📌 What it does NOT pin, measured: the drain sweeps at BOTH
+      // boundaries, and deleting the start-of-drain call leaves this
+      // cell green — the end-of-drain one reaps the orphan anyway. So
+      // read it as "a later drain cleans up", not as a claim about
+      // which of the two points did it. S3 covers both points.
+      await setupAligned();
+      const orphan = await sha("orphan bytes\n");
+      await syncStore.saveBlobToSyncStore(orphan, enc("orphan bytes\n"));
+      const refs = { queueReferencedShas: async () => new Set<string>() };
+
+      // Drain 1 reaches its end with the sweep never running.
+      const d1 = makeDeps(refs);
+      const origSweep = syncStore.sweep.bind(syncStore);
+      syncStore.sweep = (async () => ({ removed: 0, kept: 0 })) as never;
+      try {
+        expect((await drainOnce(d1)).status).toBe("ok");
+      } finally {
+        syncStore.sweep = origSweep;
+      }
+      // The intermediate state: the journal is gone (step 4 ran) and
+      // the orphan is still there (step 5 did not).
+      expect(await journal.load()).toBeNull();
+      expect(await syncStore.existInSyncStore(orphan)).toBe(true);
+
+      // Drain 2: nothing to push, nothing to pull — and the sweep.
+      const r = await drainOnce(makeDeps(refs));
+      expect(r.status).toBe("ok");
+      expect(r.pushedCommits).toHaveLength(0);
+      expect(await syncStore.existInSyncStore(orphan)).toBe(false);
+    });
   });
 
   // ── A1 п.22-25: the drain's half of the .obsidian/ mtime tiebreak ──
