@@ -264,6 +264,24 @@ Use it, and note which runs you did.
 
 - [ ] **Mobile autosave benchmark** (Settings → *Run mobile autosave benchmark*): run on a mid-tier Android and on iOS; collect the p50/p95/p99 figures and send the log so the autosave timing can be tuned.
 - [ ] A large conflict (hundreds of change blocks) in the diff editor stays responsive on mobile.
+- [ ] 📱🖥️ **The FIRST sync after a large pull — the self-heal pass.** Pull several
+      hundred files from another device, then sync again and time the *Committing…*
+      phase. ⚠️ It is EXPECTED to be slow once, and the second sync after it must be
+      fast again — that pair is the pass condition, not any single number.
+
+      Why it happens, so a tester does not file it as a hang: the epilogue writes
+      `mtime: 0` into the baseline of every path the drain TOUCHED. That is deliberate
+      (D.15) — a real mtime there could hide an edit the user made DURING the drain
+      behind the change detector's stat short-circuit, permanently. The cost is that
+      those paths cannot short-circuit on the next scan, so each is re-read and
+      re-hashed exactly once (D.14, "self-healing"), after which the real mtime is
+      written back.
+
+      ⚠️ The cost is proportional to what the sync TOUCHED, never to the vault: a sync
+      of three files re-hashes three. Measured on the owner's 264-file / 64 MB vault
+      2026-10-03: bootstrap commit 7.3 s → self-heal pass 2.75 s → steady state 0.19 s.
+      Mobile is where this matters — a full walk there was measured at 10-22 s (`p6`),
+      so a 500-file pull is the case worth timing on a phone rather than a laptop.
 
 ## Reporting a mobile issue
 
