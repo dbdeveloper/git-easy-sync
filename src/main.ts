@@ -1489,6 +1489,7 @@ export default class GitHubSyncPlugin extends Plugin {
       },
       // 1 — the click registered. No number exists yet.
       onCommitStarted: () => {
+        this.inCommitPhase = true;
         this.reportCommitOutcome(commitStartedNoticeText());
         // The commit gets the SAME 2 s gate as the drain, so a fast
         // commit shows "Committing…" and then its result, with no
@@ -1501,13 +1502,18 @@ export default class GitHubSyncPlugin extends Plugin {
       },
       // 3 — the settled number, in the past tense.
       onLocalCommitted: (count: number) => {
+        this.inCommitPhase = false;
         this.finishCommitOutcome(commitDoneNoticeText(count));
       },
       onNoLocalChanges: () => {
+        this.inCommitPhase = false;
         this.finishCommitOutcome("Nothing to commit");
       },
       onSyncStarted: () => {
         this.inFullSync = true;
+        // Belt to clearSyncNotice's braces: whatever the last operation
+        // left behind, this one starts in the commit phase.
+        this.inCommitPhase = false;
         // A stale request would make the NEXT drain's idle event
         // announce a cancellation that never happened.
         this.syncCancelRequested = false;
@@ -2585,6 +2591,9 @@ export default class GitHubSyncPlugin extends Plugin {
   private syncCancelRequested = false;
   private syncProgressTimer: number | null = null;
   private syncProgressActive = false;
+  // Which half of a full sync owns the notice right now. The commit
+  // pass does until it says its last word; after that the drain does.
+  private inCommitPhase = false;
 
   // Create-or-update. duration 0: this notice lives until WE take it
   // down, because its whole purpose is to span the operation.
@@ -2701,6 +2710,21 @@ export default class GitHubSyncPlugin extends Plugin {
     this.syncProgressTimer = window.setTimeout(() => {
       this.syncProgressTimer = null;
       this.syncProgressActive = true;
+      // ⚠️ OPEN THE GATE, DO NOT PAINT SOMEONE ELSE'S PHASE.
+      //
+      // Field report 2026-10-03: the notice read "Committing…" →
+      // "Syncing with GitHub" → "Committing 100 of 250" → the drain's
+      // counters. The middle two are out of order, and this line was
+      // why: the commit pass ran 7.2 s, the 2 s timer fired five
+      // seconds INSIDE it, and painted the DRAIN's text (header with
+      // no counters) over a commit that was still running.
+      //
+      // The gate is shared; the brush is not. While the commit owns
+      // the notice its own next batch repaints it, and the handover to
+      // the drain happens through the status listener's
+      // `repaintSyncProgressNotice`, which fires once the drain is
+      // actually running.
+      if (this.inCommitPhase) return;
       this.setSyncNotice(this.currentSyncProgressText());
     }, SYNC_PROGRESS_DELAY_MS);
   }
@@ -2734,6 +2758,9 @@ export default class GitHubSyncPlugin extends Plugin {
   // it hangs on screen until Obsidian restarts, which is worse than
   // showing no progress at all.
   private clearSyncNotice(): void {
+    // A commit that threw would otherwise leave the phase flag up, and
+    // the NEXT sync's timer would decline to paint the drain forever.
+    this.inCommitPhase = false;
     this.disarmSyncProgress();
     if (this.syncNoticeHideTimer !== null) {
       window.clearTimeout(this.syncNoticeHideTimer);

@@ -35,6 +35,7 @@ interface NoticeHandle {
   reportCommitOutcome(text: string): void;
   finishCommitOutcome(text: string): void;
   reportCommitProgress(done: number, total: number): void;
+  inCommitPhase: boolean;
   repaintSyncProgressNotice(): void;
 }
 
@@ -168,6 +169,52 @@ describe("sync notice lifecycle (§II.16)", () => {
       "Committing…",
       "Committing 100 of 250",
     ]);
+  });
+
+  it("🔑 the 2 s timer opens the gate but does NOT paint over the commit", async () => {
+    // FIELD REPORT 2026-10-03, verbatim order the owner saw:
+    //   "Committing…" → "Syncing with GitHub" → "Committing 100 of 250"
+    // The middle one is a different PHASE's text, painted over a commit
+    // that was still running. The log explains it: the commit pass took
+    // 7.2 s, so the 2 s timer fired five seconds inside it and called
+    // `currentSyncProgressText()` — the DRAIN's builder, which with no
+    // counters yet renders the bare header.
+    //
+    // The gate is shared between the two phases; the brush is not.
+    vi.useFakeTimers();
+    try {
+      const p = makePlugin();
+      p.inFullSync = true;
+      p.inCommitPhase = true; // the commit pass is running
+      p.reportCommitOutcome("Committing…");
+      p.armSyncProgressNotice();
+      vi.advanceTimersByTime(2500);
+
+      // The gate opened…
+      expect(p.syncProgressActive).toBe(true);
+      // …and the text is still the commit's.
+      expect(recordedNotices[recordedNotices.length - 1].message).toBe(
+        "Committing…",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("…and once the commit is done, the timer paints the drain as before", () => {
+    vi.useFakeTimers();
+    try {
+      const p = makePlugin();
+      p.inFullSync = true;
+      p.inCommitPhase = false; // drain phase
+      p.armSyncProgressNotice();
+      vi.advanceTimersByTime(2500);
+      expect(recordedNotices[recordedNotices.length - 1].message).toBe(
+        "Syncing with GitHub",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("🔑 the commit counter waits for the 2 s gate, like the drain's", () => {
