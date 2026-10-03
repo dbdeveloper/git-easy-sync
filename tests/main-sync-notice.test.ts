@@ -217,6 +217,52 @@ describe("sync notice lifecycle (§II.16)", () => {
     }
   });
 
+  it("🔑 a commit cannot inherit the PREVIOUS drain's numbers (owner's check)", () => {
+    // The owner asked whether the commit has the bug the drain had: a
+    // second run flashing counters from the first. Checked rather than
+    // reasoned about, because that is how the drain's version survived
+    // one fix already.
+    //
+    // Two independent reasons it cannot, and the test pins both:
+    //   1. the commit's numbers are PASSED IN per batch, live — there
+    //      is no snapshot anywhere to go stale;
+    //   2. the only stored snapshot belongs to the drain, and during a
+    //      commit the timer refuses to paint it (inCommitPhase).
+    {
+      // A drain has just finished and left its snapshot behind — the
+      // exact value the drain's own version of this bug was reading.
+      const p = makePlugin({
+        pullDone: 0,
+        pullTotal: 0,
+        pushDone: 258,
+        pushTotal: 258,
+        conflicts: 0,
+        path: "x.md",
+      });
+
+      // Now a standalone commit starts.
+      p.inFullSync = false;
+      p.inCommitPhase = true;
+      p.reportCommitOutcome("Committing…");
+      p.armSyncProgressNotice();
+      vi.advanceTimersByTime(2500);
+
+      // The gate is open, yet nothing from the drain appears.
+      expect(p.syncProgressActive).toBe(true);
+      const shown = recordedNotices.map((n) => n.message).join(" | ");
+      expect(shown).not.toContain("258");
+      expect(recordedNotices[recordedNotices.length - 1].message).toBe(
+        "Committing…",
+      );
+
+      // And its own counter, when it comes, carries THIS pass's numbers.
+      p.reportCommitProgress(3, 7);
+      expect(recordedNotices[recordedNotices.length - 1].message).toBe(
+        "Committing 3 of 7",
+      );
+    }
+  });
+
   it("🔑 the commit counter waits for the 2 s gate, like the drain's", () => {
     // Owner's rule: "через 2 сек 'Commit N of M'". A commit that
     // finishes inside the gate should read "Committing…" → "Committed
