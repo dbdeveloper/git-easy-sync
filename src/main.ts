@@ -81,6 +81,11 @@ import {
   progressNoticeText,
   syncSummaryText,
   syncStartedNoticeText,
+  renderNoticeState,
+  nextNoticeDeadline,
+  EMPTY_NOTICE_STATE,
+  type NoticeState,
+  type NoticeSection,
   commitStartedNoticeText,
   commitProgressNoticeText,
   commitDoneNoticeText,
@@ -1489,31 +1494,39 @@ export default class GitHubSyncPlugin extends Plugin {
       },
       // 1 — the click registered. No number exists yet.
       onCommitStarted: () => {
-        this.inCommitPhase = true;
-        this.reportCommitOutcome(commitStartedNoticeText());
-        // The commit gets the SAME 2 s gate as the drain, so a fast
-        // commit shows "Committing…" and then its result, with no
-        // counter flickering in between.
+        this.setCommitSection({
+          state: "live",
+          text: commitStartedNoticeText(),
+        });
+        // The same 2 s gate as the drain's counters, so a fast commit
+        // shows "Committing…" and then its result with nothing
+        // flickering in between.
         this.armSyncProgressNotice();
       },
       // 2 — see reportCommitProgress.
       onCommitProgress: (done: number, total: number) => {
         this.reportCommitProgress(done, total);
       },
-      // 3 — the settled number, in the past tense.
+      // 3 — the settled number, in the past tense, kept for a moment.
+      // It no longer has to be overwritten by the drain: the drain has
+      // its own slot below, so "Committed 264 files" stays readable
+      // while the upload runs.
       onLocalCommitted: (count: number) => {
-        this.inCommitPhase = false;
-        this.finishCommitOutcome(commitDoneNoticeText(count));
+        this.setCommitSection({
+          state: "settled",
+          text: commitDoneNoticeText(count),
+          until: this.settleAt(),
+        });
       },
       onNoLocalChanges: () => {
-        this.inCommitPhase = false;
-        this.finishCommitOutcome("Nothing to commit");
+        this.setCommitSection({
+          state: "settled",
+          text: "Nothing to commit",
+          until: this.settleAt(),
+        });
       },
       onSyncStarted: () => {
         this.inFullSync = true;
-        // Belt to clearSyncNotice's braces: whatever the last operation
-        // left behind, this one starts in the commit phase.
-        this.inCommitPhase = false;
         // A stale request would make the NEXT drain's idle event
         // announce a cancellation that never happened.
         this.syncCancelRequested = false;
@@ -1536,7 +1549,7 @@ export default class GitHubSyncPlugin extends Plugin {
           if (!summary.cancelled) this.clearSyncNotice();
           return;
         }
-        this.finishSyncNotice(
+        this.settleDrainSection(
           syncSummaryText({
             sent: summary.pushedFiles,
             received: summary.pulledFiles,
@@ -1588,32 +1601,21 @@ export default class GitHubSyncPlugin extends Plugin {
         // (interval watchdog, resumeQueue): those never fire
         // onSyncStarted, and a long drain there is just as silent.
         if (s.state === "running") {
-          // ⚠️ ONLY when the drain runs WITHOUT a commit pass in front
-          // of it (owner, 2026-10-03): resumeQueue, the watchdog, or a
-          // Sync with "start with commit" off. Inside a full sync the
-          // commit pass has already spoken and this would just
-          // overwrite it.
-          if (!this.inFullSync) this.setSyncNotice(syncStartedNoticeText());
+          // The drain's slot opens the moment it starts, in EVERY case.
+          // The "only when standalone" rule this replaces existed to
+          // stop the header overwriting the commit's line; with a slot
+          // each there is nothing to overwrite, and the owner called
+          // the header-plus-counters shape correct when they saw it.
+          this.setDrainSection({
+            state: "live",
+            text: syncStartedNoticeText(),
+          });
           this.armSyncProgressNotice();
         }
         this.repaintSyncProgressNotice();
         // …and a drain that ended without a syncAll wrapper still has
         // to take the notice down (see disarm's warning).
-        if (s.state === "idle") {
-          // The cancel confirmation lives HERE, not on the sync
-          // summary, because a background drain (interval tick,
-          // watchdog) never produces a summary — cancelling one used to
-          // report nothing at all. This fires for every path that can
-          // be cancelled.
-          if (this.syncCancelRequested) {
-            this.syncCancelRequested = false;
-            this.finishSyncNotice("Sync canceled");
-          } else if (!this.inFullSync) {
-            // A drain with no syncAll wrapper has no summary coming, so
-            // nothing else will take the notice down.
-            this.clearSyncNotice();
-          }
-        }
+        if (s.state === "idle") this.handleDrainIdle();
       },
     );
 
@@ -2591,9 +2593,57 @@ export default class GitHubSyncPlugin extends Plugin {
   private syncCancelRequested = false;
   private syncProgressTimer: number | null = null;
   private syncProgressActive = false;
-  // Which half of a full sync owns the notice right now. The commit
-  // pass does until it says its last word; after that the drain does.
-  private inCommitPhase = false;
+  // ── THE TWO-SECTION NOTICE ──────────────────────────────────────
+  //
+  // Commit and drain can run AT THE SAME TIME (nothing guards one
+  // against the other — see the model's header), so neither "one
+  // notice per operation" nor "a notice each" works. Each phase owns a
+  // SLOT; one renderer composes them. No handler can overwrite
+  // another's text, which is what makes the ordering bugs of
+  // 2026-10-03 unexpressible rather than merely fixed.
+  private noticeState: NoticeState = EMPTY_NOTICE_STATE;
+  private noticeDeadlineTimer: number | null = null;
+
+  private setCommitSection(section: NoticeSection): void {
+    this.noticeState = { ...this.noticeState, commit: section };
+    this.renderNotice();
+  }
+
+  private setDrainSection(section: NoticeSection): void {
+    this.noticeState = { ...this.noticeState, drain: section };
+    this.renderNotice();
+  }
+
+  private settleAt(): number {
+    return Date.now() + SYNC_SUMMARY_LINGER_MS;
+  }
+
+  // The ONE place the notice text is decided. Also the one place the
+  // box is closed: `null` means no section is visible any more.
+  private renderNotice(): void {
+    const now = Date.now();
+    const text = renderNoticeState(this.noticeState, now);
+    if (text === null) {
+      this.clearSyncNotice();
+      return;
+    }
+    this.setSyncNotice(text);
+    if (this.noticeDeadlineTimer !== null) {
+      window.clearTimeout(this.noticeDeadlineTimer);
+      this.noticeDeadlineTimer = null;
+    }
+    const due = nextNoticeDeadline(this.noticeState, now);
+    if (due === null) return;
+    // One timer for both sections — the earliest deadline. Re-rendering
+    // then either drops that section or closes the box.
+    this.noticeDeadlineTimer = window.setTimeout(
+      () => {
+        this.noticeDeadlineTimer = null;
+        this.renderNotice();
+      },
+      Math.max(0, due - now),
+    );
+  }
 
   // Create-or-update. duration 0: this notice lives until WE take it
   // down, because its whole purpose is to span the operation.
@@ -2650,15 +2700,48 @@ export default class GitHubSyncPlugin extends Plugin {
   // The commit pass has something to say. Inside a full sync it writes
   // into the shared notice and STAYS — the drain will replace the text.
   // Standalone, it is a brief toast with nothing following it.
-  private reportCommitOutcome(text: string): void {
-    // ⚠️ ALWAYS the shared notice, never a fresh toast (owner,
-    // 2026-10-03). A commit now speaks three times — acknowledgement,
-    // per-batch progress, settled result — and `new Notice` each time
-    // would STACK them: three boxes for one operation, which is the
-    // exact defect §II.16 was written to kill. One notice whose text
-    // changes is the whole model.
-    this.setSyncNotice(text);
+  // The drain reached idle, however it got there. Extracted from the
+  // status listener so the branch is REACHABLE by a test: a probe that
+  // replaced the settle below with a box-wide clear left all twelve
+  // notice tests green, because every one of them drove
+  // `settleDrainSection` directly and none drove the wiring.
+  private handleDrainIdle(): void {
+    // The cancel confirmation lives HERE, not on the sync summary,
+    // because a background drain (interval tick, watchdog) never
+    // produces one — cancelling such a drain used to report nothing at
+    // all. This fires for every path that can be cancelled.
+    if (this.syncCancelRequested) {
+      this.syncCancelRequested = false;
+      this.settleDrainSection("Sync canceled");
+      return;
+    }
+    if (this.inFullSync) return; // the summary will settle it
+    // ⚠️ SETTLE, never clear: a standalone commit may be running
+    // alongside and owns its own slot, so clearing the box would erase
+    // a phase that is still working. The box closes by itself once
+    // every section has expired.
+    this.settleDrainSection("Sync done");
   }
+
+  // The drain's last word, kept visible for a moment like the
+  // commit's. ⚠️ Always DISARM here: a pending 2 s timer firing over a
+  // finished drain is the 2026-09-26 field bug.
+  private settleDrainSection(text: string): void {
+    this.disarmSyncProgress();
+    this.setDrainSection({
+      state: "settled",
+      text,
+      until: this.settleAt(),
+    });
+  }
+
+  // ⚰️ `reportCommitOutcome` / `finishCommitOutcome` lived here until
+  // 2026-10-03. They were the "whoever paints last wins" model: every
+  // handler called them and the newest text replaced whatever was
+  // there — which is precisely what let a 2 s timer paint the drain's
+  // header over a running commit. With a SLOT per phase and one
+  // renderer there is nothing for a handler to overwrite; see
+  // `setCommitSection` / `setDrainSection` / `renderNotice`.
 
   // Per-batch progress, behind the SAME 2 s gate as the drain's
   // counters (owner, 2026-10-03). A commit that finishes inside the
@@ -2675,24 +2758,12 @@ export default class GitHubSyncPlugin extends Plugin {
     // The settled "Committed N files" follows immediately, so the last
     // batch's counter would be overwritten in the same tick.
     if (done >= total) return;
-    this.reportCommitOutcome(commitProgressNoticeText(done, total));
+    this.setCommitSection({
+      state: "live",
+      text: commitProgressNoticeText(done, total),
+    });
   }
 
-  // The commit's last word. Inside a full sync the drain keeps the
-  // notice and will overwrite this; standalone, nothing follows, so the
-  // text has to linger and then go.
-  //
-  // ⚠️ The notice has duration 0, so a missed exit leaves a message on
-  // screen until Obsidian restarts. A standalone commit has neither of
-  // the two events the sync teardown hangs on (drain → idle,
-  // onSyncCompleted), so `commit()` carries its own `finally`.
-  private finishCommitOutcome(text: string): void {
-    if (this.inFullSync) {
-      this.setSyncNotice(text);
-      return;
-    }
-    this.finishSyncNotice(text);
-  }
 
   // Arm the "this is taking a while" switch. Only the TEXT changes when
   // it fires — by then the notice usually already exists, carrying the
@@ -2710,22 +2781,16 @@ export default class GitHubSyncPlugin extends Plugin {
     this.syncProgressTimer = window.setTimeout(() => {
       this.syncProgressTimer = null;
       this.syncProgressActive = true;
-      // ⚠️ OPEN THE GATE, DO NOT PAINT SOMEONE ELSE'S PHASE.
+      // ⚠️ THE GATE ONLY — the timer paints nothing now.
       //
-      // Field report 2026-10-03: the notice read "Committing…" →
-      // "Syncing with GitHub" → "Committing 100 of 250" → the drain's
-      // counters. The middle two are out of order, and this line was
-      // why: the commit pass ran 7.2 s, the 2 s timer fired five
-      // seconds INSIDE it, and painted the DRAIN's text (header with
-      // no counters) over a commit that was still running.
-      //
-      // The gate is shared; the brush is not. While the commit owns
-      // the notice its own next batch repaints it, and the handover to
-      // the drain happens through the status listener's
-      // `repaintSyncProgressNotice`, which fires once the drain is
-      // actually running.
-      if (this.inCommitPhase) return;
-      this.setSyncNotice(this.currentSyncProgressText());
+      // It used to call the DRAIN's text builder, which on 2026-10-03
+      // fired five seconds inside a 7.2 s commit pass and overwrote it
+      // ("Committing…" → "Syncing with GitHub" → "Committing 100 of
+      // 250"). The guard that followed was a patch; sections remove
+      // the possibility: each phase writes its own slot and the
+      // renderer composes them, so opening the gate cannot move
+      // anyone's text.
+      this.repaintSyncProgressNotice();
     }, SYNC_PROGRESS_DELAY_MS);
   }
 
@@ -2734,7 +2799,13 @@ export default class GitHubSyncPlugin extends Plugin {
   // undo the very sequencing this design is for.
   private repaintSyncProgressNotice(): void {
     if (!this.syncProgressActive) return;
-    this.setSyncNotice(this.currentSyncProgressText());
+    // The DRAIN's slot only. Counters appear once the gate is open;
+    // before that the slot holds the bare header set at drain start.
+    if (this.noticeState.drain.state !== "live") return;
+    this.setDrainSection({
+      state: "live",
+      text: this.currentSyncProgressText(),
+    });
   }
 
   // Before the drain reports anything (the commit pass is still
@@ -2758,9 +2829,11 @@ export default class GitHubSyncPlugin extends Plugin {
   // it hangs on screen until Obsidian restarts, which is worse than
   // showing no progress at all.
   private clearSyncNotice(): void {
-    // A commit that threw would otherwise leave the phase flag up, and
-    // the NEXT sync's timer would decline to paint the drain forever.
-    this.inCommitPhase = false;
+    this.noticeState = EMPTY_NOTICE_STATE;
+    if (this.noticeDeadlineTimer !== null) {
+      window.clearTimeout(this.noticeDeadlineTimer);
+      this.noticeDeadlineTimer = null;
+    }
     this.disarmSyncProgress();
     if (this.syncNoticeHideTimer !== null) {
       window.clearTimeout(this.syncNoticeHideTimer);

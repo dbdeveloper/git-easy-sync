@@ -103,3 +103,83 @@ export function syncSummaryText(n: {
   if (n.conflicts > 0) parts.push(`${n.conflicts} in conflict`);
   return parts.length === 0 ? "Sync done" : `Sync done — ${parts.join(", ")}`;
 }
+
+// ── THE TWO-SECTION NOTICE (owner, 2026-10-03) ──────────────────────
+//
+// WHY THIS EXISTS. Commit and drain are NOT mutually exclusive: the
+// manager guards a drain against another drain and a commit against
+// another commit, and nothing guards one against the other — by design,
+// since R3b's Peterson protocol resolves their race on the queue
+// DIRECTORY rather than in the scheduler. Committing while a sync runs
+// is a feature of this plugin.
+//
+// So "one notice per operation" was the wrong unit, and both ways of
+// having it are bad in the same way:
+//   - two Notices STACK, and Obsidian sizes a stack to a common width,
+//     so the shorter text sits in a padded box and jumps when its
+//     neighbour expires (the §II.16 field defect, screenshots on file);
+//   - one Notice shared by both phases is FOUGHT OVER — each handler
+//     calls setMessage, so the last writer wins and the text flips
+//     between phases (observed 2026-10-03: "Committing…" → "Syncing
+//     with GitHub" → "Committing 100 of 250").
+//
+// The unit is the SECTION. One box, a fixed slot per phase, one
+// renderer with two inputs — so no handler can overwrite another, and
+// an ordering bug of that class stops being expressible.
+//
+// ⚠️ ORDER IS FIXED, NOT CHRONOLOGICAL. Commit above, drain below,
+// whichever started first. Ordering by arrival would reintroduce the
+// shuffling inside the box that we left the stack to escape.
+export type NoticeSection =
+  | { state: "none" }
+  | { state: "live"; text: string }
+  // A finished phase keeps its last word for a moment. `until` is an
+  // absolute ms timestamp so the renderer stays pure and testable.
+  | { state: "settled"; text: string; until: number };
+
+export interface NoticeState {
+  commit: NoticeSection;
+  drain: NoticeSection;
+}
+
+export const EMPTY_NOTICE_STATE: NoticeState = {
+  commit: { state: "none" },
+  drain: { state: "none" },
+};
+
+function visible(s: NoticeSection, nowMs: number): string | null {
+  if (s.state === "live") return s.text;
+  if (s.state === "settled" && s.until > nowMs) return s.text;
+  return null;
+}
+
+// The whole text, or null when nothing is left to show — which is the
+// signal to CLOSE the box. A settled section expiring while the other
+// is still live shrinks the notice; the owner chose that over holding a
+// ghost line to keep the height fixed.
+export function renderNoticeState(
+  s: NoticeState,
+  nowMs: number,
+): string | null {
+  const parts = [visible(s.commit, nowMs), visible(s.drain, nowMs)].filter(
+    (x): x is string => x !== null,
+  );
+  return parts.length === 0 ? null : parts.join("\n");
+}
+
+// When the renderer must be called again — the earliest expiry still in
+// the future, or null if nothing is pending. A LIVE section never
+// expires on its own: if its phase dies without reporting, the teardown
+// events force it to settle (they are what guarantee the box closes).
+export function nextNoticeDeadline(
+  s: NoticeState,
+  nowMs: number,
+): number | null {
+  const ends = [s.commit, s.drain]
+    .filter((x): x is { state: "settled"; text: string; until: number } =>
+      x.state === "settled",
+    )
+    .map((x) => x.until)
+    .filter((t) => t > nowMs);
+  return ends.length === 0 ? null : Math.min(...ends);
+}
