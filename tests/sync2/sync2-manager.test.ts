@@ -306,7 +306,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(manager.getDrainStatus().progress).toBeNull();
   });
 
-  it("🔑 the commit pass speaks BEFORE the slow half, then per batch", async () => {
+  it("🔑 the commit acknowledges FIRST, then reports per batch, then settles", async () => {
     // Owner's sequencing, 2026-10-03. A commit is two phases: COUNT the
     // changes (measured: 0.12 s at 2k files, 0.71 s at 20k — linear)
     // and then WRITE them to the queue in ≤100-file batches, hashing
@@ -317,8 +317,9 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     // is the settled number, and as an acknowledgement it arrives
     // exactly when it is no longer needed.
     const order: string[] = [];
-    deps.onCommitCounted = (n) => order.push(`counted:${n}`);
-    deps.onCommitProgress = (d, t) => order.push(`progress:${d}/${t}`);
+    deps.onCommitStarted = () => order.push("started");
+    deps.onCommitProgress = (d: number, t: number) =>
+      order.push(`progress:${d}/${t}`);
     deps.onLocalCommitted = (n) => order.push(`committed:${n}`);
     const origWrite = deps.batchWriter.writeBatch.bind(deps.batchWriter);
     deps.batchWriter.writeBatch = async (c: FileChange[]) => {
@@ -331,9 +332,10 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
 
     await manager.commitOnly();
 
-    // The count comes first, before any byte is written.
-    expect(order[0]).toBe("counted:250");
-    expect(order.indexOf("counted:250")).toBeLessThan(
+    // The acknowledgement comes FIRST — before the scan, before any
+    // byte is written. It carries no number because none exists yet.
+    expect(order[0]).toBe("started");
+    expect(order.indexOf("started")).toBeLessThan(
       order.findIndex((x) => x.startsWith("write:")),
     );
     // Then one report per ≤100-file batch — 250 files is three.

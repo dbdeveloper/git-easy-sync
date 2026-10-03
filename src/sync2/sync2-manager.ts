@@ -149,12 +149,18 @@ export interface Sync2ManagerDeps {
   trashHooks?: TrashHooks | null;
   // Obsidian-aware rename for the local filename sanitize pass.
   renameFile?: (oldPath: string, newPath: string) => Promise<void>;
-  // ⚠️ Fires when the scan has COUNTED the changes, BEFORE a single
-  // batch is written (owner, 2026-10-03). `onLocalCommitted` reports
-  // the settled number AFTER the enqueue, which on a large vault is
-  // seconds later — and those are exactly the seconds in which the
-  // user is wondering whether the button worked.
-  onCommitCounted?(filesCount: number): void;
+  // ⚠️ Fires the INSTANT a commit begins — before `enforce()`, before
+  // the scan, before anything can be known (owner, 2026-10-03). There
+  // is no number yet and inventing one would be a lie; the point is
+  // only "your click registered". Every commit path goes through
+  // `runCommitPass`, so one hook covers syncAll, syncFile, commitOnly
+  // and commitFile alike.
+  //
+  // 📌 It replaced `onCommitCounted` (fired after the scan): measured
+  // on desktop the scan is 0.12 s at 2k files and 0.71 s at 20k, but
+  // `p6` records a full walk at 10-22 s on Android — so "after the
+  // count" is early enough on a laptop and nowhere near it on a phone.
+  onCommitStarted?(): void;
   // Per ≤100-file batch during the enqueue — the slow half. `done` is
   // what has actually reached the queue, `total` what the scan counted.
   onCommitProgress?(done: number, total: number): void;
@@ -443,6 +449,9 @@ export class Sync2Manager {
   // (the RUNNING pass re-scans everything on its next loop, so the
   // coalesced caller's changes are picked up there — SYNC2-FIX §6).
   private async runCommitPass(target: string | null): Promise<number> {
+    // The click registered. Before enforce(), before the scan, before
+    // anything is knowable — see `onCommitStarted`.
+    this.deps.onCommitStarted?.();
     if (this.commitInProgress) {
       this.restartCommit = true;
       // Merge the coalesced target into the bell: identical target →
@@ -501,14 +510,6 @@ export class Sync2Manager {
       this.deps.logger.info("Sync2 commit pass: nothing to commit");
       return 0;
     }
-
-    // The count is known and NOTHING has been written yet. Measured
-    // 2026-10-03: `findChanges` is 0.12 s at 2k files and 0.71 s at 20k
-    // on desktop (linear), while the enqueue below hashes and copies
-    // every file's bytes into `sync_store/` and is what actually takes
-    // seconds. So this is the earliest HONEST number, and it precedes
-    // the slow part rather than following it.
-    this.deps.onCommitCounted?.(changes.length);
 
     await this.applyZeroByteRestoreGuard(changes);
 

@@ -82,6 +82,8 @@ import {
   syncSummaryText,
   syncStartedNoticeText,
   commitStartedNoticeText,
+  commitProgressNoticeText,
+  commitDoneNoticeText,
 } from "./sync-progress-model";
 import WorkerClient from "./worker/worker-client";
 import { PreSyncConflictModal } from "./sync2/views/pre-sync-conflict-modal";
@@ -1485,28 +1487,24 @@ export default class GitHubSyncPlugin extends Plugin {
         if (!file) return;
         await this.app.fileManager.renameFile(file, newPath);
       },
-      // The count, the instant it is known and before a single batch is
-      // written. `onLocalCommitted` below reports the SETTLED number
-      // after the enqueue — seconds later on a large vault, and those
-      // are the seconds the user spends wondering.
-      onCommitCounted: (count: number) => {
-        this.reportCommitOutcome(
-          count === 1 ? "Commit 1 file…" : `Commit ${count} files…`,
-        );
+      // 1 — the click registered. No number exists yet.
+      onCommitStarted: () => {
+        this.reportCommitOutcome(commitStartedNoticeText());
+        // The commit gets the SAME 2 s gate as the drain, so a fast
+        // commit shows "Committing…" and then its result, with no
+        // counter flickering in between.
+        this.armSyncProgressNotice();
       },
-      // Only meaningful past the first batch: at ≤100 files there is
-      // exactly one, and repainting the same number would be noise.
+      // 2 — see reportCommitProgress.
       onCommitProgress: (done: number, total: number) => {
-        if (done >= total) return; // the settled line follows anyway
-        this.reportCommitOutcome(`Commit ${done} of ${total} files…`);
+        this.reportCommitProgress(done, total);
       },
+      // 3 — the settled number, in the past tense.
       onLocalCommitted: (count: number) => {
-        this.reportCommitOutcome(
-          count === 1 ? "Commit 1 file" : `Commit ${count} files`,
-        );
+        this.finishCommitOutcome(commitDoneNoticeText(count));
       },
       onNoLocalChanges: () => {
-        this.reportCommitOutcome("Nothing to commit");
+        this.finishCommitOutcome("Nothing to commit");
       },
       onSyncStarted: () => {
         this.inFullSync = true;
@@ -2644,11 +2642,47 @@ export default class GitHubSyncPlugin extends Plugin {
   // into the shared notice and STAYS — the drain will replace the text.
   // Standalone, it is a brief toast with nothing following it.
   private reportCommitOutcome(text: string): void {
+    // ⚠️ ALWAYS the shared notice, never a fresh toast (owner,
+    // 2026-10-03). A commit now speaks three times — acknowledgement,
+    // per-batch progress, settled result — and `new Notice` each time
+    // would STACK them: three boxes for one operation, which is the
+    // exact defect §II.16 was written to kill. One notice whose text
+    // changes is the whole model.
+    this.setSyncNotice(text);
+  }
+
+  // Per-batch progress, behind the SAME 2 s gate as the drain's
+  // counters (owner, 2026-10-03). A commit that finishes inside the
+  // gate must show "Committing…" and then its result — a counter
+  // flickering between them for a fifth of a second is worse than no
+  // counter at all.
+  //
+  // ⚠️ Extracted from the dep handler so the gate is REACHABLE by a
+  // test. It was inline, and a probe that deleted the gate left all 34
+  // notice/manager tests green — the one condition the owner actually
+  // specified was the one nothing checked.
+  private reportCommitProgress(done: number, total: number): void {
+    if (!this.syncProgressActive) return;
+    // The settled "Committed N files" follows immediately, so the last
+    // batch's counter would be overwritten in the same tick.
+    if (done >= total) return;
+    this.reportCommitOutcome(commitProgressNoticeText(done, total));
+  }
+
+  // The commit's last word. Inside a full sync the drain keeps the
+  // notice and will overwrite this; standalone, nothing follows, so the
+  // text has to linger and then go.
+  //
+  // ⚠️ The notice has duration 0, so a missed exit leaves a message on
+  // screen until Obsidian restarts. A standalone commit has neither of
+  // the two events the sync teardown hangs on (drain → idle,
+  // onSyncCompleted), so `commit()` carries its own `finally`.
+  private finishCommitOutcome(text: string): void {
     if (this.inFullSync) {
       this.setSyncNotice(text);
       return;
     }
-    new Notice(text, BRIEF_NOTICE_MS);
+    this.finishSyncNotice(text);
   }
 
   // Arm the "this is taking a while" switch. Only the TEXT changes when
@@ -2990,17 +3024,18 @@ export default class GitHubSyncPlugin extends Plugin {
     // which is also how a [Commit] during the background analysis could
     // put a second enforce() on the same files.
     if (!(await this.confirmPendingConflictsBeforeSync())) return;
-    // Instant acknowledgement, same reason as the sync's: the scan runs
-    // for seconds on a large vault and the button looked dead. A commit
-    // is standalone, so this is its OWN brief toast — the shared notice
-    // belongs to a full sync.
-    new Notice(commitStartedNoticeText(), BRIEF_NOTICE_MS);
     try {
       await this.sync2Manager.commitOnly();
     } catch (err) {
       this.logger?.error("Commit ribbon click failed", {
         error: String(err),
       });
+      // ⚠️ Take the shared notice down BEFORE the error toast. A
+      // standalone commit has neither of the events the sync teardown
+      // hangs on (drain → idle, onSyncCompleted), so a throw mid-commit
+      // is the one path that could leave "Committing…" on screen until
+      // Obsidian restarts — the notice has duration 0 by design.
+      this.clearSyncNotice();
       new Notice(`Commit failed: ${err}`, 10000);
     }
   }

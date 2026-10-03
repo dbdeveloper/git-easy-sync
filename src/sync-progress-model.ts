@@ -38,12 +38,26 @@ export function syncStartedNoticeText(): string {
   return HEADER;
 }
 
-// The Commit button's own acknowledgement. A commit is not a sync and
-// must not claim to be one — saying "Syncing with GitHub" for a local
-// enqueue would be a lie the user can act on (they would wait for
-// something to reach the server).
+// The commit's three texts. One stable prefix so the message reads as
+// ONE line gaining detail rather than three messages replacing each
+// other (owner: "щоб початок повідомлення не сильно змінювалось").
+//
+// ⚠️ Present participle while it runs, PAST tense when it is done —
+// the tense is the only thing that says "finished", and it says it for
+// free. A bare "Commit N files" reads as an imperative, a button label
+// telling the user to act; every other notice in this plugin already
+// uses the participle ("Syncing with GitHub", "Downloading N of M"),
+// so that one was the odd one out.
 export function commitStartedNoticeText(): string {
-  return "Checking for local changes";
+  return "Committing…";
+}
+
+export function commitProgressNoticeText(done: number, total: number): string {
+  return `Committing ${done} of ${total}`;
+}
+
+export function commitDoneNoticeText(count: number): string {
+  return count === 1 ? "Committed 1 file" : `Committed ${count} files`;
 }
 
 // The live notice, refreshed in place while the sync runs.
