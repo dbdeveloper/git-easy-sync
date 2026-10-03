@@ -1362,7 +1362,30 @@ DOT-FILES не існує; у самій DOT-FILES-спеці він і стої
 | `pnpm test:integration` | ✅ | **162 passed, 1 skipped, 0 failed**, 2213 с (36,9 хв) |
 | `reset` → `bootstrap` → `findChanges` порожній | ✅ | `settings-lifecycle/I1-reset-metadata` у складі прогону |
 | ручний прогін на пристрої (`MANUAL-TEST-CHECKLIST.md`) | 🔴 | **тільки власник** |
-| живий холодний старт (§5.5.0, останній рядок) | 🔴 | **тільки власник** — див. нижче |
+| живий холодний старт (§5.5.0, останній рядок) | ✅ | прогнано 2026-10-03 на `/Users/dbdeveloper/Obsidian-test` (64 МБ) → `dbdeveloper/obsidian2@main` — звіт нижче |
+
+##### Живий холодний старт — прогін 2026-10-03
+
+```
+BEFORE:  head=9eb1fdcb  remoteBlobs=269  localChanges=259  conflictBases=0  pendingBatches=0
+syncAll finished in 6.8s
+AFTER-1: head=9eb1fdcb  remoteBlobs=269  localChanges=0    conflictBases=0  pendingBatches=0
+remote added(0) / changed(0) / removed(0)
+AFTER-2: ідентично  →  converged after 1 commit-producing pass
+residual local changes: —
+residual NOT explained by an open conflict: —
+```
+
+**259 локальних «змін» → 0 без ЖОДНОГО коміту**, head той самий до й після. Це і є сенс
+рядка: після стирання baseline-ів рушій бачить усе сховище зміненим, перечитує 64 МБ за
+**6,8 с** і не пушить нічого — бо вміст справді збігається з віддаленим. Збіжність за
+один прохід, залишків нема.
+
+📌 **З першої спроби цей прогін УПАВ — і не через рушій.** `OBSIDIAN_TEST_TOKEN` віддавав
+401 навіть на `/user`, тобто був відкликаний. ⚠️ Але `reset` відбувається ДО першого
+мережевого виклику, тож `.runtime/` було видалено ще до падіння. Це штатна поведінка
+(те саме робить кнопка Reset) і втрати вмісту нема — але хто запускатиме цей драйвер,
+має знати: **він стирає метадані синку навіть тоді, коли далі не піде.**
 
 ⚠️ **Той «1 skipped» — не дрібниця, а сам рядок гейта.** Це
 `tests/integration/live/live-cold-start.test.ts`: він свідомо не входить до жодного
