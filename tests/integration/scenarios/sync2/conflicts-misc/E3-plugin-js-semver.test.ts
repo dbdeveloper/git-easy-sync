@@ -1,8 +1,13 @@
+// ▶️ RUNNING AGAIN since 2026-10-02: the §5.12.5 semver resolver landed and
+// the interim mtime seam is gone, so §28 decides plugin-core collisions by
+// `manifest.json` and the clock only breaks ties it cannot. Suspended at THE
+// SWITCH on 2026-08-31 (MASTER-PLAN §5.5.0) precisely because that rule was
+// not there yet.
+//
+// ⚠️ This note used to sit INSIDE the import braces — legal, invisible, and
+// stale: it still said "un-skip when PLUGIN-UPDATE-COMPAT lands" while the
+// body below already described the landed behaviour.
 import {
-// ⏸️ SUSPENDED AT THE SWITCH (2026-08-31, recorded in MASTER-PLAN §5.5.0):
-// the interim plugin-core collision rule is pure mtime (newest wins,
-// remote on ambiguity) — SEMVER priority (§28) deliberately returns
-// with PLUGIN-UPDATE-COMPAT (Phase 7). Un-skip when that lands.
   describe,
   it,
   beforeAll,

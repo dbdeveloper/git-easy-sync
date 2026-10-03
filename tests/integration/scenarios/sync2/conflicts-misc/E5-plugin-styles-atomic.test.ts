@@ -1,5 +1,9 @@
+// ▶️ RUNNING AGAIN since 2026-10-02 — same reason as E3: with §28 deciding by
+// version, `styles.css` follows `main.js`'s winner, so the bundle stays whole.
+// Suspended at THE SWITCH (2026-08-31) while the interim per-file mtime rule
+// could split it. ⚠️ The note used to live inside the import braces.
 import {
-// ⏸️ SUSPENDED AT THE SWITCH (2026-08-31, same class as E3):
+// (historical)
 // bundle ATOMICITY (styles.css follows main.js's winner — the §28
 // coupled-bundle rules) is part of PLUGIN-UPDATE-COMPAT (Phase 7).
 // The interim plugin-core rule is per-file mtime (newest wins,

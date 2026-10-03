@@ -185,6 +185,11 @@ Use it, and note which runs you did.
 - [ ] **§28 — plugin collisions are decided by SEMVER, not mtime.** Two devices update
       the same third-party plugin: the HIGHER `manifest.json` version wins regardless of
       which was written later.
+- [ ] 📱 **`isDesktopOnly` on a phone — the ONE Фаза 1 branch never run on real
+      hardware.** A plugin that is RUNNING on mobile because an older version had no
+      such flag sits in `enabledPlugins`, so the "skip disabled" filter never fires and
+      a reload would kill it. Our gate is supposed to skip it instead. Recorded as
+      outstanding in BUILDLOG; it had no checklist line until 2026-10-03.
 - [ ] **Self-update writes through the bootloader.** Updating THIS plugin stages the new
       bytes beside the live `main.js` and applies them at the next load — the file
       Obsidian is running is never overwritten underneath it. Verify on mobile too
