@@ -167,6 +167,90 @@ describe("sync notice lifecycle (§II.16)", () => {
     );
   });
 
+  // ── the 500 ms start gate ─────────────────────────────────────────
+
+  it("🔑 a fast no-op sync shows NO start lines — only the results", () => {
+    // The owner's complaint, as the sequence they actually saw:
+    // "Committing…" and "Syncing with GitHub" appearing and being
+    // replaced within milliseconds by "Nothing to commit" / "Sync
+    // done". Four strings in a blink.
+    const p = makePlugin();
+    const now = Date.now();
+    p.setCommitSection({
+      state: "pending",
+      text: "Committing…",
+      showAt: now + 500,
+    });
+    expect(p.syncNotice).toBeNull(); // nothing on screen yet
+    // The scan finds nothing 120 ms later.
+    vi.advanceTimersByTime(120);
+    p.setCommitSection({
+      state: "settled",
+      text: "Nothing to commit",
+      until: Date.now() + 1000,
+    });
+    // Same for the drain.
+    p.setDrainSection({
+      state: "pending",
+      text: "Syncing with GitHub",
+      showAt: Date.now() + 500,
+    });
+    vi.advanceTimersByTime(100);
+    p.settleDrainSection("Sync done");
+
+    const all = recordedNotices.map((n) => n.message).join(" | ");
+    expect(all).not.toContain("Committing…");
+    expect(all).not.toContain("Syncing with GitHub");
+    expect(lastMessage()).toBe("Nothing to commit\nSync done");
+  });
+
+  it("…but slow work still gets its start line", () => {
+    const p = makePlugin();
+    p.setCommitSection({
+      state: "pending",
+      text: "Committing…",
+      showAt: Date.now() + 500,
+    });
+    vi.advanceTimersByTime(600);
+    expect(lastMessage()).toBe("Committing…");
+  });
+
+  it("a drain inside the start delay that ALREADY has counters shows them", () => {
+    // Counters are proof the work is real, so the line is earned even
+    // before the 500 ms is up — the repaint upgrades pending → live.
+    const p = makePlugin({
+      pullDone: 2,
+      pullTotal: 10,
+      pushDone: 0,
+      pushTotal: 0,
+      conflicts: 0,
+      path: "a.md",
+    });
+    p.setDrainSection({
+      state: "pending",
+      text: "Syncing with GitHub",
+      showAt: Date.now() + 500,
+    });
+    p.syncProgressActive = true;
+    p.repaintSyncProgressNotice();
+    expect(lastMessage()).toBe("Syncing with GitHub\nDownloading 2 of 10");
+  });
+
+  it("a SETTLED drain is never resurrected by a repaint", () => {
+    const p = makePlugin({
+      pullDone: 9,
+      pullTotal: 9,
+      pushDone: 0,
+      pushTotal: 0,
+      conflicts: 0,
+      path: "a.md",
+    });
+    p.settleDrainSection("Sync done");
+    p.syncProgressActive = true;
+    p.repaintSyncProgressNotice();
+    expect(lastMessage()).toBe("Sync done");
+  });
+
   // ── the box comes down ────────────────────────────────────────────
 
   it("🔑 a settled section expires and the box CLOSES by itself", () => {

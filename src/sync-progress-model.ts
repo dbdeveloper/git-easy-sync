@@ -132,6 +132,17 @@ export function syncSummaryText(n: {
 // shuffling inside the box that we left the stack to escape.
 export type NoticeSection =
   | { state: "none" }
+  // ⚠️ A phase that has STARTED but has not earned a line yet (owner,
+  // 2026-10-03). Becomes visible at `showAt` — and if the phase
+  // settles first, the text is simply never shown.
+  //
+  // Why: on a vault with nothing to do, "Committing…" and "Syncing
+  // with GitHub" appear and are replaced within milliseconds by
+  // "Nothing to commit" / "Sync done". Four strings in a blink is not
+  // information, it is flicker — "ні прочитати ні зрозуміти". A start
+  // line earns its place only by the work lasting long enough to need
+  // one.
+  | { state: "pending"; text: string; showAt: number }
   | { state: "live"; text: string }
   // A finished phase keeps its last word for a moment. `until` is an
   // absolute ms timestamp so the renderer stays pure and testable.
@@ -149,6 +160,7 @@ export const EMPTY_NOTICE_STATE: NoticeState = {
 
 function visible(s: NoticeSection, nowMs: number): string | null {
   if (s.state === "live") return s.text;
+  if (s.state === "pending") return s.showAt <= nowMs ? s.text : null;
   if (s.state === "settled" && s.until > nowMs) return s.text;
   return null;
 }
@@ -175,11 +187,14 @@ export function nextNoticeDeadline(
   s: NoticeState,
   nowMs: number,
 ): number | null {
-  const ends = [s.commit, s.drain]
-    .filter((x): x is { state: "settled"; text: string; until: number } =>
-      x.state === "settled",
-    )
-    .map((x) => x.until)
-    .filter((t) => t > nowMs);
-  return ends.length === 0 ? null : Math.min(...ends);
+  // Both kinds of future moment: a pending section that is due to
+  // APPEAR, and a settled one that is due to go. One timer, whichever
+  // comes first.
+  const times: number[] = [];
+  for (const x of [s.commit, s.drain]) {
+    if (x.state === "settled") times.push(x.until);
+    if (x.state === "pending") times.push(x.showAt);
+  }
+  const future = times.filter((t) => t > nowMs);
+  return future.length === 0 ? null : Math.min(...future);
 }

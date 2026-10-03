@@ -91,12 +91,63 @@ describe("renderNoticeState", () => {
   });
 });
 
+describe("pending — a start line has to earn its place", () => {
+  it("🔑 invisible before its moment, visible after", () => {
+    const s = st({ commit: { state: "pending", text: "Committing…", showAt: 500 } });
+    expect(renderNoticeState(s, 499)).toBeNull();
+    expect(renderNoticeState(s, 500)).toBe("Committing…");
+  });
+
+  it("🔑 the owner's flicker: a phase that settles first never shows its start line", () => {
+    // "Committing…" and "Syncing with GitHub" used to appear and be
+    // replaced within milliseconds by "Nothing to commit" / "Sync
+    // done". Four strings in a blink is flicker, not information.
+    let s = st({ commit: { state: "pending", text: "Committing…", showAt: 500 } });
+    // …the scan finds nothing at 120 ms, so the section settles:
+    s = { ...s, commit: { state: "settled", text: "Nothing to commit", until: 1120 } };
+    expect(renderNoticeState(s, 120)).toBe("Nothing to commit");
+    // "Committing…" was never rendered at any point in time.
+    expect(renderNoticeState(s, 0)).toBe("Nothing to commit");
+    expect(renderNoticeState(s, 600)).toBe("Nothing to commit");
+  });
+
+  it("slow work still gets its start line, as before", () => {
+    const s = st({ commit: { state: "pending", text: "Committing…", showAt: 500 } });
+    expect(renderNoticeState(s, 3000)).toBe("Committing…");
+  });
+
+  it("a pending section alone keeps the box CLOSED until its moment", () => {
+    const s = st({ drain: { state: "pending", text: "Syncing with GitHub", showAt: 500 } });
+    expect(renderNoticeState(s, 100)).toBeNull(); // nothing on screen yet
+  });
+
+  it("one phase pending, the other already settled → only the settled one shows", () => {
+    const s = st({
+      commit: { state: "settled", text: "Nothing to commit", until: 1000 },
+      drain: { state: "pending", text: "Syncing with GitHub", showAt: 900 },
+    });
+    expect(renderNoticeState(s, 500)).toBe("Nothing to commit");
+    expect(renderNoticeState(s, 950)).toBe(
+      "Nothing to commit\nSyncing with GitHub",
+    );
+  });
+});
+
 describe("nextNoticeDeadline", () => {
   it("null when nothing is pending — a LIVE section never expires on its own", () => {
     expect(nextNoticeDeadline(EMPTY_NOTICE_STATE, 0)).toBeNull();
     expect(
       nextNoticeDeadline(st({ drain: { state: "live", text: "x" } }), 0),
     ).toBeNull();
+  });
+
+  it("a PENDING section's appearance is a deadline too — one timer, both kinds", () => {
+    const s = st({
+      commit: { state: "pending", text: "Committing…", showAt: 500 },
+      drain: { state: "settled", text: "Sync done", until: 1200 },
+    });
+    expect(nextNoticeDeadline(s, 0)).toBe(500); // the appearance comes first
+    expect(nextNoticeDeadline(s, 600)).toBe(1200);
   });
 
   it("the EARLIEST future deadline, so one timer serves both sections", () => {

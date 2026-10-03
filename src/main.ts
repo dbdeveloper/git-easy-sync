@@ -156,6 +156,12 @@ const BRIEF_NOTICE_MS = 700;
 // silence is a hang.
 const ANALYSIS_QUIET_MS = 3000;
 const SYNC_PROGRESS_DELAY_MS = 2000;
+// ⚠️ A SECOND, shorter gate — for the START lines, not the counters
+// (owner, 2026-10-03). "Committing…" and "Syncing with GitHub" must
+// earn their place by the work lasting this long; a phase that settles
+// sooner never shows one, so a sync with nothing to do reads
+// "Nothing to commit / Sync done" instead of four strings in a blink.
+const PHASE_START_DELAY_MS = 500;
 // How long the closing line ("Sync done — …") stays after the operation
 // ends. The user has been watching this notice, so it does not need the
 // dwell time of a toast that appears out of nowhere — a second is the
@@ -1495,8 +1501,9 @@ export default class GitHubSyncPlugin extends Plugin {
       // 1 — the click registered. No number exists yet.
       onCommitStarted: () => {
         this.setCommitSection({
-          state: "live",
+          state: "pending",
           text: commitStartedNoticeText(),
+          showAt: Date.now() + PHASE_START_DELAY_MS,
         });
         // The same 2 s gate as the drain's counters, so a fast commit
         // shows "Committing…" and then its result with nothing
@@ -1607,8 +1614,9 @@ export default class GitHubSyncPlugin extends Plugin {
           // each there is nothing to overwrite, and the owner called
           // the header-plus-counters shape correct when they saw it.
           this.setDrainSection({
-            state: "live",
+            state: "pending",
             text: syncStartedNoticeText(),
+            showAt: Date.now() + PHASE_START_DELAY_MS,
           });
           this.armSyncProgressNotice();
         }
@@ -2623,19 +2631,24 @@ export default class GitHubSyncPlugin extends Plugin {
   private renderNotice(): void {
     const now = Date.now();
     const text = renderNoticeState(this.noticeState, now);
-    if (text === null) {
-      this.clearSyncNotice();
-      return;
-    }
-    this.setSyncNotice(text);
+
+    // ⚠️ "Nothing visible" is NOT "nothing pending", and conflating the
+    // two cost two tests: a section waiting out its 500 ms start delay
+    // renders as null, so clearing the state here would delete the very
+    // line we are waiting to show, and returning early would cancel the
+    // timer that shows it. Hide the BOX, keep the STATE, always
+    // schedule.
+    if (text === null) this.hideSyncNoticeBox();
+    else this.setSyncNotice(text);
+
     if (this.noticeDeadlineTimer !== null) {
       window.clearTimeout(this.noticeDeadlineTimer);
       this.noticeDeadlineTimer = null;
     }
     const due = nextNoticeDeadline(this.noticeState, now);
     if (due === null) return;
-    // One timer for both sections — the earliest deadline. Re-rendering
-    // then either drops that section or closes the box.
+    // One timer for both sections and both kinds of moment — a pending
+    // section appearing, a settled one expiring. Whichever comes first.
     this.noticeDeadlineTimer = window.setTimeout(
       () => {
         this.noticeDeadlineTimer = null;
@@ -2643,6 +2656,17 @@ export default class GitHubSyncPlugin extends Plugin {
       },
       Math.max(0, due - now),
     );
+  }
+
+  // Take the box off screen WITHOUT touching the sections — the
+  // difference from clearSyncNotice, which is the full teardown.
+  private hideSyncNoticeBox(): void {
+    if (this.syncNoticeHideTimer !== null) {
+      window.clearTimeout(this.syncNoticeHideTimer);
+      this.syncNoticeHideTimer = null;
+    }
+    this.syncNotice?.hide();
+    this.syncNotice = null;
   }
 
   // Create-or-update. duration 0: this notice lives until WE take it
@@ -2799,9 +2823,13 @@ export default class GitHubSyncPlugin extends Plugin {
   // undo the very sequencing this design is for.
   private repaintSyncProgressNotice(): void {
     if (!this.syncProgressActive) return;
-    // The DRAIN's slot only. Counters appear once the gate is open;
-    // before that the slot holds the bare header set at drain start.
-    if (this.noticeState.drain.state !== "live") return;
+    // The DRAIN's slot only. ⚠️ `pending` counts: a drain that is still
+    // inside its 500 ms start delay but already has counters has
+    // plainly earned a line, and upgrading it to `live` here is what
+    // shows it. Only a FINISHED or absent drain is refused — repainting
+    // one would resurrect a phase that is over.
+    const d = this.noticeState.drain.state;
+    if (d === "settled" || d === "none") return;
     this.setDrainSection({
       state: "live",
       text: this.currentSyncProgressText(),
