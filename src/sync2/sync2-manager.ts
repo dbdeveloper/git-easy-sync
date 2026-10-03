@@ -149,6 +149,15 @@ export interface Sync2ManagerDeps {
   trashHooks?: TrashHooks | null;
   // Obsidian-aware rename for the local filename sanitize pass.
   renameFile?: (oldPath: string, newPath: string) => Promise<void>;
+  // ⚠️ Fires when the scan has COUNTED the changes, BEFORE a single
+  // batch is written (owner, 2026-10-03). `onLocalCommitted` reports
+  // the settled number AFTER the enqueue, which on a large vault is
+  // seconds later — and those are exactly the seconds in which the
+  // user is wondering whether the button worked.
+  onCommitCounted?(filesCount: number): void;
+  // Per ≤100-file batch during the enqueue — the slow half. `done` is
+  // what has actually reached the queue, `total` what the scan counted.
+  onCommitProgress?(done: number, total: number): void;
   onLocalCommitted?(filesCount: number): void;
   onNoLocalChanges?(): void;
   // §II.16 — the whole user-visible operation began. Paired with
@@ -493,6 +502,14 @@ export class Sync2Manager {
       return 0;
     }
 
+    // The count is known and NOTHING has been written yet. Measured
+    // 2026-10-03: `findChanges` is 0.12 s at 2k files and 0.71 s at 20k
+    // on desktop (linear), while the enqueue below hashes and copies
+    // every file's bytes into `sync_store/` and is what actually takes
+    // seconds. So this is the earliest HONEST number, and it precedes
+    // the slow part rather than following it.
+    this.deps.onCommitCounted?.(changes.length);
+
     await this.applyZeroByteRestoreGuard(changes);
 
     let enqueued = 0;
@@ -508,10 +525,19 @@ export class Sync2Manager {
       }
     }
     // ≤100-entry slices (MAX_BATCH_ENTRIES) as fresh batches.
+    //
+    // ⚠️ THIS is the slow half of a commit (owner, 2026-10-03): the scan
+    // above counts in well under a second even at 20k files, while every
+    // entry here is hashed and its bytes copied into `sync_store/`. A
+    // static "Commit N files…" across all of it would be the same
+    // silence the early message was meant to end, just later — so each
+    // batch reports. One update per ≤100 files means a vault under that
+    // size sees exactly one text, as before.
     for (let i = 0; i < rest.length; i += MAX_BATCH_ENTRIES) {
       const slice = rest.slice(i, i + MAX_BATCH_ENTRIES);
       const id = await this.deps.batchWriter.writeBatch(slice);
       if (id !== null) enqueued += slice.length;
+      this.deps.onCommitProgress?.(enqueued, changes.length);
     }
 
     this.queueIndex = null; // the queue just changed — rebuild lazily

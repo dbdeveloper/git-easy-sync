@@ -1485,6 +1485,21 @@ export default class GitHubSyncPlugin extends Plugin {
         if (!file) return;
         await this.app.fileManager.renameFile(file, newPath);
       },
+      // The count, the instant it is known and before a single batch is
+      // written. `onLocalCommitted` below reports the SETTLED number
+      // after the enqueue — seconds later on a large vault, and those
+      // are the seconds the user spends wondering.
+      onCommitCounted: (count: number) => {
+        this.reportCommitOutcome(
+          count === 1 ? "Commit 1 file…" : `Commit ${count} files…`,
+        );
+      },
+      // Only meaningful past the first batch: at ≤100 files there is
+      // exactly one, and repainting the same number would be noise.
+      onCommitProgress: (done: number, total: number) => {
+        if (done >= total) return; // the settled line follows anyway
+        this.reportCommitOutcome(`Commit ${done} of ${total} files…`);
+      },
       onLocalCommitted: (count: number) => {
         this.reportCommitOutcome(
           count === 1 ? "Commit 1 file" : `Commit ${count} files`,
@@ -1498,19 +1513,13 @@ export default class GitHubSyncPlugin extends Plugin {
         // A stale request would make the NEXT drain's idle event
         // announce a cancellation that never happened.
         this.syncCancelRequested = false;
-        // ⚠️ ACKNOWLEDGE THE CLICK IMMEDIATELY (owner, 2026-10-03).
-        //
-        // §II.16 gated the first paint behind 2 s because the original
-        // complaint was "a long sync looks like a hang". That reading
-        // was half the problem: a SHORT silence right after a click is
-        // its own failure — the user cannot tell whether the button
-        // registered, and on this vault the commit pass alone scans
-        // 264 files before anything else can speak.
-        //
-        // So the gate moves off the FIRST paint and stays on the
-        // counters: the acknowledgement is instant, and the numbers
-        // still only appear once there are numbers.
-        this.setSyncNotice(syncStartedNoticeText());
+        // ⚠️ NO notice here (owner, 2026-10-03). In a FULL sync the
+        // first word belongs to the commit pass — "Commit N files…",
+        // fired the moment the count is known — and a sync header
+        // painted ahead of it would be overwritten a second later,
+        // reading as two messages for one operation. The drain gets
+        // its own header only when it runs WITHOUT a commit pass in
+        // front of it; see the drain-status listener.
         this.armSyncProgressNotice();
       },
       onSyncCompleted: (summary) => {
@@ -1574,7 +1583,15 @@ export default class GitHubSyncPlugin extends Plugin {
         // ARMS it for entry points that drain without a commit pass
         // (interval watchdog, resumeQueue): those never fire
         // onSyncStarted, and a long drain there is just as silent.
-        if (s.state === "running") this.armSyncProgressNotice();
+        if (s.state === "running") {
+          // ⚠️ ONLY when the drain runs WITHOUT a commit pass in front
+          // of it (owner, 2026-10-03): resumeQueue, the watchdog, or a
+          // Sync with "start with commit" off. Inside a full sync the
+          // commit pass has already spoken and this would just
+          // overwrite it.
+          if (!this.inFullSync) this.setSyncNotice(syncStartedNoticeText());
+          this.armSyncProgressNotice();
+        }
         this.repaintSyncProgressNotice();
         // …and a drain that ended without a syncAll wrapper still has
         // to take the notice down (see disarm's warning).
