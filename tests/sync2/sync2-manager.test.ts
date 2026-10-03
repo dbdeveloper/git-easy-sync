@@ -68,6 +68,8 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     cancelled: boolean;
   }>;
   let latched: Array<401 | 403>;
+  let hotMetaRef: HotMetadataStore;
+  let baselinesRef: FileBaselinesStore;
 
   const put = (p: string, content: string): void => {
     const abs = path.join(dir, p);
@@ -201,6 +203,8 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
         return drainResult;
       },
     };
+    hotMetaRef = hotMeta;
+    baselinesRef = baselines;
     manager = new Sync2Manager(deps);
   });
 
@@ -346,6 +350,101 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     ]);
     // And the settled number last.
     expect(order[order.length - 1]).toBe("committed:250");
+  });
+
+  it("🔴 a repo switch must not sync with baselines from the PREVIOUS repo", async () => {
+    // The guard the surviving comment in hot-metadata.ts already
+    // promises: "(owner, repo, branch) the metadata was built against.
+    // The manager compares this to current settings at the start of
+    // every syncAll; a mismatch means the user pointed the plugin at a
+    // different remote and the local baseline is no longer
+    // authoritative."
+    //
+    // ⚠️ The FIELD IS WRITTEN AND READ BY NOBODY — `reconcileRemoteIdentity`
+    // was deleted at THE SWITCH and its storage survived. What the
+    // comment describes does not exist.
+    //
+    // Why it matters is pinned separately in
+    // `repo-substitution-data-loss.test.ts`: with foreign baselines, an
+    // empty repo reads as "everything was deleted remotely", and rule
+    // 4.3 turns that into a clean pull — i.e. the vault is emptied. The
+    // owner only escaped because §II.7.1 skipped discovery entirely.
+    await hotMetaRef.update({
+      remoteIdentity: { owner: "me", repo: "repo-A", branch: "main" },
+      lastSyncCommitSha: "commit-from-repo-A",
+    });
+    await baselinesRef.setMany([
+      { path: "a.md", baselineSha: "sha-a", mtime: 0, size: 1 },
+      { path: "b.md", baselineSha: "sha-b", mtime: 0, size: 1 },
+    ]);
+    // The user retyped owner/repo in Settings — a different remote.
+    (deps as never as { remoteIdentity: () => unknown }).remoteIdentity =
+      () => ({ owner: "me", repo: "repo-B", branch: "main" });
+
+    await manager.syncAll();
+
+    // The local baseline is no longer authoritative, so it must be gone
+    // BEFORE anything compares the vault against the new remote.
+    expect(
+      await baselinesRef.allPaths(),
+      "baselines built against repo-A may not describe repo-B",
+    ).toEqual([]);
+    expect(
+      hotMetaRef.getLastSyncCommitSha(),
+      "an anchor from repo-A is meaningless in repo-B",
+    ).toBeNull();
+    expect(hotMetaRef.getRemoteIdentity()).toEqual({
+      owner: "me",
+      repo: "repo-B",
+      branch: "main",
+    });
+  });
+
+  it("🔑 the FIRST observation records the identity and wipes NOTHING", async () => {
+    // ⚠️ The branch that makes this safe to ship. Every install that
+    // upgrades from a build without `remoteIdentity` arrives here with
+    // `recorded === null`, and treating that as a mismatch would wipe
+    // the baselines of EVERY existing user once — a full re-adoption
+    // for nothing.
+    //
+    // Added after a probe: deleting the `recorded === null` branch left
+    // all 28 tests green, so the condition was implemented and
+    // unchecked — the same shape as the defect this whole guard exists
+    // to fix.
+    await baselinesRef.setMany([
+      { path: "a.md", baselineSha: "sha-a", mtime: 0, size: 1 },
+      { path: "b.md", baselineSha: "sha-b", mtime: 0, size: 1 },
+    ]);
+    expect(hotMetaRef.getRemoteIdentity()).toBeNull(); // the upgrade state
+    (deps as never as { remoteIdentity: () => unknown }).remoteIdentity =
+      () => ({ owner: "me", repo: "repo-A", branch: "main" });
+
+    await manager.syncAll();
+
+    expect(
+      (await baselinesRef.allPaths()).sort(),
+      "an upgrade must not cost the user their baselines",
+    ).toEqual(["a.md", "b.md"]);
+    expect(hotMetaRef.getRemoteIdentity()).toEqual({
+      owner: "me",
+      repo: "repo-A",
+      branch: "main",
+    });
+  });
+
+  it("the SAME identity is a no-op — no wipe on an ordinary sync", async () => {
+    await hotMetaRef.update({
+      remoteIdentity: { owner: "me", repo: "repo-A", branch: "main" },
+    });
+    await baselinesRef.setMany([
+      { path: "a.md", baselineSha: "sha-a", mtime: 0, size: 1 },
+    ]);
+    (deps as never as { remoteIdentity: () => unknown }).remoteIdentity =
+      () => ({ owner: "me", repo: "repo-A", branch: "main" });
+
+    await manager.syncAll();
+
+    expect(await baselinesRef.allPaths()).toEqual(["a.md"]);
   });
 
   it("🔑 §II.16: the progress snapshot is cleared at the SYNC start, not at the drain start", async () => {

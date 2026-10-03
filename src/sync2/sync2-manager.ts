@@ -160,6 +160,10 @@ export interface Sync2ManagerDeps {
   // on desktop the scan is 0.12 s at 2k files and 0.71 s at 20k, but
   // `p6` records a full walk at 10-22 s on Android — so "after the
   // count" is early enough on a laptop and nowhere near it on a phone.
+  // (owner, repo, branch) as the user has them RIGHT NOW. Compared at
+  // the start of every user-driven sync against what the metadata was
+  // built against — see `reconcileRemoteIdentity`.
+  remoteIdentity?(): { owner: string; repo: string; branch: string };
   onCommitStarted?(): void;
   // Per ≤100-file batch during the enqueue — the slow half. `done` is
   // what has actually reached the queue, `total` what the scan counted.
@@ -294,8 +298,84 @@ export class Sync2Manager {
     this.emitDrainStatus({ progress: null });
   }
 
+  // ⚠️ THE PROVENANCE `base` DOES NOT CARRY.
+  //
+  // `FileBaseline` is {baselineSha, mtime, size}: it records WHAT this
+  // device and the remote last agreed on for a path, never WITH WHOM.
+  // Strip that and two situations become bit-identical — a force-push
+  // to an empty tree, and a DIFFERENT empty repository. Both answer
+  // compare() with 404 and present an empty tree, so discovery's
+  // fallback emits a deletion for every baselined path, and rule 4.3
+  // ("local unchanged, remote moved → clean pull") turns each one into
+  // a local delete. Foreign baselines can empty the vault.
+  //
+  // (A mass deletion committed NORMALLY is a different thing and is
+  // handled correctly: history moves forward, compare() answers 200,
+  // and pulling those deletions is right. Only the 404 case is
+  // ambiguous, and no heuristic ON THE DATA can disambiguate it,
+  // because the data really is the same. Only identity can.)
+  //
+  // 📌 Restored 2026-10-03. `reconcileRemoteIdentity` was deleted at THE
+  // SWITCH on the reasoning that a repo switch "reads as the force-push
+  // class" — true about the MECHANISM and wrong about the MEANING. Its
+  // storage survived the deletion, and so did the comment in
+  // hot-metadata.ts promising this check; the field was written and
+  // read by nobody until now.
+  private async reconcileRemoteIdentity(): Promise<void> {
+    if (!this.deps.remoteIdentity) return;
+    const current = this.deps.remoteIdentity();
+    const recorded = this.deps.hotMeta.getRemoteIdentity();
+    if (recorded === null) {
+      // First observation — record and continue. NOT a mismatch: an
+      // install upgrading from a build without this field would
+      // otherwise wipe its state once, for nothing.
+      await this.deps.hotMeta.update({ remoteIdentity: current });
+      return;
+    }
+    if (
+      recorded.owner === current.owner &&
+      recorded.repo === current.repo &&
+      recorded.branch === current.branch
+    ) {
+      return;
+    }
+    this.deps.logger.warn("Sync2 remote identity changed; wiping local state", {
+      from: recorded,
+      to: current,
+    });
+    // ⚠️ COLD first, then HOT — the order is what makes this safe to
+    // crash in the middle: with the baselines already gone but the
+    // identity not yet updated, the next sync detects the same mismatch
+    // and repeats the wipe. Idempotent by construction.
+    await this.deps.baselines.clear();
+    await this.deps.hotMeta.update({
+      lastSyncCommitSha: null,
+      lastSyncTreeSha: null,
+      conflictBranch: null,
+      remoteIdentity: current,
+    });
+    // The queue holds batches enqueued against repo A's baselines. The
+    // BYTES are repo-independent (content-addressed in sync_store), but
+    // each entry's `previousRemoteSha` is repo A's — and the wipe above
+    // guarantees the next commit pass re-enqueues everything anyway, so
+    // keeping them buys nothing and carries stale provenance.
+    const queueRoot = normalizePath(
+      `${this.deps.vault.configDir}/plugins/${this.deps.selfPluginId}/${QUEUE_DIRNAME}`,
+    );
+    if (await this.deps.vault.adapter.exists(queueRoot)) {
+      await this.deps.vault.adapter.rmdir(queueRoot, true);
+    }
+    // Conflict RECORDS reference repo A's blobs; the sibling FILES stay
+    // in the vault untouched, exactly as a Reset leaves them, and the
+    // reconciler re-detects them as orphans on the next pass.
+    const conflicts = await this.deps.conflictStore.load();
+    conflicts.entries.clear();
+    await this.deps.conflictStore.save(conflicts);
+  }
+
   async syncAll(): Promise<void> {
     this.deps.logger.info("Sync2 syncAll start");
+    await this.reconcileRemoteIdentity();
     this.pulledFilesThisSync = 0;
     this.clearProgressForNewUserSync();
     let pushedFiles = 0;

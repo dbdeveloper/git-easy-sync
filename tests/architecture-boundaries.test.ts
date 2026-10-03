@@ -216,3 +216,39 @@ describe("§VI.0 — the main-thread diff3 wiring stays out of src/", () => {
     expect(users.length).toBeGreaterThan(0);
   });
 });
+
+// The guard that keeps a load-bearing dep from silently sleeping.
+//
+// ⚠️ `Sync2ManagerDeps.remoteIdentity` is OPTIONAL — the manager skips
+// the check when it is absent, which is right for tests and fatal in
+// production. That is not hypothetical: `remoteIdentity` was stored,
+// parsed, and read by NOBODY from THE SWITCH until 2026-10-03, while a
+// comment in hot-metadata.ts described the check as if it existed.
+// Pointing the plugin at a different repo could then empty the vault.
+//
+// A probe confirmed the hole is invisible to the suite: deleting the
+// wiring from main.ts left all 1058 sync2 + notice tests green. So the
+// wiring itself is asserted here, where "it compiles and passes" is not
+// the same as "it runs".
+describe("load-bearing optional deps are actually wired", () => {
+  const mainSrc = fs.readFileSync(path.join(SRC, "main.ts"), "utf8");
+
+  it("🔑 main.ts passes `remoteIdentity` into the Sync2Manager deps", () => {
+    // Matching the KEY, not the body: the body may change shape, but a
+    // manager built without this key cannot detect a repo switch.
+    expect(
+      /\bremoteIdentity:\s*\(\)\s*=>/.test(mainSrc),
+      "without this the repo-switch guard never runs in production",
+    ).toBe(true);
+  });
+
+  it("…and reads it from settings, not from a captured snapshot", () => {
+    // A captured value would be the Reset defect all over again: the
+    // client held the settings OBJECT and kept using the old token.
+    const m = /\bremoteIdentity:\s*\(\)\s*=>\s*\(\{([^}]*)\}\)/.exec(mainSrc);
+    expect(m, "remoteIdentity must be a live getter").not.toBeNull();
+    expect(m![1]).toContain("this.settings.githubOwner");
+    expect(m![1]).toContain("this.settings.githubRepo");
+    expect(m![1]).toContain("this.settings.githubBranch");
+  });
+});

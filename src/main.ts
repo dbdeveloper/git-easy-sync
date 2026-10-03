@@ -1499,6 +1499,15 @@ export default class GitHubSyncPlugin extends Plugin {
         await this.app.fileManager.renameFile(file, newPath);
       },
       // 1 — the click registered. No number exists yet.
+      // ⚠️ Read LIVE from settings, never captured: the whole point is
+      // to notice when the user retypes them. Settings are normalised
+      // on load (trimmed, branch defaulted), so this compares the same
+      // shape the client uses for its URLs.
+      remoteIdentity: () => ({
+        owner: this.settings.githubOwner ?? "",
+        repo: this.settings.githubRepo ?? "",
+        branch: this.settings.githubBranch ?? "main",
+      }),
       onCommitStarted: () => {
         this.setCommitSection({
           state: "pending",
