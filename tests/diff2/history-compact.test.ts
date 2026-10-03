@@ -12,7 +12,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { isolateHistory, redo, undo, undoDepth } from "@codemirror/commands";
 import type { TransactionSpec } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
@@ -31,44 +31,11 @@ import {
   scanHistoryV2,
 } from "../../src/diff2/history-replay-v2";
 
-// ── happy-dom has no layout, and that made this file 4× slower ────────────────
-//
-// Measured 2026-10-03, after the 428-block stress test started flaking against the
-// 30 s timeout. The cost was NOT in the compactor (7 ms for all 428 blocks) nor in
-// the oracle's comparisons (4 ms total) — it was `replayHistoryV2`, at ~10 ms per
-// dispatched block. A bare CM6 view under the same happy-dom costs 0.4 ms per
-// dispatch; the diff2 pane cost 8.6 ms. 21× — so it was ours, not the environment's.
-//
-// A CPU profile put 71 % of that in `markerLayoutController.measureAndApply`, and
-// the reason is spelled out in its own source: the controller measures the marker
-// widths ONCE and caches them, and the update hook that retries is guarded by
-// `!this.widths` so it "stays inert forever" after the first success. happy-dom
-// reports `offsetWidth === 0` for everything, so the measure NEVER succeeds, the
-// cache never fills, the guard never closes — and every geometry-changing update
-// rebuilds probe DOM, runs querySelector and getComputedStyle. (40 % of total CPU
-// went to happy-dom re-parsing CSS selector strings, which it does not cache.)
-//
-// So the fix is to give happy-dom the one thing it lacks: a non-zero width, which
-// is what a real browser reports on the first paint. The measure then succeeds once
-// and the hook goes inert, exactly as in Obsidian.
-//
-// ⚠️ `offsetWidth` ONLY, deliberately. `apply()` bails on
-// `contentDOM.clientWidth === 0`, which stays 0 here — so no layout mode is chosen
-// and no classes are toggled. The ONLY behaviour that changes is that the cache
-// fills. Nothing this file asserts (doc + structure) can see the difference.
-//
-// Effect on the stress test's replay: 4339 ms → 1132 ms.
-let fakeOffsetWidth: PropertyDescriptor | null = null;
-beforeAll(() => {
-  const proto = HTMLElement.prototype as object;
-  fakeOffsetWidth = Object.getOwnPropertyDescriptor(proto, "offsetWidth") ?? null;
-  Object.defineProperty(proto, "offsetWidth", { configurable: true, get: () => 120 });
-});
-afterAll(() => {
-  const proto = HTMLElement.prototype as object;
-  if (fakeOffsetWidth) Object.defineProperty(proto, "offsetWidth", fakeOffsetWidth);
-  else delete (proto as Record<string, unknown>).offsetWidth;
-});
+// 📌 This file used to fake `offsetWidth` itself — the 428-block stress test was
+// flaking against the 30 s timeout at ~15 s. The measurement that explained it
+// turned out to apply to EVERY diff2 suite that mounts a pane, so the fix moved to
+// `tests/setup-happy-dom-layout.ts`, which also carries the full rationale.
+// Replay here: 4339 ms → 1132 ms; this file: 19.8 s → 3.2 s.
 
 const parents: HTMLElement[] = [];
 function mount(base: string, sibling: string): EditorView {

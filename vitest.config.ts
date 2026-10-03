@@ -11,6 +11,14 @@ export default defineConfig({
     // stop masquerading as failures, while a genuine hang still surfaces.
     testTimeout: 30000,
     hookTimeout: 30000,
+    // ⚠️ The comment above describes a cost that was finally MEASURED on
+    // 2026-10-03, and most of it was removable: happy-dom reports
+    // `offsetWidth === 0`, which stops diff2's marker-layout controller from
+    // ever caching its one-time measurement, so it re-measured on every
+    // update. The setup below hands it a width. Full rationale — including why
+    // this is NOT a production defect and why it fakes one property and not a
+    // whole layout — lives in that file.
+    setupFiles: ["./tests/setup-happy-dom-layout.ts"],
     // Integration tests live under tests/integration/ and perf
     // baselines under tests/perf/. Both reach the real GitHub API
     // and have their own configs (vitest.integration.config.ts and
