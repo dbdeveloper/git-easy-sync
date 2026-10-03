@@ -306,6 +306,69 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(manager.getDrainStatus().progress).toBeNull();
   });
 
+  it("🔑 §II.16: the progress snapshot is cleared at the SYNC start, not at the drain start", async () => {
+    // FIELD REPORT 2026-10-03 — the owner glimpsed "258" in the notice
+    // on a sync that did nothing, and said it confused them. The log
+    // showed the engine idle: `nothing to commit`, every counter zero.
+    // The numbers were the PREVIOUS run's, painted by the notice.
+    //
+    // ⚠️ THE EXISTING RESET IS IN THE WRONG PLACE, and the test above
+    // cannot see it: `lastProgress = null` happens when the DRAIN
+    // starts, while main.ts arms the 2 s progress timer at
+    // `onSyncStarted` — deliberately, so the wait is measured from the
+    // CLICK ("a slow commit pass is silence too"). Between those two
+    // points sits the commit pass, which took ~3 s over 264 files. The
+    // timer fired inside that gap and read a snapshot nobody had
+    // cleared yet.
+    //
+    // So the assertion has to be taken AT `onSyncStarted`, which is the
+    // first instant the notice can paint. Checking after `syncAll`
+    // returns — what the neighbouring test does — passes either way.
+    deps.drainFn = async (d) => {
+      d.onProgress?.({
+        pullDone: 0,
+        pullTotal: 0,
+        pushDone: 258,
+        pushTotal: 258,
+        conflicts: 0,
+        path: "a.md",
+      });
+      return okResult();
+    };
+    await manager.syncAll();
+    expect(manager.getDrainStatus().progress).not.toBeNull(); // armed
+
+    const atSyncStart: Array<unknown> = [];
+    deps.onSyncStarted = () => {
+      atSyncStart.push(manager.getDrainStatus().progress);
+    };
+    deps.drainFn = async () => okResult();
+    await manager.syncAll();
+    expect(
+      atSyncStart[0],
+      "the notice must not be able to read the previous run's counters",
+    ).toBeNull();
+
+    // syncFile is the same entry shape and the same window.
+    atSyncStart.length = 0;
+    deps.drainFn = async (d) => {
+      d.onProgress?.({
+        pullDone: 0,
+        pullTotal: 0,
+        pushDone: 7,
+        pushTotal: 7,
+        conflicts: 0,
+        path: "b.md",
+      });
+      return okResult();
+    };
+    await manager.syncAll();
+    atSyncStart.length = 0;
+    deps.drainFn = async () => okResult();
+    await manager.syncFile("b.md");
+    expect(atSyncStart[0], "syncFile too").toBeNull();
+  });
+
   it("§II.17: a CANCELLED sync does not report success — the summary must not say 'Sync done'", async () => {
     // A cancelled drain returns normally (it is not an error), so the
     // summary's `ok` flag would have been true and the user would have

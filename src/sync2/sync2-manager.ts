@@ -256,9 +256,33 @@ export class Sync2Manager {
     }
   }
 
+  // ⚠️ THE SNAPSHOT MUST DIE AT THE *SYNC* START, NOT THE DRAIN START.
+  //
+  // `drain()` already clears `lastProgress` — but main.ts arms the 2 s
+  // progress timer at `onSyncStarted`, deliberately, so the wait is
+  // measured from the CLICK ("a slow commit pass is silence too").
+  // Between those two points sits the commit pass, and on a large vault
+  // it runs for seconds. A timer firing in that gap reads a snapshot
+  // nobody has cleared yet — the PREVIOUS run's.
+  //
+  // Field report 2026-10-03: a sync with nothing to do flashed "258"
+  // at the owner, who was watching for "nothing to commit" and was
+  // confused by it. The log showed the engine idle; the numbers came
+  // from the bootstrap run that had finished five seconds earlier.
+  //
+  // 📌 The same bug was fixed once before (2026-09-26) and the fix was
+  // put in `drain()` — correct for the drain, blind to the window in
+  // front of it. Clearing it HERE covers both, and the one in `drain()`
+  // stays for the entry points that do not come through a user sync.
+  private clearProgressForNewUserSync(): void {
+    this.lastProgress = null;
+    this.emitDrainStatus({ progress: null });
+  }
+
   async syncAll(): Promise<void> {
     this.deps.logger.info("Sync2 syncAll start");
     this.pulledFilesThisSync = 0;
+    this.clearProgressForNewUserSync();
     let pushedFiles = 0;
     let ok = false;
     this.deps.onSyncStarted?.();
@@ -280,6 +304,7 @@ export class Sync2Manager {
   async syncFile(path: string): Promise<void> {
     this.deps.logger.info("Sync2 syncFile start", { path });
     this.pulledFilesThisSync = 0;
+    this.clearProgressForNewUserSync();
     let pushedFiles = 0;
     let ok = false;
     this.deps.onSyncStarted?.();
