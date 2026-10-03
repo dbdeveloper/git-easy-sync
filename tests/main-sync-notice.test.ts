@@ -52,6 +52,9 @@ interface NoticeHandle {
   setDrainSection(s: NoticeState["drain"]): void;
   settleDrainSection(text: string): void;
   handleDrainIdle(): void;
+  handleDrainStatus(s: { state: string }): void;
+  lastDrainState: string | null;
+  applyRibbonSyncingState(on: boolean): void;
 }
 
 function makePlugin(progress: unknown = null): NoticeHandle {
@@ -65,8 +68,12 @@ function makePlugin(progress: unknown = null): NoticeHandle {
   p.syncNoticeHideTimer = null;
   p.noticeState = EMPTY_NOTICE_STATE;
   p.noticeDeadlineTimer = null;
+  p.lastDrainState = null;
+  p.applyRibbonSyncingState = () => {};
   return p;
 }
+
+const PHASE_START_DELAY = 700;
 
 const lastMessage = (): string =>
   recordedNotices[recordedNotices.length - 1]?.message ?? "";
@@ -249,6 +256,65 @@ describe("sync notice lifecycle (§II.16)", () => {
     p.syncProgressActive = true;
     p.repaintSyncProgressNotice();
     expect(lastMessage()).toBe("Sync done");
+  });
+
+  it("🔑 a running drain repeats its status for every file — the slot opens ONCE", () => {
+    // Field report 2026-10-03: "Syncing with GitHub" jumped around.
+    //
+    // ⚠️ `onProgress` emits `{progress}` WITHOUT touching `state`, so
+    // the merged status is still "running" and the listener fires again
+    // for every single file. Re-opening the slot on each one pushed
+    // `showAt` forever forward: the section went invisible, the render
+    // yielded null, THE BOX WAS DESTROYED, and the next repaint built a
+    // new one. Not one box changing text — dozens created and thrown
+    // away.
+    const p = makePlugin();
+    p.handleDrainStatus({ state: "running" });
+    const first = p.noticeState.drain;
+    expect(first.state).toBe("pending");
+
+    // …twenty more progress emits, all still "running", WITH TIME
+    // PASSING between them. ⚠️ The clock matters: without it every
+    // re-arm computes the same `showAt` and an unguarded listener looks
+    // identical to a guarded one. A probe caught exactly that — the
+    // first version of this test passed with the guard deleted.
+    for (let i = 0; i < 20; i++) {
+      vi.advanceTimersByTime(50);
+      p.handleDrainStatus({ state: "running" });
+    }
+
+    expect(
+      p.noticeState.drain,
+      "the slot must not be re-armed by a repeat of the same state",
+    ).toEqual(first);
+
+    // And the consequence that was visible: by now the section is due,
+    // so the box exists. An unguarded listener would have pushed
+    // `showAt` a second into the future on the last tick instead.
+    vi.advanceTimersByTime(PHASE_START_DELAY);
+    expect(lastMessage()).toBe("Syncing with GitHub");
+  });
+
+  it("…and the slot opens again for a LATER, separate drain", () => {
+    // The guard is about repeats, not about suppressing real restarts.
+    const p = makePlugin();
+    p.handleDrainStatus({ state: "running" });
+    p.handleDrainStatus({ state: "idle" });
+    vi.advanceTimersByTime(2000); // the box closes
+    p.handleDrainStatus({ state: "running" });
+    expect(p.noticeState.drain.state).toBe("pending");
+  });
+
+  it("🔑 idle is repeated too — the last line must not be kept alive forever", () => {
+    const p = makePlugin();
+    p.handleDrainStatus({ state: "running" });
+    p.handleDrainStatus({ state: "idle" });
+    const settled = p.noticeState.drain;
+    expect(settled.state).toBe("settled");
+    // Further idle emits must not refresh the deadline.
+    vi.advanceTimersByTime(300);
+    p.handleDrainStatus({ state: "idle" });
+    expect(p.noticeState.drain).toEqual(settled);
   });
 
   // ── the box comes down ────────────────────────────────────────────

@@ -57,7 +57,7 @@ import ChangeDetector from "./sync2/change-detector";
 import GitignoreInvariants from "./sync2/gitignore-invariants";
 import GitignoreSeedStore from "./sync2/gitignore-seeds";
 import DeletedStore from "./diff2/deleted-store";
-import { Sync2Manager } from "./sync2/sync2-manager";
+import { Sync2Manager, type DrainStatus } from "./sync2/sync2-manager";
 import { IntervalScheduler } from "./sync2/interval-scheduler";
 import ConflictStoreV2 from "./sync2/conflict-store-v2";
 import BatchWriter from "./sync2/batch-writer";
@@ -1626,30 +1626,7 @@ export default class GitHubSyncPlugin extends Plugin {
     // 2.0.2-beta2: drive the ribbon "syncing" look from drain status.
     // The icon (refresh-cw) spins + tints accent while a drain runs.
     this.drainStatusRibbonUnsub = this.sync2Manager.setDrainStatusListener(
-      (s) => {
-        this.applyRibbonSyncingState(s.state === "running");
-        // §II.16 — every drain event repaints the live notice. Also
-        // ARMS it for entry points that drain without a commit pass
-        // (interval watchdog, resumeQueue): those never fire
-        // onSyncStarted, and a long drain there is just as silent.
-        if (s.state === "running") {
-          // The drain's slot opens the moment it starts, in EVERY case.
-          // The "only when standalone" rule this replaces existed to
-          // stop the header overwriting the commit's line; with a slot
-          // each there is nothing to overwrite, and the owner called
-          // the header-plus-counters shape correct when they saw it.
-          this.setDrainSection({
-            state: "pending",
-            text: syncStartedNoticeText(),
-            showAt: Date.now() + PHASE_START_DELAY_MS,
-          });
-          this.armSyncProgressNotice();
-        }
-        this.repaintSyncProgressNotice();
-        // …and a drain that ended without a syncAll wrapper still has
-        // to take the notice down (see disarm's warning).
-        if (s.state === "idle") this.handleDrainIdle();
-      },
+      (s) => this.handleDrainStatus(s),
     );
 
     // Conflict resolution events (sibling delete, edit, rename) are
@@ -2634,6 +2611,9 @@ export default class GitHubSyncPlugin extends Plugin {
   // SLOT; one renderer composes them. No handler can overwrite
   // another's text, which is what makes the ordering bugs of
   // 2026-10-03 unexpressible rather than merely fixed.
+  // The previous drain state, so the listener can act on TRANSITIONS.
+  // Every emit while running repeats `state: "running"`.
+  private lastDrainState: string | null = null;
   private noticeState: NoticeState = EMPTY_NOTICE_STATE;
   private noticeDeadlineTimer: number | null = null;
 
@@ -2749,6 +2729,52 @@ export default class GitHubSyncPlugin extends Plugin {
   // The commit pass has something to say. Inside a full sync it writes
   // into the shared notice and STAYS — the drain will replace the text.
   // Standalone, it is a brief toast with nothing following it.
+
+  // The drain-status listener, extracted so its TRANSITION logic is
+  // reachable by a test. Every emit while running repeats
+  // `state: "running"`, and acting on the repeats instead of the
+  // change is what made the notice jump.
+  private handleDrainStatus(s: DrainStatus): void {
+        this.applyRibbonSyncingState(s.state === "running");
+        // §II.16 — every drain event repaints the live notice. Also
+        // ARMS it for entry points that drain without a commit pass
+        // (interval watchdog, resumeQueue): those never fire
+        // onSyncStarted, and a long drain there is just as silent.
+        // ⚠️ ON THE TRANSITION, not on every emit while running.
+        //
+        // `onProgress` calls `emitDrainStatus({progress})` WITHOUT
+        // touching `state`, so the merged status is still "running" and
+        // this listener fires again for every single file. Opening the
+        // slot here unconditionally re-armed it to `pending` on each
+        // tick — pushing `showAt` forever forward, so the section went
+        // invisible, the render yielded null, the BOX WAS DESTROYED,
+        // and the next repaint built a new one. That is the notice
+        // "jumping" the owner saw: not one box changing text, dozens of
+        // boxes created and thrown away.
+        const wasRunning = this.lastDrainState === "running";
+        this.lastDrainState = s.state;
+        if (s.state === "running" && !wasRunning) {
+          // The drain's slot opens the moment it starts, in EVERY case.
+          // The "only when standalone" rule this replaces existed to
+          // stop the header overwriting the commit's line; with a slot
+          // each there is nothing to overwrite, and the owner called
+          // the header-plus-counters shape correct when they saw it.
+          this.setDrainSection({
+            state: "pending",
+            text: syncStartedNoticeText(),
+            showAt: Date.now() + PHASE_START_DELAY_MS,
+          });
+          this.armSyncProgressNotice();
+        }
+        this.repaintSyncProgressNotice();
+        // …and a drain that ended without a syncAll wrapper still has
+        // to take the notice down (see disarm's warning).
+        // Same reasoning: idle is re-emitted too, and settling again
+        // each time would keep refreshing the linger deadline so the
+        // last line never expired.
+        if (s.state === "idle" && wasRunning) this.handleDrainIdle();
+  }
+
   // The drain reached idle, however it got there. Extracted from the
   // status listener so the branch is REACHABLE by a test: a probe that
   // replaced the settle below with a box-wide clear left all twelve
