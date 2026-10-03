@@ -1983,6 +1983,77 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect((await conflictStore.load()).entries.size).toBe(0);
   });
 
+  // ── §VIII K.2 — the CAP is counted in THREE places, not one ──────
+  //
+  // Phase 6. The test above drives the third site (the commit push).
+  // The counter is also incremented, and the ceiling also checked, at
+  // two earlier points — both of them a `createTree` 422 rather than a
+  // commit 422:
+  //
+  //   1. the MID-LOOP flush, when the accumulator crosses
+  //      MAX_INLINE_BYTES while files are still being added (§II.15);
+  //   2. the END-of-batch flush, just before the commit.
+  //
+  // Each has its OWN `return result("too-many-concurrent-pushes")` and
+  // its own "NO persist here (D.16)" comment. Three copies of one rule
+  // is three chances for one of them to drift — most plausibly by
+  // someone adding a defensive `journal.persist` to just one, which is
+  // precisely the thing D.16 forbids and which no existing test would
+  // have caught at two of the three sites.
+  //
+  // ⚠️ Why these stay UNIT and do not become integration cells: by the
+  // agreed criterion an integration cell earns its cost only where the
+  // fake world and real GitHub can DISAGREE. Five consecutive 422s
+  // cannot be provoked from a real server on demand — an integration
+  // version would synthesize the 422 responses through the fault
+  // injector, i.e. fake exactly the thing under test, while paying real
+  // network time for the rest. The behaviour being pinned (counting,
+  // the ceiling, what is NOT written) is pure local logic.
+  const capInvariants = async (r: { status: string }): Promise<void> => {
+    expect(r.status).toBe("too-many-concurrent-pushes");
+    expect(batches[0].removed).toBe(false); // the work survives
+    // D.16: a CAP exit must look exactly like a crash just before the
+    // failed batch — none of the failed attempt's state reaches disk.
+    expect((await journal.load())?.trackedFiles.size ?? 0).toBe(0);
+    expect((await conflictStore.load()).entries.size).toBe(0);
+  };
+
+  it("422-CAP site 2/3: the END-of-batch tree flush 422s five times → the same clean exit", async () => {
+    await setupAligned();
+    await stageBatch({ "note.md": "C1\n" });
+    const client = world.makeClient();
+    let treeCalls = 0;
+    client.createTree = async () => {
+      treeCalls += 1;
+      throw new ValidationError("422: base_tree moved");
+    };
+    const r = await drainOnce(makeDeps({ client }));
+    // Exactly the ceiling, not one more: the fifth failure returns
+    // instead of restarting, so a sixth attempt never happens.
+    expect(treeCalls).toBe(5);
+    await capInvariants(r);
+  });
+
+  it("422-CAP site 1/3: a MID-LOOP flush 422s five times → the same clean exit", async () => {
+    // The accumulator flushes on its own once the inlined bytes cross
+    // MAX_INLINE_BYTES (1 MB), i.e. while the per-file loop is still
+    // running — a different code path from the two flushes at the end,
+    // with its own restart flag (`restartFromFlush`).
+    await setupAligned();
+    const big = `${"x".repeat(1_100_000)}\n`;
+    await stageBatch({ "big.md": big });
+    vaultFiles.files.set("big.md", { content: big, mtime: 100 });
+    const client = world.makeClient();
+    let treeCalls = 0;
+    client.createTree = async () => {
+      treeCalls += 1;
+      throw new ValidationError("422: head moved mid-flush");
+    };
+    const r = await drainOnce(makeDeps({ client }));
+    expect(treeCalls).toBe(5);
+    await capInvariants(r);
+  });
+
   // ── DOT-FILES §8.0 — the seeded .gitignore as its own ancestor ────
   //
   // The engine half of the fix. `enforce()` writes the managed
