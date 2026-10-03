@@ -25,6 +25,18 @@ suite (`pnpm test:integration`).
 **Legend**  🖥️ desktop · 📱 mobile (iOS/Android) · 🌐 needs a real GitHub repo ·
 ⏳ feature not yet bundled into `main.js` (test once it ships).
 
+⚠️ **Some items cannot be done on one device, and that is not a formality.** Everything
+in §5b (the managed `.gitignore` blocks) and §5c (plugin updates across Obsidian
+versions) exists to govern what a SECOND device does with what the first one wrote —
+the version stamp in a `.gitignore` marker and the whole `heldPluginUpdates` mechanism
+are answers to problems a single device cannot even express. §5c additionally needs the
+two devices on **different Obsidian versions**. Ticking those from one machine is worse
+than leaving them blank: it records a pass for a question that was never asked.
+
+For §5c there is a scripted fixture — `tests/fixtures/reload-probe/README.md`, runs 1-5
+— which stages the version skew deliberately so you do not have to wait for a real one.
+Use it, and note which runs you did.
+
 ---
 
 ## 1. Platform & build
@@ -36,10 +48,10 @@ suite (`pnpm test:integration`).
 
 ## 2. Sync — end-to-end flows (🌐 real GitHub)
 
-- [ ] 🖥️ **Bare-repo bootstrap:** the first sync into an empty repo creates the structure, `.gitignore`, and the snapshot manifest.
+- [ ] 🖥️ **Bare-repo bootstrap:** the first sync into an empty repo creates the structure and the managed `.gitignore` files. (⚠️ There is no "snapshot manifest" since THE SWITCH — local state lives in `.runtime/` as the hot metadata pair + `file-baselines`, and none of it is pushed.)
 - [ ] 🖥️ **Adoption:** the first sync against a non-empty repo produces no duplicates or losses; conflicts are classified.
 - [ ] 🖥️ **Incremental:** edit a file → `[Sync]` → it commits and pushes; delete a file → the deletion reaches the remote.
-- [ ] 🖥️ **Pending deletions:** delete a file and sync → it is removed on the remote; on a second device, pull removes it locally.
+- [ ] 🖥️ **Deletions propagate:** delete a file and sync → it is removed on the remote; on a second device, pull removes it locally. (Formerly "pending deletions" — that store no longer exists; a deletion is an ordinary batch entry now. The behaviour is still worth a pass.)
 - [ ] 🖥️ **"Sync starts with commit" = off:** `[Sync]` only pulls/pushes; the `[Commit]` ribbon button (or the *Commit local changes* command) commits separately.
 - [ ] 🖥️ **Interval scheduler:** the periodic tick syncs automatically; an initial sync runs shortly after the vault opens.
 - [ ] 🖥️ **Ribbon & status bar:** sync/commit icons work; the conflict counter (🔀) updates; the status reads *Syncing… / idle / Last error*.
@@ -75,7 +87,7 @@ suite (`pnpm test:integration`).
 - [ ] 🖥️ When a sibling is reconciled to match the base (identical content), the sibling is cleared on the next sync.
 - [ ] 🖥️ **Multi-device rotation:** run a realistic round-trip across 2+ devices.
 
-## 5. Diff-editor widget (⏳ once bundled into `main.js`)
+## 5. Diff-editor widget
 
 > The editor **model** is fully unit-tested (`tests/diff2/`). This section covers
 > what needs real layout/geometry and the end-to-end user experience.
@@ -114,7 +126,7 @@ suite (`pnpm test:integration`).
 - [ ] **Select all + delete** then `[← Back]` saves a single newline (not a 0-byte file).
 - [ ] **Standard editing commands** (delete line, delete word, Home/End, Page Up/Down) behave normally and never corrupt the merged view. (Note: *delete to end of line* / Ctrl+K is not bound yet — verify if/when added.)
 
-**Autosave & recovery (⏳ later milestone):**
+**Autosave & recovery:**
 
 - [ ] **Zero-edit invariant (§4.1.a):** open a conflict, change **nothing**, leave (via `[← Back]`, a sub-tab switch, or closing the view). Reopening the SAME conflict must NOT show a *"Resume previous edit session · 0 edits saved"* dialog — it opens fresh. (The `.diff2-autosave/<id>/` dir is wiped on the zero-edit exit; a crash-survivor empty dir is swept on the next plugin load.)
 - [ ] **No spurious re-mount:** while editing a conflict, trigger a background sync that adds/removes another conflict → the editor you're in keeps its state (it does NOT re-mount or pop a resume dialog mid-edit).
@@ -122,6 +134,83 @@ suite (`pnpm test:integration`).
 - [ ] *Start over* discards the session and starts fresh from the current files.
 - [ ] If the underlying files changed during the session (a sync pulled new content), a dialog offers *restore the previous version / discard / cancel*.
 - [ ] If the files changed by the time you press `[← Back]`, a dialog offers *save to alternative paths / overwrite / cancel*.
+
+## 5b. Managed `.gitignore` — the dot-space rules (🖥️📱🌐 · DOT-FILES)
+
+> Nothing automated can check these end to end: the point is what a SECOND device
+> does with a block the first one wrote, and the whole mechanism exists to stop two
+> plugin versions fighting over it.
+
+- [ ] **The blocks appear and carry a version.** After a sync, `<vault>/.gitignore`,
+      `<configDir>/.gitignore` and `<configDir>/plugins/.gitignore` each hold a managed
+      block whose header reads `# ===== git-easy-sync invariants v<X.Y.Z> - DO NOT EDIT =====`
+      (and a `final` one at the bottom). The version is the BUILD's, not the file's.
+- [ ] **⚠️ Two devices, two versions — the ping-pong guard.** Sync a vault from a device
+      running an OLDER build after a newer one wrote these blocks. The older build must
+      leave them **untouched** — no rewrite, no commit. This is the whole reason the
+      version sits in the marker, and one device cannot test it.
+- [ ] **Your edits inside `invariants` survive; `final` is absolute.** Add a line to the
+      top block → it stays after the next sync. The bottom block is restored verbatim if
+      you edit it.
+- [ ] **Per-device `data.json` switch.** `<configDir>/plugins/.gitignore` is the
+      per-device control; toggling the setting changes what it holds, and the file is
+      NOT the same on both devices (that is the feature, not drift).
+- [ ] **Nested-gitignore migration (§8.1).** A vault that still has nested `.gitignore`
+      files gets ONE commit removing them, with its own message naming the count.
+- [ ] 🌐 **One release = one `.gitignore` commit.** The first sync after a version bump
+      rewrites three files and produces exactly ONE commit. Expected, not a defect.
+
+## 5c. Plugin updates across Obsidian versions (📱🖥️🌐 · PLUGIN-UPDATE-COMPAT)
+
+> **Needs two devices on DIFFERENT Obsidian versions.** There is a scripted fixture for
+> most of it — `tests/fixtures/reload-probe/README.md`, runs 1-5 — use it rather than
+> improvising, and record which run you did.
+
+- [ ] **Фаза 1, the gate:** an incoming plugin whose `manifest.json` demands a newer
+      Obsidian than this one is NOT reloaded — the log says `reload skipped … needs
+      Obsidian <v>` and the running plugin **keeps working**. (Fixture run 2.)
+- [ ] **Фаза 1, the honest report:** a plugin that genuinely fails to load after an
+      update produces `reload FAILED` plus a Notice naming it and asking for a restart —
+      never a silent "updated" toast. (Fixture run 1.)
+- [ ] **⚠️ Фаза 2, the hold:** an update meant for a newer Obsidian must **never reach
+      the disk**. The log says `plugin update HELD for this Obsidian`, `main.js` on disk
+      is unchanged, the plugin keeps running, and **the repo is untouched by this
+      device**. (Fixture run 3.)
+- [ ] **Фаза 2, symmetry:** while a hold is on, editing that plugin's files locally does
+      NOT push them — the log says `batch entry skipped: plugin update held`. Letting an
+      older copy travel would roll the update back on every healthy device. (Run 4.)
+- [ ] **Фаза 2, the lift:** when the condition clears, the files land, the baselines are
+      restored, and **the next sync is quiet** — no commit, no re-download. A commit here
+      means the baselines were not restored. (Run 5.)
+- [ ] **§28 — plugin collisions are decided by SEMVER, not mtime.** Two devices update
+      the same third-party plugin: the HIGHER `manifest.json` version wins regardless of
+      which was written later.
+- [ ] **Self-update writes through the bootloader.** Updating THIS plugin stages the new
+      bytes beside the live `main.js` and applies them at the next load — the file
+      Obsidian is running is never overwritten underneath it. Verify on mobile too
+      (Capacitor refuses a rename onto an existing file).
+
+## 5d. Sync progress, cancel, and what the engine tells you (🖥️📱)
+
+- [ ] **Progress notice (§II.16):** a long sync shows progress that actually moves, and
+      the counts do not jump backwards on a retry.
+- [ ] **Stop sync (§II.17):** Settings → **Stop sync** during a long run stops it at the
+      next checkpoint, says so, and **loses nothing** — the next sync finishes the job.
+- [ ] **⚠️ A cancelled conflict is announced.** If a conflict's remote content vanishes
+      from the repo, its conflict mode is cancelled and a Notice says so, naming the file
+      and stating the local copy is unchanged. This is the ONE vault-step failure the
+      user is told about — everything else is retried silently on the next sync, which is
+      the point: a notice here must stay rare enough to be believed.
+- [ ] **Skipped paths are re-asked.** After a sync that logged a skipped path, the NEXT
+      sync asks about that path again even though no commit mentions it (the
+      `.runtime/.recheck-paths` note). Easiest check: the file catches up on sync #2
+      without you touching it.
+
+## 5e. Deleted bin (🖥️📱 · HISTORY-DELETED)
+
+- [ ] The conflicts panel's **Deleted** sub-tab opens even when there are zero conflicts.
+- [ ] A file deleted locally appears there and can be restored before its deletion
+      reaches a commit; after a successful sync, older records are pruned.
 
 ## 6. Settings & lifecycle (🖥️📱)
 
@@ -156,7 +245,7 @@ suite (`pnpm test:integration`).
 
 ## Reporting a mobile issue
 
-Open a GitHub issue with: device + Android/iOS version + Obsidian version; the section/item above that failed; expected vs observed result; a snapshot of `<vault>/.obsidian/plugins/git-easy-sync/.push-queue/` (paths only — content may carry private data); and any relevant lines from `<vault>/.obsidian/git-easy-sync.log` (with "Enable logging" on).
+Open a GitHub issue with: device + Android/iOS version + Obsidian version; the section/item above that failed; expected vs observed result; a listing of `<vault>/.obsidian/plugins/git-easy-sync/.runtime/push-queue/` (paths only — content may carry private data); and any relevant lines from `<vault>/git-easy-sync.log` (⚠️ the VAULT ROOT, not inside `.obsidian/` — `logger.ts` names it `<plugin-id>.log` and puts it there so you can open it as a note) (with "Enable logging" on).
 
 ---
 
