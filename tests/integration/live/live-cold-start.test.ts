@@ -52,6 +52,45 @@ function liveEnv(): RepoEnv {
 
 const enabled = LIVE_VAULT !== "" && LIVE_BRANCH !== "";
 
+// The scope-deciding settings, read from the vault the driver is aimed
+// at. Only these two: they are what the engine branches on when it
+// decides whether a path is IN the sync at all, and getting either one
+// wrong changes what the gate measures (see the call site). Everything
+// else the harness may default — it affects how work is done, not which
+// files exist.
+//
+// Missing or unreadable data.json → return nothing and let
+// createSync2Client's own defaults stand, loudly: a vault with no
+// settings is a first-run vault, and inventing `true` there would be
+// the same mistake in the other direction.
+function deviceSettings(vaultPath: string): {
+  syncConfigDir?: boolean;
+  pushPluginsDataJson?: boolean;
+} {
+  const file = path.join(vaultPath, CONFIG_DIR, "plugins", SELF, "data.json");
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+  } catch {
+    line("settings: no readable data.json — harness defaults apply");
+    return {};
+  }
+  const out: { syncConfigDir?: boolean; pushPluginsDataJson?: boolean } = {};
+  if (typeof raw.syncConfigDir === "boolean") {
+    out.syncConfigDir = raw.syncConfigDir;
+  }
+  if (typeof raw.pushPluginsDataJson === "boolean") {
+    out.pushPluginsDataJson = raw.pushPluginsDataJson;
+  }
+  // Printed, not just applied — the report has to say which scope the
+  // numbers below belong to, or the next reader repeats this bug.
+  line(
+    `settings from vault: syncConfigDir=${out.syncConfigDir ?? "(default)"} ` +
+      `pushPluginsDataJson=${out.pushPluginsDataJson ?? "(default)"}`,
+  );
+  return out;
+}
+
 // Talk to GitHub directly for the before/after picture — deliberately
 // NOT through the engine, so the report is independent of it.
 async function gh(
@@ -146,8 +185,24 @@ describe.skipIf(!enabled)(`live cold-start [${SHAPE}]`, () => {
         env,
         vaultPath: LIVE_VAULT,
         ownsVaultPath: false, // never rm -rf a real vault
-        // Mirror the device's actual data.json settings.
-        syncConfigDir: true,
+        // ⚠️ READ THE DEVICE'S OWN SETTINGS — do not assume them.
+        //
+        // This line used to say "Mirror the device's actual data.json
+        // settings" and then hardcode ONE of them, leaving
+        // `pushPluginsDataJson` to default to FALSE. Caught in the
+        // field 2026-10-03 by the owner: a run against a vault whose
+        // setting was TRUE silently took every plugin `data.json` out
+        // of scope, so the gate measured the vault MINUS those files,
+        // and the change detector's two-way mute dropped their
+        // baselines as "newly ignored". Nothing was lost — the files
+        // already matched the remote, so the next real sync
+        // short-circuited them — but the gate's number was about a
+        // different vault than the one on disk.
+        //
+        // A driver aimed at a REAL vault has no business inventing its
+        // configuration. Anything the engine branches on comes from
+        // the vault's data.json; only what is missing falls back.
+        ...deviceSettings(LIVE_VAULT),
         autoCanonicalize: true,
         enableLogging: true,
       });
