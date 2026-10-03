@@ -161,7 +161,9 @@ const SYNC_PROGRESS_DELAY_MS = 2000;
 // earn their place by the work lasting this long; a phase that settles
 // sooner never shows one, so a sync with nothing to do reads
 // "Nothing to commit / Sync done" instead of four strings in a blink.
-const PHASE_START_DELAY_MS = 500;
+// Raised 500 → 700 the same day: at 500 they still appeared on the
+// owner's vault, which is the only measurement that counts here.
+const PHASE_START_DELAY_MS = 700;
 // How long the closing line ("Sync done — …") stays after the operation
 // ends. The user has been watching this notice, so it does not need the
 // dwell time of a toast that appears out of nowhere — a second is the
@@ -1527,6 +1529,20 @@ export default class GitHubSyncPlugin extends Plugin {
       // It no longer has to be overwritten by the drain: the drain has
       // its own slot below, so "Committed 264 files" stays readable
       // while the upload runs.
+      // The commit pass is over, whatever it produced. Close the
+      // section if nothing settled it — the R3a bell and the
+      // no-changes-with-a-queued-batch path both return without a
+      // result, and before this the line they had opened stayed on
+      // screen until the next sync.
+      //
+      // ⚠️ Only an UNSETTLED section is closed: a real result has
+      // earned its moment and must not be snatched away.
+      onCommitFinished: () => {
+        const st = this.noticeState.commit.state;
+        if (st === "pending" || st === "live") {
+          this.setCommitSection({ state: "none" });
+        }
+      },
       onLocalCommitted: (count: number) => {
         this.setCommitSection({
           state: "settled",

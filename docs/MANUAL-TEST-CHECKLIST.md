@@ -42,6 +42,13 @@ Use it, and note which runs you did.
 ## 1. Platform & build
 
 - [ ] 🖥️ `pnpm build` is green; `main.js` loads in Obsidian (desktop) with no console errors.
+- [ ] ⚠️ **AFTER EVERY REBUILD, RELOAD THE PLUGIN before testing.** Writing `main.js`
+      does not change the code Obsidian is RUNNING — it keeps the old module in memory
+      until the plugin is disabled and re-enabled. This cost two debugging rounds on
+      2026-10-03 alone (once for `data.json`, once for `main.js`), and both times the
+      symptom was "the fix did nothing". The one-second check before you trust a run:
+      `grep -c "<a string from the new code>" <vault>/.obsidian/plugins/git-easy-sync/main.js`
+      proves the FILE is new — only a reload proves the INSTANCE is.
 - [ ] 📱 The plugin **enables** in the community-plugins list on iOS and Android **without crashing**. (Regression guard: no file-scope `require("fs")` / `require("path")` in `main.js` — `grep -E '=require\("fs"\)|=require\("path"\)' main.js` must return zero.)
 - [ ] 📱 `styles.css` is applied (check both light and dark themes).
 - [ ] 🖥️📱 The same repo synced from both a desktop and a mobile vault stays consistent.

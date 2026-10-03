@@ -165,6 +165,17 @@ export interface Sync2ManagerDeps {
   // built against — see `reconcileRemoteIdentity`.
   remoteIdentity?(): { owner: string; repo: string; branch: string };
   onCommitStarted?(): void;
+  // ⚠️ THE CLOSING HALF, and it must be unconditional because the
+  // opening one is. Fires from a `finally` around the WHOLE commit
+  // pass, so it covers the paths that produce no result at all:
+  //   • the R3a bell — a trigger landing mid-pass returns 0 immediately;
+  //   • no local changes WITH a non-empty queue — `onNoLocalChanges`
+  //     is deliberately silent there, since the drain is about to speak.
+  // Field report 2026-10-03: "Committing…" hung on screen after "Sync
+  // done" and stayed until the next sync, because the section had been
+  // opened by a call that always happens and closed by calls that
+  // sometimes do.
+  onCommitFinished?(): void;
   // Per ≤100-file batch during the enqueue — the slow half. `done` is
   // what has actually reached the queue, `total` what the scan counted.
   onCommitProgress?(done: number, total: number): void;
@@ -532,6 +543,16 @@ export class Sync2Manager {
     // The click registered. Before enforce(), before the scan, before
     // anything is knowable — see `onCommitStarted`.
     this.deps.onCommitStarted?.();
+    try {
+      return await this.runCommitPassInner(target);
+    } finally {
+      // Whatever happened — a result, an early return, a throw — the
+      // section this method opened is now this method's to close.
+      this.deps.onCommitFinished?.();
+    }
+  }
+
+  private async runCommitPassInner(target: string | null): Promise<number> {
     if (this.commitInProgress) {
       this.restartCommit = true;
       // Merge the coalesced target into the bell: identical target →

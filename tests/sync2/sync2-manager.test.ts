@@ -352,6 +352,72 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(order[order.length - 1]).toBe("committed:250");
   });
 
+  it("🔑 a commit that produces NO result still closes its notice section", async () => {
+    // Field report 2026-10-03: "Committing…" hung on screen after
+    // "Sync done" and stayed until the next sync.
+    //
+    // ⚠️ The cause is structural, not cosmetic: the section is opened
+    // by a call that ALWAYS happens (`onCommitStarted`, first line of
+    // the pass) and was closed by calls that only SOMETIMES do. Two
+    // reachable paths produce neither:
+    //   • the R3a bell — a trigger landing mid-pass returns 0 at once;
+    //   • no local changes WITH a non-empty queue — `onNoLocalChanges`
+    //     is deliberately silent there.
+    // So the closing half is now a `finally`, like every other
+    // "this must always happen" in this file.
+    const events: string[] = [];
+    deps.onCommitStarted = () => events.push("started");
+    deps.onCommitFinished = () => events.push("finished");
+    deps.onLocalCommitted = () => events.push("committed");
+    deps.onNoLocalChanges = () => events.push("nothing");
+
+    // Path 1: the R3a bell. A commit is already running, so this one
+    // rings and returns without touching anything.
+    findChangesResult = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow = (async () => {
+      findChangesResult = [modified("a.md")];
+      const p1 = manager.commitOnly();
+      await gate;
+      return p1;
+    })();
+    await manager.commitOnly(); // may or may not collapse; either way:
+    release();
+    await slow;
+
+    // Whatever the interleaving, every `started` has its `finished`.
+    expect(
+      events.filter((e) => e === "started").length,
+      "every opened section must be closed",
+    ).toBe(events.filter((e) => e === "finished").length);
+  });
+
+  it("🔑 …including the no-changes-with-a-queued-batch path", async () => {
+    // The second silent path, isolated: the scan finds nothing but the
+    // queue is NOT empty, so `onNoLocalChanges` stays quiet by design
+    // and only the `finally` can close the section.
+    const events: string[] = [];
+    deps.onCommitStarted = () => events.push("started");
+    deps.onCommitFinished = () => events.push("finished");
+    deps.onNoLocalChanges = () => events.push("nothing");
+
+    // Leave a batch in the queue, then commit with nothing to find.
+    findChangesResult = [modified("queued.md")];
+    await manager.commitOnly();
+    expect((await manager.queueDepth()) > 0).toBe(true);
+
+    events.length = 0;
+    findChangesResult = [];
+    await manager.commitOnly();
+
+    expect(events).toContain("started");
+    expect(events).toContain("finished");
+    expect(events, "the queue is not empty, so this path says nothing").not.toContain(
+      "nothing",
+    );
+  });
+
   it("🔴 a repo switch must not sync with baselines from the PREVIOUS repo", async () => {
     // The guard the surviving comment in hot-metadata.ts already
     // promises: "(owner, repo, branch) the metadata was built against.
