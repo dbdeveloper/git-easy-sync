@@ -224,7 +224,17 @@ Use it, and note which runs you did.
 - [ ] **Reset** (type the confirmation phrase) wipes the token, repo settings, sync history, pending local commits, conflicts, unsaved conflict-editor edits, and the plugin trash (the whole `.runtime/`); vault files are NOT touched — conflict-copy files stay in place and are re-detected as conflicts on re-enable. A `.reset-in-progress` marker in the plugin dir makes an interrupted reset finish on the next load.
 - [ ] Toggling **"sync config folder"** includes/excludes `.obsidian/*` accordingly.
 - [ ] Changing the **device label** makes new commits carry the new `(label)` suffix.
-- [ ] Switching repositories resets state correctly.
+- [ ] Switching repositories resets state correctly. ⚠️ **Change it in the SETTINGS UI,
+      not by editing `data.json`.** A hand edit while Obsidian runs does nothing: the
+      plugin holds its settings in memory and never re-reads that file, so the sync goes
+      to the OLD repo with the OLD token and reports a perfectly healthy "0 pushed" —
+      and the next `saveSettings()` silently overwrites your edit back. Hit in the field
+      2026-10-03; the only tell was the repo-sized payload in the log
+      (`GET tree/<old-head>` answering 200 against a repo the new token cannot even
+      reach). If you must hand-edit, disable+enable the plugin before syncing.
+      (A switch made through the UI is handled as the force-push class — §6.4: the stale
+      anchor stops being an ancestor, `compare` 404s, and discovery falls back to a
+      full-tree diff.)
 - [ ] The **max auto-merge size** setting prevents very large files from being auto-merged.
 - [ ] **Token expired (§35)** — with a bad token, a manual Sync opens the recovery dialog **every time** (closing `[X]` then Sync re-opens it — not a silent toast); the raw "…status 401" toast does NOT appear.
 - [ ] **Token expired — sticky + red UI (§35)** — the marker survives a plugin reload: after reload the **GitHub** status-bar word + **Sync** ribbon icon are red (tooltip "Token expired"), **Sync All** / **Pull from repo…** are greyed, and the **GitHub sync status** box shows the 401 ("invalid or expired") vs 403 ("lacks permissions") message. It clears only on a token/owner/repo edit **or** a successful **Test connection** (a normal successful Sync does NOT clear it).

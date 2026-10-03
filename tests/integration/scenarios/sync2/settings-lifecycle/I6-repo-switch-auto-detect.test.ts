@@ -24,13 +24,23 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 
-// I6 — auto-detect a settings change that points the plugin at a
-// different remote (here: a different branch on the same int-test
-// repo). The manager's reconcileRemoteIdentity step at the start of
-// every syncAll catches the mismatch, wipes snapshot + push-queue,
-// and routes through bootstrapFromRemote against the new branch so
-// the new vault state pulls cleanly without leaking content from
-// the previous remote.
+// I6 — a settings change that points the plugin at a different remote
+// (here: a different branch on the same int-test repo) must re-adopt
+// cleanly, without leaking content from the previous one.
+//
+// ⚠️ THE MECHANISM NAMED HERE IS GONE (corrected 2026-10-03). This
+// comment used to credit `reconcileRemoteIdentity`, a snapshot/queue
+// wipe, and `bootstrapFromRemote` — all three were deleted at THE
+// SWITCH, and sync2-manager.ts lists each as deliberately absent. The
+// test kept passing because it asserts the OUTCOME, which is exactly
+// how a stale explanation survives: nothing fails when the reason is
+// wrong, only when the result is.
+//
+// What actually handles it now: a repo switch reads as the FORCE-PUSH
+// class (§6.4) — the stale anchor is no longer an ancestor, `compare`
+// answers 404, discovery falls back to a full-tree diff against the
+// cold baselines, and per-path rules decide. A conflict storm there is
+// recorded as a feature rather than a defect.
 
 describe.skipIf(!integrationEnabled())(
   "sync2 I6 — repo/branch switch auto-detects and re-adopts",
