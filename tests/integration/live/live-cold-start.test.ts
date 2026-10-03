@@ -21,8 +21,17 @@
 //      corresponding remote must do NOTHING: no commit, no conflict,
 //      empty findChanges.
 //
+//   3. SCOPE-LADDER — the two scope toggles walked off/off → on/off →
+//      on/on against the real vault, with a deliberate desync so each
+//      rung has something to move. Added 2026-10-03 at the owner's
+//      direction: mirroring the device's settings checks ONE state,
+//      while every interesting failure lives in the TRANSITION.
+//
 // Env: LIVE_VAULT_PATH, LIVE_BRANCH, OBSIDIAN_TEST_{TOKEN,OWNER,REPO}.
-// LIVE_SHAPE=adoption|gate picks the shape (default: adoption).
+// LIVE_SHAPE=adoption|gate|scope-ladder picks the shape (default:
+// adoption). ⚠️ EVERY shape starts by deleting `.runtime/`, before any
+// network call — so a run that dies on a bad token still leaves the
+// vault cold. Never aim this at a vault you are not willing to re-adopt.
 
 import { describe, it, expect } from "vitest";
 import * as fs from "fs";
@@ -156,7 +165,7 @@ async function report(
 }
 
 describe.skipIf(!enabled)(`live cold-start [${SHAPE}]`, () => {
-  it(
+  it.skipIf(SHAPE === "scope-ladder")(
     "runs the real engine against the real vault and reports what moved",
     { retry: 0, timeout: 1_800_000 },
     async () => {
@@ -358,6 +367,200 @@ describe.skipIf(!enabled)(`live cold-start [${SHAPE}]`, () => {
           expect(baselinePaths.length).toBeGreaterThan(100);
         }
       } finally {
+        client.cleanup();
+      }
+    },
+  );
+
+  // ── SHAPE: scope-ladder ─────────────────────────────────────────────
+  //
+  // Owner's design, 2026-10-03, replacing my "mirror the device's
+  // settings" fix — which aimed at the wrong target. Mirroring checks
+  // ONE state; the value is in the TRANSITIONS, because that is where
+  // the change detector's two-way mute deletes baselines and where a
+  // widening scope could drag secrets along with it.
+  //
+  // ⚠️ THE STATE SPACE IS THREE, NOT FOUR. `pluginsDataJsonToggleState`
+  // subordinates the child to the parent: with `syncConfigDir` off,
+  // `pushPluginsDataJson` is forced false and greyed. So the only legal
+  // ladder is off/off → on/off → on/on, which is exactly the sequence
+  // the owner asked for.
+  //
+  // Each rung asserts TWO things, and the second is the sharp one:
+  //   1. what came INTO scope actually moves;
+  //   2. what is still OUT of scope does NOT — and on rung 2 that is a
+  //      SECRET BOUNDARY, not a tidiness check. The subordination exists
+  //      because a stored `true` under a disabled parent would, on the
+  //      first flip of the parent, "silently resume publishing
+  //      credentials" (the words are from loadSettings' own comment).
+  //
+  // The NARROWING direction comes free: a device whose real settings are
+  // on/on starts this ladder by turning both OFF, so rung 1 is a live
+  // became-ignored transition. Its claim is that the remote keeps every
+  // `.obsidian/**` blob it had — a mute is not a delete.
+  //
+  // DELIBERATE DESYNC (owner: "розсинхрон роби"). On an already-synced
+  // vault nothing moves when scope widens, so membership alone would be
+  // a pale answer. Two files are nudged out of sync first — one ordinary
+  // configDir file, one plugin data.json — by appending a single
+  // newline: valid JSON, one byte, a different blob sha, and reverted at
+  // the end. ⚠️ This leaves a few extra commits in the repo; that is the
+  // price of the question being answerable.
+  it.skipIf(SHAPE !== "scope-ladder")(
+    "scope ladder: off/off → on/off → on/on, each rung moving exactly what it should",
+    { retry: 0, timeout: 1_800_000 },
+    async () => {
+      const env = liveEnv();
+      line(`vault=${LIVE_VAULT}`);
+      line(`repo=${env.owner}/${env.repo} branch=${LIVE_BRANCH}`);
+      const real = deviceSettings(LIVE_VAULT);
+
+      const runtime = path.join(LIVE_VAULT, CONFIG_DIR, "plugins", SELF, ".runtime");
+      if (fs.existsSync(runtime)) {
+        fs.rmSync(runtime, { recursive: true, force: true });
+        line("reset: removed existing .runtime/");
+      }
+
+      // Pick the two victims from what the REMOTE actually has, so the
+      // desync is guaranteed observable as a sha change rather than as
+      // an addition.
+      const head0 = await headOf(env, LIVE_BRANCH);
+      const tree0 = await treeOf(env, head0);
+      const isPluginData = (p: string): boolean =>
+        /^\.obsidian\/plugins\/[^/]+\/data\.json$/.test(p);
+      const pickLocal = (pred: (p: string) => boolean): string | null => {
+        for (const p of tree0.keys()) {
+          if (pred(p) && fs.existsSync(path.join(LIVE_VAULT, p))) return p;
+        }
+        return null;
+      };
+      const cfgVictim = pickLocal(
+        (p) => p.startsWith(`${CONFIG_DIR}/`) && !isPluginData(p) && p.endsWith(".json"),
+      );
+      const dataVictim = pickLocal(isPluginData);
+      if (!cfgVictim || !dataVictim) {
+        throw new Error(
+          `need one configDir file and one plugin data.json present BOTH locally and ` +
+            `remotely; got cfg=${cfgVictim} data=${dataVictim}`,
+        );
+      }
+      line(`desync victims: cfg=${cfgVictim}  data=${dataVictim}`);
+
+      const originals = new Map<string, Buffer>();
+      for (const v of [cfgVictim, dataVictim]) {
+        const abs = path.join(LIVE_VAULT, v);
+        originals.set(v, fs.readFileSync(abs));
+        fs.appendFileSync(abs, "\n"); // one byte, still valid JSON
+      }
+      line("desync applied: one newline appended to each victim");
+
+      const client = await createSync2Client({
+        branch: LIVE_BRANCH,
+        env,
+        vaultPath: LIVE_VAULT,
+        ownsVaultPath: false,
+        // Rung 1 explicitly, NOT the device's values — the ladder sets
+        // its own starting state and restores the device's at the end.
+        syncConfigDir: false,
+        pushPluginsDataJson: false,
+        autoCanonicalize: true,
+        enableLogging: true,
+      });
+      client.settings.deviceLabel = "Macbook";
+
+      const inScope = async (pred: (p: string) => boolean): Promise<number> =>
+        (await client.baselines.allPaths()).filter(pred).length;
+      const underConfig = (p: string): boolean => p.startsWith(`${CONFIG_DIR}/`);
+
+      try {
+        // ── RUNG 1: off / off ────────────────────────────────────────
+        line("── rung 1: syncConfigDir=false pushPluginsDataJson=false");
+        await client.manager.syncAll();
+        const r1 = await report(client, env, LIVE_BRANCH, "AFTER rung 1");
+        expect(await inScope(underConfig), "rung 1: configDir is OUT of scope").toBe(0);
+        // A mute is not a delete: every configDir blob the remote had is
+        // still there. This is the narrowing half of the ladder.
+        const cfgBefore = [...tree0.keys()].filter(underConfig);
+        expect(
+          cfgBefore.filter((p) => !r1.tree.has(p)),
+          "rung 1: a disabled scope must not DELETE remote files",
+        ).toEqual([]);
+        expect(r1.tree.get(cfgVictim), "rung 1: the cfg desync stayed home").toBe(
+          tree0.get(cfgVictim),
+        );
+        expect(r1.tree.get(dataVictim), "rung 1: the data desync stayed home").toBe(
+          tree0.get(dataVictim),
+        );
+
+        // ── RUNG 2: on / off ─────────────────────────────────────────
+        line("── rung 2: syncConfigDir=TRUE pushPluginsDataJson=false");
+        client.settings.syncConfigDir = true;
+        await client.manager.syncAll();
+        const r2 = await report(client, env, LIVE_BRANCH, "AFTER rung 2");
+        // What came into scope MOVED…
+        expect(
+          r2.tree.get(cfgVictim),
+          "rung 2: the configDir file reached the remote",
+        ).not.toBe(tree0.get(cfgVictim));
+        // …and the SECRET BOUNDARY held: data.json neither travelled nor
+        // even entered the scope.
+        expect(
+          r2.tree.get(dataVictim),
+          "🔑 rung 2: a plugin data.json must NOT travel while its toggle is off",
+        ).toBe(tree0.get(dataVictim));
+        expect(
+          await inScope(isPluginData),
+          "🔑 rung 2: no plugin data.json may be IN scope",
+        ).toBe(0);
+        expect(
+          await inScope(underConfig),
+          "rung 2: configDir is in scope now",
+        ).toBeGreaterThan(0);
+
+        // ── RUNG 3: on / on ──────────────────────────────────────────
+        line("── rung 3: syncConfigDir=TRUE pushPluginsDataJson=TRUE");
+        client.settings.pushPluginsDataJson = true;
+        await client.manager.syncAll();
+        const r3 = await report(client, env, LIVE_BRANCH, "AFTER rung 3");
+        expect(
+          r3.tree.get(dataVictim),
+          "rung 3: the data.json reached the remote once its toggle opened",
+        ).not.toBe(tree0.get(dataVictim));
+        expect(
+          await inScope(isPluginData),
+          "rung 3: plugin data.json is in scope",
+        ).toBeGreaterThan(0);
+
+        // Quiescence at the top of the ladder — the same claim the
+        // adoption shape makes, now at full scope.
+        await client.manager.syncAll();
+        const r3b = await report(client, env, LIVE_BRANCH, "AFTER rung 3 (again)");
+        expect(r3b.head, "rung 3: the second sync is quiet").toBe(r3.head);
+        expect(await client.detector.findChanges()).toEqual([]);
+      } finally {
+        // ── RESTORE: the vault and the remote go back ────────────────
+        // Not best-effort — a driver that leaves a real vault desynced
+        // or with the device's toggles flipped is worse than no driver.
+        for (const [v, bytes] of originals) {
+          fs.writeFileSync(path.join(LIVE_VAULT, v), bytes);
+        }
+        client.settings.syncConfigDir = real.syncConfigDir ?? true;
+        client.settings.pushPluginsDataJson = real.pushPluginsDataJson ?? false;
+        line(
+          `restore: settings back to syncConfigDir=${client.settings.syncConfigDir} ` +
+            `pushPluginsDataJson=${client.settings.pushPluginsDataJson}; reverting content`,
+        );
+        try {
+          await client.manager.syncAll();
+          const rf = await report(client, env, LIVE_BRANCH, "AFTER restore");
+          for (const v of originals.keys()) {
+            line(
+              `restore ${v}: ${rf.tree.get(v) === tree0.get(v) ? "back to original" : "⚠️ NOT back"}`,
+            );
+          }
+        } catch (e) {
+          line(`⚠️ restore sync failed: ${String(e)} — revert by hand`);
+        }
         client.cleanup();
       }
     },
