@@ -80,6 +80,8 @@ import {
 import {
   progressNoticeText,
   syncSummaryText,
+  syncStartedNoticeText,
+  commitStartedNoticeText,
 } from "./sync-progress-model";
 import WorkerClient from "./worker/worker-client";
 import { PreSyncConflictModal } from "./sync2/views/pre-sync-conflict-modal";
@@ -1496,6 +1498,19 @@ export default class GitHubSyncPlugin extends Plugin {
         // A stale request would make the NEXT drain's idle event
         // announce a cancellation that never happened.
         this.syncCancelRequested = false;
+        // ⚠️ ACKNOWLEDGE THE CLICK IMMEDIATELY (owner, 2026-10-03).
+        //
+        // §II.16 gated the first paint behind 2 s because the original
+        // complaint was "a long sync looks like a hang". That reading
+        // was half the problem: a SHORT silence right after a click is
+        // its own failure — the user cannot tell whether the button
+        // registered, and on this vault the commit pass alone scans
+        // 264 files before anything else can speak.
+        //
+        // So the gate moves off the FIRST paint and stays on the
+        // counters: the acknowledgement is instant, and the numbers
+        // still only appear once there are numbers.
+        this.setSyncNotice(syncStartedNoticeText());
         this.armSyncProgressNotice();
       },
       onSyncCompleted: (summary) => {
@@ -2958,6 +2973,11 @@ export default class GitHubSyncPlugin extends Plugin {
     // which is also how a [Commit] during the background analysis could
     // put a second enforce() on the same files.
     if (!(await this.confirmPendingConflictsBeforeSync())) return;
+    // Instant acknowledgement, same reason as the sync's: the scan runs
+    // for seconds on a large vault and the button looked dead. A commit
+    // is standalone, so this is its OWN brief toast — the shared notice
+    // belongs to a full sync.
+    new Notice(commitStartedNoticeText(), BRIEF_NOTICE_MS);
     try {
       await this.sync2Manager.commitOnly();
     } catch (err) {

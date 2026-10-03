@@ -1396,7 +1396,27 @@ export default class GithubClient {
     );
 
     if (response.status < 200 || response.status >= 400) {
-      this.logger.error("Failed to get branch head sha", response);
+      // ⚠️ 404/409 ARE NOT ERRORS HERE, and logging them as such sent
+      // the owner hunting through a healthy log (2026-10-03). On a BARE
+      // repo every ref read answers 409 "Git Repository is empty", and
+      // `buildDrainDeps` catches exactly NotFoundError/ConflictError to
+      // return the drain's legal `head === null` cold-start signal. So
+      // the line below reported a designed control-flow branch at ERROR
+      // on every single bootstrap.
+      //
+      // The sibling `getBranchHeadShaByName` already got this right —
+      // it returns null for the same two statuses before reaching its
+      // error log. The THROW stays (the caller needs the typed error to
+      // recognise the case); only the level becomes honest.
+      const coldStart =
+        response.status === 404 || response.status === 409;
+      if (coldStart) {
+        this.logger.info("branch head: repo is empty or branch absent", {
+          status: response.status,
+        });
+      } else {
+        this.logger.error("Failed to get branch head sha", response);
+      }
       throw makeGithubAPIError(
         response.status,
         `Failed to get branch head sha, status ${response.status}`,

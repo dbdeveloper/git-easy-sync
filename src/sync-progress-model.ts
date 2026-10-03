@@ -25,6 +25,27 @@ export interface SyncProgressNumbers {
 
 const HEADER = "Syncing with GitHub";
 
+// The instant acknowledgement (owner, 2026-10-03). Shown the moment a
+// click is accepted, BEFORE anything is known — no counters exist yet
+// and inventing some would be the "Downloading 0 of 0" mistake the
+// builder below already refuses to make.
+//
+// It is deliberately the same HEADER the progress notice uses, so the
+// sequence reads as one message gaining detail rather than as two
+// messages replacing each other: acknowledgement → commit outcome →
+// counters → summary, all in the same notice.
+export function syncStartedNoticeText(): string {
+  return HEADER;
+}
+
+// The Commit button's own acknowledgement. A commit is not a sync and
+// must not claim to be one — saying "Syncing with GitHub" for a local
+// enqueue would be a lie the user can act on (they would wait for
+// something to reach the server).
+export function commitStartedNoticeText(): string {
+  return "Checking for local changes";
+}
+
 // The live notice, refreshed in place while the sync runs.
 //
 // Every line is conditional. A sync that only sends files must not
