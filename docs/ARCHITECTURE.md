@@ -137,6 +137,31 @@ src/
     │                                #  scan and diff2's conflicts panel. SYNC2 §13.3
     ├── cross-platform.ts            # sanitizeFilename (12 forbidden ASCII → Unicode),
     │                                #  encodePathForGithub, safeRename. SYNC2 §3.
+    ├── semver.ts                    # THE single semver comparison (§28 + PLUGIN-UPDATE-COMPAT).
+    │                                #  Returns `null`, never 0, for anything unparseable — a tie
+    │                                #  and "I cannot tell" must not share a value, because every
+    │                                #  caller treats them oppositely
+    ├── gitignore-markers.ts         # §5.11 marker shape + the YIELD rule: the BEGIN line carries
+    │                                #  the plugin VERSION, an older build leaves a newer-stamped
+    │                                #  file entirely alone. What is frozen is the RECOGNIZER
+    │                                #  (regexp, version group optional) — not the literal, so every
+    │                                #  pre-stamp file still reads as ours. END stays unversioned:
+    │                                #  two carriers of one value need a disagreement rule nothing
+    │                                #  can supply
+    ├── held-plugins.ts              # PLUGIN-UPDATE-COMPAT Фаза 2: what it means for a plugin
+    │                                #  update to be HELD on THIS device. The unit is the FOLDER,
+    │                                #  matched SEGMENT-wise (`templater-extras` is not `templater`);
+    │                                #  held paths are invisible in BOTH directions; decideHold
+    │                                #  fails OPEN on a corrupt manifest (§7.1.1)
+    ├── recheck-paths.ts             # "Ask again about these paths" — the note one drain leaves the
+    │                                #  next (.runtime/.recheck-paths). WRITE-AHEAD, not write-after:
+    │                                #  a skip makes a path invisible once the pointer advances past
+    │                                #  its commit. Append-per-line so a torn write loses only its
+    │                                #  own line; it can never make things worse than its absence
+    ├── plugin-update-bootloader.ts  # §12 self-update: the staged bytes live beside the live
+    │                                #  main.js and the bootloader applies them at onload, so the
+    │                                #  file Obsidian is RUNNING is never overwritten underneath it.
+    │                                #  The marker carries the expected SHA and is verified first
     ├── gitignore-invariants.ts      # The TWO managed sections (`invariants` top / `final`
     │                                #  bottom) + the per-device plugins/.gitignore switch;
     │                                #  always-write enforce; §8.0 seed markers; runs before

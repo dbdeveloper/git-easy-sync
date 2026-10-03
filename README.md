@@ -434,8 +434,9 @@ Settings tab layout matches what you'll see in Obsidian under
 ### Sync
 
 - **Device label** — text appended to every commit message produced
-  by the plugin, in the lowercase trailing-parenthesis form
-  (`sync (MyMacBook)`, `resolve conflict (MyMacBook)`, etc.). Helps
+  by the plugin, in the trailing-parenthesis form
+  (`Sync at 2026-10-03 04:46:29.192+02:00 (MyMacBook)`,
+  `Merge conflict-branch at … (MyMacBook)`, etc.). Helps
   tell which device produced which commit when you have several
   devices syncing to the same repo. Also used in
   conflict-resolution sibling filenames
@@ -781,11 +782,25 @@ a matching badge.
 
 ### Resolution — entirely through native Obsidian file operations
 
-> **A dedicated side-by-side diff-edit GUI is planned for the next
-> release.** In this release, conflict resolution is done with the
-> native Obsidian operations you already use every day: open the
-> files in the editor, delete a file from the file explorer, rename
-> a file by long-press (mobile) or right-click → rename (desktop).
+> **There are two ways to resolve, and both are supported.** The
+> side-by-side diff editor (the `git-merge` ribbon icon, or a
+> conflicted file's *Resolve conflict* menu entry) shows the two
+> versions with per-change buttons. Everything below still works
+> exactly as described and needs no special UI: conflicts are
+> ordinary files, so you can open them in the editor, delete one from
+> the file explorer, or rename one over the other — by long-press on
+> mobile, right-click → rename on desktop. Neither way is a fallback
+> for the other; pick whichever suits the change in front of you.
+
+> **One conflict can disappear on its own, and the plugin will say
+> so.** If the other version vanishes from the repository — someone
+> force-pushed over it, or history was rewritten — the conflict is
+> cancelled, because the thing it was comparing against no longer
+> exists. You get a notice naming the file and stating that your local
+> copy is untouched. This is the ONLY sync hiccup the plugin
+> interrupts you about: everything else it skips is retried on the
+> next sync without a word, which is what keeps this notice worth
+> reading.
 
 The three resolution moves and what they mean:
 
