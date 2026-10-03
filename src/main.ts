@@ -452,7 +452,10 @@ export default class GitHubSyncPlugin extends Plugin {
       try {
         if (await hasResetMarker(this.app.vault, manifest.id)) {
           await wipeRuntimeDir(this.app.vault, manifest.id);
-          this.settings = Object.assign({}, DEFAULT_SETTINGS);
+          // Same rule as resetPluginState's — see resetSettingsInPlace.
+          // Harmless today (this runs before initSync2) and written the
+          // same way so the invariant has no exceptions to remember.
+          this.resetSettingsInPlace();
           await this.saveSettings();
           await removeResetMarker(this.app.vault, manifest.id);
           try {
@@ -978,6 +981,33 @@ export default class GitHubSyncPlugin extends Plugin {
   // modal. Settings are restored to DEFAULT_SETTINGS; the user has to
   // re-enter the GitHub token, owner, repo, branch before the next
   // sync will reach a remote.
+  // ⚠️ MUTATE, NEVER REPLACE. `GithubClient` captures this object BY
+  // REFERENCE in `initSync2()` and is never re-created, so assigning a
+  // fresh object silently detaches it: the plugin then reads the
+  // credentials the user just typed while every HTTP request keeps
+  // using the ones the reset was meant to retire.
+  //
+  // Field defect 2026-10-03 — a reset, a new token and a new repo, and
+  // the sync went to the PREVIOUS repo with the PREVIOUS token, which
+  // the owner could only see because the log showed a 95 KB tree coming
+  // back from a repository the new token cannot read. ⚠️ The token half
+  // is the worse one: rotating a credential is the usual reason to
+  // reset, so the plugin kept using exactly the secret the user had
+  // just retired.
+  //
+  // ⚠️ Without a reset nothing was wrong, which is how this survived:
+  // the settings tab MUTATES `this.settings`, so an ordinary credential
+  // change reaches the client immediately. Only the replacement broke
+  // the link. The identity of this object is therefore part of the
+  // contract, not an implementation detail — and the delete loop is
+  // what makes it a RESET rather than a merge (`Object.assign` alone
+  // would leave any key the defaults no longer mention).
+  private resetSettingsInPlace(): void {
+    const live = this.settings as unknown as Record<string, unknown>;
+    for (const key of Object.keys(live)) delete live[key];
+    Object.assign(live, DEFAULT_SETTINGS);
+  }
+
   async resetPluginState(): Promise<void> {
     // RESET-PLUGIN (Phase 1.6) — D1: one recursive wipe of .runtime/
     // instead of per-store cleanup; D4 (reversed): the vault is NOT
@@ -1026,7 +1056,7 @@ export default class GitHubSyncPlugin extends Plugin {
     // edited" clear rule, since the token itself is wiped just below.
     this.tokenExpiredFlag?.clear();
 
-    this.settings = Object.assign({}, DEFAULT_SETTINGS);
+    this.resetSettingsInPlace();
     await this.saveSettings();
 
     // O6: the marker dies LAST — after data.json — so a crash anywhere
