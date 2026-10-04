@@ -739,6 +739,72 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(await deps.syncStore.existInSyncStore(sha)).toBe(false);
   });
 
+  // R3b at the commit pass (SYNC2-FIX §6; owner, 2026-10-04: one of the
+  // short commit↔drain interaction points resolved on the spot). With
+  // "Consolidate commits into one (if possible)" ON, a commit folds into
+  // the queue TAIL — unless the drain has already claimed that tail
+  // (`.attempted`). Then the commit must NOT wait and must NOT write into
+  // it: it appends a NEW batch, which the running drain's loop claims
+  // next. BatchWriter's back-off is pinned in its own suite; this pins
+  // the requirement end to end through the pass.
+  describe("consolidate ON + a tail the drain already claimed", () => {
+    const queueDirs = (): string[] => {
+      const root = path.join(dir, CONFIG_DIR, "plugins", PLUGIN_ID, ".runtime", "push-queue");
+      return fs.existsSync(root) ? fs.readdirSync(root).filter((d) => /^\d{17}$/.test(d)).sort() : [];
+    };
+    const metaShas = (id: string): Record<string, string | null> => {
+      const raw = fs.readFileSync(
+        path.join(dir, CONFIG_DIR, "plugins", PLUGIN_ID, ".runtime", "push-queue", id, "meta.json"),
+        "utf8",
+      );
+      return Object.fromEntries(
+        (JSON.parse(raw).entries as Array<{ path: string; sha: string | null }>).map((e) => [e.path, e.sha]),
+      );
+    };
+    const sha = (t: string): Promise<string> =>
+      calculateGitBlobSHA(new TextEncoder().encode(t).buffer as ArrayBuffer);
+
+    const setup = async (drainClaimedTail: boolean): Promise<string> => {
+      const writer = new BatchWriter({
+        vault: vault as never,
+        selfPluginId: PLUGIN_ID,
+        syncStore: deps.syncStore,
+        autoCanonicalize: () => false,
+        logger: { info: () => {}, warn: () => {} },
+      });
+      put("a.md", "v1\n");
+      const tail = (await writer.writeBatch([modified("a.md")]))!;
+      if (drainClaimedTail) {
+        fs.writeFileSync(
+          path.join(dir, CONFIG_DIR, "plugins", PLUGIN_ID, ".runtime", "push-queue", tail, ".attempted"),
+          "",
+        );
+      }
+      deps.batchWriter = writer;
+      deps.accumulateOfflineSyncs = () => true;
+      put("a.md", "v2\n");
+      findChangesResult = [modified("a.md")];
+      return tail;
+    };
+
+    it("control — tail NOT claimed: the commit folds into it (the setting really is on)", async () => {
+      const tail = await setup(false);
+      await manager.commitOnly();
+      expect(queueDirs()).toEqual([tail]);
+      expect(metaShas(tail)["a.md"]).toBe(await sha("v2\n"));
+    });
+
+    it("🔑 tail claimed by the drain: a NEW batch is appended; the claimed tail is untouched", async () => {
+      const tail = await setup(true);
+      await manager.commitOnly();
+      const dirs = queueDirs();
+      expect(dirs).toHaveLength(2);
+      expect(dirs[0]).toBe(tail);
+      expect(metaShas(tail)["a.md"]).toBe(await sha("v1\n"));
+      expect(metaShas(dirs[1])["a.md"]).toBe(await sha("v2\n"));
+    });
+  });
+
   it("R3a bell escalation: a FULL-scan trigger during a single-file pass re-loops as a FULL scan, never the runner's file", async () => {
     put("a.md", "x");
     put("b.md", "y");
