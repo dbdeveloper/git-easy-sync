@@ -328,4 +328,20 @@ describe("DeletedStore (§5.2.1)", () => {
     await reopened.release(["watched.md"]);
     expect(reopened.referencedShas().size).toBe(0);
   });
+
+  it("a capture whose blob write FAILS leaves no pin behind — the sweep can still reap that sha later (COMMIT-PASS-PERF §6.1)", async () => {
+    put("doomed.md", "bytes\n");
+    const sha = await calculateGitBlobSHA(enc("bytes\n"));
+    const realSave = syncStore.saveBlobToSyncStore.bind(syncStore);
+    syncStore.saveBlobToSyncStore = async () => {
+      throw new Error("disk full");
+    };
+    await expect(store.captureForDelete("doomed.md")).rejects.toThrow("disk full");
+    syncStore.saveBlobToSyncStore = realSave;
+
+    // Something writes those bytes later; nothing references them.
+    await syncStore.saveBlobToSyncStore(sha, enc("bytes\n"));
+    await syncStore.sweep([async () => store.referencedShas()]);
+    expect(await syncStore.existInSyncStore(sha)).toBe(false);
+  });
 });

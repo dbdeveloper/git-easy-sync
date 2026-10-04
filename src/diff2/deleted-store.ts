@@ -167,8 +167,10 @@ export default class DeletedStore {
     // already present may be a leftover a running sweep is about to
     // reap. The pin holds them until the record below — the durable
     // reference — exists.
-    await this.syncStore.retain(PIN_OWNER_DELETED_BIN, sha, async () => bytes);
     try {
+      // Inside the try: retain pins BEFORE it writes, so a failed write
+      // must still unpin, or the pin would outlive this capture.
+      await this.syncStore.retain(PIN_OWNER_DELETED_BIN, sha, async () => bytes);
       const record: DeletedRecord = {
         path: normalized,
         sha,
@@ -221,6 +223,11 @@ export default class DeletedStore {
 
   // Called when a diff-editor tab opens a deleted version, and again
   // when it closes (or after a restore). Idempotent both ways.
+  // ⚠️ No caller yet (Phase 9b). Its first caller must NOT use this
+  // synchronous shape as-is: holding a blob that already sits in the
+  // store is a REUSE, which a running sweep can reap — the contract is
+  // an async hold through SyncStore.retain with an honest "bytes gone"
+  // answer (COMMIT-PASS-PERF §6.1, case F).
   hold(sha: string): void {
     this.holds.add(sha);
   }
