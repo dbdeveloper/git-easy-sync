@@ -122,6 +122,18 @@ w.addEventListener("message", async (e) => {
         w.postMessage({ id: msg.id, ok: true, result: sha });
         return;
       }
+      case "hash-git-blob": {
+        // The caller TRANSFERRED its buffer here (no copy); hand the same
+        // buffer back the same way, so the file is never held twice
+        // across the two threads. Nothing here may touch msg.bytes after
+        // this postMessage — it is detached on our side from then on.
+        const sha = await computeGitBlobSHA(msg.bytes);
+        w.postMessage(
+          { id: msg.id, ok: true, result: { sha, bytes: msg.bytes } },
+          [msg.bytes],
+        );
+        return;
+      }
       case "merge-text": {
         const out = mergeText(msg.ours, msg.base, msg.theirs);
         w.postMessage({ id: msg.id, ok: true, result: out });

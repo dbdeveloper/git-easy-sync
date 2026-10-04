@@ -7,6 +7,7 @@ import type {
   WorkerResponse,
   WorkerKind,
   MergeTextResult,
+  HashedBlob,
   HttpRequestResult,
 } from "./types";
 import { workerKindForOp } from "./types";
@@ -140,6 +141,14 @@ const FALLBACK_HANDLERS: Record<WorkerRequest["op"], FallbackHandler> = {
     const r = req as Extract<WorkerRequest, { op: "compute-git-blob-sha" }>;
     return await fallbackComputeGitBlobSHA(r.bytes);
   },
+  "hash-git-blob": async (req) => {
+    const r = req as Extract<WorkerRequest, { op: "hash-git-blob" }>;
+    const result: HashedBlob = {
+      sha: await fallbackComputeGitBlobSHA(r.bytes),
+      bytes: r.bytes,
+    };
+    return result;
+  },
   "merge-text": async (req) => {
     const r = req as Extract<WorkerRequest, { op: "merge-text" }>;
     return fallbackMergeText(r.ours, r.base, r.theirs);
@@ -272,7 +281,13 @@ export default class WorkerClient {
   // Stage 3 surface: send an op, get a result. Stage 4-6 add typed
   // method wrappers (`mergeText`, `computeSha`, `getBlob`, …) on
   // top of this primitive.
-  dispatch<T = unknown>(op: WorkerRequest): Promise<T> {
+  // `transfer`: buffers to MOVE to the worker instead of cloning them —
+  // detached on this side once posted. Ignored in fallback mode (nothing
+  // crosses a thread there).
+  dispatch<T = unknown>(
+    op: WorkerRequest,
+    transfer: Transferable[] = [],
+  ): Promise<T> {
     if (this.fallbackMode) {
       const handler = FALLBACK_HANDLERS[op.op];
       return handler(op) as Promise<T>;
@@ -294,7 +309,7 @@ export default class WorkerClient {
         );
         return;
       }
-      target.postMessage(op);
+      target.postMessage(op, transfer);
     });
   }
 
@@ -345,7 +360,10 @@ export default class WorkerClient {
   // Compute the git-blob SHA for these bytes. Routes to the CPU
   // pool when the buffer is large enough; otherwise runs inline.
   // The buffer is NOT transferred (caller usually needs to keep
-  // using the bytes after the SHA call).
+  // using the bytes after the SHA call) — so above the threshold the
+  // file is CLONED into the worker: a second full copy. Callers on the
+  // hot commit path use hashGitBlob below, which moves the buffer
+  // there and back instead.
   async computeGitBlobSHA(bytes: ArrayBuffer): Promise<string> {
     if (
       this.fallbackMode ||
@@ -358,6 +376,43 @@ export default class WorkerClient {
       op: "compute-git-blob-sha",
       bytes,
     });
+  }
+
+  // The SHA of a git blob, with the bytes MOVED to the worker and back
+  // rather than cloned (COMMIT-PASS-PERF, 2026-10-04). Peak memory for a
+  // file of size F drops from 3F (caller's bytes + clone + the worker's
+  // header+bytes concat) to 2F — the concat is unavoidable while
+  // crypto.subtle.digest has no incremental API.
+  //
+  // ⚠️ When the worker path runs, the ARGUMENT is detached on return
+  // (byteLength 0). Use ONLY the returned `bytes` afterwards — reading
+  // the argument would silently see an empty file. Below the threshold
+  // (and in fallback mode) nothing crosses a thread and the returned
+  // buffer IS the argument; callers must not rely on that either.
+  //
+  // A worker error rejects, and the bytes are gone with it: the caller
+  // cannot retry without reading the file again.
+  async hashGitBlob(bytes: ArrayBuffer): Promise<HashedBlob> {
+    if (
+      this.fallbackMode ||
+      bytes.byteLength < WorkerClient.SHA_WORKER_THRESHOLD
+    ) {
+      return { sha: await fallbackComputeGitBlobSHA(bytes), bytes };
+    }
+    const sent = bytes.byteLength;
+    const result = await this.dispatch<HashedBlob>(
+      { id: this.newRequestId(), op: "hash-git-blob", bytes },
+      [bytes],
+    );
+    // Cheap guard: a worker that handed back the wrong buffer (or an
+    // empty one) must fail LOUDLY here, not become an empty blob stored
+    // under a real sha further down.
+    if (result.bytes.byteLength !== sent) {
+      throw new Error(
+        `WorkerClient.hashGitBlob: worker returned ${result.bytes.byteLength} bytes, sent ${sent}`,
+      );
+    }
+    return result;
   }
 
   // Three-way text merge via node-diff3. Routes to the CPU pool

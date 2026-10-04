@@ -24,6 +24,11 @@ export type WorkerRequest =
   // for a binary buffer. Used by reconcile to compare ours/theirs
   // SHAs without touching the network.
   | { id: string; op: "compute-git-blob-sha"; bytes: ArrayBuffer }
+  // Same SHA, but `bytes` is TRANSFERRED to the worker and handed back
+  // in the result (HashedBlob) instead of being cloned — no extra copy
+  // of the file (COMMIT-PASS-PERF, 2026-10-04). The sender's buffer is
+  // detached the moment it is posted.
+  | { id: string; op: "hash-git-blob"; bytes: ArrayBuffer }
   // Run node-diff3 three-way merge on three text strings. Used by
   // reconcile when ours/base/theirs all differ on a text file.
   // Result mirrors `MergeOutcome` from three-way-merge.ts.
@@ -62,6 +67,13 @@ export type MergeTextResult =
   | { kind: "clean"; content: string }
   | { kind: "conflict"; conflictMarkedContent: string };
 
+// Result of the hash-git-blob op: the SHA plus the very buffer that
+// was sent, transferred back to the caller.
+export interface HashedBlob {
+  sha: string;
+  bytes: ArrayBuffer;
+}
+
 // Result shape for the http-request op. Mirrors the subset of
 // Obsidian's RequestUrlResponse the engine actually reads — body
 // text + status + parsed JSON when applicable. Worker can't
@@ -87,6 +99,7 @@ export function workerKindForOp(op: WorkerRequest["op"]): WorkerKind {
     case "echo":
     case "decode-base64":
     case "compute-git-blob-sha":
+    case "hash-git-blob":
     case "merge-text":
       return "cpu";
     case "http-request":
