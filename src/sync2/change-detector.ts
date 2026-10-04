@@ -20,6 +20,7 @@ import FileBaselinesStore, {
 import { FileChange } from "./types";
 import { canonicalizeBytes, shouldCanonicalize } from "./text-normalize";
 import { PIN_OWNER_COMMIT } from "./sync-store";
+import WorkerClient from "../worker/worker-client";
 
 // isSyncable for sync2: hardcoded deny list + per-device configDir
 // gate + gi.ignoredAsync. The configDir gate (`syncConfigDir`) is
@@ -244,6 +245,58 @@ export interface ChangeDetectorDeps {
   autoCanonicalize?: () => boolean;
 }
 
+// Where a commit scan's time goes (COMMIT-PASS-PERF, 2026-10-05). Logged
+// by the manager after every commit pass, so a measurement on a real
+// device says WHICH part is slow instead of one total; the same numbers
+// are what step 3's forecast will learn from. All times in ms.
+export interface ScanTiming {
+  totalMs: number;
+  // readRootGitignore — the opt-in set (beginScan).
+  beginScanMs: number;
+  // getFiles + dot-space files and walks + the bucket sort.
+  enumerateMs: number;
+  indexFiles: number;
+  dotEntries: number;
+  // The whole Pass 1 loop (stat short-circuits + candidates).
+  pass1Ms: number;
+  // Files actually read and hashed, and their bytes.
+  candidates: number;
+  candidateBytes: number;
+  readMs: number;
+  hashMs: number;
+  // The share of hashing spent on files at or above the worker
+  // threshold — the ones that cross to the worker and back.
+  hashedLarge: number;
+  hashLargeMs: number;
+  // Proven changes put into sync_store while hashing (Крок 2).
+  stored: number;
+  storedBytes: number;
+  storeMs: number;
+  // Pass 2 over the baseline buckets + the grouped flushes.
+  pass2Ms: number;
+}
+
+const emptyTiming = (): ScanTiming => ({
+  totalMs: 0,
+  beginScanMs: 0,
+  enumerateMs: 0,
+  indexFiles: 0,
+  dotEntries: 0,
+  pass1Ms: 0,
+  candidates: 0,
+  candidateBytes: 0,
+  readMs: 0,
+  hashMs: 0,
+  hashedLarge: 0,
+  hashLargeMs: 0,
+  stored: 0,
+  storedBytes: 0,
+  storeMs: 0,
+  pass2Ms: 0,
+});
+
+const now = (): number => performance.now();
+
 // One candidate's bytes in the form a commit records, and their sha.
 // `needsWriteBack`: the live file is not canonical yet.
 type HashedCandidate = {
@@ -300,6 +353,11 @@ export default class ChangeDetector {
   // fixed for the whole pass (§3.3) — a mid-scan recompute could read a
   // .gitignore this very drain just pulled.
   private optIn: OptInSet | null = null;
+  // The last findChanges' breakdown (null before the first one). The
+  // in-progress one accumulates in `timing`; a single-path
+  // findChangeForPath does not touch either.
+  lastScanTiming: ScanTiming | null = null;
+  private timing: ScanTiming | null = null;
 
   constructor(deps: ChangeDetectorDeps) {
     this.vault = deps.vault;
@@ -378,21 +436,31 @@ export default class ChangeDetector {
   // the narrow candidate set is what actually pays for isSyncable +
   // read+SHA.
   async findChanges(): Promise<FileChange[]> {
+    const t = emptyTiming();
+    this.timing = t;
+    const t0 = now();
     await this.beginScan();
+    t.beginScanMs = now() - t0;
     try {
       return await this.scan();
     } finally {
       this.endScan();
+      t.totalMs = now() - t0;
+      this.lastScanTiming = t;
+      this.timing = null;
     }
   }
 
   private async scan(): Promise<FileChange[]> {
     const out: FileChange[] = [];
+    const t = this.timing ?? emptyTiming();
+    const tEnum = now();
     const watermark = this.hotMeta.getLastCommitMtime();
     const allFiles: FileLike[] = this.vault.getFiles().map((f) => ({
       path: f.path,
       stat: { mtime: f.stat.mtime, size: f.stat.size },
     }));
+    t.indexFiles = allFiles.length;
     // Obsidian's file index excludes anything whose name starts with a
     // dot, so `vault.getFiles()` never returns `<vault>/.gitignore` or
     // anything under `<configDir>/`. Dot-space therefore needs its own
@@ -431,6 +499,9 @@ export default class ChangeDetector {
       const bb = bucketIdForPath(b.path);
       return ba < bb ? -1 : ba > bb ? 1 : 0;
     });
+    t.dotEntries = allFiles.length - t.indexFiles;
+    t.enumerateMs = now() - tEnum;
+    const tPass1 = now();
     // Track syncable paths we examined this pass so Pass 2 can tell
     // apart "snapshot points at a path that's still tracked but
     // unchanged" from "snapshot points at a path that's gone or
@@ -602,6 +673,8 @@ export default class ChangeDetector {
       });
     }
 
+    t.pass1Ms = now() - tPass1;
+    const tPass2 = now();
     // Pass 2: baseline paths Pass 1 didn't claim as still-syncable.
     //   - seenIgnored: file exists on disk but is now ignored → silent
     //     cleanup (gitignore is a two-way mute).
@@ -644,6 +717,7 @@ export default class ChangeDetector {
     });
     if (removals.length > 0) await this.baselines.removeMany(removals);
     if (statRefreshes.length > 0) await this.baselines.setMany(statRefreshes);
+    t.pass2Ms = now() - tPass2;
     return out;
   }
 
@@ -804,7 +878,10 @@ export default class ChangeDetector {
   // (canonicalizeBytes — the SAME transform BatchWriter applies) and
   // hash that. null = vanished mid-walk (readBinaryOrSkip).
   private async hashCandidate(path: string): Promise<HashedCandidate | null> {
+    const t = this.timing;
+    const tRead = now();
     const raw = await this.readBinaryOrSkip(path);
+    if (t) t.readMs += now() - tRead;
     if (raw === null) return null;
     const canon = canonicalizeBytes(
       raw,
@@ -813,7 +890,19 @@ export default class ChangeDetector {
     // Only the RETURNED buffer is live: hashBlob may have moved
     // canon.bytes (and `raw`, the same object when nothing was
     // canonicalized) to the worker.
+    const size = canon.bytes.byteLength; // before hashBlob may move it
+    const tHash = now();
     const { sha, bytes } = await this.hashBlob(canon.bytes);
+    if (t) {
+      const ms = now() - tHash;
+      t.candidates += 1;
+      t.candidateBytes += size;
+      t.hashMs += ms;
+      if (size >= WorkerClient.SHA_WORKER_THRESHOLD) {
+        t.hashedLarge += 1;
+        t.hashLargeMs += ms;
+      }
+    }
     return { sha, bytes, needsWriteBack: canon.changed };
   }
 
@@ -834,7 +923,14 @@ export default class ChangeDetector {
     // (a revert to pushed content) and a sweep may be about to reap them
     // — COMMIT-PASS-PERF §6.1, case D. Pinned as the commit pass's; the
     // pass releases its pins once its metafiles are written.
+    const tStore = now();
     await this.syncStore.retain(PIN_OWNER_COMMIT, h.sha, async () => h.bytes);
+    const t = this.timing;
+    if (t) {
+      t.storeMs += now() - tStore;
+      t.stored += 1;
+      t.storedBytes += h.bytes.byteLength;
+    }
     return { sha: h.sha, size: h.bytes.byteLength };
   }
 

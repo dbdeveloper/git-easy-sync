@@ -805,6 +805,36 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     });
   });
 
+  // COMMIT-PASS-PERF (2026-10-05): one timing line per commit pass, so a
+  // device run says which phase is slow; syncAll also times the remote
+  // identity check that sits before the pass.
+  it("each commit pass logs its phases (and the detector's breakdown for a full scan); syncAll logs the identity check", async () => {
+    const lines: Array<{ m: string; d: unknown }> = [];
+    deps.logger = { ...deps.logger, info: (m: string, d?: unknown) => lines.push({ m, d }) };
+    put("x.md", "x");
+    findChangesResult = [modified("x.md")];
+    await manager.syncAll();
+    const identity = lines.find((l) => l.m === "Sync2 syncAll: remote identity checked");
+    expect(identity).toBeDefined();
+    const timing = lines.find((l) => l.m === "Sync2 commit pass timing")?.d as Record<string, unknown>;
+    expect(timing).toBeDefined();
+    expect(timing.changes).toBe(1);
+    for (const k of ["totalMs", "enforceMs", "sanitizeMs", "queueIndexMs", "detectMs", "zeroByteGuardMs", "writeBatchesMs"]) {
+      expect(typeof timing[k], k).toBe("number");
+    }
+  });
+
+  it("…a pass with nothing to commit logs its timing too", async () => {
+    const lines: Array<{ m: string; d: unknown }> = [];
+    deps.logger = { ...deps.logger, info: (m: string, d?: unknown) => lines.push({ m, d }) };
+    findChangesResult = [];
+    await manager.commitOnly();
+    const timing = lines.find((l) => l.m === "Sync2 commit pass timing")?.d as Record<string, unknown>;
+    expect(timing).toBeDefined();
+    expect(timing.changes).toBe(0);
+    expect(typeof timing.detectMs).toBe("number");
+  });
+
   it("R3a bell escalation: a FULL-scan trigger during a single-file pass re-loops as a FULL scan, never the runner's file", async () => {
     put("a.md", "x");
     put("b.md", "y");

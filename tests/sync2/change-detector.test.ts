@@ -1723,3 +1723,64 @@ describe("COMMIT-PASS-PERF Крок 2 — one read per changed file, end to end"
     );
   });
 });
+
+// COMMIT-PASS-PERF (2026-10-05): the scan's breakdown. Counts are pinned
+// exactly; times only for being present and non-negative — they are
+// what a device run reads, not what a unit test can assert.
+describe("ScanTiming — where a commit scan's time goes", () => {
+  let f: ReturnType<typeof fixture>;
+
+  beforeEach(async () => {
+    f = fixture();
+    await f.hot.load();
+  });
+
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  it("counts index files, candidates and their bytes, large (worker-sized) hashes, and stored blobs", async () => {
+    writeFile(f.root, "small.md", "tiny\n"); // 5 bytes
+    writeFile(f.root, "big.bin", Buffer.alloc(150 * 1024, 7)); // >= 100 KB
+    const saved: string[] = [];
+    const det = new ChangeDetector({
+      vault: f.vault as unknown as import("obsidian").Vault,
+      hotMeta: f.hot,
+      baselines: f.store,
+      gi: f.gi,
+      configDir: CONFIG_DIR,
+      selfPluginId: SELF_PLUGIN_ID,
+      vaultRoot: f.root,
+      syncConfigDir: () => true,
+      queue: { peekLatestPathSha: async () => null },
+      syncStore: {
+        retain: async (_o, sha) => {
+          saved.push(sha);
+          return true;
+        },
+      },
+    });
+    expect(det.lastScanTiming).toBeNull();
+    await det.findChanges();
+    const t = det.lastScanTiming!;
+    expect(t.indexFiles).toBe(2);
+    expect(t.candidates).toBe(2);
+    expect(t.candidateBytes).toBe(5 + 150 * 1024);
+    expect(t.hashedLarge).toBe(1);
+    expect(t.stored).toBe(2);
+    expect(t.storedBytes).toBe(5 + 150 * 1024);
+    for (const k of ["totalMs", "beginScanMs", "enumerateMs", "pass1Ms", "readMs", "hashMs", "hashLargeMs", "storeMs", "pass2Ms"] as const) {
+      expect(t[k], k).toBeGreaterThanOrEqual(0);
+    }
+    expect(t.totalMs).toBeGreaterThanOrEqual(t.pass1Ms);
+  });
+
+  it("a stat short-circuit costs no candidate; a single-path check leaves the last scan's numbers alone", async () => {
+    writeFile(f.root, "a.md", "same\n");
+    await f.detector.findChanges(); // first sync: a.md is a candidate
+    expect(f.detector.lastScanTiming!.candidates).toBe(0); // no queue → added without hashing
+    const before = f.detector.lastScanTiming;
+    await f.detector.findChangeForPath("a.md");
+    expect(f.detector.lastScanTiming).toBe(before);
+  });
+});

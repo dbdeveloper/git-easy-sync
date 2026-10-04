@@ -218,6 +218,9 @@ export interface Sync2ManagerDeps {
   drainFn?: typeof drainOnce;
 }
 
+// Timing values in logs: one decimal is plenty and keeps lines short.
+const round1 = (n: number): number => Math.round(n * 10) / 10;
+
 export class Sync2Manager {
   private readonly deps: Sync2ManagerDeps;
   private readonly now: () => number;
@@ -386,7 +389,13 @@ export class Sync2Manager {
 
   async syncAll(): Promise<void> {
     this.deps.logger.info("Sync2 syncAll start");
+    // Timed: it sits between "syncAll start" and the commit pass, so a
+    // device measurement of "the commit" includes it (COMMIT-PASS-PERF).
+    const tIdentity = performance.now();
     await this.reconcileRemoteIdentity();
+    this.deps.logger.info("Sync2 syncAll: remote identity checked", {
+      ms: round1(performance.now() - tIdentity),
+    });
     this.pulledFilesThisSync = 0;
     this.clearProgressForNewUserSync();
     let pushedFiles = 0;
@@ -598,13 +607,26 @@ export class Sync2Manager {
   }
 
   private async doOneCommitPass(target: string | null): Promise<number> {
+    // COMMIT-PASS-PERF (2026-10-05): where the pass's time goes, one log
+    // line per pass — see logCommitTiming.
+    const ph: Record<string, number> = {};
+    const t0 = performance.now();
+    let mark = t0;
+    const lap = (name: string): void => {
+      const t = performance.now();
+      ph[name] = round1(t - mark);
+      mark = t;
+    };
     if (this.deps.invariants) await this.deps.invariants.enforce();
+    lap("enforceMs");
     if (target === null) await this.sanitizeForbiddenFilenames();
+    lap("sanitizeMs");
     // Fresh dedup reference for THIS pass.
     this.queueIndex = await buildQueueShaIndex(
       this.deps.vault,
       this.deps.selfPluginId,
     );
+    lap("queueIndexMs");
 
     let changes: FileChange[];
     if (target === null) {
@@ -613,7 +635,9 @@ export class Sync2Manager {
       const one = await this.deps.detector.findChangeForPath(target);
       changes = one === null ? [] : [one];
     }
+    lap("detectMs");
     if (changes.length === 0) {
+      this.logCommitTiming(target, ph, t0, 0);
       if ((await this.listQueueIds()).length === 0) {
         this.deps.onNoLocalChanges?.();
       }
@@ -622,6 +646,7 @@ export class Sync2Manager {
     }
 
     await this.applyZeroByteRestoreGuard(changes);
+    lap("zeroByteGuardMs");
 
     let enqueued = 0;
     let rest = changes;
@@ -651,6 +676,8 @@ export class Sync2Manager {
       this.deps.onCommitProgress?.(enqueued, changes.length);
     }
 
+    lap("writeBatchesMs");
+    this.logCommitTiming(target, ph, t0, changes.length);
     this.queueIndex = null; // the queue just changed — rebuild lazily
     await this.fireQueueDepth();
     if (enqueued > 0) {
@@ -661,6 +688,32 @@ export class Sync2Manager {
       });
     }
     return enqueued;
+  }
+
+  // One line per commit pass: the pass's own phases plus, for a full
+  // scan, the detector's breakdown (ScanTiming). Written so that ONE
+  // device run answers "which part is slow" — the first measurement
+  // after step 1 had only a total, and the guess drawn from it was wrong.
+  private logCommitTiming(
+    target: string | null,
+    phases: Record<string, number>,
+    t0: number,
+    changes: number,
+  ): void {
+    const scan =
+      target === null ? this.deps.detector.lastScanTiming : null;
+    this.deps.logger.info("Sync2 commit pass timing", {
+      totalMs: round1(performance.now() - t0),
+      changes,
+      ...phases,
+      ...(scan === null
+        ? {}
+        : {
+            scan: Object.fromEntries(
+              Object.entries(scan).map(([k, v]) => [k, round1(v)]),
+            ),
+          }),
+    });
   }
 
   // ── drain (the engine call) ────────────────────────────────────────
