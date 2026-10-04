@@ -2739,14 +2739,26 @@ export async function sweepSyncStore(deps: DrainDeps): Promise<void> {
   if (!deps.queueReferencedShas) return;
   try {
     const r = await deps.syncStore.sweep([
-      deps.queueReferencedShas,
-      () => deps.journal.collectReferencedShas(),
-      () => deps.conflictStore.collectReferencedShas(),
       // Source №5 (HISTORY-DELETED §5.2.1): the Deleted bin's pending
       // captures. Their bytes are referenced by NOTHING else until the
       // deletion reaches a batch — miss this and the restore window
       // dies between a delete and its commit.
+      //
+      // ⚠️ It is read FIRST, before the queue — the order is the fix
+      // (COMMIT-PASS-PERF §6, defect A). A concurrent commit hands the
+      // sha over by writing the batch metafile and THEN releasing the
+      // bin record. Bin read first: a record released before this read
+      // means the metafile was already on disk, and the queue source,
+      // read later, sees it; a record not yet released is caught here.
+      // Bin read LAST, a commit finishing between the queue read and
+      // the bin read left the blob named by neither, and it was reaped
+      // although the batch still listed it as restorable. Same rule as
+      // SyncStore's in-flight pins: whoever releases after the metafile
+      // must be read before the metafiles are.
       async () => deps.deletedBinReferencedShas?.() ?? new Set<string>(),
+      deps.queueReferencedShas,
+      () => deps.journal.collectReferencedShas(),
+      () => deps.conflictStore.collectReferencedShas(),
     ]);
     if (r.removed > 0) {
       deps.logger?.info("sync_store sweep", r);

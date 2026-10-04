@@ -78,16 +78,13 @@ describe("sync_store sweep vs a concurrent commit / delete (COMMIT-PASS-PERF §6
   // record (§5.2.1). If that lands between the sweep reading the queue
   // and reading the bin, neither source names the blob. For a file
   // created and deleted between pushes, that blob is the ONLY copy.
-  // `red` = the positions where the defect bites today: the commit has to
-  // finish AFTER the queue was read and BEFORE the bin is. Finishing on
-  // entry to the queue read is safe in any order (the queue sees it) —
-  // kept as a control so the pin cannot pass by testing nothing.
-  for (const [during, red] of [
-    ["queue", false],
-    ["journal", true],
-    ["conflicts", true],
-  ] as const) {
-    (red ? it.fails : it)(`A: a deletion committed while the sweep reads "${during}" keeps its Deleted-bin bytes`, async () => {
+  // FIXED 2026-10-04 (it.fails removed in the fixing commit): the bin is
+  // now read before the queue. Before the fix the commit bit when it
+  // finished AFTER the queue was read and BEFORE the bin was — the
+  // "journal" and "conflicts" positions. Finishing on entry to the queue
+  // read was safe in either order and is kept as a control.
+  for (const during of ["queue", "journal", "conflicts"]) {
+    it(`A: a deletion committed while the sweep reads "${during}" keeps its Deleted-bin bytes`, async () => {
       fs.writeFileSync(path.join(dir, "never-pushed.md"), "only copy\n");
       await bin.captureForDelete("never-pushed.md");
       fs.rmSync(path.join(dir, "never-pushed.md"));

@@ -245,13 +245,15 @@ diff3/drain ідуть усередині того ж drain-у послідов�
   чергу ПЕРШОЮ, кошик ОСТАННІМ. Зонд: `batch references deletedSha: true | blob
   still in store: false`. Наслідок: втрачено відновлення з Deleted; для файлу,
   створеного й видаленого між пушами, блоб кошика — **єдина копія** вмісту.
-  Пропоноване виправлення — читати джерело №5 ПЕРЕД чергою (те саме правило, що й
-  піни).
+  ✅ **ВИПРАВЛЕНО 2026-10-04:** `sweepSyncStore` читає джерело №5 ПЕРЕД чергою
+  (те саме правило, що й піни). Тест у `sweep-reuse-races.test.ts` перевіряє
+  кожну позицію завершення коміту; `it.fails` знято в коміті виправлення.
 - **C — кошик перевикористовує наявний блоб.** `captureForDelete` бачить блоб
   (`existInSyncStore`) → не пише → removal-цикл його видаляє. Зонд: `bin record
   sha: true | blob in store: false`. Відновлення втрачено; `reconcile()` скине
   запис на наступному завантаженні. Якщо вміст колись пушився — він є в історії
   GitHub.
+  🔴 **Відкрито, запінено `it.fails`** (`sweep-reuse-races.test.ts`).
 - **D — мої піни, той самий механізм** (вище). Зонд: `pinned blob in store after
   sweep: false`, далі `entry kept: true | blob after writer fallback: true`.
 
