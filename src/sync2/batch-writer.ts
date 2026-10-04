@@ -17,6 +17,11 @@
 // manifest of what should have been written. The price: each file is
 // read TWICE (hash pass, then blob pass) so peak memory stays one
 // file's bytes, never the whole batch.
+// COMMIT-PASS-PERF Крок 2: a change that arrives WITH a sha skips both
+// passes — ChangeDetector stored its blob while hashing it, pinned
+// (SyncStore.saveInFlight) in place of the reference §12.4 would give;
+// the blob pass finds it present. Only sha-less changes pay the two
+// reads now.
 //
 // R3b commit-side protocol (SYNC2-FIX §6):
 // - a NEW dir gets `.attempted-commit` immediately on creation and
@@ -257,6 +262,23 @@ export default class BatchWriter {
           // captured them. Null = nothing to restore later, which is
           // the honest answer for a delete made outside our hooks.
           deletedSha: this.deletedBin?.peek(c.path) ?? null,
+        });
+        continue;
+      }
+      if (c.sha !== undefined) {
+        // COMMIT-PASS-PERF Крок 2: the detector already read, hashed
+        // and stored these exact bytes (pinned in sync_store until the
+        // pass ends) — record them as-is. No second read means no
+        // window for the file to change between hash and store; a later
+        // edit is simply the next commit. mtime is the scan's stat,
+        // taken before the read — the same "before any write-back"
+        // moment snapshotEntry captures.
+        byPath.set(c.path, {
+          path: c.path,
+          sha: c.sha,
+          size: c.size,
+          mtime: c.mtime,
+          deletedSha: null,
         });
         continue;
       }

@@ -191,6 +191,10 @@ export async function createSync2Client(
       peekLatestPathSha: async (p: string) =>
         (await managerRef?.peekLatestPathSha(p)) ?? null,
     },
+    // COMMIT-PASS-PERF Крок 2 — production composition: the detector
+    // stores proven blobs, with the SAME toggle getter as the writer.
+    syncStore,
+    autoCanonicalize: () => opts.autoCanonicalize ?? true,
   });
   // DOT-FILES §8.0 — the fixture MUST carry the same composition the
   // product has. An earlier shape of this fix was optional here, the

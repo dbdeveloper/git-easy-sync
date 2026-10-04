@@ -18,6 +18,7 @@ import FileBaselinesStore, {
   bucketIdForPath,
 } from "./file-baselines";
 import { FileChange } from "./types";
+import { canonicalizeBytes, shouldCanonicalize } from "./text-normalize";
 
 // isSyncable for sync2: hardcoded deny list + per-device configDir
 // gate + gi.ignoredAsync. The configDir gate (`syncConfigDir`) is
@@ -218,7 +219,29 @@ export interface ChangeDetectorDeps {
   // the main-thread `calculateGitBlobSHA` runs (unit tests). Both paths
   // compute the byte-identical SHA (worker-vs-fallback identity tests).
   computeSha?: (bytes: ArrayBuffer) => Promise<string>;
+  // COMMIT-PASS-PERF Крок 2 — the commit pass's sync_store. When set, a
+  // change the detector PROVED (hash differs from its reference) has its
+  // bytes stored right there, pinned against the sweep until the pass
+  // releases them, and the FileChange carries their sha — BatchWriter
+  // then neither re-reads nor re-hashes the file. Unchanged files are
+  // never stored: the post-drain self-heal pass re-reads everything and
+  // finds nothing, and storing that would write megabytes for the sweep
+  // to reap. Absent → today's shape (sha-less changes).
+  syncStore?: { saveInFlight(sha: string, bytes: ArrayBuffer): Promise<void> };
+  // The canonicalize toggle (autoCanonicalizeTextFiles). MUST be the
+  // same getter BatchWriter gets: the detector hashes the canonical form
+  // the writer records, and a carried sha is trusted as-is. Absent →
+  // off: raw bytes, as before.
+  autoCanonicalize?: () => boolean;
 }
+
+// One candidate's bytes in the form a commit records, and their sha.
+// `needsWriteBack`: the live file is not canonical yet.
+type HashedCandidate = {
+  sha: string;
+  bytes: ArrayBuffer;
+  needsWriteBack: boolean;
+};
 
 // Minimal surface ChangeDetector consumes from PushQueue. Lets
 // tests inject a stub without dragging the full queue (which would
@@ -257,6 +280,8 @@ export default class ChangeDetector {
     | ((target: string) => void)
     | undefined;
   private readonly computeSha: (bytes: ArrayBuffer) => Promise<string>;
+  private readonly syncStore: ChangeDetectorDeps["syncStore"];
+  private readonly autoCanonicalize: () => boolean;
   // The opt-in set for the CURRENT operation (DOT-FILES §5). Null until
   // beginScan() runs, and deliberately not lazily filled: "not computed
   // yet" and "lifecycle bug" have to stay distinguishable, or the
@@ -279,6 +304,8 @@ export default class ChangeDetector {
     this.conflictBaseSha = deps.conflictBaseSha;
     this.logWalkIncomplete = deps.logWalkIncomplete;
     this.computeSha = deps.computeSha ?? calculateGitBlobSHA;
+    this.syncStore = deps.syncStore;
+    this.autoCanonicalize = deps.autoCanonicalize ?? (() => false);
   }
 
   // Compute the dot-space opt-in set for the operation about to run.
@@ -448,26 +475,29 @@ export default class ChangeDetector {
         const addConflictRef = this.conflictBaseSha
           ? this.conflictBaseSha(file.path)
           : undefined;
+        let proven: { sha?: string; size?: number } = {};
         if (this.queue || addConflictRef !== undefined) {
-          const buf = await this.readBinaryOrSkip(file.path);
-          if (buf === null) continue; // SYNC2 §6 skip-class — vanished mid-walk
-          const localSha = await this.computeSha(buf);
+          const h = await this.hashCandidate(file.path);
+          if (h === null) continue; // SYNC2 §6 skip-class — vanished mid-walk
           const inQueueSha = this.queue
             ? await this.queue.peekLatestPathSha(file.path)
             : null;
           // Conflict base (§26): unchanged iff it matches its branch value
           // or the last queued commit — never main. Else: plain dedup.
-          if (addConflictRef !== undefined) {
-            if (localSha === (inQueueSha ?? addConflictRef)) continue;
-          } else if (inQueueSha === localSha) {
-            continue;
-          }
+          // A pending canonical write-back is a change either way.
+          const ref =
+            addConflictRef !== undefined
+              ? (inQueueSha ?? addConflictRef)
+              : inQueueSha;
+          if (h.sha === ref && !h.needsWriteBack) continue;
+          proven = await this.storeProven(h);
         }
         out.push({
           kind: "added",
           path: file.path,
           size: file.stat.size,
           mtime: file.stat.mtime,
+          ...proven,
         });
         continue;
       }
@@ -484,9 +514,9 @@ export default class ChangeDetector {
       }
 
       // Stat moved; verify it's a real content change.
-      const buf = await this.readBinaryOrSkip(file.path);
-      if (buf === null) continue; // SYNC2 §6 skip-class — vanished mid-walk
-      const sha = await this.computeSha(buf);
+      const h = await this.hashCandidate(file.path);
+      if (h === null) continue; // SYNC2 §6 skip-class — vanished mid-walk
+      const sha = h.sha;
 
       // The file's LAST COMMITTED state is the newest queued batch that
       // holds it (a pending local commit), falling back to the last
@@ -514,19 +544,24 @@ export default class ChangeDetector {
         ? this.conflictBaseSha(file.path)
         : undefined;
       if (conflictRef !== undefined) {
-        if (sha === (queuedSha ?? conflictRef)) continue; // unchanged vs branch
+        // unchanged vs branch (and already canonical on disk)
+        if (sha === (queuedSha ?? conflictRef) && !h.needsWriteBack) continue;
         out.push({
           kind: "modified",
           path: file.path,
           size: file.stat.size,
           mtime: file.stat.mtime,
           previousRemoteSha: snap.baselineSha,
+          ...(await this.storeProven(h)),
         });
         continue;
       }
 
       const lastCommittedSha = queuedSha ?? snap.baselineSha;
-      if (sha === lastCommittedSha) {
+      // A pending canonical write-back keeps the file a change even when
+      // its canonical sha matches — the same verdict the raw-byte hash
+      // gave before the detector canonicalized (COMMIT-PASS-PERF Крок 2).
+      if (sha === lastCommittedSha && !h.needsWriteBack) {
         // Unchanged since the last commit. When it also matches the
         // pushed remote (nothing pending, or the pending IS the remote),
         // refresh the stat-cache so later walks short-circuit cheaply.
@@ -550,6 +585,7 @@ export default class ChangeDetector {
         size: file.stat.size,
         mtime: file.stat.mtime,
         previousRemoteSha: snap.baselineSha,
+        ...(await this.storeProven(h)),
       });
     }
 
@@ -643,10 +679,9 @@ export default class ChangeDetector {
       return null; // cache hit
     }
 
-    const buf = await this.readBinaryOrSkip(path);
-    if (buf === null) return null; // SYNC2 §6 skip-class — vanished mid-detect
-    const sha = await this.computeSha(buf);
-    if (sha === snap.baselineSha) {
+    const h = await this.hashCandidate(path);
+    if (h === null) return null; // SYNC2 §6 skip-class — vanished mid-detect
+    if (h.sha === snap.baselineSha && !h.needsWriteBack) {
       // Touched but unchanged — refresh stat so future calls
       // short-circuit (write-through persists it), then report
       // "nothing to do".
@@ -664,6 +699,7 @@ export default class ChangeDetector {
       size: stat.size,
       mtime: stat.mtime,
       previousRemoteSha: snap.baselineSha,
+      ...(await this.storeProven(h)),
     };
   }
 
@@ -751,6 +787,40 @@ export default class ChangeDetector {
   // - dotfiles in subfolders are theoretically also missing from the
   //   index, but that scenario is rarer and would need a deeper
   //   recursive walk; address if it surfaces.
+  // Read one candidate, bring it to the form a commit records
+  // (canonicalizeBytes — the SAME transform BatchWriter applies) and
+  // hash that. null = vanished mid-walk (readBinaryOrSkip).
+  private async hashCandidate(path: string): Promise<HashedCandidate | null> {
+    const raw = await this.readBinaryOrSkip(path);
+    if (raw === null) return null;
+    const canon = canonicalizeBytes(
+      raw,
+      shouldCanonicalize(path, this.configDir) && this.autoCanonicalize(),
+    );
+    return {
+      sha: await this.computeSha(canon.bytes),
+      bytes: canon.bytes,
+      needsWriteBack: canon.changed,
+    };
+  }
+
+  // COMMIT-PASS-PERF Крок 2 — store the bytes of a PROVEN change while
+  // we still hold them, and hand their sha + length to the FileChange.
+  // Returns nothing (the writer reads the file itself, as before) when
+  // no store is wired, or when the live file still needs its canonical
+  // write-back: the scan never writes to the vault, the writer does.
+  //
+  // This is what closes the hash→store TOCTOU: the bytes stored are the
+  // bytes hashed, so there is no second read for the file to change
+  // under.
+  private async storeProven(
+    h: HashedCandidate,
+  ): Promise<{ sha?: string; size?: number }> {
+    if (!this.syncStore || h.needsWriteBack) return {};
+    await this.syncStore.saveInFlight(h.sha, h.bytes);
+    return { sha: h.sha, size: h.bytes.byteLength };
+  }
+
   // SYNC2 §6 skip-class — read a candidate that was just listed in allFiles,
   // tolerating the file VANISHING mid-walk. On Android (Capacitor) an external
   // writer (Obsidian rewriting its own .obsidian/* config at startup, or any

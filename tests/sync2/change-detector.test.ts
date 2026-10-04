@@ -19,6 +19,8 @@ import ChangeDetector, {
 } from "../../src/sync2/change-detector";
 import { Vault } from "../../mock-obsidian";
 import { calculateGitBlobSHA } from "../../src/utils";
+import SyncStore from "../../src/sync2/sync-store";
+import BatchWriter from "../../src/sync2/batch-writer";
 
 const CONFIG_DIR = ".obsidian";
 const SELF_PLUGIN_ID = "git-easy-sync";
@@ -1485,5 +1487,237 @@ describe("COMMIT-PASS-PERF Крок 1 — the detector hashes through the inject
     // f.detector carries no computeSha; identical bytes must still read
     // as unchanged, i.e. the fallback hasher computes the real git sha.
     expect(await f.detector.findChangeForPath("Notes/x.md")).toBeNull();
+  });
+});
+
+// COMMIT-PASS-PERF Крок 2: a change the detector PROVED carries its sha,
+// and its bytes are already in sync_store (pinned). Unchanged files are
+// never stored; a file that still needs its canonical write-back goes
+// sha-less, so the writer (not the scan) rewrites it.
+describe("COMMIT-PASS-PERF Крок 2 — store the blob while hashing it", () => {
+  const WATERMARK = 1_500_000_000_000;
+  const AHEAD = 2_000_000_000_000;
+  let f: ReturnType<typeof fixture>;
+  let saved: Map<string, string>;
+
+  beforeEach(async () => {
+    f = fixture();
+    await f.hot.load();
+    saved = new Map();
+  });
+
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  const detector = (opts: {
+    canonicalize?: boolean;
+    peek?: (path: string) => Promise<string | null>;
+  } = {}): ChangeDetector =>
+    new ChangeDetector({
+      vault: f.vault as unknown as import("obsidian").Vault,
+      hotMeta: f.hot,
+      baselines: f.store,
+      gi: f.gi,
+      configDir: CONFIG_DIR,
+      selfPluginId: SELF_PLUGIN_ID,
+      vaultRoot: f.root,
+      syncConfigDir: () => true,
+      syncStore: {
+        saveInFlight: async (sha, bytes) => {
+          saved.set(sha, new TextDecoder().decode(bytes));
+        },
+      },
+      autoCanonicalize: () => opts.canonicalize ?? false,
+      ...(opts.peek ? { queue: { peekLatestPathSha: opts.peek } } : {}),
+    });
+
+  const stageModified = async (rel: string, content: string, baseline: string): Promise<void> => {
+    writeFile(f.root, rel, content);
+    setMtime(f.root, rel, AHEAD);
+    await f.store.set(rel, { baselineSha: baseline, mtime: 1, size: 1 });
+    await f.hot.update({ lastCommitMtime: WATERMARK });
+  };
+
+  it("modified, proven: the change carries the sha + byte length, and exactly those bytes were stored", async () => {
+    await stageModified("a.md", "new bytes\n", "OLD");
+    const out = await detector().findChanges();
+    const sha = await shaOf("new bytes\n");
+    expect(out).toEqual([
+      expect.objectContaining({ kind: "modified", path: "a.md", sha, size: 10 }),
+    ]);
+    expect(saved.get(sha)).toBe("new bytes\n");
+  });
+
+  it("self-heal pass (baseline mtime 0, same content): nothing is stored, nothing emitted", async () => {
+    writeFile(f.root, "a.md", "same\n");
+    await f.store.set("a.md", { baselineSha: await shaOf("same\n"), mtime: 0, size: 5 });
+    const out = await detector().findChanges();
+    expect(out).toEqual([]);
+    expect(saved.size).toBe(0);
+  });
+
+  it("added, proven (queue wired, not in it): carries sha, blob stored", async () => {
+    writeFile(f.root, "n.md", "fresh\n");
+    const out = await detector({ peek: async () => null }).findChanges();
+    const sha = await shaOf("fresh\n");
+    expect(out).toEqual([
+      expect.objectContaining({ kind: "added", path: "n.md", sha, size: 6 }),
+    ]);
+    expect(saved.get(sha)).toBe("fresh\n");
+  });
+
+  it("added, already queued with these bytes: skipped, nothing stored", async () => {
+    writeFile(f.root, "n.md", "fresh\n");
+    const sha = await shaOf("fresh\n");
+    const out = await detector({ peek: async () => sha }).findChanges();
+    expect(out).toEqual([]);
+    expect(saved.size).toBe(0);
+  });
+
+  it("toggle ON, canonical file changed: the carried sha is of the CANONICAL bytes (what the writer records)", async () => {
+    await stageModified("a.md", "v2\n", "OLD");
+    const out = await detector({ canonicalize: true }).findChanges();
+    expect(out[0]).toMatchObject({ sha: await shaOf("v2\n") });
+  });
+
+  it("toggle ON, file needs its write-back (no trailing NL): emitted WITHOUT a sha, nothing stored — even when its canonical form equals the baseline", async () => {
+    // Canonical "same\n" == baseline, but the live file lacks the
+    // trailing newline. The raw-hash detector emitted this (raw ≠
+    // baseline) and the writer rewrote the file; that verdict stays.
+    await stageModified("a.md", "same", await shaOf("same\n"));
+    const out = await detector({ canonicalize: true }).findChanges();
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("modified");
+    expect("sha" in out[0] && out[0].sha).toBeFalsy();
+    expect(saved.size).toBe(0);
+    // The scan itself never writes to the vault.
+    expect(fs.readFileSync(path.join(f.root, "a.md"), "utf8")).toBe("same");
+  });
+
+  it("toggle OFF: a CRLF file is hashed raw — byte-exact, as before", async () => {
+    await stageModified("a.md", "x\r\ny", "OLD");
+    const out = await detector().findChanges();
+    expect(out[0]).toMatchObject({ sha: await shaOf("x\r\ny") });
+  });
+
+  it("findChangeForPath, modified: carries sha, blob stored", async () => {
+    writeFile(f.root, "Notes/x.md", "v2\n");
+    await f.store.set("Notes/x.md", { baselineSha: "OLD", mtime: 1, size: 1 });
+    const out = await detector().findChangeForPath("Notes/x.md");
+    const sha = await shaOf("v2\n");
+    expect(out).toMatchObject({ kind: "modified", sha, size: 3 });
+    expect(saved.get(sha)).toBe("v2\n");
+  });
+
+  it("no syncStore wired → sha-less changes, exactly as before", async () => {
+    await stageModified("a.md", "new\n", "OLD");
+    const out = await f.detector.findChanges();
+    expect(out[0].kind).toBe("modified");
+    expect("sha" in out[0]).toBe(false);
+  });
+});
+
+// The point of Крок 2, measured as the one thing it promises: a changed
+// file is READ ONCE per commit (was three times — detector, the writer's
+// hash pass, the writer's blob pass). Real detector + real BatchWriter +
+// real SyncStore over a vault that counts reads.
+describe("COMMIT-PASS-PERF Крок 2 — one read per changed file, end to end", () => {
+  let f: ReturnType<typeof fixture>;
+
+  beforeEach(async () => {
+    f = fixture();
+    await f.hot.load();
+  });
+
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  const run = async (canonicalize: boolean): Promise<Map<string, number>> => {
+    const reads = new Map<string, number>();
+    const real = f.vault as unknown as Record<string | symbol, unknown>;
+    const counting = new Proxy(real, {
+      get(target, prop) {
+        if (prop !== "adapter") {
+          const v = Reflect.get(target, prop);
+          return typeof v === "function" ? v.bind(target) : v;
+        }
+        const adapter = Reflect.get(target, "adapter") as Record<string, unknown>;
+        return new Proxy(adapter, {
+          get(a, m) {
+            const fn = Reflect.get(a, m);
+            if (typeof fn !== "function") return fn;
+            return (...args: unknown[]) => {
+              if ((m === "readBinary" || m === "read") && typeof args[0] === "string") {
+                reads.set(args[0], (reads.get(args[0]) ?? 0) + 1);
+              }
+              return (fn as (...x: unknown[]) => unknown).apply(a, args);
+            };
+          },
+        });
+      },
+    }) as unknown as import("obsidian").Vault;
+
+    const syncStore = new SyncStore({ vault: counting, selfPluginId: SELF_PLUGIN_ID });
+    const det = new ChangeDetector({
+      vault: counting,
+      hotMeta: f.hot,
+      baselines: f.store,
+      gi: f.gi,
+      configDir: CONFIG_DIR,
+      selfPluginId: SELF_PLUGIN_ID,
+      vaultRoot: f.root,
+      syncConfigDir: () => true,
+      queue: { peekLatestPathSha: async () => null },
+      syncStore,
+      autoCanonicalize: () => canonicalize,
+    });
+    const writer = new BatchWriter({
+      vault: counting,
+      selfPluginId: SELF_PLUGIN_ID,
+      syncStore,
+      autoCanonicalize: () => canonicalize,
+    });
+    const changes = await det.findChanges();
+    expect(changes.length).toBeGreaterThan(0);
+    const id = await writer.writeBatch(changes);
+    expect(id).not.toBeNull();
+    syncStore.releaseInFlight();
+    return reads;
+  };
+
+  it("first commit (no baselines), toggle OFF: every file read exactly once, and every blob landed", async () => {
+    writeFile(f.root, "a.md", "alpha\n");
+    writeFile(f.root, "b.md", "beta, no trailing newline");
+    writeFile(f.root, "img.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+    const reads = await run(false);
+    expect(reads.get("a.md")).toBe(1);
+    expect(reads.get("b.md")).toBe(1);
+    expect(reads.get("img.png")).toBe(1);
+    const storeDir = path.join(
+      f.root, CONFIG_DIR, "plugins", SELF_PLUGIN_ID, ".runtime", "sync_store",
+    );
+    expect(fs.readdirSync(storeDir).sort()).toEqual(
+      [await shaOf("alpha\n"), await shaOf("beta, no trailing newline")]
+        .concat([
+          await calculateGitBlobSHA(
+            new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]).buffer as ArrayBuffer,
+          ),
+        ])
+        .sort(),
+    );
+  });
+
+  it("toggle ON: a canonical file is read once; one needing its write-back keeps the old path and IS rewritten", async () => {
+    writeFile(f.root, "a.md", "canonical\n");
+    writeFile(f.root, "b.md", "needs newline");
+    const reads = await run(true);
+    expect(reads.get("a.md")).toBe(1);
+    // b.md: the detector's read, then the writer's two (hash + blob).
+    expect(reads.get("b.md")).toBe(3);
+    expect(fs.readFileSync(path.join(f.root, "b.md"), "utf8")).toBe(
+      "needs newline\n",
+    );
   });
 });
