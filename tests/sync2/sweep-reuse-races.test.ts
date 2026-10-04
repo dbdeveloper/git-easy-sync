@@ -10,6 +10,10 @@ import BatchWriter from "../../src/sync2/batch-writer";
 import { collectQueueReferencedShas } from "../../src/sync2/queue-sha-index";
 import { sweepSyncStore } from "../../src/sync2/drain";
 import { calculateGitBlobSHA } from "../../src/utils";
+import ChangeDetector from "../../src/sync2/change-detector";
+import HotMetadataStore from "../../src/sync2/hot-metadata";
+import FileBaselinesStore from "../../src/sync2/file-baselines";
+import GI from "../../src/gi";
 
 // COMMIT-PASS-PERF §6 — the sync_store sweep runs at drain end while a
 // commit or a user delete can run concurrently (nothing excludes them).
@@ -105,21 +109,21 @@ describe("sync_store sweep vs a concurrent commit / delete (COMMIT-PASS-PERF §6
     });
   }
 
-  // C: the bin finds the blob ALREADY present (an unreferenced leftover
-  // with the same content), skips the save, records it — and the
-  // sweep's removal loop, whose references were collected before the
-  // record existed, deletes it. Recorded as restorable, restorable from
-  // nothing; reconcile() drops the record on the next load.
-  it.fails("C: a delete captured during the sweep's removal loop keeps bytes the bin finds already present", async () => {
-    const content = new TextEncoder().encode("same content\n").buffer as ArrayBuffer;
-    const sha = await calculateGitBlobSHA(content);
-    await syncStore.saveBlobToSyncStore(sha, content); // unreferenced leftover
-    fs.writeFileSync(path.join(dir, "f.md"), "same content\n");
-
-    // A store whose remove(blob) first lets the user's delete run — i.e.
-    // the delete lands inside the removal loop, after collection.
+  // ── C / D / E: reuse of a blob ALREADY in the store (§6) ───────────
+  //
+  // One world, ONE SyncStore shared by the sweep and every actor — as in
+  // production, where any lock lives inside that one instance. Its vault
+  // lets a test start a concurrent operation at the moment the sweep is
+  // about to unlink a given blob: AFTER the references were collected.
+  // The operation is raced against a short delay instead of awaited, so
+  // the same test runs against code without a lock (the operation
+  // finishes first) and with one (it waits on the lock, the unlink
+  // proceeds, the operation finishes after).
+  const hookedWorld = () => {
+    let hook: { sha: string; op: () => Promise<unknown> } | null = null;
+    let pending: Promise<unknown> | null = null;
     const real = vault as unknown as Record<string, unknown>;
-    const hooked = new Proxy(real, {
+    const v = new Proxy(real, {
       get(t, prop) {
         if (prop !== "adapter") {
           const x = Reflect.get(t, prop);
@@ -131,20 +135,136 @@ describe("sync_store sweep vs a concurrent commit / delete (COMMIT-PASS-PERF §6
             const fn = Reflect.get(aa, m) as (...x: unknown[]) => Promise<unknown>;
             if (m !== "remove") return typeof fn === "function" ? fn.bind(aa) : fn;
             return async (p: string) => {
-              if (p.endsWith(sha)) {
-                await bin.captureForDelete("f.md");
-                fs.rmSync(path.join(dir, "f.md")); // Obsidian's delete proceeds
+              if (hook !== null && p.endsWith(hook.sha)) {
+                const h = hook;
+                hook = null;
+                pending = h.op();
+                pending.catch(() => {});
+                await Promise.race([
+                  pending,
+                  new Promise((r) => setTimeout(r, 300)),
+                ]);
               }
               return fn.call(aa, p);
             };
           },
         });
       },
-    });
-    const sweeping = new SyncStore({ vault: hooked as never, selfPluginId: PLUGIN_ID });
-    await sweeping.sweep([async () => bin.referencedShas()]);
+    }) as never;
+    const store = new SyncStore({ vault: v, selfPluginId: PLUGIN_ID });
+    return {
+      vault: v,
+      store,
+      bin: new DeletedStore({ vault: v, selfPluginId: PLUGIN_ID, syncStore: store }),
+      writer: new BatchWriter({
+        vault: v,
+        selfPluginId: PLUGIN_ID,
+        syncStore: store,
+        autoCanonicalize: () => false,
+      }),
+      // Run `op` when the sweep reaches the unlink of `sha`.
+      during(sha: string, op: () => Promise<unknown>): void {
+        hook = { sha, op };
+      },
+      // The concurrent operation's own completion.
+      async settle(): Promise<void> {
+        if (pending !== null) await pending;
+      },
+    };
+  };
 
-    expect(bin.peek("f.md")).toBe(sha);
-    expect(await syncStore.existInSyncStore(sha)).toBe(true);
+  // A content-addressed leftover: in the store, referenced by nothing.
+  const leftover = async (
+    store: SyncStore,
+    text: string,
+  ): Promise<{ sha: string; bytes: ArrayBuffer }> => {
+    const bytes = new TextEncoder().encode(text).buffer as ArrayBuffer;
+    const sha = await calculateGitBlobSHA(bytes);
+    await store.saveBlobToSyncStore(sha, bytes);
+    return { sha, bytes };
+  };
+
+  // C: the bin finds the blob ALREADY present, skips the save, records
+  // it — and the removal loop, whose references were collected before
+  // the record existed, deletes it. Recorded as restorable, restorable
+  // from nothing; reconcile() drops the record on the next load.
+  it.fails("C: a delete captured during the sweep's removal loop keeps bytes the bin finds already present", async () => {
+    const w = hookedWorld();
+    await w.bin.load();
+    const { sha } = await leftover(w.store, "same content\n");
+    fs.writeFileSync(path.join(dir, "f.md"), "same content\n");
+
+    w.during(sha, async () => {
+      await w.bin.captureForDelete("f.md");
+      fs.rmSync(path.join(dir, "f.md")); // Obsidian's delete proceeds
+    });
+    await w.store.sweep([async () => w.bin.referencedShas()]);
+    await w.settle();
+
+    expect(w.bin.peek("f.md")).toBe(sha);
+    expect(await w.store.existInSyncStore(sha)).toBe(true);
+  });
+
+  // D: the commit pass's detector stores a PROVEN change whose bytes
+  // happen to equal a leftover (a revert to previously pushed content).
+  // Its pin lands after the sweep collected references, so the removal
+  // loop takes the blob anyway; only the writer's re-read fallback saves
+  // the commit. Asserted here: the blob survives on its own.
+  it.fails("D: a change the detector stores during the removal loop keeps a blob that was already present", async () => {
+    const w = hookedWorld();
+    const { sha } = await leftover(w.store, "reverted\n");
+    fs.writeFileSync(path.join(dir, "r.md"), "reverted\n");
+    const hot = new HotMetadataStore({ vault: w.vault, selfPluginId: PLUGIN_ID });
+    await hot.load();
+    const detector = new ChangeDetector({
+      vault: w.vault,
+      hotMeta: hot,
+      baselines: new FileBaselinesStore({ vault: w.vault, selfPluginId: PLUGIN_ID }),
+      gi: new GI(dir),
+      configDir: ".obsidian",
+      selfPluginId: PLUGIN_ID,
+      vaultRoot: dir,
+      syncConfigDir: () => true,
+      queue: { peekLatestPathSha: async () => null },
+      syncStore: w.store,
+    });
+    let changes: Awaited<ReturnType<ChangeDetector["findChanges"]>> = [];
+
+    w.during(sha, async () => {
+      changes = await detector.findChanges();
+    });
+    await w.store.sweep([async () => new Set<string>()]);
+    await w.settle();
+
+    expect(changes).toEqual([expect.objectContaining({ path: "r.md", sha })]);
+    expect(await w.store.existInSyncStore(sha)).toBe(true);
+  });
+
+  // E: BatchWriter's blob pass finds the blob already present and skips
+  // it — but the sweep collected references BEFORE this batch's metafile
+  // existed, and its removal loop takes the blob. The drain can repair
+  // from the vault only while the file is unchanged; after an edit the
+  // committed version never reaches GitHub (preserve-all-commits).
+  it.fails("E: a batch written during the removal loop keeps the blob its metafile names", async () => {
+    const w = hookedWorld();
+    const { sha } = await leftover(w.store, "identical\n");
+    fs.writeFileSync(path.join(dir, "e.md"), "identical\n");
+    let id: string | null = null;
+
+    w.during(sha, async () => {
+      id = await w.writer.writeBatch([
+        { kind: "modified", path: "e.md", size: 0, mtime: 0, previousRemoteSha: "p" },
+      ]);
+    });
+    await w.store.sweep([
+      () => collectQueueReferencedShas(w.vault, PLUGIN_ID),
+    ]);
+    await w.settle();
+
+    expect(id).not.toBeNull();
+    expect(
+      (await collectQueueReferencedShas(w.vault, PLUGIN_ID)).has(sha),
+    ).toBe(true);
+    expect(await w.store.existInSyncStore(sha)).toBe(true);
   });
 });
