@@ -28,11 +28,7 @@
 
 import { normalizePath, type Vault } from "obsidian";
 import { atomicWriteFile } from "./atomic-write";
-import {
-  normalizeText,
-  shouldCanonicalize,
-  utf8RoundTripKeepBom,
-} from "./text-normalize";
+import { canonicalizeBytes, shouldCanonicalize } from "./text-normalize";
 import type { TrashHooks } from "./trash-hooks";
 import type { VaultFileReader } from "./drain";
 import {
@@ -157,27 +153,17 @@ export function makeVaultFileReader(
     async write(path, bytes) {
       const normalized = normalizePath(path);
       await ensureParentDir(deps.vault, normalized);
-      let out = bytes;
-      if (
+      // The SAME canonical form the commit side records
+      // (canonicalizeBytes — round-trip PROOF first, the §II.15 rule:
+      // invalid UTF-8 under a text extension passes through untouched,
+      // never through a lossy decode). One function for both sides is
+      // what keeps them agreeing; a file normalized on one side and
+      // passed raw on the other would re-sync forever.
+      const { bytes: out } = canonicalizeBytes(
+        bytes,
         deps.autoCanonicalize?.() === true &&
-        shouldCanonicalize(normalized, deps.vault.configDir)
-      ) {
-        // Round-trip PROOF before touching bytes (the §II.15 rule):
-        // invalid UTF-8 under a text extension must pass through
-        // untouched, never through a lossy decode. BOM-preserving
-        // variant — normalizeText must SEE the BOM to strip it.
-        const text = utf8RoundTripKeepBom(bytes);
-        if (text !== null) {
-          const { content, changed } = normalizeText(text);
-          if (changed) {
-            const enc = new TextEncoder().encode(content);
-            out = enc.buffer.slice(
-              enc.byteOffset,
-              enc.byteOffset + enc.byteLength,
-            ) as ArrayBuffer;
-          }
-        }
-      }
+          shouldCanonicalize(normalized, deps.vault.configDir),
+      );
       await atomicWriteFile(deps.vault, normalized, out);
     },
 
