@@ -211,6 +211,13 @@ export interface ChangeDetectorDeps {
   // because it is diagnostics — the BELT that protects the data does
   // not depend on anyone listening (§3.3).
   logWalkIncomplete?: (target: string) => void;
+  // COMMIT-PASS-PERF Крок 1: the git-blob SHA of a candidate's bytes.
+  // Production wires the worker orchestra (`computeGitBlobSHA`) — the
+  // same hasher BatchWriter already uses — so the header+bytes copy and
+  // the digest of a large file leave the UI thread. Optional: absent,
+  // the main-thread `calculateGitBlobSHA` runs (unit tests). Both paths
+  // compute the byte-identical SHA (worker-vs-fallback identity tests).
+  computeSha?: (bytes: ArrayBuffer) => Promise<string>;
 }
 
 // Minimal surface ChangeDetector consumes from PushQueue. Lets
@@ -249,6 +256,7 @@ export default class ChangeDetector {
   private readonly logWalkIncomplete:
     | ((target: string) => void)
     | undefined;
+  private readonly computeSha: (bytes: ArrayBuffer) => Promise<string>;
   // The opt-in set for the CURRENT operation (DOT-FILES §5). Null until
   // beginScan() runs, and deliberately not lazily filled: "not computed
   // yet" and "lifecycle bug" have to stay distinguishable, or the
@@ -270,6 +278,7 @@ export default class ChangeDetector {
     this.queue = deps.queue;
     this.conflictBaseSha = deps.conflictBaseSha;
     this.logWalkIncomplete = deps.logWalkIncomplete;
+    this.computeSha = deps.computeSha ?? calculateGitBlobSHA;
   }
 
   // Compute the dot-space opt-in set for the operation about to run.
@@ -442,7 +451,7 @@ export default class ChangeDetector {
         if (this.queue || addConflictRef !== undefined) {
           const buf = await this.readBinaryOrSkip(file.path);
           if (buf === null) continue; // SYNC2 §6 skip-class — vanished mid-walk
-          const localSha = await calculateGitBlobSHA(buf);
+          const localSha = await this.computeSha(buf);
           const inQueueSha = this.queue
             ? await this.queue.peekLatestPathSha(file.path)
             : null;
@@ -477,7 +486,7 @@ export default class ChangeDetector {
       // Stat moved; verify it's a real content change.
       const buf = await this.readBinaryOrSkip(file.path);
       if (buf === null) continue; // SYNC2 §6 skip-class — vanished mid-walk
-      const sha = await calculateGitBlobSHA(buf);
+      const sha = await this.computeSha(buf);
 
       // The file's LAST COMMITTED state is the newest queued batch that
       // holds it (a pending local commit), falling back to the last
@@ -636,7 +645,7 @@ export default class ChangeDetector {
 
     const buf = await this.readBinaryOrSkip(path);
     if (buf === null) return null; // SYNC2 §6 skip-class — vanished mid-detect
-    const sha = await calculateGitBlobSHA(buf);
+    const sha = await this.computeSha(buf);
     if (sha === snap.baselineSha) {
       // Touched but unchanged — refresh stat so future calls
       // short-circuit (write-through persists it), then report

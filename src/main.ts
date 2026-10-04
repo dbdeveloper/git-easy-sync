@@ -1204,6 +1204,9 @@ export default class GitHubSyncPlugin extends Plugin {
       // target keeps failing is this line.
       logWalkIncomplete: (target) =>
         this.logger.warn("dot-space walk did not complete", { target }),
+      // COMMIT-PASS-PERF Крок 1: hash candidates in the worker, not on
+      // the UI thread (constructed above, before this detector).
+      computeSha: (b) => this.workerClient.computeGitBlobSHA(b),
       // THE SWITCH: the dedup reference is the manager's per-pass
       // queue-sha index over the new metafiles (deletion entries
       // answer the DELETED sentinel — §40 revert class). Lazy thunk:

@@ -1399,3 +1399,91 @@ describe("§5.3 a held plugin is invisible to sync, both ways", () => {
     expect(changes.map((c) => c.path)).toContain(other);
   });
 });
+
+// COMMIT-PASS-PERF Крок 1: every hash the detector takes goes through the
+// injected `computeSha` (production: the worker orchestra), never the
+// main-thread `calculateGitBlobSHA` directly. Three sites hash: the added
+// dedup, the modified verify, and the single-path findChangeForPath. Each
+// test proves the injected RESULT drives the decision, not merely that the
+// spy was called — a hasher that is called and then ignored would pass a
+// call-count check.
+describe("COMMIT-PASS-PERF Крок 1 — the detector hashes through the injected computeSha", () => {
+  const WATERMARK = 1_500_000_000_000;
+  const AHEAD = 2_000_000_000_000;
+  let f: ReturnType<typeof fixture>;
+
+  beforeEach(async () => {
+    f = fixture();
+    await f.hot.load();
+  });
+
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  const detectorWith = (
+    computeSha: (bytes: ArrayBuffer) => Promise<string>,
+    peek?: (path: string) => Promise<string | null>,
+  ): ChangeDetector =>
+    new ChangeDetector({
+      vault: f.vault as unknown as import("obsidian").Vault,
+      hotMeta: f.hot,
+      baselines: f.store,
+      gi: f.gi,
+      configDir: CONFIG_DIR,
+      selfPluginId: SELF_PLUGIN_ID,
+      vaultRoot: f.root,
+      syncConfigDir: () => true,
+      computeSha,
+      ...(peek ? { queue: { peekLatestPathSha: peek } } : {}),
+    });
+
+  it("modified verify: an injected sha equal to the baseline makes the file UNCHANGED", async () => {
+    writeFile(f.root, "a.md", "edited on disk");
+    setMtime(f.root, "a.md", AHEAD);
+    await f.store.set("a.md", { baselineSha: "BASELINE", mtime: 1, size: 1 });
+    await f.hot.update({ lastCommitMtime: WATERMARK });
+    const seen: string[] = [];
+    const det = detectorWith(async (bytes) => {
+      seen.push(new TextDecoder().decode(bytes));
+      return "BASELINE";
+    });
+    const out = await det.findChanges();
+    expect(seen).toEqual(["edited on disk"]);
+    expect(out.find((c) => c.path === "a.md")).toBeUndefined();
+  });
+
+  it("added dedup: an injected sha equal to the queued one suppresses the re-emit", async () => {
+    writeFile(f.root, "a.md", "queued bytes");
+    setMtime(f.root, "a.md", AHEAD);
+    await f.hot.update({ lastCommitMtime: WATERMARK });
+    const spy = vi.fn(async () => "QUEUED");
+    const det = detectorWith(spy, async () => "QUEUED");
+    const out = await det.findChanges();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(out.find((c) => c.path === "a.md")).toBeUndefined();
+  });
+
+  it("findChangeForPath: an injected sha equal to the baseline returns null", async () => {
+    writeFile(f.root, "Notes/x.md", "v2-different");
+    await f.store.set("Notes/x.md", { baselineSha: "BASELINE", mtime: 1, size: 2 });
+    const spy = vi.fn(async () => "BASELINE");
+    const det = detectorWith(spy);
+    expect(await det.findChangeForPath("Notes/x.md")).toBeNull();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("without computeSha the default is the main-thread calculateGitBlobSHA (unit-test path unchanged)", async () => {
+    writeFile(f.root, "Notes/x.md", "v1");
+    await f.store.set("Notes/x.md", {
+      baselineSha: await calculateGitBlobSHA(
+        new TextEncoder().encode("v1").buffer as ArrayBuffer,
+      ),
+      mtime: 1,
+      size: 2,
+    });
+    // f.detector carries no computeSha; identical bytes must still read
+    // as unchanged, i.e. the fallback hasher computes the real git sha.
+    expect(await f.detector.findChangeForPath("Notes/x.md")).toBeNull();
+  });
+});
