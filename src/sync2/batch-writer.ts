@@ -46,7 +46,7 @@
 import { normalizePath, type Vault } from "obsidian";
 import WorkerClient from "../worker/worker-client";
 import SyncStore from "./sync-store";
-import { normalizeText, shouldCanonicalize } from "./text-normalize";
+import { canonicalizeBytes, shouldCanonicalize } from "./text-normalize";
 import { newBatchId, parseTimestampId } from "./timestamp-id";
 import { FileChange } from "./types";
 import {
@@ -313,29 +313,29 @@ export default class BatchWriter {
   // on) normalize to LF/no-BOM/trailing-NL; `writeBack` additionally
   // enforces "locally everything is canonical" on the live file —
   // only on real change, to spare mtime. size MUST be the byte length
-  // of these bytes (TextEncoder), not the string length — the crash
-  // repair compares vault stat.size against it (§12.9).
+  // of these bytes, not the string length — the crash repair compares
+  // vault stat.size against it (§12.9).
+  //
+  // Always `readBinary` + canonicalizeBytes (COMMIT-PASS-PERF Крок 2):
+  // the SAME transform ChangeDetector hashes, so the sha it proved is
+  // the sha recorded here. This replaced a text-mode `adapter.read`,
+  // which pushed invalid UTF-8 under a text extension through a lossy
+  // decode; it now passes through untouched, as on the pull side.
   private async readCanonicalBytes(
     path: string,
     writeBack: boolean,
   ): Promise<ArrayBuffer | null> {
     if (!(await this.vault.adapter.exists(path))) return null;
-    if (
+    const raw = await this.vault.adapter.readBinary(path);
+    const canon = canonicalizeBytes(
+      raw,
       shouldCanonicalize(path, this.vault.configDir) &&
-      this.autoCanonicalize()
-    ) {
-      const original = await this.vault.adapter.read(path);
-      const { content, changed } = normalizeText(original);
-      if (changed && writeBack) {
-        await this.vault.adapter.write(path, content);
-      }
-      const encoded = new TextEncoder().encode(content);
-      return encoded.buffer.slice(
-        encoded.byteOffset,
-        encoded.byteOffset + encoded.byteLength,
-      ) as ArrayBuffer;
+        this.autoCanonicalize(),
+    );
+    if (canon.changed && writeBack) {
+      await this.vault.adapter.write(path, canon.content as string);
     }
-    return this.vault.adapter.readBinary(path);
+    return canon.bytes;
   }
 
   // Pass 2 (§12.4 "…і ЛИШЕ ПОТІМ blob-и"): re-read each manifest

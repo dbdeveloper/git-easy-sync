@@ -684,19 +684,33 @@ describe("BatchWriter (Phase 2 group B)", () => {
     expect(fs.readFileSync(path.join(dir, "raw.md"), "utf8")).toBe("a\r\nb");
   });
 
+  it("text canonicalization: invalid UTF-8 under a text extension passes through BYTE-EXACT (no lossy decode)", async () => {
+    // cp1251 "Привіт\r\n" — not valid UTF-8. The old text-mode read
+    // decoded it with U+FFFD substitutions and committed the damage.
+    const cp1251 = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xb3, 0xf2, 0x0d, 0x0a]);
+    fs.writeFileSync(path.join(dir, "legacy.csv"), cp1251);
+    const id = await makeWriter().writeBatch([modified("legacy.csv")]);
+    const ab = cp1251.buffer.slice(
+      cp1251.byteOffset,
+      cp1251.byteOffset + cp1251.byteLength,
+    ) as ArrayBuffer;
+    expect(readMeta(id!).entries[0].sha).toBe(await calculateGitBlobSHA(ab));
+    expect(fs.readFileSync(path.join(dir, "legacy.csv"))).toEqual(cp1251);
+  });
+
   it("file mutated between hash pass and blob pass → entry dropped LOUDLY, store never poisoned", async () => {
     putVaultFile("hot.md", "pass1\n");
     let reads = 0;
     const mutatingVault = wrapVault({
-      read: async (p: unknown) => {
+      readBinary: async (p: unknown) => {
         if (p === "hot.md") {
           reads += 1;
           // Simulate a live edit landing between the two passes.
-          if (reads === 2) return "pass2 — mutated\n";
+          if (reads === 2) return enc("pass2 — mutated\n");
         }
-        return (vault.adapter as { read: (q: string) => Promise<string> }).read(
-          p as string,
-        );
+        return (
+          vault.adapter as { readBinary: (q: string) => Promise<ArrayBuffer> }
+        ).readBinary(p as string);
       },
     });
 

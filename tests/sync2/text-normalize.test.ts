@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { normalizeText, shouldCanonicalize } from "../../src/sync2/text-normalize";
+import {
+  canonicalizeBytes,
+  normalizeText,
+  shouldCanonicalize,
+} from "../../src/sync2/text-normalize";
 
 // The contract:
 //   1. Strip a leading UTF-8 BOM (decoded to the U+FEFF code point).
@@ -252,5 +256,49 @@ describe("shouldCanonicalize — only USER-edited vault text (excludes <configDi
     // With a custom config dir, files under it are excluded and `.obsidian/` is NOT.
     expect(shouldCanonicalize("my-config/app.json", "my-config")).toBe(false);
     expect(shouldCanonicalize(".obsidian/app.json", "my-config")).toBe(true);
+  });
+});
+
+describe("canonicalizeBytes — the commit side's one canonical form (COMMIT-PASS-PERF Крок 2)", () => {
+  const enc = (s: string): ArrayBuffer =>
+    new TextEncoder().encode(s).buffer as ArrayBuffer;
+  const dec = (b: ArrayBuffer): string => new TextDecoder().decode(b);
+
+  it("not eligible → the input buffer itself, unchanged", () => {
+    const input = enc("a\r\nb");
+    const r = canonicalizeBytes(input, false);
+    expect(r.bytes).toBe(input);
+    expect(r.changed).toBe(false);
+    expect(r.content).toBeNull();
+  });
+
+  it("eligible + already canonical → the input buffer itself, unchanged", () => {
+    const input = enc("hello\n");
+    const r = canonicalizeBytes(input, true);
+    expect(r.bytes).toBe(input);
+    expect(r.changed).toBe(false);
+  });
+
+  it("eligible + CRLF, multibyte, no trailing NL → canonical bytes and text", () => {
+    const r = canonicalizeBytes(enc("як\r\nтак"), true);
+    expect(r.changed).toBe(true);
+    expect(r.content).toBe("як\nтак\n");
+    expect(dec(r.bytes)).toBe("як\nтак\n");
+  });
+
+  it("eligible + leading BOM → stripped (the decode must SEE it)", () => {
+    const withBom = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode("x\n")]);
+    const r = canonicalizeBytes(withBom.buffer as ArrayBuffer, true);
+    expect(r.changed).toBe(true);
+    expect(dec(r.bytes)).toBe("x\n");
+    expect(r.bytes.byteLength).toBe(2);
+  });
+
+  it("eligible + invalid UTF-8 → passes through UNTOUCHED (no lossy decode)", () => {
+    // cp1251 "Привіт\r\n" — not valid UTF-8.
+    const cp1251 = new Uint8Array([0xcf, 0xf0, 0xe8, 0xe2, 0xb3, 0xf2, 0x0d, 0x0a]);
+    const r = canonicalizeBytes(cp1251.buffer as ArrayBuffer, true);
+    expect(r.changed).toBe(false);
+    expect(new Uint8Array(r.bytes)).toEqual(cp1251);
   });
 });

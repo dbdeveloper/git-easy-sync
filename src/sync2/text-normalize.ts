@@ -83,3 +83,48 @@ export function normalizeText(input: string): NormalizeResult {
   }
   return { content: s, changed: s !== input };
 }
+
+export interface CanonicalBytes {
+  // The bytes a commit records: the canonical encoding when `changed`,
+  // otherwise the input buffer itself (no copy).
+  bytes: ArrayBuffer;
+  // True iff `bytes` differ from the input — i.e. the live file is not
+  // canonical yet and a write-back is due.
+  changed: boolean;
+  // The canonical text when `changed` (what the write-back writes),
+  // else null.
+  content: string | null;
+}
+
+// COMMIT-PASS-PERF Крок 2 — the ONE canonical form of a file's bytes on
+// the COMMIT side, shared by ChangeDetector (which hashes it) and
+// BatchWriter (which records it). They must agree byte-for-byte, or the
+// sha the detector proved and stored would not be the sha the batch
+// names. `eligible` is the caller's gate: `shouldCanonicalize(path,
+// configDir) && autoCanonicalize()`.
+//
+// Same round-trip PROOF as the pull-side write (vault-file-reader.ts,
+// the §II.15 rule): bytes that are not valid UTF-8 under a text
+// extension (a cp1251 .csv) pass through UNTOUCHED, never through a
+// lossy decode. BOM-preserving decode, so normalizeText can see and
+// strip the BOM.
+export function canonicalizeBytes(
+  bytes: ArrayBuffer,
+  eligible: boolean,
+): CanonicalBytes {
+  const unchanged = { bytes, changed: false, content: null };
+  if (!eligible) return unchanged;
+  const text = utf8RoundTripKeepBom(bytes);
+  if (text === null) return unchanged;
+  const { content, changed } = normalizeText(text);
+  if (!changed) return unchanged;
+  const enc = new TextEncoder().encode(content);
+  return {
+    bytes: enc.buffer.slice(
+      enc.byteOffset,
+      enc.byteOffset + enc.byteLength,
+    ) as ArrayBuffer,
+    changed: true,
+    content,
+  };
+}
