@@ -2732,7 +2732,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
 // §12.5 rearangeSyncStore — both drain boundaries call this. A sweep
 // failure never aborts a drain (it is hygiene, not correctness): warn
 // and continue.
-async function sweepSyncStore(deps: DrainDeps): Promise<void> {
+// Exported ONLY for the sweep-race tests (tests/sync2/sweep-reuse-races):
+// the order of the sources below is a correctness property, and it can
+// only be pinned against the real list.
+export async function sweepSyncStore(deps: DrainDeps): Promise<void> {
   if (!deps.queueReferencedShas) return;
   try {
     const r = await deps.syncStore.sweep([
