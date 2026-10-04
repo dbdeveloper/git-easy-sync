@@ -1551,13 +1551,7 @@ export default class GitHubSyncPlugin extends Plugin {
           this.setCommitSection({ state: "none" });
         }
       },
-      onLocalCommitted: (count: number) => {
-        this.setCommitSection({
-          state: "settled",
-          text: commitDoneNoticeText(count),
-          until: this.settleAt(),
-        });
-      },
+      onLocalCommitted: (count: number) => this.reportCommitDone(count),
       onNoLocalChanges: () => {
         this.setCommitSection({
           state: "settled",
@@ -2836,6 +2830,28 @@ export default class GitHubSyncPlugin extends Plugin {
   // test. It was inline, and a probe that deleted the gate left all 34
   // notice/manager tests green — the one condition the owner actually
   // specified was the one nothing checked.
+  // The commit's result line (COMMIT-PASS-PERF step 4, owner
+  // 2026-10-04). A STANDALONE commit shows "Committed N files" for a
+  // moment. Inside a sync it shows NOTHING and closes whatever line the
+  // pass had opened: the sync's own summary ("Sync done — sent …")
+  // carries the number, and the extra line only blinked before the
+  // drain's. "Nothing to commit" is not routed here and stays as it is.
+  //
+  // ⚠️ Extracted from the dep handler for the same reason as
+  // reportCommitProgress below: inline, the rule was unreachable by a
+  // test.
+  private reportCommitDone(count: number): void {
+    if (this.inFullSync) {
+      this.setCommitSection({ state: "none" });
+      return;
+    }
+    this.setCommitSection({
+      state: "settled",
+      text: commitDoneNoticeText(count),
+      until: this.settleAt(),
+    });
+  }
+
   private reportCommitProgress(done: number, total: number): void {
     if (!this.syncProgressActive) return;
     // The settled "Committed N files" follows immediately, so the last

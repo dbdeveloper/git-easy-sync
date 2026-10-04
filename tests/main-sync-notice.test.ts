@@ -48,6 +48,7 @@ interface NoticeHandle {
   clearSyncNotice(): void;
   repaintSyncProgressNotice(): void;
   reportCommitProgress(done: number, total: number): void;
+  reportCommitDone(count: number): void;
   setCommitSection(s: NoticeState["commit"]): void;
   setDrainSection(s: NoticeState["drain"]): void;
   settleDrainSection(text: string): void;
@@ -408,5 +409,34 @@ describe("sync notice lifecycle (§II.16)", () => {
     const box = p.syncNotice;
     p.setDrainSection({ state: "live", text: "Syncing with GitHub" });
     expect(p.syncNotice).toBe(box);
+  });
+
+  // COMMIT-PASS-PERF step 4 (owner, 2026-10-04): inside a sync the
+  // commit's "Committed N files" is NOT shown — the sync's own summary
+  // ("Sync done — sent …") carries the number, and the extra line only
+  // blinked before the drain's. A standalone [Commit] keeps it.
+  it("🔑 step 4: a commit INSIDE a sync shows no \"Committed N files\" line", () => {
+    const p = makePlugin();
+    p.inFullSync = true;
+    p.reportCommitDone(5);
+    const all = recordedNotices.map((n) => n.message).join(" | ");
+    expect(all).not.toContain("Committed");
+    expect(p.noticeState.commit.state).toBe("none");
+  });
+
+  it("step 4: …and it takes down a \"Committing…\" line the pass had opened", () => {
+    const p = makePlugin();
+    p.inFullSync = true;
+    p.setCommitSection({ state: "live", text: "Committing…" });
+    p.reportCommitDone(5);
+    expect(p.noticeState.commit.state).toBe("none");
+  });
+
+  it("step 4: a STANDALONE commit still shows \"Committed N files\" for a moment", () => {
+    const p = makePlugin();
+    p.inFullSync = false;
+    p.reportCommitDone(5);
+    expect(lastMessage()).toContain("Committed 5 files");
+    expect(p.noticeState.commit.state).toBe("settled");
   });
 });
