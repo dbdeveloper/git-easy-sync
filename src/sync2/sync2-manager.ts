@@ -576,7 +576,16 @@ export class Sync2Manager {
         this.restartCommit = false;
         this.bellTarget = undefined;
         this.currentCommitTarget = t;
-        total += await this.doOneCommitPass(t);
+        try {
+          total += await this.doOneCommitPass(t);
+        } finally {
+          // COMMIT-PASS-PERF Крок 2: the detector pinned the blobs it
+          // stored while hashing; every metafile that references them is
+          // on disk now (or the pass failed and they are orphans the
+          // sweep should reap). Per pass, not per run: a bell re-loop
+          // re-detects and re-pins what it still needs.
+          this.deps.syncStore.releaseInFlight();
+        }
         if (this.restartCommit && this.bellTarget !== undefined) {
           t = this.bellTarget; // the escalated scope for the re-loop
         }

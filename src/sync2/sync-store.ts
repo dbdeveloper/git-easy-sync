@@ -30,6 +30,14 @@ export default class SyncStore {
   private readonly vault: Vault;
   private readonly selfPluginId: string;
   private readonly logger: SyncStoreLogger | undefined;
+  // COMMIT-PASS-PERF Крок 2: blobs the commit pass stored BEFORE any
+  // batch metafile references them (ChangeDetector stores a changed
+  // file's bytes the moment it hashes them). §12.4's "metadata before
+  // blobs" cannot hold for those, so this set stands in for the missing
+  // reference until the pass's metafiles are written. In-memory on
+  // purpose: a crash loses the set AND the pass that needed it, and the
+  // orphan blobs are then exactly what the sweep should reap.
+  private readonly inFlight = new Set<string>();
 
   constructor(deps: {
     vault: Vault;
@@ -135,6 +143,23 @@ export default class SyncStore {
     await this.vault.adapter.writeBinary(this.blobPath(sha), bytes);
   }
 
+  // Store a blob that NO metafile references yet, pinned against the
+  // sweep until releaseInFlight(). The pin goes in BEFORE the write:
+  // the sweep lists the store first and reads this set after, so a blob
+  // that made it into a listing was already pinned by then.
+  async saveInFlight(sha: string, bytes: ArrayBuffer): Promise<void> {
+    this.inFlight.add(sha);
+    await this.saveBlobToSyncStore(sha, bytes);
+  }
+
+  // Called by the commit pass once every metafile it writes is on disk
+  // (or the pass failed). Clearing the WHOLE set is right because the
+  // commit pass is a singleton (SYNC2-FIX §6 R3a) — no other pass can
+  // hold pins at the same time.
+  releaseInFlight(): void {
+    this.inFlight.clear();
+  }
+
   // Reference sweep (§12.5): drop every blob no source references.
   //
   // The FULL formula has four sources (queue metadata, drain-journal
@@ -149,7 +174,9 @@ export default class SyncStore {
   // Order-of-write contract that makes this safe: batch metadata is
   // written BEFORE its blobs (§12.4), so a reference always exists by
   // the time its blob appears — the snapshot-then-delete below can
-  // never reap a just-written blob.
+  // never reap a just-written blob. The one exception — blobs the
+  // commit pass stores before their metafile — is covered by the
+  // in-flight pins (saveInFlight).
   async sweep(
     referencedSources: Array<() => Promise<Set<string>>>,
   ): Promise<{ removed: number; kept: number }> {
@@ -165,7 +192,14 @@ export default class SyncStore {
       const slash = f.lastIndexOf("/");
       return slash >= 0 ? f.slice(slash + 1) : f;
     });
-    const referenced = new Set<string>();
+    // In-flight pins are read FIRST, before any injected source. The
+    // commit pass releases its pins only AFTER its metafile is written,
+    // so a sha released after this line is on disk before the queue
+    // source below reads the metafiles; one still pinned is caught
+    // here. Reading the pins LAST would open a window: queue read
+    // (metafile not yet there) → metafile written → pins released →
+    // pins read (empty) → a live batch's blob reaped.
+    const referenced = new Set<string>(this.inFlight);
     for (const source of referencedSources) {
       for (const sha of await source()) referenced.add(sha);
     }

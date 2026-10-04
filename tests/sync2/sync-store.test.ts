@@ -175,6 +175,41 @@ describe("SyncStore (§VIII F)", () => {
     expect(await store.sweep([])).toEqual({ removed: 0, kept: 0 });
   });
 
+  // COMMIT-PASS-PERF Крок 2: the commit pass stores a changed file's
+  // blob BEFORE any metafile references it; the in-flight pin stands in
+  // for that reference until the pass releases it.
+  it("in-flight: a pinned blob survives a sweep no source references it in; released, the next sweep reaps it", async () => {
+    const sha = await shaOf("being committed");
+    await store.saveInFlight(sha, enc("being committed"));
+    await store.sweep([async () => new Set()]);
+    expect(await store.existInSyncStore(sha)).toBe(true);
+
+    store.releaseInFlight();
+    await store.sweep([async () => new Set()]);
+    expect(await store.existInSyncStore(sha)).toBe(false);
+  });
+
+  it("🔑 in-flight: release landing BETWEEN source reads cannot reap a live blob (pins are read before any source)", async () => {
+    // The commit pass's order: pin → blob → metafile → release. Here the
+    // metafile lands and the pin is released WHILE the sweep is reading
+    // its sources — after the queue source answered (no metafile yet),
+    // before a later source. Pins read last would see an empty set
+    // and reap the blob of a batch that now exists.
+    const sha = await shaOf("racing");
+    await store.saveInFlight(sha, enc("racing"));
+    let metafileWritten = false;
+    const queueSource = async (): Promise<Set<string>> =>
+      metafileWritten ? new Set([sha]) : new Set();
+    const laterSource = async (): Promise<Set<string>> => {
+      // The commit pass completes mid-sweep.
+      metafileWritten = true;
+      store.releaseInFlight();
+      return new Set();
+    };
+    await store.sweep([queueSource, laterSource]);
+    expect(await store.existInSyncStore(sha)).toBe(true);
+  });
+
   it("§12.2 dedup shape: same content saved under one name once — a second save is harmless overwrite of identical bytes", async () => {
     const sha = await shaOf("same");
     await store.saveBlobToSyncStore(sha, enc("same"));

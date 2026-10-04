@@ -701,6 +701,42 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(notices.noChanges).toBe(1);
   });
 
+  // COMMIT-PASS-PERF Крок 2: the detector pins blobs it stores before
+  // any metafile names them; the pass must release those pins when it
+  // ends — on success AND on a throw — or they outlive their purpose
+  // and the sweep can never reap a blob the pass then abandoned.
+  it("in-flight pins are released when the commit pass ends — the next sweep can reap an abandoned blob", async () => {
+    const sha = await calculateGitBlobSHA(
+      new TextEncoder().encode("abandoned").buffer as ArrayBuffer,
+    );
+    deps.detector.findChanges = async () => {
+      await deps.syncStore.saveInFlight(
+        sha,
+        new TextEncoder().encode("abandoned").buffer as ArrayBuffer,
+      );
+      return []; // e.g. the zero-byte guard dropped the change
+    };
+    await manager.commitOnly();
+    await deps.syncStore.sweep([async () => new Set()]);
+    expect(await deps.syncStore.existInSyncStore(sha)).toBe(false);
+  });
+
+  it("in-flight pins are released by a THROWING pass too", async () => {
+    const sha = await calculateGitBlobSHA(
+      new TextEncoder().encode("half-done").buffer as ArrayBuffer,
+    );
+    deps.detector.findChanges = async () => {
+      await deps.syncStore.saveInFlight(
+        sha,
+        new TextEncoder().encode("half-done").buffer as ArrayBuffer,
+      );
+      throw new Error("scan boom");
+    };
+    await expect(manager.commitOnly()).rejects.toThrow("scan boom");
+    await deps.syncStore.sweep([async () => new Set()]);
+    expect(await deps.syncStore.existInSyncStore(sha)).toBe(false);
+  });
+
   it("R3a bell escalation: a FULL-scan trigger during a single-file pass re-loops as a FULL scan, never the runner's file", async () => {
     put("a.md", "x");
     put("b.md", "y");
