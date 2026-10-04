@@ -213,13 +213,15 @@ export interface ChangeDetectorDeps {
   // because it is diagnostics — the BELT that protects the data does
   // not depend on anyone listening (§3.3).
   logWalkIncomplete?: (target: string) => void;
-  // COMMIT-PASS-PERF Крок 1: the git-blob SHA of a candidate's bytes.
-  // Production wires the worker orchestra (`computeGitBlobSHA`) — the
-  // same hasher BatchWriter already uses — so the header+bytes copy and
-  // the digest of a large file leave the UI thread. Optional: absent,
-  // the main-thread `calculateGitBlobSHA` runs (unit tests). Both paths
-  // compute the byte-identical SHA (worker-vs-fallback identity tests).
-  computeSha?: (bytes: ArrayBuffer) => Promise<string>;
+  // COMMIT-PASS-PERF Крок 1: the git-blob SHA of a candidate's bytes,
+  // with the bytes handed back. Production wires the worker orchestra
+  // (`WorkerClient.hashGitBlob`), which MOVES the buffer to the worker
+  // and back — the digest leaves the UI thread without a second copy of
+  // the file. ⚠️ The argument may come back detached: only the RETURNED
+  // bytes are usable afterwards. Optional: absent, the main-thread
+  // `calculateGitBlobSHA` runs and the same buffer is returned (unit
+  // tests). Both compute the byte-identical SHA.
+  hashBlob?: (bytes: ArrayBuffer) => Promise<{ sha: string; bytes: ArrayBuffer }>;
   // COMMIT-PASS-PERF Крок 2 — the commit pass's sync_store. When set, a
   // change the detector PROVED (hash differs from its reference) has its
   // bytes stored right there, pinned against the sweep until the pass
@@ -286,7 +288,9 @@ export default class ChangeDetector {
   private readonly logWalkIncomplete:
     | ((target: string) => void)
     | undefined;
-  private readonly computeSha: (bytes: ArrayBuffer) => Promise<string>;
+  private readonly hashBlob: (
+    bytes: ArrayBuffer,
+  ) => Promise<{ sha: string; bytes: ArrayBuffer }>;
   private readonly syncStore: ChangeDetectorDeps["syncStore"];
   private readonly autoCanonicalize: () => boolean;
   // The opt-in set for the CURRENT operation (DOT-FILES §5). Null until
@@ -310,7 +314,9 @@ export default class ChangeDetector {
     this.queue = deps.queue;
     this.conflictBaseSha = deps.conflictBaseSha;
     this.logWalkIncomplete = deps.logWalkIncomplete;
-    this.computeSha = deps.computeSha ?? calculateGitBlobSHA;
+    this.hashBlob =
+      deps.hashBlob ??
+      (async (bytes) => ({ sha: await calculateGitBlobSHA(bytes), bytes }));
     this.syncStore = deps.syncStore;
     this.autoCanonicalize = deps.autoCanonicalize ?? (() => false);
   }
@@ -804,11 +810,11 @@ export default class ChangeDetector {
       raw,
       shouldCanonicalize(path, this.configDir) && this.autoCanonicalize(),
     );
-    return {
-      sha: await this.computeSha(canon.bytes),
-      bytes: canon.bytes,
-      needsWriteBack: canon.changed,
-    };
+    // Only the RETURNED buffer is live: hashBlob may have moved
+    // canon.bytes (and `raw`, the same object when nothing was
+    // canonicalized) to the worker.
+    const { sha, bytes } = await this.hashBlob(canon.bytes);
+    return { sha, bytes, needsWriteBack: canon.changed };
   }
 
   // COMMIT-PASS-PERF Крок 2 — store the bytes of a PROVEN change while

@@ -252,9 +252,18 @@ export class Vault {
         writeFileSync(fullPath, data);
       },
 
+      // A standalone ArrayBuffer, exactly what Obsidian returns
+      // (verified in obsidian-1.13.4.asar: desktop slices the Buffer's
+      // backing store — `e.buffer.slice(e.byteOffset, e.byteOffset +
+      // e.byteLength)`; mobile returns `Uint8Array(...).buffer` or
+      // `fetch(...).arrayBuffer()`). This used to return the Node Buffer
+      // itself — a Uint8Array VIEW, which cannot be TRANSFERRED to a
+      // worker and hid how the real result behaves (COMMIT-PASS-PERF,
+      // 2026-10-04).
       readBinary: async (filePath: string) => {
         const fullPath = path.join(this.rootPath, filePath);
-        return readFileSync(fullPath);
+        const b = readFileSync(fullPath);
+        return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
       },
 
       writeBinary: async (filePath: string, data: ArrayBuffer) => {

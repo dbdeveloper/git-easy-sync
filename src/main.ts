@@ -1205,8 +1205,9 @@ export default class GitHubSyncPlugin extends Plugin {
       logWalkIncomplete: (target) =>
         this.logger.warn("dot-space walk did not complete", { target }),
       // COMMIT-PASS-PERF Крок 1: hash candidates in the worker, not on
-      // the UI thread (constructed above, before this detector).
-      computeSha: (b) => this.workerClient.computeGitBlobSHA(b),
+      // the UI thread (constructed above, before this detector) — and
+      // MOVE the bytes there and back rather than clone them.
+      hashBlob: (b) => this.workerClient.hashGitBlob(b),
       // COMMIT-PASS-PERF Крок 2: store a proven change's blob while
       // hashing it. The toggle getter MUST match BatchWriter's — the
       // writer trusts the sha the detector hands it.

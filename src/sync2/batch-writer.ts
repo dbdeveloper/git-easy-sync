@@ -333,9 +333,12 @@ export default class BatchWriter {
   private async snapshotEntry(path: string): Promise<BatchEntry | null> {
     const stat = await this.vault.adapter.stat(path);
     if (!stat) return null;
-    const bytes = await this.readCanonicalBytes(path, true);
-    if (bytes === null) return null;
-    const sha = await this.workerClient.computeGitBlobSHA(bytes);
+    const read = await this.readCanonicalBytes(path, true);
+    if (read === null) return null;
+    // hashGitBlob may MOVE `read` to the worker: its length must come
+    // from the returned buffer (a detached one reads 0 — a zero-byte
+    // entry the size checks downstream would trust).
+    const { sha, bytes } = await this.workerClient.hashGitBlob(read);
     return {
       path,
       sha,
@@ -398,12 +401,12 @@ export default class BatchWriter {
         PIN_OWNER_COMMIT,
         entry.sha,
         async () => {
-          const bytes = await this.readCanonicalBytes(entry.path, false);
-          actual =
-            bytes === null
-              ? null
-              : await this.workerClient.computeGitBlobSHA(bytes);
-          return actual === entry.sha ? bytes : null;
+          const read = await this.readCanonicalBytes(entry.path, false);
+          if (read === null) return null;
+          // Store the RETURNED buffer — `read` may be detached now.
+          const hashed = await this.workerClient.hashGitBlob(read);
+          actual = hashed.sha;
+          return actual === entry.sha ? hashed.bytes : null;
         },
       );
       if (!ok) {

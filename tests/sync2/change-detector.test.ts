@@ -1403,13 +1403,13 @@ describe("§5.3 a held plugin is invisible to sync, both ways", () => {
 });
 
 // COMMIT-PASS-PERF Крок 1: every hash the detector takes goes through the
-// injected `computeSha` (production: the worker orchestra), never the
+// injected `hashBlob` (production: the worker orchestra), never the
 // main-thread `calculateGitBlobSHA` directly. Three sites hash: the added
 // dedup, the modified verify, and the single-path findChangeForPath. Each
 // test proves the injected RESULT drives the decision, not merely that the
 // spy was called — a hasher that is called and then ignored would pass a
 // call-count check.
-describe("COMMIT-PASS-PERF Крок 1 — the detector hashes through the injected computeSha", () => {
+describe("COMMIT-PASS-PERF Крок 1 — the detector hashes through the injected hashBlob", () => {
   const WATERMARK = 1_500_000_000_000;
   const AHEAD = 2_000_000_000_000;
   let f: ReturnType<typeof fixture>;
@@ -1424,7 +1424,7 @@ describe("COMMIT-PASS-PERF Крок 1 — the detector hashes through the inject
   });
 
   const detectorWith = (
-    computeSha: (bytes: ArrayBuffer) => Promise<string>,
+    sha: (bytes: ArrayBuffer) => Promise<string>,
     peek?: (path: string) => Promise<string | null>,
   ): ChangeDetector =>
     new ChangeDetector({
@@ -1436,7 +1436,7 @@ describe("COMMIT-PASS-PERF Крок 1 — the detector hashes through the inject
       selfPluginId: SELF_PLUGIN_ID,
       vaultRoot: f.root,
       syncConfigDir: () => true,
-      computeSha,
+      hashBlob: async (bytes) => ({ sha: await sha(bytes), bytes }),
       ...(peek ? { queue: { peekLatestPathSha: peek } } : {}),
     });
 
@@ -1475,7 +1475,7 @@ describe("COMMIT-PASS-PERF Крок 1 — the detector hashes through the inject
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it("without computeSha the default is the main-thread calculateGitBlobSHA (unit-test path unchanged)", async () => {
+  it("without hashBlob the default is the main-thread calculateGitBlobSHA (unit-test path unchanged)", async () => {
     writeFile(f.root, "Notes/x.md", "v1");
     await f.store.set("Notes/x.md", {
       baselineSha: await calculateGitBlobSHA(
@@ -1484,7 +1484,7 @@ describe("COMMIT-PASS-PERF Крок 1 — the detector hashes through the inject
       mtime: 1,
       size: 2,
     });
-    // f.detector carries no computeSha; identical bytes must still read
+    // f.detector carries no hashBlob; identical bytes must still read
     // as unchanged, i.e. the fallback hasher computes the real git sha.
     expect(await f.detector.findChangeForPath("Notes/x.md")).toBeNull();
   });
