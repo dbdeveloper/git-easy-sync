@@ -32,12 +32,14 @@
 //   present → back off (caller appends a new batch instead), absent →
 //   merge and release. Commit never blocks and never writes to a dir
 //   the drain is processing.
-// ⚠️ Residual TOCTOU (documented, accepted): between mkdir and the
-// marker write there is one await-gap where a concurrently running
-// getBatch() on an otherwise-empty queue could discard the embryonic
-// dir as an incomplete crash leftover. The §12.6 equivalence bounds
-// the damage — the vault still holds the content and the next
-// detection re-emits it (loud logs on both sides).
+// A NEW dir is born in QUEUE_STAGING_DIRNAME with its
+// `.attempted-commit` already inside and enters the queue by ONE
+// rename (owner 2026-10-04). This closed a TOCTOU once accepted as
+// unreachable: with mkdir-then-marker IN the queue, a drain's
+// getBatch() landing in the one-await gap on an otherwise empty queue
+// took the embryo for a crashed commit's leftover and discarded it —
+// and it IS reachable, because commit and drain do not exclude each
+// other and the drain calls getBatch() after every batch.
 //
 // Two defects of the old queue are impossible here by construction,
 // with tests pinning them:
@@ -62,6 +64,7 @@ import {
   BatchMetafile,
   parseBatchMetafile,
   QUEUE_DIRNAME,
+  QUEUE_STAGING_DIRNAME,
 } from "./batch-metafile";
 
 // Owner decision 2026-08-30: `[commit]` slices changes into batches of
@@ -125,21 +128,32 @@ export default class BatchWriter {
     this.queueRoot = normalizePath(
       `${deps.vault.configDir}/plugins/${deps.selfPluginId}/${QUEUE_DIRNAME}`,
     );
+    this.stagingRoot = normalizePath(
+      `${deps.vault.configDir}/plugins/${deps.selfPluginId}/${QUEUE_STAGING_DIRNAME}`,
+    );
   }
 
   private readonly queueRoot: string;
+  private readonly stagingRoot: string;
 
   // Append a NEW batch for `changes`. Returns the batch id, or null
   // when `changes` is empty (nothing to write — no empty dirs).
   async writeBatch(changes: FileChange[]): Promise<string | null> {
     if (changes.length === 0) return null;
     await this.ensureDir(this.queueRoot);
+    await this.ensureDir(this.stagingRoot);
     const id = await this.allocateUniqueId();
     const dir = `${this.queueRoot}/${id}`;
-    await this.vault.adapter.mkdir(dir);
-    // Claim BEFORE any content lands (R3b step 5) — from here on the
-    // claimer waits instead of reading a half-written dir.
-    await this.vault.adapter.write(`${dir}/${ATTEMPTED_COMMIT_MARKER}`, "");
+    // Claim BEFORE any content lands (R3b step 5) — and before the dir
+    // is even visible to the claimer: born in staging WITH its marker,
+    // it enters the queue by one rename, so getBatch() can never meet
+    // it unclaimed. The id is unique in the queue (allocateUniqueId),
+    // so the rename never meets an occupied target — which matters on
+    // mobile, where rename does not overwrite.
+    const staged = `${this.stagingRoot}/${id}`;
+    await this.vault.adapter.mkdir(staged);
+    await this.vault.adapter.write(`${staged}/${ATTEMPTED_COMMIT_MARKER}`, "");
+    await this.vault.adapter.rename(staged, dir);
 
     const entries = await this.buildEntries(changes);
     const meta: BatchMetafile = {

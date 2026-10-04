@@ -68,6 +68,7 @@ Use it, and note which runs you did.
 ## 3. Mobile-specific (📱 — Capacitor is not unit-tested)
 
 - [ ] 📱 **Capacitor rename:** conflict resolution and atomic writes never fail with *"Destination file already exists"* (iOS/Android `rename` does not overwrite; the code must remove-then-rename).
+- [ ] 📱 **Capacitor rename of a DIRECTORY (new 2026-10-04):** every commit now creates its batch in `.runtime/push-queue-staging/<id>/` and moves it into `.runtime/push-queue/` with ONE `adapter.rename` of the folder — the first folder rename anywhere in the plugin. Commit a few times on the phone: each commit must land a batch under `push-queue/`, `push-queue-staging/` must be empty (or absent) afterwards, and the log must show no rename error. Obsidian's API documents `rename` for "a file or folder", but it was never exercised on Capacitor for a folder.
 - [ ] 📱 **Binary files** (PNG, PDF) sync without corruption (binary read/write path, not the text path).
 - [ ] 📱 **Token with trailing whitespace** (pasted from the keyboard suggestion bar) still works — input is trimmed and existing values self-heal on restart.
 - [ ] 📱 **Low-memory kill:** while editing or syncing, let the OS kill Obsidian → on relaunch the vault is consistent and the recovery sweep has run.
@@ -256,6 +257,7 @@ Use it, and note which runs you did.
 ## 8. Crash / recovery / edge cases (🖥️📱)
 
 - [ ] A crash between atomic-write steps is completed forward by the recovery sweep on the next launch.
+- [ ] A commit killed between creating its staged batch folder and moving it into the queue leaves `.runtime/push-queue-staging/<id>/` (holding only `.attempted-commit`); the next plugin start removes it with a `staged batch dir(s) left by a crashed commit — removed` warning in the log, and the changes are picked up by the next commit.
 - [ ] **Zero-byte restore guard:** a file that had content but accidentally became 0 bytes is restored to its last good version, and the empty copy never reaches the server.
 - [ ] Out-of-band drift (another tool changed the repo) reconciles correctly.
 - [ ] Disabling then re-enabling the plugin mid-sync causes no double-run or corruption.

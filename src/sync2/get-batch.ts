@@ -37,6 +37,7 @@ import {
   BatchMetafile,
   parseBatchMetafile,
   QUEUE_DIRNAME,
+  QUEUE_STAGING_DIRNAME,
 } from "./batch-metafile";
 
 export interface GetBatchLogger {
@@ -182,6 +183,25 @@ export default class BatchClaimer {
   // yet. Repair (or discard) each such dir so getBatch's in-run wait
   // never faces a marker that will never clear.
   async recoverStaleCommitClaims(): Promise<void> {
+    // Staged batch dirs (QUEUE_STAGING_DIRNAME) first. One can only
+    // outlive its writeBatch through a crash between its mkdir and the
+    // rename into the queue — and at that point it holds nothing but
+    // the `.attempted-commit` marker: no metafile, no content. Nothing
+    // to repair, so the whole staging area goes; the vault still holds
+    // the changes and the next commit re-detects them (§12.6).
+    const staging = normalizePath(
+      `${this.vault.configDir}/plugins/${this.selfPluginId}/${QUEUE_STAGING_DIRNAME}`,
+    );
+    if (await this.vault.adapter.exists(staging)) {
+      const left = await this.vault.adapter.list(staging);
+      if (left.folders.length + left.files.length > 0) {
+        this.logger?.warn(
+          "recoverStaleCommitClaims: staged batch dir(s) left by a crashed commit — removed",
+          { dirs: left.folders },
+        );
+      }
+      await this.vault.adapter.rmdir(staging, true);
+    }
     const root = this.queueRoot();
     if (!(await this.vault.adapter.exists(root))) return;
     const listing = await this.vault.adapter.list(root);

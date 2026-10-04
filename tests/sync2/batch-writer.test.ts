@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
-import { Vault } from "../../mock-obsidian";
+import { Vault, setMockPlatform } from "../../mock-obsidian";
 import SyncStore from "../../src/sync2/sync-store";
 import BatchWriter from "../../src/sync2/batch-writer";
 import BatchClaimer from "../../src/sync2/get-batch";
@@ -226,6 +226,64 @@ describe("BatchWriter (Phase 2 group B)", () => {
     expect(firstBlob).toBeGreaterThan(metaWrite);
     expect(markerRemove).toBeGreaterThan(firstBlob);
     expect(id).not.toBeNull();
+  });
+
+  it("🔑 R3b: a drain claiming the head while a NEW batch is being created never sees it half-made (no 'crash leftover' discard)", async () => {
+    // The batch dir used to appear in the queue BEFORE its
+    // `.attempted-commit`: mkdir, one await, then the marker. A drain's
+    // getBatch() landing in that gap on an otherwise empty queue took
+    // the embryo for a crashed commit's leftover and DISCARDED it. Reachable
+    // from inside the plugin: commit and drain do not exclude each other,
+    // and the drain calls getBatch() after every batch. Now the dir is
+    // made in staging with its marker and enters the queue by ONE rename.
+    putVaultFile("n.md", "new\n");
+    const claimerWarnings: string[] = [];
+    const claimer = new BatchClaimer({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+      syncStore,
+      logger: { info: () => {}, warn: (m) => claimerWarnings.push(m) },
+      sleep: async () => {},
+    });
+    let claimed: unknown = "not called";
+    const racing = wrapVault({
+      write: async (p: unknown, data: unknown) => {
+        // The drain's getBatch() runs right before the writer's marker.
+        if (typeof p === "string" && p.endsWith(ATTEMPTED_COMMIT_MARKER) && claimed === "not called") {
+          claimed = await claimer.getBatch();
+        }
+        return (vault.adapter as unknown as { write: (a: unknown, b: unknown) => Promise<void> }).write(p, data);
+      },
+    });
+
+    const id = await makeWriter({ vault: racing }).writeBatch([modified("n.md")]);
+
+    expect(claimed).toBeNull(); // nothing claimable yet — not a "leftover"
+    expect(claimerWarnings).toEqual([]);
+    expect(readMeta(id!).entries.map((e) => e.path)).toEqual(["n.md"]);
+  });
+
+  it("R3b staging on MOBILE semantics (rename never overwrites): writeBatch still lands the batch", async () => {
+    setMockPlatform("mobile");
+    try {
+      putVaultFile("m1.md", "one\n");
+      putVaultFile("m2.md", "two\n");
+      const w = makeWriter();
+      const a = await w.writeBatch([modified("m1.md")]);
+      const b = await w.writeBatch([modified("m2.md")]);
+      expect(a).not.toBe(b);
+      expect(readMeta(a!).entries.map((e) => e.path)).toEqual(["m1.md"]);
+      expect(readMeta(b!).entries.map((e) => e.path)).toEqual(["m2.md"]);
+    } finally {
+      setMockPlatform("desktop");
+    }
+  });
+
+  it("R3b: writeBatch leaves nothing behind in staging", async () => {
+    putVaultFile("s.md", "s\n");
+    await makeWriter().writeBatch([modified("s.md")]);
+    const staging = path.join(dir, ".obsidian", "plugins", PLUGIN_ID, ".runtime", "push-queue-staging");
+    expect(fs.existsSync(staging) ? fs.readdirSync(staging) : []).toEqual([]);
   });
 
   it("sync_store dedup: a blob already present is not rewritten", async () => {

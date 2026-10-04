@@ -23,6 +23,14 @@
 // (`.attempted`, `.attempted-commit`) as the visual cue telling
 // markers apart from data.
 export const QUEUE_DIRNAME = ".runtime/push-queue";
+// Where a NEW batch dir is born, OUTSIDE the queue (SYNC2-FIX §6/R3b,
+// owner 2026-10-04): made here together with its `.attempted-commit`,
+// then moved into QUEUE_DIRNAME by ONE rename — so the queue never
+// holds a batch dir without its claim. A sibling of the queue, not a
+// child: nothing that lists the queue can ever see a staged dir.
+// Leftovers exist only after a crash and are swept on plugin start
+// (BatchClaimer.recoverStaleCommitClaims).
+export const QUEUE_STAGING_DIRNAME = ".runtime/push-queue-staging";
 export const BATCH_META_FILE = "meta.json";
 export const ATTEMPTED_MARKER = ".attempted";
 export const ATTEMPTED_COMMIT_MARKER = ".attempted-commit";

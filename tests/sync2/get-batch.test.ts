@@ -331,4 +331,26 @@ describe("BatchClaimer (§VIII H)", () => {
     )!;
     expect(meta.entries).toEqual([]);
   });
+
+  // R3b staging (owner 2026-10-04): a NEW batch dir is born in
+  // push-queue-staging/ with its marker and renamed into the queue. A
+  // staged dir outlives its writeBatch only through a crash before that
+  // rename — holding nothing but the marker — and is swept on start.
+  it("onload: a staged batch dir left by a crashed commit is removed; the queue is left alone", async () => {
+    const stagingAbs = path.join(dir, ".obsidian", "plugins", PLUGIN_ID, ".runtime", "push-queue-staging");
+    fs.mkdirSync(path.join(stagingAbs, "20261004120000000"), { recursive: true });
+    fs.writeFileSync(path.join(stagingAbs, "20261004120000000", ATTEMPTED_COMMIT_MARKER), "");
+    const queued = writeBatch("20261004110000000", []);
+
+    await makeClaimer().recoverStaleCommitClaims();
+
+    expect(fs.existsSync(stagingAbs)).toBe(false);
+    expect(fs.existsSync(path.join(queued, BATCH_META_FILE))).toBe(true);
+    expect(warnings.some((w) => w.includes("staged batch dir"))).toBe(true);
+  });
+
+  it("onload: no staging area → nothing to do, nothing logged", async () => {
+    await makeClaimer().recoverStaleCommitClaims();
+    expect(warnings).toEqual([]);
+  });
 });

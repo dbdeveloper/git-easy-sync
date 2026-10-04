@@ -552,6 +552,13 @@ snapshot-а нема → читаємо й хешуємо все, економі
   >    з контролем) і `batch-writer.test.ts` (R3b back-off); drain-бік — `get-batch.test.ts` (H);
   > 2. **один блоб у `sync_store`** — замок на одне видалення sweep-у (§12.5 нижче,
   >    COMMIT-PASS-PERF §6.1).
+  > 3. **народження нового батча** — каталог створюється в
+  >    `.runtime/push-queue-staging/<id>/` разом із `.attempted-commit` і переходить
+  >    у чергу ОДНИМ `rename`, тож `getBatch()` ніколи не бачить батч без мітки (раніше
+  >    mkdir → await → мітка: drain у цьому вікні викидав «ембріон» як залишок краху).
+  >    Залишки staging після краху прибирає `recoverStaleCommitClaims` на старті
+  >    плагіна. Запінено `batch-writer.test.ts` (🔑 «never sees it half-made») і
+  >    `get-batch.test.ts` (onload staging).
 
   > ### ⚠️ ВАЖЛИВА ЗНАХІДКА — TOCTOU на встановленні мітки `.attempted`
   >
