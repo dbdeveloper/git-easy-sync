@@ -110,6 +110,8 @@ describe("sync_store sweep vs a concurrent commit / delete (COMMIT-PASS-PERF §6
   }
 
   // ── C / D / E: reuse of a blob ALREADY in the store (§6) ───────────
+  // FIXED 2026-10-04 by retain() + per-blob lock + deferred unpin
+  // (§6.1); it.fails removed in the fixing commit.
   //
   // One world, ONE SyncStore shared by the sweep and every actor — as in
   // production, where any lock lives inside that one instance. Its vault
@@ -188,7 +190,7 @@ describe("sync_store sweep vs a concurrent commit / delete (COMMIT-PASS-PERF §6
   // it — and the removal loop, whose references were collected before
   // the record existed, deletes it. Recorded as restorable, restorable
   // from nothing; reconcile() drops the record on the next load.
-  it.fails("C: a delete captured during the sweep's removal loop keeps bytes the bin finds already present", async () => {
+  it("C: a delete captured during the sweep's removal loop keeps bytes the bin finds already present", async () => {
     const w = hookedWorld();
     await w.bin.load();
     const { sha } = await leftover(w.store, "same content\n");
@@ -210,7 +212,7 @@ describe("sync_store sweep vs a concurrent commit / delete (COMMIT-PASS-PERF §6
   // Its pin lands after the sweep collected references, so the removal
   // loop takes the blob anyway; only the writer's re-read fallback saves
   // the commit. Asserted here: the blob survives on its own.
-  it.fails("D: a change the detector stores during the removal loop keeps a blob that was already present", async () => {
+  it("D: a change the detector stores during the removal loop keeps a blob that was already present", async () => {
     const w = hookedWorld();
     const { sha } = await leftover(w.store, "reverted\n");
     fs.writeFileSync(path.join(dir, "r.md"), "reverted\n");
@@ -245,7 +247,7 @@ describe("sync_store sweep vs a concurrent commit / delete (COMMIT-PASS-PERF §6
   // existed, and its removal loop takes the blob. The drain can repair
   // from the vault only while the file is unchanged; after an edit the
   // committed version never reaches GitHub (preserve-all-commits).
-  it.fails("E: a batch written during the removal loop keeps the blob its metafile names", async () => {
+  it("E: a batch written during the removal loop keeps the blob its metafile names", async () => {
     const w = hookedWorld();
     const { sha } = await leftover(w.store, "identical\n");
     fs.writeFileSync(path.join(dir, "e.md"), "identical\n");

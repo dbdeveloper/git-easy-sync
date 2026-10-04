@@ -48,7 +48,7 @@ import { buildQueueShaIndex, QueueShaIndex } from "./queue-sha-index";
 import { QUEUE_DIRNAME } from "./batch-metafile";
 import ChangeDetector from "./change-detector";
 import { FileChange } from "./types";
-import SyncStore from "./sync-store";
+import SyncStore, { PIN_OWNER_COMMIT } from "./sync-store";
 import DrainJournal from "./drain-journal";
 import ConflictStoreV2 from "./conflict-store-v2";
 import SiblingTx from "./sibling-tx";
@@ -584,7 +584,7 @@ export class Sync2Manager {
           // on disk now (or the pass failed and they are orphans the
           // sweep should reap). Per pass, not per run: a bell re-loop
           // re-detects and re-pins what it still needs.
-          this.deps.syncStore.releaseInFlight();
+          this.deps.syncStore.releaseOwner(PIN_OWNER_COMMIT);
         }
         if (this.restartCommit && this.bellTarget !== undefined) {
           t = this.bellTarget; // the escalated scope for the re-loop

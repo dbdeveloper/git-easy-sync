@@ -50,7 +50,7 @@
 
 import { normalizePath, type Vault } from "obsidian";
 import WorkerClient from "../worker/worker-client";
-import SyncStore from "./sync-store";
+import SyncStore, { PIN_OWNER_COMMIT } from "./sync-store";
 import { canonicalizeBytes, shouldCanonicalize } from "./text-normalize";
 import { newBatchId, parseTimestampId } from "./timestamp-id";
 import { FileChange } from "./types";
@@ -372,21 +372,33 @@ export default class BatchWriter {
     const dropped: string[] = [];
     for (const entry of meta.entries) {
       if (entry.sha === null) continue; // deletion — no bytes
-      if (await this.syncStore.existInSyncStore(entry.sha)) continue;
-      const bytes = await this.readCanonicalBytes(entry.path, false);
-      const sha =
-        bytes === null
-          ? null
-          : await this.workerClient.computeGitBlobSHA(bytes);
-      if (bytes === null || sha !== entry.sha) {
+      // retain, not "exists → skip" (COMMIT-PASS-PERF §6.1, case E): a
+      // blob already present may be one the sweep is about to reap — it
+      // collected references before this metafile existed. Under
+      // retain's lock the blob is either pinned in time or found gone
+      // and written again. The file is read only when the bytes are
+      // missing (the common case for a sha the detector carried is a
+      // pin already in place and no read at all).
+      let actual: string | null = null;
+      const ok = await this.syncStore.retain(
+        PIN_OWNER_COMMIT,
+        entry.sha,
+        async () => {
+          const bytes = await this.readCanonicalBytes(entry.path, false);
+          actual =
+            bytes === null
+              ? null
+              : await this.workerClient.computeGitBlobSHA(bytes);
+          return actual === entry.sha ? bytes : null;
+        },
+      );
+      if (!ok) {
         this.logger?.warn(
           "BatchWriter: file changed between hash and blob pass — entry dropped; next detection re-emits",
-          { path: entry.path, expected: entry.sha, actual: sha },
+          { path: entry.path, expected: entry.sha, actual },
         );
         dropped.push(entry.path);
-        continue;
       }
-      await this.syncStore.saveBlobToSyncStore(entry.sha, bytes);
     }
     if (dropped.length > 0) {
       const reduced: BatchMetafile = {

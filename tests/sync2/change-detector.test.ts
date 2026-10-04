@@ -19,7 +19,7 @@ import ChangeDetector, {
 } from "../../src/sync2/change-detector";
 import { Vault } from "../../mock-obsidian";
 import { calculateGitBlobSHA } from "../../src/utils";
-import SyncStore from "../../src/sync2/sync-store";
+import SyncStore, { PIN_OWNER_COMMIT } from "../../src/sync2/sync-store";
 import BatchWriter from "../../src/sync2/batch-writer";
 
 const CONFIG_DIR = ".obsidian";
@@ -1524,8 +1524,10 @@ describe("COMMIT-PASS-PERF Крок 2 — store the blob while hashing it", () =
       vaultRoot: f.root,
       syncConfigDir: () => true,
       syncStore: {
-        saveInFlight: async (sha, bytes) => {
-          saved.set(sha, new TextDecoder().decode(bytes));
+        retain: async (_owner, sha, produce) => {
+          const bytes = await produce();
+          saved.set(sha, new TextDecoder().decode(bytes!));
+          return true;
         },
       },
       autoCanonicalize: () => opts.canonicalize ?? false,
@@ -1683,7 +1685,7 @@ describe("COMMIT-PASS-PERF Крок 2 — one read per changed file, end to end"
     expect(changes.length).toBeGreaterThan(0);
     const id = await writer.writeBatch(changes);
     expect(id).not.toBeNull();
-    syncStore.releaseInFlight();
+    syncStore.releaseOwner(PIN_OWNER_COMMIT);
     return reads;
   };
 

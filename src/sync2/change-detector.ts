@@ -19,6 +19,7 @@ import FileBaselinesStore, {
 } from "./file-baselines";
 import { FileChange } from "./types";
 import { canonicalizeBytes, shouldCanonicalize } from "./text-normalize";
+import { PIN_OWNER_COMMIT } from "./sync-store";
 
 // isSyncable for sync2: hardcoded deny list + per-device configDir
 // gate + gi.ignoredAsync. The configDir gate (`syncConfigDir`) is
@@ -227,7 +228,13 @@ export interface ChangeDetectorDeps {
   // never stored: the post-drain self-heal pass re-reads everything and
   // finds nothing, and storing that would write megabytes for the sweep
   // to reap. Absent → today's shape (sha-less changes).
-  syncStore?: { saveInFlight(sha: string, bytes: ArrayBuffer): Promise<void> };
+  syncStore?: {
+    retain(
+      owner: string,
+      sha: string,
+      produce: () => Promise<ArrayBuffer | null>,
+    ): Promise<boolean>;
+  };
   // The canonicalize toggle (autoCanonicalizeTextFiles). MUST be the
   // same getter BatchWriter gets: the detector hashes the canonical form
   // the writer records, and a carried sha is trusted as-is. Absent →
@@ -817,7 +824,11 @@ export default class ChangeDetector {
     h: HashedCandidate,
   ): Promise<{ sha?: string; size?: number }> {
     if (!this.syncStore || h.needsWriteBack) return {};
-    await this.syncStore.saveInFlight(h.sha, h.bytes);
+    // retain, not a plain write: the bytes may ALREADY be in the store
+    // (a revert to pushed content) and a sweep may be about to reap them
+    // — COMMIT-PASS-PERF §6.1, case D. Pinned as the commit pass's; the
+    // pass releases its pins once its metafiles are written.
+    await this.syncStore.retain(PIN_OWNER_COMMIT, h.sha, async () => h.bytes);
     return { sha: h.sha, size: h.bytes.byteLength };
   }
 

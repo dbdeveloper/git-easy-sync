@@ -4,7 +4,10 @@ import * as path from "path";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { Vault } from "../../mock-obsidian";
-import SyncStore from "../../src/sync2/sync-store";
+import SyncStore, {
+  PIN_OWNER_COMMIT,
+  PIN_OWNER_DELETED_BIN,
+} from "../../src/sync2/sync-store";
 import { calculateGitBlobSHA } from "../../src/utils";
 
 // §VIII category F — sync_store + sweep (NEW-DRAIN §II.9,
@@ -175,38 +178,109 @@ describe("SyncStore (§VIII F)", () => {
     expect(await store.sweep([])).toEqual({ removed: 0, kept: 0 });
   });
 
-  // COMMIT-PASS-PERF Крок 2: the commit pass stores a changed file's
-  // blob BEFORE any metafile references it; the in-flight pin stands in
-  // for that reference until the pass releases it.
-  it("in-flight: a pinned blob survives a sweep no source references it in; released, the next sweep reaps it", async () => {
+  // ── Pins + retain (COMMIT-PASS-PERF Крок 2, §6.1) ─────────────────
+  // A pin is a temporary in-memory reference, one set per owner, that
+  // the sweep unions with the references it collects. retain() is the
+  // one way to write or reuse a blob outside the drain.
+
+  it("retain: a pinned blob survives a sweep no source references it in; released, the next sweep reaps it", async () => {
     const sha = await shaOf("being committed");
-    await store.saveInFlight(sha, enc("being committed"));
+    await store.retain(PIN_OWNER_COMMIT, sha, async () => enc("being committed"));
     await store.sweep([async () => new Set()]);
     expect(await store.existInSyncStore(sha)).toBe(true);
 
-    store.releaseInFlight();
+    store.releaseOwner(PIN_OWNER_COMMIT);
     await store.sweep([async () => new Set()]);
     expect(await store.existInSyncStore(sha)).toBe(false);
   });
 
-  it("🔑 in-flight: release landing BETWEEN source reads cannot reap a live blob (pins are read before any source)", async () => {
-    // The commit pass's order: pin → blob → metafile → release. Here the
-    // metafile lands and the pin is released WHILE the sweep is reading
-    // its sources — after the queue source answered (no metafile yet),
-    // before a later source. Pins read last would see an empty set
-    // and reap the blob of a batch that now exists.
-    const sha = await shaOf("racing");
-    await store.saveInFlight(sha, enc("racing"));
-    let metafileWritten = false;
-    const queueSource = async (): Promise<Set<string>> =>
-      metafileWritten ? new Set([sha]) : new Set();
-    const laterSource = async (): Promise<Set<string>> => {
-      // The commit pass completes mid-sweep.
-      metafileWritten = true;
-      store.releaseInFlight();
+  it("retain: bytes already present → `produce` is NOT called (no read for a blob we have)", async () => {
+    const sha = await shaOf("present");
+    await store.saveBlobToSyncStore(sha, enc("present"));
+    let produced = 0;
+    const ok = await store.retain(PIN_OWNER_COMMIT, sha, async () => {
+      produced += 1;
+      return enc("present");
+    });
+    expect(ok).toBe(true);
+    expect(produced).toBe(0);
+  });
+
+  it("retain: bytes missing and `produce` has none → false, and the pin is dropped", async () => {
+    const sha = await shaOf("vanished");
+    expect(await store.retain(PIN_OWNER_COMMIT, sha, async () => null)).toBe(false);
+    expect(await store.existInSyncStore(sha)).toBe(false);
+    // Not pinned: a blob that appears under that name later is reapable.
+    await store.saveBlobToSyncStore(sha, enc("vanished"));
+    await store.sweep([async () => new Set()]);
+    expect(await store.existInSyncStore(sha)).toBe(false);
+  });
+
+  it("🔑 owners are isolated: the commit pass releasing its pins does not strip the bin's pin on the same blob", async () => {
+    // The trap of the first design: ONE shared set cleared wholesale.
+    const sha = await shaOf("shared content");
+    await store.retain(PIN_OWNER_DELETED_BIN, sha, async () => enc("shared content"));
+    await store.retain(PIN_OWNER_COMMIT, sha, async () => enc("shared content"));
+
+    store.releaseOwner(PIN_OWNER_COMMIT);
+    await store.sweep([async () => new Set()]);
+    expect(await store.existInSyncStore(sha)).toBe(true);
+
+    store.unpin(PIN_OWNER_DELETED_BIN, sha);
+    await store.sweep([async () => new Set()]);
+    expect(await store.existInSyncStore(sha)).toBe(false);
+  });
+
+  it("🔑 deferred unpin: a whole retain → reference → unpin cycle between collection and removal cannot reap the blob", async () => {
+    // §6.1's load-bearing case. The sweep collected references before
+    // the durable one existed; the pin is gone before the removal loop.
+    // Only the deferral (released pins keep protecting until THIS sweep
+    // ends) stops the unlink.
+    const sha = await shaOf("leftover");
+    await store.saveBlobToSyncStore(sha, enc("leftover"));
+    let durableRef = false;
+    const binSource = async (): Promise<Set<string>> =>
+      durableRef ? new Set([sha]) : new Set();
+    const lastSource = async (): Promise<Set<string>> => {
+      // The bin's full capture cycle runs right here.
+      await store.retain(PIN_OWNER_DELETED_BIN, sha, async () => enc("leftover"));
+      durableRef = true; // deleted.json written — too late for binSource
+      store.unpin(PIN_OWNER_DELETED_BIN, sha);
       return new Set();
     };
-    await store.sweep([queueSource, laterSource]);
+    await store.sweep([binSource, lastSource]);
+    expect(await store.existInSyncStore(sha)).toBe(true);
+  });
+
+  it("deferred release ends with ITS sweep: the next sweep, with no reference and no pin, reaps", async () => {
+    const sha = await shaOf("temp");
+    await store.saveBlobToSyncStore(sha, enc("temp"));
+    await store.sweep([
+      async () => {
+        await store.retain(PIN_OWNER_COMMIT, sha, async () => enc("temp"));
+        store.releaseOwner(PIN_OWNER_COMMIT);
+        return new Set();
+      },
+    ]);
+    expect(await store.existInSyncStore(sha)).toBe(true);
+    await store.sweep([async () => new Set()]);
+    expect(await store.existInSyncStore(sha)).toBe(false);
+  });
+
+  it("an owner re-pinning a sha it released mid-sweep keeps the NEW pin after that sweep ends", async () => {
+    // releaseOwner during a sweep retires the old pins; a fresh retain of
+    // the same sha by the next pass must not be undone when they drop.
+    const sha = await shaOf("again");
+    await store.saveBlobToSyncStore(sha, enc("again"));
+    await store.retain(PIN_OWNER_COMMIT, sha, async () => enc("again"));
+    await store.sweep([
+      async () => {
+        store.releaseOwner(PIN_OWNER_COMMIT); // pass 1 ends
+        await store.retain(PIN_OWNER_COMMIT, sha, async () => enc("again")); // pass 2
+        return new Set();
+      },
+    ]);
+    await store.sweep([async () => new Set()]);
     expect(await store.existInSyncStore(sha)).toBe(true);
   });
 

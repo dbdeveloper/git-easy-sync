@@ -42,7 +42,7 @@
 //   lands, a record simply stays here and keeps protecting its blob.
 
 import { normalizePath, type Vault } from "obsidian";
-import SyncStore from "../sync2/sync-store";
+import SyncStore, { PIN_OWNER_DELETED_BIN } from "../sync2/sync-store";
 import { calculateGitBlobSHA } from "../utils";
 
 const DELETED_FILE = "deleted.json";
@@ -163,25 +163,30 @@ export default class DeletedStore {
     const bytes = await this.vault.adapter.readBinary(normalized);
     const sha = await calculateGitBlobSHA(bytes);
     // Content-addressed: the same content deleted twice costs one blob.
-    if (!(await this.syncStore.existInSyncStore(sha))) {
-      await this.syncStore.saveBlobToSyncStore(sha, bytes);
+    // retain, not "exists → skip" (COMMIT-PASS-PERF §6.1, case C): bytes
+    // already present may be a leftover a running sweep is about to
+    // reap. The pin holds them until the record below — the durable
+    // reference — exists.
+    await this.syncStore.retain(PIN_OWNER_DELETED_BIN, sha, async () => bytes);
+    try {
+      const record: DeletedRecord = {
+        path: normalized,
+        sha,
+        size: bytes.byteLength,
+        mtime: stat.mtime,
+        deletedAt: this.now().toISOString(),
+      };
+      // One live record per path: a path deleted again supersedes its
+      // previous capture (the older bytes stay reachable only through a
+      // committed batch, per §5.2.1 scenario 4).
+      this.records = this.records.filter((r) => r.path !== normalized);
+      this.records.push(record);
+      await this.persist();
+      this.notify();
+      return record;
+    } finally {
+      this.syncStore.unpin(PIN_OWNER_DELETED_BIN, sha);
     }
-
-    const record: DeletedRecord = {
-      path: normalized,
-      sha,
-      size: bytes.byteLength,
-      mtime: stat.mtime,
-      deletedAt: this.now().toISOString(),
-    };
-    // One live record per path: a path deleted again supersedes its
-    // previous capture (the older bytes stay reachable only through a
-    // committed batch, per §5.2.1 scenario 4).
-    this.records = this.records.filter((r) => r.path !== normalized);
-    this.records.push(record);
-    await this.persist();
-    this.notify();
-    return record;
   }
 
   // The sha for a path's pending deletion, without mutating anything —

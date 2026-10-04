@@ -6,7 +6,7 @@ import { tmpdir } from "os";
 import { Vault } from "../../mock-obsidian";
 import { Sync2Manager, Sync2ManagerDeps } from "../../src/sync2/sync2-manager";
 import { DrainResult, DrainStatus as DrainOutcome } from "../../src/sync2/drain";
-import SyncStore from "../../src/sync2/sync-store";
+import SyncStore, { PIN_OWNER_COMMIT } from "../../src/sync2/sync-store";
 import DrainJournal from "../../src/sync2/drain-journal";
 import ConflictStoreV2 from "../../src/sync2/conflict-store-v2";
 import SiblingTx from "../../src/sync2/sibling-tx";
@@ -710,9 +710,10 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       new TextEncoder().encode("abandoned").buffer as ArrayBuffer,
     );
     deps.detector.findChanges = async () => {
-      await deps.syncStore.saveInFlight(
+      await deps.syncStore.retain(
+        PIN_OWNER_COMMIT,
         sha,
-        new TextEncoder().encode("abandoned").buffer as ArrayBuffer,
+        async () => new TextEncoder().encode("abandoned").buffer as ArrayBuffer,
       );
       return []; // e.g. the zero-byte guard dropped the change
     };
@@ -726,9 +727,10 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       new TextEncoder().encode("half-done").buffer as ArrayBuffer,
     );
     deps.detector.findChanges = async () => {
-      await deps.syncStore.saveInFlight(
+      await deps.syncStore.retain(
+        PIN_OWNER_COMMIT,
         sha,
-        new TextEncoder().encode("half-done").buffer as ArrayBuffer,
+        async () => new TextEncoder().encode("half-done").buffer as ArrayBuffer,
       );
       throw new Error("scan boom");
     };
