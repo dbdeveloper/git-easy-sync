@@ -264,7 +264,7 @@ export interface ScanTiming {
   enumerateMs: number;
   indexFiles: number;
   dotEntries: number;
-  // The whole Pass 1 loop (stat short-circuits + candidates).
+  // Stage 1's classify loop (stat short-circuits, building the plan).
   pass1Ms: number;
   // Files actually read and hashed, and their bytes.
   candidates: number;
@@ -279,8 +279,11 @@ export interface ScanTiming {
   stored: number;
   storedBytes: number;
   storeMs: number;
-  // Pass 2 over the baseline buckets + the grouped flushes.
+  // Pass 2 over the baseline buckets (finds the deletions; part of
+  // stage 1 since 3b).
   pass2Ms: number;
+  // Stage 2 — reading, hashing and storing the planned candidates.
+  checkMs: number;
 }
 
 const emptyTiming = (): ScanTiming => ({
@@ -300,9 +303,40 @@ const emptyTiming = (): ScanTiming => ({
   storedBytes: 0,
   storeMs: 0,
   pass2Ms: 0,
+  checkMs: 0,
 });
 
 const now = (): number => performance.now();
+
+// Stage 1's verdict for one file that stage 2 must look at (§3.1).
+type PlanItem =
+  | {
+      kind: "added-check";
+      file: FileLike;
+      addConflictRef: string | null | undefined;
+    }
+  | { kind: "added-direct"; file: FileLike }
+  | { kind: "modified-check"; file: FileLike; snap: FileBaseline };
+
+// What stage 1 knows before a single file is read — the forecast and
+// the "Checking N of M files" denominator (§3.1). Deletions count toward
+// the commit too; they need no reads.
+export interface ScanPlan {
+  // Files stage 2 will read + hash, and their bytes (from the stat).
+  checks: number;
+  checkBytes: number;
+  // New files emitted without a hash (only without a queue).
+  unhashedAdds: number;
+  deletions: number;
+}
+
+export interface ScanHooks {
+  // After stage 1, before any read.
+  onPlan?(plan: ScanPlan): void;
+  // After each stage-2 check, whatever its outcome (unchanged, stored,
+  // vanished): `done` of `total` checks.
+  onChecked?(done: number, total: number): void;
+}
 
 // One candidate's bytes in the form a commit records, and their sha.
 // `needsWriteBack`: the live file is not canonical yet.
@@ -444,14 +478,14 @@ export default class ChangeDetector {
   // unchanged since the last sync stay out of the loop entirely;
   // the narrow candidate set is what actually pays for isSyncable +
   // read+SHA.
-  async findChanges(): Promise<FileChange[]> {
+  async findChanges(hooks?: ScanHooks): Promise<FileChange[]> {
     const t = emptyTiming();
     this.timing = t;
     const t0 = now();
     await this.beginScan();
     t.beginScanMs = now() - t0;
     try {
-      return await this.scan();
+      return await this.scan(hooks);
     } finally {
       this.endScan();
       t.totalMs = now() - t0;
@@ -460,7 +494,7 @@ export default class ChangeDetector {
     }
   }
 
-  private async scan(): Promise<FileChange[]> {
+  private async scan(hooks?: ScanHooks): Promise<FileChange[]> {
     const out: FileChange[] = [];
     const t = this.timing ?? emptyTiming();
     const tEnum = now();
@@ -515,6 +549,15 @@ export default class ChangeDetector {
     // the "Committing…" forecast. The sort is not in it.
     this.stats?.recordDot(t.dotEntries, tDotEnd - tDot);
     t.enumerateMs = now() - tEnum;
+
+    // ── STAGE 1 — classify, NO reads (COMMIT-PASS-PERF §3.1) ─────────
+    // The same decisions the single read-as-you-go loop used to make,
+    // in the same order — but every file that has to be READ goes into
+    // `plan` instead of being read on the spot. That is what makes the
+    // number of candidates and their bytes known BEFORE the expensive
+    // part starts: the commit's forecast and "Checking N of M files"
+    // need them up front. Nothing below the line changes WHAT is
+    // emitted; only WHEN the reads happen.
     const tPass1 = now();
     // Track syncable paths we examined this pass so Pass 2 can tell
     // apart "snapshot points at a path that's still tracked but
@@ -524,11 +567,12 @@ export default class ChangeDetector {
     // stale snapshot rows silently rather than emit `deleted`.
     const seenSyncable = new Set<string>();
     const seenIgnored = new Set<string>();
-    // Stat-cache refreshes discovered during Pass 1 — flushed as one
+    // Stat-cache refreshes discovered during the check — flushed as one
     // grouped setMany after the scan (§2.2.1).
     const statRefreshes: Array<{ path: string } & FileBaseline> = [];
+    const plan: PlanItem[] = [];
 
-    // Pass 1: candidates whose stat.mtime exceeds the watermark.
+    // Candidates whose stat.mtime exceeds the watermark.
     // First-ever sync (watermark === null) treats every file as a
     // candidate so the initial bootstrap walks the whole vault once.
     for (const file of allFiles) {
@@ -573,30 +617,13 @@ export default class ChangeDetector {
         const addConflictRef = this.conflictBaseSha
           ? this.conflictBaseSha(file.path)
           : undefined;
-        let proven: { sha?: string; size?: number } = {};
-        if (this.queue || addConflictRef !== undefined) {
-          const h = await this.hashCandidate(file.path);
-          if (h === null) continue; // SYNC2 §6 skip-class — vanished mid-walk
-          const inQueueSha = this.queue
-            ? await this.queue.peekLatestPathSha(file.path)
-            : null;
-          // Conflict base (§26): unchanged iff it matches its branch value
-          // or the last queued commit — never main. Else: plain dedup.
-          // A pending canonical write-back is a change either way.
-          const ref =
-            addConflictRef !== undefined
-              ? (inQueueSha ?? addConflictRef)
-              : inQueueSha;
-          if (h.sha === ref && !h.needsWriteBack) continue;
-          proven = await this.storeProven(h);
-        }
-        out.push({
-          kind: "added",
-          path: file.path,
-          size: file.stat.size,
-          mtime: file.stat.mtime,
-          ...proven,
-        });
+        plan.push(
+          this.queue || addConflictRef !== undefined
+            ? { kind: "added-check", file, addConflictRef }
+            : // No reference to compare against: emitted unhashed, the
+              // writer reads it (only without a queue — unit tests).
+              { kind: "added-direct", file },
+        );
         continue;
       }
 
@@ -611,85 +638,16 @@ export default class ChangeDetector {
         continue;
       }
 
-      // Stat moved; verify it's a real content change.
-      const h = await this.hashCandidate(file.path);
-      if (h === null) continue; // SYNC2 §6 skip-class — vanished mid-walk
-      const sha = h.sha;
-
-      // The file's LAST COMMITTED state is the newest queued batch that
-      // holds it (a pending local commit), falling back to the last
-      // PUSHED sha (snapshot.remoteSha) only when nothing is queued.
-      // "Changed" = differs from that reference. Comparing against the
-      // queue-latest (not just the snapshot) is what makes a REVERT to
-      // the last-pushed bytes correctly count as a change when a newer,
-      // different version is already queued but hasn't pushed (TODO §40:
-      // add char → commit → remove char → must commit the revert, even
-      // though it matches the last push). It ALSO subsumes the plain
-      // dedup (unchanged since the last commit → skip).
-      const queuedSha = this.queue
-        ? await this.queue.peekLatestPathSha(file.path)
-        : null;
-
-      // TODO §26 — a tracked-conflict base lives on the CONFLICT BRANCH,
-      // not main. Its "changed?" reference is the last value pushed there
-      // (conflictBaseSha), or the last queued commit if one is pending.
-      // snap.remoteSha (main) is NOT a valid unchanged-reference here —
-      // the base differs from main by nature, so comparing against it
-      // re-committed the unchanged base to the branch on EVERY sync. An
-      // edited base differs from its branch value → committed once (then
-      // pushConflictPathsToBranch advances branchBaseSha).
-      const conflictRef = this.conflictBaseSha
-        ? this.conflictBaseSha(file.path)
-        : undefined;
-      if (conflictRef !== undefined) {
-        // unchanged vs branch (and already canonical on disk)
-        if (sha === (queuedSha ?? conflictRef) && !h.needsWriteBack) continue;
-        out.push({
-          kind: "modified",
-          path: file.path,
-          size: file.stat.size,
-          mtime: file.stat.mtime,
-          previousRemoteSha: snap.baselineSha,
-          ...(await this.storeProven(h)),
-        });
-        continue;
-      }
-
-      const lastCommittedSha = queuedSha ?? snap.baselineSha;
-      // A pending canonical write-back keeps the file a change even when
-      // its canonical sha matches — the same verdict the raw-byte hash
-      // gave before the detector canonicalized (COMMIT-PASS-PERF Крок 2).
-      if (sha === lastCommittedSha && !h.needsWriteBack) {
-        // Unchanged since the last commit. When it also matches the
-        // pushed remote (nothing pending, or the pending IS the remote),
-        // refresh the stat-cache so later walks short-circuit cheaply.
-        // Collected and flushed as ONE grouped setMany after the scan
-        // (§2.2.1) — a per-file write-through here would re-write the
-        // same bucket once per touched file.
-        if (sha === snap.baselineSha) {
-          statRefreshes.push({
-            path: file.path,
-            ...snap,
-            mtime: file.stat.mtime,
-            size: file.stat.size,
-          });
-        }
-        continue;
-      }
-
-      out.push({
-        kind: "modified",
-        path: file.path,
-        size: file.stat.size,
-        mtime: file.stat.mtime,
-        previousRemoteSha: snap.baselineSha,
-        ...(await this.storeProven(h)),
-      });
+      // Stat moved; the check below verifies it's a real content change.
+      plan.push({ kind: "modified-check", file, snap });
     }
-
     t.pass1Ms = now() - tPass1;
-    const tPass2 = now();
-    // Pass 2: baseline paths Pass 1 didn't claim as still-syncable.
+
+    // Pass 2 (still stage 1 — no file reads): baseline paths stage 1
+    // didn't claim as still-syncable. It needs only seenSyncable /
+    // seenIgnored, so it runs BEFORE the check: the deletions are part
+    // of the commit's M. Its emits are still appended AFTER the check's,
+    // so the changes list keeps its old order.
     //   - seenIgnored: file exists on disk but is now ignored → silent
     //     cleanup (gitignore is a two-way mute).
     //   - neither seen: file is genuinely gone from disk → emit `deleted`.
@@ -697,6 +655,8 @@ export default class ChangeDetector {
     // §2.2.1 full scan: forEachBucket reads every bucket exactly once
     // (cached buckets served from cache, disk-only ones NOT inserted),
     // removals are collected and flushed as one grouped removeMany.
+    const tPass2 = now();
+    const deletions: FileChange[] = [];
     const removals: string[] = [];
     await this.baselines.forEachBucket(async (files) => {
       for (const [path, snap] of files) {
@@ -722,7 +682,7 @@ export default class ChangeDetector {
           removals.push(path);
           continue;
         }
-        out.push({
+        deletions.push({
           kind: "deleted",
           path,
           previousRemoteSha: snap.baselineSha,
@@ -730,9 +690,149 @@ export default class ChangeDetector {
       }
     });
     if (removals.length > 0) await this.baselines.removeMany(removals);
-    if (statRefreshes.length > 0) await this.baselines.setMany(statRefreshes);
     t.pass2Ms = now() - tPass2;
+
+    const checks = plan.filter((p) => p.kind !== "added-direct");
+    hooks?.onPlan?.({
+      checks: checks.length,
+      checkBytes: checks.reduce((n, p) => n + p.file.stat.size, 0),
+      unhashedAdds: plan.length - checks.length,
+      deletions: deletions.length,
+    });
+
+    // ── STAGE 2 — check: read + SHA-1 + store the proven changes ──────
+    const tCheck = now();
+    let checked = 0;
+    for (const item of plan) {
+      const file = item.file;
+      if (item.kind === "added-direct") {
+        out.push({
+          kind: "added",
+          path: file.path,
+          size: file.stat.size,
+          mtime: file.stat.mtime,
+        });
+        continue;
+      }
+      const emitted = await this.checkOne(item, statRefreshes);
+      checked += 1;
+      hooks?.onChecked?.(checked, checks.length);
+      if (emitted !== null) out.push(emitted);
+    }
+    t.checkMs = now() - tCheck;
+
+    out.push(...deletions);
+    if (statRefreshes.length > 0) await this.baselines.setMany(statRefreshes);
     return out;
+  }
+
+  // Stage 2 for ONE planned candidate: read, hash, compare against the
+  // file's last committed state, store a proven change. Returns the
+  // change to emit, or null (unchanged, or vanished mid-walk). The
+  // logic is exactly the old in-loop body.
+  private async checkOne(
+    item: Exclude<PlanItem, { kind: "added-direct" }>,
+    statRefreshes: Array<{ path: string } & FileBaseline>,
+  ): Promise<FileChange | null> {
+    const file = item.file;
+    if (item.kind === "added-check") {
+      const addConflictRef = item.addConflictRef;
+      const h = await this.hashCandidate(file.path);
+      if (h === null) return null; // SYNC2 §6 skip-class — vanished mid-walk
+      const inQueueSha = this.queue
+        ? await this.queue.peekLatestPathSha(file.path)
+        : null;
+      // Conflict base (§26): unchanged iff it matches its branch value
+      // or the last queued commit — never main. Else: plain dedup.
+      // A pending canonical write-back is a change either way.
+      const ref =
+        addConflictRef !== undefined
+          ? (inQueueSha ?? addConflictRef)
+          : inQueueSha;
+      if (h.sha === ref && !h.needsWriteBack) return null;
+      return {
+        kind: "added",
+        path: file.path,
+        size: file.stat.size,
+        mtime: file.stat.mtime,
+        ...(await this.storeProven(h)),
+      };
+    }
+
+    const snap = item.snap;
+    // Stat moved; verify it's a real content change.
+    const h = await this.hashCandidate(file.path);
+    if (h === null) return null; // SYNC2 §6 skip-class — vanished mid-walk
+    const sha = h.sha;
+
+    // The file's LAST COMMITTED state is the newest queued batch that
+    // holds it (a pending local commit), falling back to the last
+    // PUSHED sha (snapshot.remoteSha) only when nothing is queued.
+    // "Changed" = differs from that reference. Comparing against the
+    // queue-latest (not just the snapshot) is what makes a REVERT to
+    // the last-pushed bytes correctly count as a change when a newer,
+    // different version is already queued but hasn't pushed (TODO §40:
+    // add char → commit → remove char → must commit the revert, even
+    // though it matches the last push). It ALSO subsumes the plain
+    // dedup (unchanged since the last commit → skip).
+    const queuedSha = this.queue
+      ? await this.queue.peekLatestPathSha(file.path)
+      : null;
+
+    // TODO §26 — a tracked-conflict base lives on the CONFLICT BRANCH,
+    // not main. Its "changed?" reference is the last value pushed there
+    // (conflictBaseSha), or the last queued commit if one is pending.
+    // snap.remoteSha (main) is NOT a valid unchanged-reference here —
+    // the base differs from main by nature, so comparing against it
+    // re-committed the unchanged base to the branch on EVERY sync. An
+    // edited base differs from its branch value → committed once (then
+    // pushConflictPathsToBranch advances branchBaseSha).
+    const conflictRef = this.conflictBaseSha
+      ? this.conflictBaseSha(file.path)
+      : undefined;
+    if (conflictRef !== undefined) {
+      // unchanged vs branch (and already canonical on disk)
+      if (sha === (queuedSha ?? conflictRef) && !h.needsWriteBack) return null;
+      return {
+        kind: "modified",
+        path: file.path,
+        size: file.stat.size,
+        mtime: file.stat.mtime,
+        previousRemoteSha: snap.baselineSha,
+        ...(await this.storeProven(h)),
+      };
+    }
+
+    const lastCommittedSha = queuedSha ?? snap.baselineSha;
+    // A pending canonical write-back keeps the file a change even when
+    // its canonical sha matches — the same verdict the raw-byte hash
+    // gave before the detector canonicalized (COMMIT-PASS-PERF Крок 2).
+    if (sha === lastCommittedSha && !h.needsWriteBack) {
+      // Unchanged since the last commit. When it also matches the
+      // pushed remote (nothing pending, or the pending IS the remote),
+      // refresh the stat-cache so later walks short-circuit cheaply.
+      // Collected and flushed as ONE grouped setMany after the scan
+      // (§2.2.1) — a per-file write-through here would re-write the
+      // same bucket once per touched file.
+      if (sha === snap.baselineSha) {
+        statRefreshes.push({
+          path: file.path,
+          ...snap,
+          mtime: file.stat.mtime,
+          size: file.stat.size,
+        });
+      }
+      return null;
+    }
+
+    return {
+      kind: "modified",
+      path: file.path,
+      size: file.stat.size,
+      mtime: file.stat.mtime,
+      previousRemoteSha: snap.baselineSha,
+      ...(await this.storeProven(h)),
+    };
   }
 
   // Classify a single path the same way findChanges() would, but

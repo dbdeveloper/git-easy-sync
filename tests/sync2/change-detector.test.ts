@@ -1824,3 +1824,122 @@ describe("stats — read and SHA-1 per candidate, one dot-space measurement per 
     expect(dots).toBe(1);
   });
 });
+
+// COMMIT-PASS-PERF 3b (spec §3.1): stage 1 classifies WITHOUT reading,
+// so the plan (M and its bytes) is known before the first read; stage 2
+// reads, hashes and stores, reporting each check.
+describe("3b — classify first, then check", () => {
+  const WATERMARK = 1_500_000_000_000;
+  const AHEAD = 2_000_000_000_000;
+  let f: ReturnType<typeof fixture>;
+  beforeEach(async () => {
+    f = fixture();
+    await f.hot.load();
+  });
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  // A vault whose readBinary calls are counted.
+  const countingVault = () => {
+    let reads = 0;
+    const real = f.vault as unknown as Record<string | symbol, unknown>;
+    const v = new Proxy(real, {
+      get(t, prop) {
+        if (prop !== "adapter") {
+          const x = Reflect.get(t, prop);
+          return typeof x === "function" ? x.bind(t) : x;
+        }
+        const a = Reflect.get(t, "adapter") as Record<string, unknown>;
+        return new Proxy(a, {
+          get(aa, m) {
+            const fn = Reflect.get(aa, m) as (...x: unknown[]) => unknown;
+            if (typeof fn !== "function") return fn;
+            return (...args: unknown[]) => {
+              if (m === "readBinary") reads += 1;
+              return fn.apply(aa, args);
+            };
+          },
+        });
+      },
+    }) as unknown as import("obsidian").Vault;
+    return { v, reads: () => reads };
+  };
+
+  const detectorOn = (v: import("obsidian").Vault): ChangeDetector =>
+    new ChangeDetector({
+      vault: v,
+      hotMeta: f.hot,
+      baselines: f.store,
+      gi: f.gi,
+      configDir: CONFIG_DIR,
+      selfPluginId: SELF_PLUGIN_ID,
+      vaultRoot: f.root,
+      syncConfigDir: () => true,
+      queue: { peekLatestPathSha: async () => null },
+    });
+
+  it("🔑 the plan arrives BEFORE any file is read, with checks, their bytes and the deletions", async () => {
+    writeFile(f.root, "new.md", "new\n"); // 4 bytes, no baseline → check
+    writeFile(f.root, "edited.md", "edited!\n"); // 8 bytes, stat moved → check
+    setMtime(f.root, "edited.md", AHEAD);
+    await f.store.set("edited.md", { baselineSha: "OLD", mtime: 1, size: 1 });
+    await f.store.set("gone.md", { baselineSha: "G", mtime: 1, size: 1 }); // deleted
+    await f.hot.update({ lastCommitMtime: WATERMARK });
+    const { v, reads } = countingVault();
+    let readsAtPlan = -1;
+    let plan: unknown = null;
+    await detectorOn(v).findChanges({
+      onPlan: (p) => {
+        plan = p;
+        readsAtPlan = reads();
+      },
+    });
+    expect(readsAtPlan).toBe(0);
+    expect(plan).toEqual({ checks: 2, checkBytes: 12, unhashedAdds: 0, deletions: 1 });
+    expect(reads()).toBe(2);
+  });
+
+  it("every check is reported — unchanged, stored or vanished alike — and the count reaches the total", async () => {
+    writeFile(f.root, "same.md", "same\n");
+    setMtime(f.root, "same.md", AHEAD);
+    await f.store.set("same.md", {
+      baselineSha: await calculateGitBlobSHA(new TextEncoder().encode("same\n").buffer as ArrayBuffer),
+      mtime: 1,
+      size: 5,
+    }); // stat moved, content unchanged
+    writeFile(f.root, "changed.md", "x\n");
+    setMtime(f.root, "changed.md", AHEAD);
+    await f.store.set("changed.md", { baselineSha: "OLD", mtime: 1, size: 1 });
+    await f.hot.update({ lastCommitMtime: WATERMARK });
+    const seen: Array<[number, number]> = [];
+    const out = await f.detector.findChanges({ onChecked: (d, t) => seen.push([d, t]) });
+    expect(seen).toEqual([
+      [1, 2],
+      [2, 2],
+    ]);
+    expect(out.map((c) => c.path)).toEqual(["changed.md"]);
+  });
+
+  it("the changes list keeps its order: added/modified first, deletions last", async () => {
+    writeFile(f.root, "a.md", "a\n");
+    await f.store.set("zz-gone.md", { baselineSha: "G", mtime: 1, size: 1 });
+    await f.store.set("aa-gone.md", { baselineSha: "G2", mtime: 1, size: 1 });
+    const out = await detectorOn(f.vault as unknown as import("obsidian").Vault).findChanges();
+    const kinds = out.map((c) => c.kind);
+    expect(kinds[0]).toBe("added");
+    expect(kinds.slice(1).every((k) => k === "deleted")).toBe(true);
+    expect(out).toHaveLength(3);
+  });
+
+  it("no hooks → same result (the hooks are observation only)", async () => {
+    writeFile(f.root, "a.md", "a\n");
+    writeFile(f.root, "b.md", "b\n");
+    const a = await detectorOn(f.vault as unknown as import("obsidian").Vault).findChanges();
+    const b = await detectorOn(f.vault as unknown as import("obsidian").Vault).findChanges({
+      onPlan: () => {},
+      onChecked: () => {},
+    });
+    expect(b).toEqual(a);
+  });
+});
