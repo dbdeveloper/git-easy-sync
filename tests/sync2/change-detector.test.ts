@@ -1943,3 +1943,67 @@ describe("3b — classify first, then check", () => {
     expect(b).toEqual(a);
   });
 });
+
+// OWNER'S UNCONDITIONAL RULES (2026-10-05). The managed .gitignore blocks
+// are written for FOREIGN git clients; the plugin's own rules hold
+// whether any .gitignore exists or not — a remote clean-up that deletes
+// every .gitignore must not widen what this device sends:
+//   1. "Sync .obsidian/" off → nothing under the config dir;
+//   2. "Push plugins data.json" off → no plugin's data.json, ever;
+//   3. from OUR plugin's folder only main.js, manifest.json, styles.css
+//      and .gitignore — never data.json, never anything else.
+// .gitignore rules may only NARROW what these allow. Asked here with NO
+// .gitignore at all (the reader returns nothing), which is exactly the
+// state a remote deletion leaves behind.
+describe("unconditional rules — independent of every .gitignore", () => {
+  const CD = ".obsidian";
+  const ME = "git-easy-sync";
+  const noOptIn = { dotFiles: new Set<string>(), walkTargets: new Set<string>() };
+  const ask = (p: string, o: { syncConfigDir?: boolean; pushPluginsDataJson?: boolean } = {}) =>
+    (isSyncable as (...a: unknown[]) => Promise<boolean>)(
+      p,
+      CD,
+      ME,
+      o.syncConfigDir ?? true,
+      new GI(""),
+      async () => null,
+      noOptIn,
+      o.pushPluginsDataJson ?? false,
+    );
+
+  it("rule 1 (control): .obsidian/ off → nothing under it, not even our own main.js", async () => {
+    expect(await ask(`${CD}/app.json`, { syncConfigDir: false })).toBe(false);
+    expect(await ask(`${CD}/plugins/${ME}/main.js`, { syncConfigDir: false })).toBe(false);
+    expect(await ask(`${CD}/plugins/other/data.json`, { syncConfigDir: false, pushPluginsDataJson: true })).toBe(false);
+  });
+
+  it.fails("🔑 rule 2: data.json off → ANOTHER plugin's data.json is not syncable, with no .gitignore anywhere", async () => {
+    expect(await ask(`${CD}/plugins/github-easy-sync/data.json`, { pushPluginsDataJson: false })).toBe(false);
+  });
+
+  it("rule 2 (control): data.json ON → another plugin's data.json is syncable", async () => {
+    expect(await ask(`${CD}/plugins/templater/data.json`, { pushPluginsDataJson: true })).toBe(true);
+  });
+
+  it("rule 2 is about a plugin's data.json only — other files of other plugins are untouched", async () => {
+    expect(await ask(`${CD}/plugins/templater/main.js`, { pushPluginsDataJson: false })).toBe(true);
+  });
+
+  it("rule 3: our own data.json NEVER syncs — even with data.json ON", async () => {
+    expect(await ask(`${CD}/plugins/${ME}/data.json`, { pushPluginsDataJson: true })).toBe(false);
+  });
+
+  it("rule 3 (control): our four files sync", async () => {
+    for (const f of ["main.js", "manifest.json", "styles.css", ".gitignore"]) {
+      expect(await ask(`${CD}/plugins/${ME}/${f}`), f).toBe(true);
+    }
+  });
+
+  it.fails("🔑 rule 3: ANY other file in our folder is not syncable, with no .gitignore anywhere", async () => {
+    expect(await ask(`${CD}/plugins/${ME}/notes.txt`)).toBe(false);
+  });
+
+  it.fails("rule 3: nothing in a SUBFOLDER of ours either (not only .runtime/)", async () => {
+    expect(await ask(`${CD}/plugins/${ME}/backup/main.js`)).toBe(false);
+  });
+});
