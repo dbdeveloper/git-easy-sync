@@ -271,6 +271,38 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
   };
 
 
+  // FIELD BUG 2026-10-05 (owner's vault, "auto canonicalize" ON): a
+  // file restored non-canonical, whose canonical form equals its
+  // baseline, is committed for the sake of the write-back — and the
+  // batch entry's sha is then EXACTLY the baseline. Layer 2 confirms the
+  // remote unchanged, leaving remote.sha null; _diff3 had no rule for
+  // local == base with remote == null and fetched a blob for a null sha.
+  // Every drain failed on that queued batch.
+  describe("a batch entry equal to its own baseline", () => {
+    it.fails("🔑 head exists and holds it: ok, and NOTHING is pushed (no empty commit)", async () => {
+      await setupAligned();
+      const commitsBefore = world.commits.length;
+      await stageBatch({ "note.md": V0 });
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(world.commits.length).toBe(commitsBefore);
+      expect(baselines.get("note.md")?.baselineSha).toBe(await sha(V0));
+    });
+
+    it.fails("…but in an EMPTY repo (no head, Layer 2 skipped) it IS pushed — null there means \"nothing on the server\"", async () => {
+      baselines.set("note.md", {
+        baselineSha: await sha(V0),
+        mtime: 50,
+        size: enc(V0).byteLength,
+      });
+      vaultFiles.files.set("note.md", { content: V0, mtime: 50 });
+      await stageBatch({ "note.md": V0 });
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(world.headFiles().get("note.md")?.sha).toBe(await sha(V0));
+    });
+  });
+
   // ── PLUGIN-UPDATE-COMPAT Фаза 2 (§5.12) ──────────────────────────
   //
   // A plugin update meant for a newer Obsidian than this device runs

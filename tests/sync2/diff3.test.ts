@@ -216,6 +216,33 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
     expect(r).toEqual({ kind: "file", file: b });
   });
 
+  // FIELD BUG 2026-10-05 (owner's vault): the STANDARD branch lacked
+  // the two "one side null, the other unchanged" rules the .obsidian/
+  // branch got on 2026-08-28 (A1.15/16). local == base with remote ==
+  // null fell through every rule to the merge path and fetched a blob
+  // for a null sha (TypeError in getBlob). Reached when the canonical
+  // write-back produced a batch entry equal to its own baseline.
+  it.fails("A.30: base=A local=A remote=null → A, nothing fetched (4.5.c — null-as-base, local unchanged)", async () => {
+    const base = side("n.md", "A");
+    const r = await _diff3(
+      makeDeps({ getContentsMetadataAtRef: async () => ({ sha: "live", size: 2 }) }),
+      t(base, emptyFileInfo()),
+      side("n.md", "A"),
+      HEAD,
+    );
+    expect(r.kind).toBe("file");
+    expect((r as { file: FileInfo }).file.sha).toBe(base.sha);
+    expect(repoFetches).toEqual([]);
+    expect(metaCalls).toEqual([]);
+  });
+
+  it.fails("A.31: base=A local=null remote=A → A (4.5.d — the mirror; no caller reaches it today, pinned for totality)", async () => {
+    const base = side("n.md", "A");
+    const r = await _diff3(makeDeps(), t(base, side("n.md", "A")), null, HEAD);
+    expect(r.kind).toBe("file");
+    expect((r as { file: FileInfo }).file.sha).toBe(base.sha);
+  });
+
   it("A.15: base=A local=B remote=deleted → B wins (4.6.a, edit beats delete)", async () => {
     const b = side("n.md", "B");
     const r = await _diff3(
@@ -978,5 +1005,79 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
     expect(
       await mergeBlobsWithMainThreadDiff3("data.csv", bad, enc("x\n"), enc("y\n")),
     ).toEqual({ kind: "conflict" });
+  });
+});
+
+// 🔑 TOTALITY (2026-10-05). The A.30 hole sat in the standard branch for
+// weeks after the .obsidian/ branch had the same one fixed (A1.15/16):
+// a rule table checked case by case misses the combination nobody
+// listed. This walks EVERY combination — path class × base × local ×
+// remote over {absent, A, B, C, deleted} — and pins the two properties
+// a fall-through breaks: no store or repo access with a null sha, and
+// no "rules 1-6 bug" assert. The metadata fake answers like a live
+// repo, which is exactly what made the null fetch reachable in the field.
+describe("_diff3 totality — every (base, local, remote) combination", () => {
+  type S = "none" | "A" | "B" | "C" | "DEL";
+  const STATES: S[] = ["none", "A", "B", "C", "DEL"];
+  const mk = (p: string, st: S): FileInfo | null => {
+    if (st === "none") return null;
+    if (st === "DEL") return fi({ path: p, sha: "pre-sentinel", mode: DELETED });
+    return side(p, st);
+  };
+
+  it.fails("no combination fetches by a null sha or falls through to the rules-1-6 assert", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "diff3-total-"));
+    const store = new SyncStore({ vault: new Vault(dir) as never, selfPluginId: PLUGIN_ID });
+    const problems: string[] = [];
+    try {
+      for (const p of ["notes/a.md", ".obsidian/app.json"]) {
+        for (const b of ["none", "A", "B"] as S[]) {
+          for (const l of STATES) {
+            for (const r of STATES) {
+              const nulls: string[] = [];
+              const guardedStore = new Proxy(store, {
+                get(target, key) {
+                  const v = Reflect.get(target, key);
+                  if (typeof v !== "function") return v;
+                  return (...a: unknown[]) => {
+                    if (a[0] === null || a[0] === undefined) nulls.push(`store.${String(key)}`);
+                    return (v as (...x: unknown[]) => unknown).apply(target, a);
+                  };
+                },
+              });
+              const deps: Diff3Deps = {
+                syncStore: guardedStore as never,
+                verifiedShas: new Set(),
+                getBlobFromRepo: async (sha) => {
+                  if (sha === null || sha === undefined) nulls.push("getBlobFromRepo");
+                  return enc("X\n");
+                },
+                getContentsMetadataAtRef: async () => ({ sha: "live", size: 2 }),
+                maxAutoMergeFileSize: () => 10_000_000,
+                mergeBlobs: mergeBlobsWithMainThreadDiff3,
+                computeSha: calculateGitBlobSHA,
+              };
+              const baseF = mk(p, b);
+              const remF = mk(p, r);
+              const tracked =
+                baseF === null && remF === null
+                  ? null
+                  : { base: baseF ?? emptyFileInfo(), remote: remF ?? emptyFileInfo() };
+              const label = `${p} base=${b} local=${l} remote=${r}`;
+              try {
+                await _diff3(deps, tracked, mk(p, l), HEAD);
+              } catch (e) {
+                if (e instanceof CompareWrongFilesError) problems.push(`${label}: ${e.message}`);
+                else throw e;
+              }
+              if (nulls.length > 0) problems.push(`${label}: null sha → ${[...new Set(nulls)].join(", ")}`);
+            }
+          }
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(problems).toEqual([]);
   });
 });
