@@ -89,6 +89,14 @@ after the layout capture) → the bootloader applies the stage at the top of onl
 is replaced only by healthy running code at the top of onload. RED first in
 `sync2-manager.test.ts`.
 
+**Found on the same run — an uncaught TypeError on a click-enable.** When the
+bootloader applies a stage, onload returns BEFORE loadSettings (the scheduled
+reload replaces the instance). Obsidian still calls `onUserEnable()` on that
+half-loaded instance after a click-enable, and it read `this.settings` →
+`Cannot read properties of undefined (reading 'githubToken')`. Harmless (the
+reload went fine) but it looks like a failure. `onUserEnable` now returns when
+settings were never loaded (`tests/main-user-enable.test.ts`).
+
 ## ⚠️ FIELD BUG 2026-10-05 — the 3.a seam read "never had it" as "deleted it" (FIXED)
 
 The owner's fresh test vault (only `Welcome.md`, the top level of `.obsidian/` and

@@ -471,6 +471,11 @@ export default class GitHubSyncPlugin extends Plugin {
   private drainRunning = false;
 
   async onUserEnable(): Promise<void> {
+    // No settings = onload stopped at the self-update bootloader (it
+    // applied a staged update and a reload replaces this instance).
+    // Obsidian still calls this after a click-enable; the fresh
+    // instance answers instead (field bug 2026-10-05).
+    if (this.settings === undefined) return;
     if (!this.isConfigured()) {
       new Notice("Go to settings to configure syncing");
     }
