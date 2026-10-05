@@ -169,8 +169,9 @@ export interface Sync2ManagerDeps {
   // opening one is. Fires from a `finally` around the WHOLE commit
   // pass, so it covers the paths that produce no result at all:
   //   • the R3a bell — a trigger landing mid-pass returns 0 immediately;
-  //   • no local changes WITH a non-empty queue — `onNoLocalChanges`
-  //     is deliberately silent there, since the drain is about to speak.
+  //   • no local changes WITH a non-empty queue inside a sync — the
+  //     notice layer stays silent there, since the drain is about to
+  //     speak (see onNoLocalChanges).
   // Field report 2026-10-03: "Committing…" hung on screen after "Sync
   // done" and stayed until the next sync, because the section had been
   // opened by a call that always happens and closed by calls that
@@ -180,7 +181,12 @@ export interface Sync2ManagerDeps {
   // what has actually reached the queue, `total` what the scan counted.
   onCommitProgress?(done: number, total: number): void;
   onLocalCommitted?(filesCount: number): void;
-  onNoLocalChanges?(): void;
+  // The scan found nothing. `queued`: older batches are still waiting
+  // in the queue. Whether to SAY "Nothing to commit" is the notice
+  // layer's call (owner, 2026-10-05): inside a sync with batches queued
+  // it stays quiet — the drain is about to send them; a STANDALONE
+  // commit always says it, because it speaks only for that one call.
+  onNoLocalChanges?(queued: boolean): void;
   // §II.16 — the whole user-visible operation began. Paired with
   // onSyncCompleted; main.ts arms the 2 s progress timer here, so the
   // wait is measured from the CLICK, not from the drain (a slow commit
@@ -638,9 +644,7 @@ export class Sync2Manager {
     lap("detectMs");
     if (changes.length === 0) {
       this.logCommitTiming(target, ph, t0, 0);
-      if ((await this.listQueueIds()).length === 0) {
-        this.deps.onNoLocalChanges?.();
-      }
+      this.deps.onNoLocalChanges?.((await this.listQueueIds()).length > 0);
       this.deps.logger.info("Sync2 commit pass: nothing to commit");
       return 0;
     }

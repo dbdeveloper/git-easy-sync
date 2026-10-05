@@ -1553,13 +1553,7 @@ export default class GitHubSyncPlugin extends Plugin {
         }
       },
       onLocalCommitted: (count: number) => this.reportCommitDone(count),
-      onNoLocalChanges: () => {
-        this.setCommitSection({
-          state: "settled",
-          text: "Nothing to commit",
-          until: this.settleAt(),
-        });
-      },
+      onNoLocalChanges: (queued: boolean) => this.reportNothingToCommit(queued),
       onSyncStarted: () => {
         this.inFullSync = true;
         // A stale request would make the NEXT drain's idle event
@@ -2841,6 +2835,25 @@ export default class GitHubSyncPlugin extends Plugin {
   // ⚠️ Extracted from the dep handler for the same reason as
   // reportCommitProgress below: inline, the rule was unreachable by a
   // test.
+  // "Nothing to commit" (owner, 2026-10-05). It speaks for THIS commit
+  // call only. A STANDALONE commit says it whenever its own scan found
+  // nothing — even with older batches still queued (the [Commit] button
+  // works on its own whatever "Sync starts with commit" says). Inside a
+  // sync it is said only when the queue is empty too: with batches
+  // queued the drain is about to send them, and "Nothing to commit"
+  // right before "Sync done — sent 5 files" would contradict it.
+  private reportNothingToCommit(queued: boolean): void {
+    if (this.inFullSync && queued) {
+      this.setCommitSection({ state: "none" });
+      return;
+    }
+    this.setCommitSection({
+      state: "settled",
+      text: "Nothing to commit",
+      until: this.settleAt(),
+    });
+  }
+
   private reportCommitDone(count: number): void {
     if (this.inFullSync) {
       this.setCommitSection({ state: "none" });

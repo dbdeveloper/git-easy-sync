@@ -49,6 +49,7 @@ interface NoticeHandle {
   repaintSyncProgressNotice(): void;
   reportCommitProgress(done: number, total: number): void;
   reportCommitDone(count: number): void;
+  reportNothingToCommit(queued: boolean): void;
   setCommitSection(s: NoticeState["commit"]): void;
   setDrainSection(s: NoticeState["drain"]): void;
   settleDrainSection(text: string): void;
@@ -438,5 +439,38 @@ describe("sync notice lifecycle (§II.16)", () => {
     p.reportCommitDone(5);
     expect(lastMessage()).toContain("Committed 5 files");
     expect(p.noticeState.commit.state).toBe("settled");
+  });
+
+  // "Nothing to commit" speaks for THIS commit call (owner, 2026-10-05).
+  describe("\"Nothing to commit\": per call, not per setting", () => {
+    it("standalone commit, queue empty → says it", () => {
+      const p = makePlugin();
+      p.reportNothingToCommit(false);
+      expect(lastMessage()).toBe("Nothing to commit");
+    });
+
+    it("🔑 standalone commit WITH older batches queued → still says it (only about this call)", () => {
+      const p = makePlugin();
+      p.inFullSync = false;
+      p.reportNothingToCommit(true);
+      expect(lastMessage()).toBe("Nothing to commit");
+    });
+
+    it("inside a sync, queue empty → says it (followed by the sync's own result)", () => {
+      const p = makePlugin();
+      p.inFullSync = true;
+      p.reportNothingToCommit(false);
+      expect(lastMessage()).toBe("Nothing to commit");
+    });
+
+    it("🔑 inside a sync WITH batches queued → silent: the drain is about to send them", () => {
+      const p = makePlugin();
+      p.inFullSync = true;
+      p.setCommitSection({ state: "live", text: "Committing…" });
+      p.reportNothingToCommit(true);
+      const all = recordedNotices.map((n) => n.message).join(" | ");
+      expect(all).not.toContain("Nothing to commit");
+      expect(p.noticeState.commit.state).toBe("none");
+    });
   });
 });

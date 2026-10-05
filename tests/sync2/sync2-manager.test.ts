@@ -394,13 +394,15 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
   });
 
   it("🔑 …including the no-changes-with-a-queued-batch path", async () => {
-    // The second silent path, isolated: the scan finds nothing but the
-    // queue is NOT empty, so `onNoLocalChanges` stays quiet by design
-    // and only the `finally` can close the section.
+    // The second path that may say nothing, isolated: the scan finds
+    // nothing but the queue is NOT empty. The manager now REPORTS that
+    // (owner 2026-10-05) and the notice layer decides — silent inside a
+    // sync, "Nothing to commit" for a standalone commit — so the
+    // `finally` must still close the section either way.
     const events: string[] = [];
     deps.onCommitStarted = () => events.push("started");
     deps.onCommitFinished = () => events.push("finished");
-    deps.onNoLocalChanges = () => events.push("nothing");
+    deps.onNoLocalChanges = (queued) => events.push(`nothing queued=${queued}`);
 
     // Leave a batch in the queue, then commit with nothing to find.
     findChangesResult = [modified("queued.md")];
@@ -413,8 +415,8 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
 
     expect(events).toContain("started");
     expect(events).toContain("finished");
-    expect(events, "the queue is not empty, so this path says nothing").not.toContain(
-      "nothing",
+    expect(events, "reported WITH the queue state, for the notice layer to decide").toContain(
+      "nothing queued=true",
     );
   });
 
