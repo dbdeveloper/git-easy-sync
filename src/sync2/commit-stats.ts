@@ -87,6 +87,25 @@ export function costLine(r: ActionRecords): CostLine | null {
   return { overheadMs, msPerByte };
 }
 
+// Stages 2 + 3 of a commit (§3.1): every planned file is read, hashed
+// and — as an upper bound — written. null when any of the three has no
+// measurement yet: the caller then shows the counter anyway, because
+// "unknown" is not "fast".
+export function forecastCheckMs(
+  lines: { read: CostLine | null; hash: CostLine | null; write: CostLine | null },
+  files: number,
+  bytes: number,
+): number | null {
+  if (lines.read === null || lines.hash === null || lines.write === null) {
+    return null;
+  }
+  return (
+    forecastMs(lines.read, files, bytes) +
+    forecastMs(lines.hash, files, bytes) +
+    forecastMs(lines.write, files, bytes)
+  );
+}
+
 export function forecastMs(
   line: CostLine,
   files: number,
@@ -223,6 +242,15 @@ export default class CommitStats {
   forecast(action: TimedAction, files: number, bytes: number): number | null {
     const l = this.line(action);
     return l === null ? null : forecastMs(l, files, bytes);
+  }
+
+  // The forecast for stages 2 + 3 (see forecastCheckMs).
+  forecastCheck(files: number, bytes: number): number | null {
+    return forecastCheckMs(
+      { read: this.line("read"), hash: this.line("hash"), write: this.line("write") },
+      files,
+      bytes,
+    );
   }
 
   // The last dot-space enumeration time: its own forecast for the next.

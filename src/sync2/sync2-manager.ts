@@ -46,7 +46,7 @@ import {
 import BatchWriter, { MAX_BATCH_ENTRIES } from "./batch-writer";
 import { buildQueueShaIndex, QueueShaIndex } from "./queue-sha-index";
 import { QUEUE_DIRNAME } from "./batch-metafile";
-import ChangeDetector from "./change-detector";
+import ChangeDetector, { type ScanPlan } from "./change-detector";
 import { FileChange } from "./types";
 import SyncStore, { PIN_OWNER_COMMIT } from "./sync-store";
 import DrainJournal from "./drain-journal";
@@ -164,7 +164,9 @@ export interface Sync2ManagerDeps {
   // the start of every user-driven sync against what the metadata was
   // built against — see `reconcileRemoteIdentity`.
   remoteIdentity?(): { owner: string; repo: string; branch: string };
-  onCommitStarted?(): void;
+  // `fullScan`: false for a single-file commit — quick by nature, so
+  // the notice layer opens nothing for it.
+  onCommitStarted?(fullScan: boolean): void;
   // ⚠️ THE CLOSING HALF, and it must be unconditional because the
   // opening one is. Fires from a `finally` around the WHOLE commit
   // pass, so it covers the paths that produce no result at all:
@@ -177,9 +179,13 @@ export interface Sync2ManagerDeps {
   // opened by a call that always happens and closed by calls that
   // sometimes do.
   onCommitFinished?(): void;
-  // Per ≤100-file batch during the enqueue — the slow half. `done` is
-  // what has actually reached the queue, `total` what the scan counted.
-  onCommitProgress?(done: number, total: number): void;
+  // COMMIT-PASS-PERF 3c (spec §3.1) — ONE counter for stages 2 and 3
+  // of a full-scan commit. onCommitPlan: stage 1 is done, nothing has
+  // been read; `total` = M = candidates + deletions. onCommitChecked:
+  // `done` of `total` — every stage-2 check counts whatever its outcome,
+  // then stage 3's deletions (and unhashed adds) as their batches land.
+  onCommitPlan?(plan: ScanPlan, total: number): void;
+  onCommitChecked?(done: number, total: number): void;
   onLocalCommitted?(filesCount: number): void;
   // The scan found nothing. `queued`: older batches are still waiting
   // in the queue. Whether to SAY "Nothing to commit" is the notice
@@ -564,7 +570,7 @@ export class Sync2Manager {
   private async runCommitPass(target: string | null): Promise<number> {
     // The click registered. Before enforce(), before the scan, before
     // anything is knowable — see `onCommitStarted`.
-    this.deps.onCommitStarted?.();
+    this.deps.onCommitStarted?.(target === null);
     try {
       return await this.runCommitPassInner(target);
     } finally {
@@ -643,8 +649,23 @@ export class Sync2Manager {
     lap("queueIndexMs");
 
     let changes: FileChange[];
+    // The stage 2+3 counter (§3.1): stage 2's checks come from the
+    // detector; stage 3 continues from there in the batch loop below.
+    let plan: ScanPlan | null = null;
+    let total = 0;
+    let checksDone = 0;
     if (target === null) {
-      changes = await this.deps.detector.findChanges();
+      changes = await this.deps.detector.findChanges({
+        onPlan: (p) => {
+          plan = p;
+          total = p.checks + p.unhashedAdds + p.deletions;
+          this.deps.onCommitPlan?.(p, total);
+        },
+        onChecked: (done) => {
+          checksDone = done;
+          this.deps.onCommitChecked?.(done, total);
+        },
+      });
     } else {
       const one = await this.deps.detector.findChangeForPath(target);
       changes = one === null ? [] : [one];
@@ -681,11 +702,24 @@ export class Sync2Manager {
     // silence the early message was meant to end, just later — so each
     // batch reports. One update per ≤100 files means a vault under that
     // size sees exactly one text, as before.
+    // Stage 3 of the counter: what stage 2 did not already count —
+    // deletions, and new files emitted unhashed (no queue; tests).
+    let stage3 = 0;
+    let unhashedLeft = (plan as ScanPlan | null)?.unhashedAdds ?? 0;
     for (let i = 0; i < rest.length; i += MAX_BATCH_ENTRIES) {
       const slice = rest.slice(i, i + MAX_BATCH_ENTRIES);
       const id = await this.deps.batchWriter.writeBatch(slice);
       if (id !== null) enqueued += slice.length;
-      this.deps.onCommitProgress?.(enqueued, changes.length);
+      if (total > 0) {
+        for (const c of slice) {
+          if (c.kind === "deleted") stage3 += 1;
+          else if (c.kind === "added" && c.sha === undefined && unhashedLeft > 0) {
+            unhashedLeft -= 1;
+            stage3 += 1;
+          }
+        }
+        this.deps.onCommitChecked?.(Math.min(total, checksDone + stage3), total);
+      }
     }
 
     lap("writeBatchesMs");

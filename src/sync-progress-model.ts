@@ -38,9 +38,18 @@ export function syncStartedNoticeText(): string {
   return HEADER;
 }
 
-// The commit's three texts. One stable prefix so the message reads as
-// ONE line gaining detail rather than three messages replacing each
-// other (owner: "щоб початок повідомлення не сильно змінювалось").
+// The commit's texts (COMMIT-PASS-PERF §3.1, owner 2026-10-05). Each is
+// shown only when its phase is FORECAST to take more than ~2 s — never
+// on a timer:
+//   "Committing…"            listing the files (dot-space) runs long;
+//   "Checking all files…"    no statistics yet (the first commit after a
+//                            RESET) — shown at once, unconditionally;
+//   "Checking N of M files"  reading, hashing and storing — ONE counter
+//                            for stages 2 and 3, M = candidates +
+//                            deletions. "Checking", not "Committing": in
+//                            the self-heal pass after a drain every file
+//                            turns out unchanged and the result is
+//                            "Nothing to commit".
 //
 // ⚠️ Present participle while it runs, PAST tense when it is done —
 // the tense is the only thing that says "finished", and it says it for
@@ -52,8 +61,14 @@ export function commitStartedNoticeText(): string {
   return "Committing…";
 }
 
-export function commitProgressNoticeText(done: number, total: number): string {
-  return `Committing ${done} of ${total}`;
+export function checkingAllFilesNoticeText(): string {
+  return "Checking all files…";
+}
+
+export function checkingNoticeText(done: number, total: number): string {
+  return total === 1
+    ? `Checking ${done} of 1 file`
+    : `Checking ${done} of ${total} files`;
 }
 
 export function commitDoneNoticeText(count: number): string {

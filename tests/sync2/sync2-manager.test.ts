@@ -310,46 +310,51 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(manager.getDrainStatus().progress).toBeNull();
   });
 
-  it("🔑 the commit acknowledges FIRST, then reports per batch, then settles", async () => {
-    // Owner's sequencing, 2026-10-03. A commit is two phases: COUNT the
-    // changes (measured: 0.12 s at 2k files, 0.71 s at 20k — linear)
-    // and then WRITE them to the queue in ≤100-file batches, hashing
-    // and copying every byte. The second is what takes seconds, so the
-    // count must be announced BEFORE it, not after.
-    //
-    // ⚠️ The old `onLocalCommitted` fires after the whole enqueue — it
-    // is the settled number, and as an acknowledgement it arrives
-    // exactly when it is no longer needed.
+  it("🔑 the commit acknowledges FIRST, then plan → one counter over stages 2 and 3 → settles", async () => {
+    // COMMIT-PASS-PERF §3.1 (owner, 2026-10-05). The acknowledgement
+    // comes before anything is knowable; the plan (M = candidates +
+    // deletions) before any read; then ONE counter: every stage-2 check,
+    // then stage 3's deletions as their batches land; the settled number
+    // last.
     const order: string[] = [];
-    deps.onCommitStarted = () => order.push("started");
-    deps.onCommitProgress = (d: number, t: number) =>
-      order.push(`progress:${d}/${t}`);
+    deps.onCommitStarted = (full) => order.push(`started:${full}`);
+    deps.onCommitPlan = (_p, total) => order.push(`plan:${total}`);
+    deps.onCommitChecked = (d, t) => order.push(`checked:${d}/${t}`);
     deps.onLocalCommitted = (n) => order.push(`committed:${n}`);
-    const origWrite = deps.batchWriter.writeBatch.bind(deps.batchWriter);
-    deps.batchWriter.writeBatch = async (c: FileChange[]) => {
-      order.push(`write:${c.length}`);
-      return origWrite(c);
+    const changes: FileChange[] = [
+      modified("a.md"),
+      modified("b.md"),
+      { kind: "deleted", path: "gone.md", previousRemoteSha: "x" },
+    ];
+    put("a.md", "a");
+    put("b.md", "b");
+    deps.detector.findChanges = async (hooks) => {
+      hooks?.onPlan?.({ checks: 2, checkBytes: 2, unhashedAdds: 0, deletions: 1 });
+      hooks?.onChecked?.(1, 2);
+      hooks?.onChecked?.(2, 2);
+      return changes;
     };
-    findChangesResult = Array.from({ length: 250 }, (_, i) =>
-      modified(`n${i}.md`),
-    );
 
     await manager.commitOnly();
 
-    // The acknowledgement comes FIRST — before the scan, before any
-    // byte is written. It carries no number because none exists yet.
-    expect(order[0]).toBe("started");
-    expect(order.indexOf("started")).toBeLessThan(
-      order.findIndex((x) => x.startsWith("write:")),
-    );
-    // Then one report per ≤100-file batch — 250 files is three.
-    expect(order.filter((x) => x.startsWith("progress:"))).toEqual([
-      "progress:100/250",
-      "progress:200/250",
-      "progress:250/250",
+    expect(order).toEqual([
+      "started:true",
+      "plan:3",
+      "checked:1/3",
+      "checked:2/3",
+      "checked:3/3", // stage 3: the deletion's batch landed
+      "committed:3",
     ]);
-    // And the settled number last.
-    expect(order[order.length - 1]).toBe("committed:250");
+  });
+
+  it("a single-file commit says it is not a full scan, and carries no plan", async () => {
+    const order: string[] = [];
+    deps.onCommitStarted = (full) => order.push(`started:${full}`);
+    deps.onCommitPlan = () => order.push("plan");
+    put("one.md", "x");
+    await manager.commitFile("one.md");
+    expect(order[0]).toBe("started:false");
+    expect(order).not.toContain("plan");
   });
 
   it("🔑 a commit that produces NO result still closes its notice section", async () => {

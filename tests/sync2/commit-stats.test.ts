@@ -6,6 +6,7 @@ import { tmpdir } from "os";
 import { Vault } from "../../mock-obsidian";
 import CommitStats, {
   costLine,
+  forecastCheckMs,
   forecastMs,
   parseCommitStats,
 } from "../../src/sync2/commit-stats";
@@ -160,5 +161,23 @@ describe("CommitStats", () => {
     expect(s.forecast("write", 10, 10 * MB)).toBeNull();
     s.record("write", MB, 10);
     expect(s.forecast("write", 10, 10 * MB)).toBeCloseTo(100, 6);
+  });
+});
+
+
+describe("forecastCheckMs — stages 2 + 3: read + SHA-1 + write for every planned file", () => {
+  const line = (overheadMs: number, msPerMB: number) => ({ overheadMs, msPerByte: msPerMB / MB });
+
+  it("sums the three actions", () => {
+    const ms = forecastCheckMs(
+      { read: line(0.1, 12), hash: line(0, 20), write: line(0.2, 10) },
+      263,
+      63 * MB,
+    )!;
+    expect(ms).toBeCloseTo(263 * 0.3 + 63 * (12 + 20 + 10), 6);
+  });
+
+  it("🔑 any action not yet measured → unknown (null), never \"fast\"", () => {
+    expect(forecastCheckMs({ read: line(0, 1), hash: null, write: line(0, 1) }, 10, MB)).toBeNull();
   });
 });

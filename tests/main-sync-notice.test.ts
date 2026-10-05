@@ -47,7 +47,14 @@ interface NoticeHandle {
   armSyncProgressNotice(): void;
   clearSyncNotice(): void;
   repaintSyncProgressNotice(): void;
-  reportCommitProgress(done: number, total: number): void;
+  reportCommitStarted(fullScan: boolean): void;
+  reportCommitPlan(
+    plan: { checks: number; checkBytes: number; unhashedAdds: number; deletions: number },
+    total: number,
+  ): void;
+  reportCommitChecked(done: number, total: number): void;
+  commitStats: unknown;
+  commitCounterOn: boolean;
   reportCommitDone(count: number): void;
   reportNothingToCommit(queued: boolean): void;
   setCommitSection(s: NoticeState["commit"]): void;
@@ -72,6 +79,8 @@ function makePlugin(progress: unknown = null): NoticeHandle {
   p.noticeDeadlineTimer = null;
   p.lastDrainState = null;
   p.applyRibbonSyncingState = () => {};
+  p.commitStats = undefined;
+  p.commitCounterOn = false;
   return p;
 }
 
@@ -139,41 +148,94 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(lastMessage()).toBe("Syncing with GitHub");
   });
 
-  it("🔑 the commit counter waits for the same gate", () => {
-    const p = makePlugin();
-    p.setCommitSection({ state: "live", text: "Committing…" });
-    p.syncProgressActive = false;
-    p.reportCommitProgress(100, 250);
-    expect(lastMessage()).toBe("Committing…");
-    p.syncProgressActive = true;
-    p.reportCommitProgress(100, 250);
-    expect(lastMessage()).toBe("Committing 100 of 250");
-    // The LAST batch stays silent: the settled line lands in the same
-    // tick and would overwrite it anyway.
-    p.reportCommitProgress(250, 250);
-    expect(lastMessage()).toBe("Committing 100 of 250");
+  // ── COMMIT-PASS-PERF §3.1: the commit's lines by FORECAST, no timers ──
+
+  const statsWith = (o: {
+    any?: boolean;
+    dotMs?: number | null;
+    forecast?: number | null;
+  }) => ({
+    hasAny: () => o.any ?? true,
+    dotMs: () => (o.dotMs === undefined ? 100 : o.dotMs),
+    forecastCheck: () => (o.forecast === undefined ? 100 : o.forecast),
+  });
+  const plan = (checks: number, deletions = 0) => ({
+    checks,
+    checkBytes: checks * 1000,
+    unhashedAdds: 0,
+    deletions,
   });
 
-  it("🔑 a commit cannot show the PREVIOUS drain's numbers (owner's check)", () => {
-    // Asked after the drain's own version of this had been fixed once
-    // in the wrong place. Two independent reasons it cannot: the
-    // commit's numbers are passed in live per batch, and the drain's
-    // snapshot can only ever reach the DRAIN's slot.
-    const p = makePlugin({
-      pullDone: 0,
-      pullTotal: 0,
-      pushDone: 258,
-      pushTotal: 258,
-      conflicts: 0,
-      path: "x.md",
-    });
-    p.setCommitSection({ state: "live", text: "Committing…" });
-    p.syncProgressActive = true;
-    p.reportCommitProgress(3, 7);
-    expect(lastMessage()).toBe("Committing 3 of 7");
-    expect(recordedNotices.map((n) => n.message).join(" | ")).not.toContain(
-      "258",
-    );
+  it("🔑 no statistics (first commit after RESET): \"Checking all files…\" AT ONCE, then the counter", () => {
+    const p = makePlugin();
+    p.commitStats = statsWith({ any: false, forecast: null });
+    p.reportCommitStarted(true);
+    expect(lastMessage()).toBe("Checking all files…"); // no timer, no delay
+    p.reportCommitPlan(plan(263, 1), 264);
+    expect(lastMessage()).toBe("Checking 0 of 264 files");
+    p.reportCommitChecked(120, 264);
+    expect(lastMessage()).toBe("Checking 120 of 264 files");
+  });
+
+  it("statistics, fast dot-space and a fast check: NO line at all until the result", () => {
+    const p = makePlugin();
+    p.commitStats = statsWith({ dotMs: 300, forecast: 800 });
+    p.reportCommitStarted(true);
+    p.reportCommitPlan(plan(10), 10);
+    p.reportCommitChecked(5, 10);
+    expect(recordedNotices).toHaveLength(0);
+  });
+
+  it("dot-space forecast over 2 s: \"Committing…\" at the start", () => {
+    const p = makePlugin();
+    p.commitStats = statsWith({ dotMs: 2500, forecast: 500 });
+    p.reportCommitStarted(true);
+    expect(lastMessage()).toBe("Committing…");
+    // A fast check after it adds no counter.
+    p.reportCommitPlan(plan(3), 3);
+    expect(lastMessage()).toBe("Committing…");
+  });
+
+  it("check forecast over 2 s: the counter from the START of stage 2", () => {
+    const p = makePlugin();
+    p.commitStats = statsWith({ dotMs: 100, forecast: 3400 });
+    p.reportCommitStarted(true);
+    expect(recordedNotices).toHaveLength(0);
+    p.reportCommitPlan(plan(263), 263);
+    expect(lastMessage()).toBe("Checking 0 of 263 files");
+    p.reportCommitChecked(263, 263);
+    expect(lastMessage()).toBe("Checking 263 of 263 files");
+  });
+
+  it("an action never measured yet (forecast unknown) shows the counter — unknown is not fast", () => {
+    const p = makePlugin();
+    p.commitStats = statsWith({ dotMs: 100, forecast: null });
+    p.reportCommitStarted(true);
+    p.reportCommitPlan(plan(5), 5);
+    expect(lastMessage()).toBe("Checking 0 of 5 files");
+  });
+
+  it("a single-file commit opens nothing, even without statistics", () => {
+    const p = makePlugin();
+    p.commitStats = statsWith({ any: false, forecast: null });
+    p.reportCommitStarted(false);
+    expect(recordedNotices).toHaveLength(0);
+  });
+
+  it("an empty plan (nothing to check, nothing deleted) adds no counter", () => {
+    const p = makePlugin();
+    p.commitStats = statsWith({ forecast: 9999 });
+    p.reportCommitStarted(true);
+    p.reportCommitPlan(plan(0), 0);
+    expect(recordedNotices).toHaveLength(0);
+  });
+
+  it("singular: \"Checking 0 of 1 file\"", () => {
+    const p = makePlugin();
+    p.commitStats = statsWith({ forecast: null });
+    p.reportCommitStarted(true);
+    p.reportCommitPlan(plan(1), 1);
+    expect(lastMessage()).toBe("Checking 0 of 1 file");
   });
 
   // ── the 500 ms start gate ─────────────────────────────────────────

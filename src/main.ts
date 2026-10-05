@@ -53,7 +53,7 @@ import GI, { whitelistedGitignoreDirs } from "./gi";
 import HotMetadataStore from "./sync2/hot-metadata";
 import FileBaselinesStore from "./sync2/file-baselines";
 import { AtomicWriteRecovery, atomicWriteFile } from "./sync2/atomic-write";
-import ChangeDetector from "./sync2/change-detector";
+import ChangeDetector, { type ScanPlan } from "./sync2/change-detector";
 import GitignoreInvariants from "./sync2/gitignore-invariants";
 import GitignoreSeedStore from "./sync2/gitignore-seeds";
 import DeletedStore from "./diff2/deleted-store";
@@ -88,7 +88,8 @@ import {
   type NoticeState,
   type NoticeSection,
   commitStartedNoticeText,
-  commitProgressNoticeText,
+  checkingAllFilesNoticeText,
+  checkingNoticeText,
   commitDoneNoticeText,
 } from "./sync-progress-model";
 import WorkerClient from "./worker/worker-client";
@@ -165,6 +166,11 @@ const SYNC_PROGRESS_DELAY_MS = 2000;
 // Raised 500 → 700 the same day: at 500 they still appeared on the
 // owner's vault, which is the only measurement that counts here.
 const PHASE_START_DELAY_MS = 700;
+// COMMIT-PASS-PERF §3.1 (owner, 2026-10-05): a commit phase gets its line
+// only when it is FORECAST to take longer than this — human reading
+// time, not machine speed. Replaces the commit's timers; the drain's
+// (PHASE_START_DELAY_MS above, SYNC_PROGRESS_DELAY_MS) are unchanged.
+const COMMIT_FORECAST_MS = 2000;
 // How long the closing line ("Sync done — …") stays after the operation
 // ends. The user has been watching this notice, so it does not need the
 // dwell time of a toast that appears out of nowhere — a second is the
@@ -1539,21 +1545,16 @@ export default class GitHubSyncPlugin extends Plugin {
         repo: this.settings.githubRepo ?? "",
         branch: this.settings.githubBranch ?? "main",
       }),
-      onCommitStarted: () => {
-        this.setCommitSection({
-          state: "pending",
-          text: commitStartedNoticeText(),
-          showAt: Date.now() + PHASE_START_DELAY_MS,
-        });
-        // The same 2 s gate as the drain's counters, so a fast commit
-        // shows "Committing…" and then its result with nothing
-        // flickering in between.
+      onCommitStarted: (fullScan: boolean) => {
+        this.reportCommitStarted(fullScan);
+        // Still armed here: the DRAIN's counters keep their 2 s gate,
+        // measured from the click (only the commit's lines moved to
+        // forecasts — COMMIT-PASS-PERF §3.1).
         this.armSyncProgressNotice();
       },
-      // 2 — see reportCommitProgress.
-      onCommitProgress: (done: number, total: number) => {
-        this.reportCommitProgress(done, total);
-      },
+      // 2 — the stage 2+3 counter, by forecast; see reportCommitPlan.
+      onCommitPlan: (plan, total) => this.reportCommitPlan(plan, total),
+      onCommitChecked: (done, total) => this.reportCommitChecked(done, total),
       // 3 — the settled number, in the past tense, kept for a moment.
       // It no longer has to be overwritten by the drain: the drain has
       // its own slot below, so "Committed 264 files" stays readable
@@ -2886,15 +2887,54 @@ export default class GitHubSyncPlugin extends Plugin {
     });
   }
 
-  private reportCommitProgress(done: number, total: number): void {
-    if (!this.syncProgressActive) return;
-    // The settled "Committed N files" follows immediately, so the last
-    // batch's counter would be overwritten in the same tick.
-    if (done >= total) return;
-    this.setCommitSection({
-      state: "live",
-      text: commitProgressNoticeText(done, total),
-    });
+  // ── COMMIT-PASS-PERF §3.1: the commit's lines by FORECAST, no timers ──
+  //
+  // Each line shows at the START of its phase, and only if that phase is
+  // forecast to take more than COMMIT_FORECAST_MS — the statistics in
+  // commit-stats.ts. Without any statistics (the first commit after a
+  // RESET) we say so at once. A forecast that was too low leaves the run
+  // without a line; the records update and the next run is right. That
+  // is the accepted, cosmetic failure mode.
+  private commitCounterOn = false;
+
+  private reportCommitStarted(fullScan: boolean): void {
+    this.commitCounterOn = false;
+    // A single-file commit is quick by nature: no line.
+    if (!fullScan) return;
+    const stats = this.commitStats;
+    if (!stats || !stats.hasAny()) {
+      this.commitCounterOn = true;
+      this.setCommitSection({ state: "live", text: checkingAllFilesNoticeText() });
+      return;
+    }
+    if ((stats.dotMs() ?? 0) > COMMIT_FORECAST_MS) {
+      this.setCommitSection({ state: "live", text: commitStartedNoticeText() });
+    }
+  }
+
+  // Stage 1 is done, nothing read yet: M = candidates + deletions.
+  private reportCommitPlan(plan: ScanPlan, total: number): void {
+    if (total === 0) return;
+    const forecast = this.commitStats?.forecastCheck(
+      plan.checks + plan.unhashedAdds,
+      plan.checkBytes,
+    );
+    // "Unknown" is not "fast": no statistics, or an action never yet
+    // measured, shows the counter.
+    if (
+      this.commitCounterOn ||
+      forecast === null ||
+      forecast === undefined ||
+      forecast > COMMIT_FORECAST_MS
+    ) {
+      this.commitCounterOn = true;
+      this.setCommitSection({ state: "live", text: checkingNoticeText(0, total) });
+    }
+  }
+
+  private reportCommitChecked(done: number, total: number): void {
+    if (!this.commitCounterOn) return;
+    this.setCommitSection({ state: "live", text: checkingNoticeText(done, total) });
   }
 
 
