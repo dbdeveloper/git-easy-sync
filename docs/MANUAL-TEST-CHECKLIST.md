@@ -208,6 +208,18 @@ Use it, and note which runs you did.
 
 - [ ] **Progress notice (§II.16):** a long sync shows progress that actually moves, and
       the counts do not jump backwards on a retry.
+- [ ] **Commit lines by forecast (COMMIT-PASS-PERF §3.1, new 2026-10-05) — no timers.**
+      Each line appears at the START of its phase and only if the phase is forecast over
+      ~2 s (statistics in `.runtime/commit-stats.json`):
+      - no statistics yet — the first commit after a RESET, **and the first commit after
+        installing this build** — shows **"Checking all files…"** at once, then
+        **"Checking N of M files"** whatever the forecast;
+      - a commit with nothing to do on a vault with statistics shows **no line**, then
+        "Nothing to commit";
+      - the self-heal pass after a large pull shows "Checking N of M files" and ends with
+        "Nothing to commit" (the forecast is an upper bound — it over-shows on purpose);
+      - "Committing…" appears only when listing dot-space files is forecast over 2 s;
+      - a single-file commit shows no line; inside a Sync there is no "Committed L files".
 - [ ] **Stop sync (§II.17):** Settings → **Stop sync** during a long run stops it at the
       next checkpoint, says so, and **loses nothing** — the next sync finishes the job.
 - [ ] **⚠️ A cancelled conflict is announced.** If a conflict's remote content vanishes
@@ -268,8 +280,8 @@ Use it, and note which runs you did.
 - [ ] **Mobile autosave benchmark** (Settings → *Run mobile autosave benchmark*): run on a mid-tier Android and on iOS; collect the p50/p95/p99 figures and send the log so the autosave timing can be tuned.
 - [ ] A large conflict (hundreds of change blocks) in the diff editor stays responsive on mobile.
 - [ ] 📱🖥️ **The FIRST sync after a large pull — the self-heal pass.** Pull several
-      hundred files from another device, then sync again and time the *Committing…*
-      phase. ⚠️ It is EXPECTED to be slow once, and the second sync after it must be
+      hundred files from another device, then sync again and time the commit phase (the
+      "Checking N of M files" line; exact numbers in the log's `Sync2 commit pass timing`). ⚠️ It is EXPECTED to be slow once, and the second sync after it must be
       fast again — that pair is the pass condition, not any single number.
 
       Why it happens, so a tester does not file it as a hang: the epilogue writes
