@@ -178,6 +178,36 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
       }
     });
 
+    // Owner, 2026-10-05: Obsidian's own settings — every file DIRECTLY in
+    // the config dir (app.json, appearance.json, hotkeys.json, …) — always
+    // exist and are re-created by Obsidian, so a deletion arriving from the
+    // server is an accident, not an intent: kept. Sub-folders (plugins/,
+    // themes/, snippets/) are what the user installs and removes on
+    // purpose — their deletions still propagate.
+    it("🔑 remove: a file DIRECTLY in .obsidian/ is kept — no removal, a warning", async () => {
+      const core = [".obsidian/app.json", ".obsidian/appearance.json", ".obsidian/hotkeys.json"];
+      for (const f of core) await vault.adapter.write(f, "{}");
+      const r = reader();
+      for (const f of core) {
+        await r.remove(f);
+        expect(await vault.adapter.exists(f), f).toBe(true);
+      }
+      expect(captured).toEqual([]);
+      expect(warnings.some((w) => w.includes("Obsidian settings file"))).toBe(true);
+    });
+
+    it("remove: files in .obsidian/ SUB-folders (themes, snippets, another plugin) are removed as before", async () => {
+      for (const f of [
+        ".obsidian/themes/Minimal/theme.css",
+        ".obsidian/snippets/wide.css",
+        ".obsidian/plugins/dataview/main.js",
+      ]) {
+        await vault.adapter.write(f, "x");
+        await reader().remove(f);
+        expect(await vault.adapter.exists(f), f).toBe(false);
+      }
+    });
+
     it("remove: ANOTHER plugin's files are removed as before (the guard is ours only)", async () => {
       await vault.adapter.write(".obsidian/plugins/templater/main.js", "x");
       await reader().remove(".obsidian/plugins/templater/main.js");

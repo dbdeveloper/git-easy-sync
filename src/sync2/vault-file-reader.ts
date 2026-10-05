@@ -194,6 +194,24 @@ export function makeVaultFileReader(
         );
         return;
       }
+      // And Obsidian's own settings — every file DIRECTLY in the config
+      // dir (app.json, appearance.json, hotkeys.json, …), owner
+      // 2026-10-05: they always exist and Obsidian re-creates them, so
+      // a deletion from the server is an accident, not an intent. Not
+      // the sub-folders: plugins/, themes/ and snippets/ are what a user
+      // installs and removes on purpose, and their deletions must keep
+      // reaching every device.
+      const cfgPrefix = `${deps.vault.configDir}/`;
+      if (
+        normalized.startsWith(cfgPrefix) &&
+        !normalized.slice(cfgPrefix.length).includes("/")
+      ) {
+        deps.logger?.warn(
+          "VaultFileReader: remote deletion of an Obsidian settings file NOT applied (kept; the next commit restores it on the server)",
+          { path: normalized },
+        );
+        return;
+      }
       const ownDir = `${deps.vault.configDir}/plugins/${deps.selfPluginId}/`;
       if (normalized.startsWith(ownDir)) {
         deps.logger?.warn(
