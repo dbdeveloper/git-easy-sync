@@ -210,7 +210,7 @@ Use it, and note which runs you did.
       the counts do not jump backwards on a retry.
 - [ ] **Commit lines by forecast (COMMIT-PASS-PERF §3.1, new 2026-10-05) — no timers.**
       Each line appears at the START of its phase and only if the phase is forecast over
-      ~2 s (statistics in `.runtime/commit-stats.json`):
+      ~1.5 s (statistics in `.runtime/commit-stats.json`):
       - no statistics yet — the first commit after a RESET, **and the first commit after
         installing this build** — shows **"Checking all files…"** at once; it turns into
         **"Checking N of M files"** only for a big commit (more than 500 files, or more
@@ -218,8 +218,9 @@ Use it, and note which runs you did.
       - a commit with nothing to do on a vault with statistics shows **no line**, then
         "Nothing to commit";
       - the self-heal pass after a large pull shows "Checking N of M files" and ends with
-        "Nothing to commit" (the forecast is an upper bound — it over-shows on purpose);
-      - "Committing…" appears only when listing dot-space files is forecast over 2 s;
+        "Nothing to commit" (measured 2026-10-05: the forecast runs ~1.7× low on read and write,
+        which is why the threshold is 1.5 s, not 2 s);
+      - "Committing…" appears only when listing dot-space files is forecast over 1.5 s;
       - a single-file commit shows no line; inside a Sync there is no "Committed L files".
 - [ ] **Stop sync (§II.17):** Settings → **Stop sync** during a long run stops it at the
       next checkpoint, says so, and **loses nothing** — the next sync finishes the job.

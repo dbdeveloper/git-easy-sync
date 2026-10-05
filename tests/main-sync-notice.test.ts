@@ -218,7 +218,7 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(recordedNotices).toHaveLength(0);
   });
 
-  it("dot-space forecast over 2 s: \"Committing…\" at the start", () => {
+  it("dot-space forecast over the threshold: \"Committing…\" at the start", () => {
     const p = makePlugin();
     p.commitStats = statsWith({ dotMs: 2500, forecast: 500 });
     p.reportCommitStarted(true);
@@ -228,7 +228,7 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(lastMessage()).toBe("Committing…");
   });
 
-  it("check forecast over 2 s: the counter from the START of stage 2", () => {
+  it("check forecast over the threshold: the counter from the START of stage 2", () => {
     const p = makePlugin();
     p.commitStats = statsWith({ dotMs: 100, forecast: 3400 });
     p.reportCommitStarted(true);
@@ -237,6 +237,23 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(lastMessage()).toBe("Checking 0 of 263 files");
     p.reportCommitChecked(263, 263);
     expect(lastMessage()).toBe("Checking 263 of 263 files");
+  });
+
+  it("🔑 the threshold is 1.5 s (owner, 2026-10-05): 1.6 s shows both lines, exactly 1.5 s shows none", () => {
+    // Lowered from 2 s: on the owner's vault the forecast came out ~1.7× low.
+    const p = makePlugin();
+    p.commitStats = statsWith({ dotMs: 1600, forecast: 1600 });
+    p.reportCommitStarted(true);
+    expect(lastMessage()).toBe("Committing…");
+    p.reportCommitPlan(plan(40), 40);
+    expect(lastMessage()).toBe("Checking 0 of 40 files");
+
+    const q = makePlugin();
+    clearRecordedNotices();
+    q.commitStats = statsWith({ dotMs: 1500, forecast: 1500 });
+    q.reportCommitStarted(true);
+    q.reportCommitPlan(plan(40), 40);
+    expect(recordedNotices).toHaveLength(0);
   });
 
   it("an action never measured yet (forecast unknown) shows the counter — unknown is not fast", () => {

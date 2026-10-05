@@ -170,7 +170,9 @@ const PHASE_START_DELAY_MS = 700;
 // only when it is FORECAST to take longer than this — human reading
 // time, not machine speed. Replaces the commit's timers; the drain's
 // (PHASE_START_DELAY_MS above, SYNC_PROGRESS_DELAY_MS) are unchanged.
-const COMMIT_FORECAST_MS = 2000;
+// Lowered 2000 → 1500 the same day: on the owner's vault the forecast
+// came out ~1.7× low (read and write records are single fast calls).
+const COMMIT_FORECAST_MS = 1500;
 // No statistics yet (the first commit after a RESET or after installing
 // this build): there is no forecast, so the counter is shown only for a
 // commit that is big by these plain measures (owner, 2026-10-05) —
