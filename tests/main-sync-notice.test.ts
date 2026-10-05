@@ -191,12 +191,12 @@ describe("sync notice lifecycle (§II.16)", () => {
 
   // Owner, 2026-10-05: a first sync into an (almost) empty vault would
   // flash "Checking all files…" for a few milliseconds — unreadable, so
-  // only a blink. Fewer than 10 visible files (getFiles: notes, no
+  // only a blink. Fewer than 50 visible files (owner raised 10 → 50) (getFiles: notes, no
   // dot-space) → the vault is "practically empty", the data will flow
   // FROM the server, and the line is not shown. The plan-stage counter
   // rule (> 500 files or > 100 MB, dot-space included) still applies.
-  it("🔑 no statistics, fewer than 10 visible files → NO \"Checking all files…\"", () => {
-    const p = makePlugin(null, 9);
+  it("🔑 no statistics, fewer than 50 visible files → NO \"Checking all files…\"", () => {
+    const p = makePlugin(null, 49);
     p.commitStats = statsWith({ any: false, forecast: null });
     p.reportCommitStarted(true);
     expect(recordedNotices).toHaveLength(0);
@@ -205,8 +205,8 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(recordedNotices).toHaveLength(0);
   });
 
-  it("no statistics, exactly 10 visible files → the line is shown as before", () => {
-    const p = makePlugin(null, 10);
+  it("no statistics, exactly 50 visible files → the line is shown as before", () => {
+    const p = makePlugin(null, 50);
     p.commitStats = statsWith({ any: false, forecast: null });
     p.reportCommitStarted(true);
     expect(lastMessage()).toBe("Checking all files…");

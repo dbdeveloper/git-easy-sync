@@ -181,13 +181,14 @@ const COMMIT_FORECAST_MS = 1500;
 // otherwise "Checking all files…" stays until the result.
 const NO_STATS_COUNTER_MIN_FILES = 500;
 // …and the opening "Checking all files…" is not shown at all when the
-// vault has fewer VISIBLE files than this (owner, 2026-10-05): a first
+// vault has fewer VISIBLE files than this (owner, 2026-10-05; raised
+// 10 → 50 the same day — fifty notes commit just as instantly): a first
 // sync into a practically empty vault commits in milliseconds, so the
 // line would only blink — the data is about to flow FROM the server.
 // getFiles() sees notes only, not the dot-space; that is the point
 // ("this is Obsidian, not a store of hidden files"). The plan-stage
 // counter rule above still applies, dot-space included.
-const NO_STATS_LINE_MIN_VISIBLE_FILES = 10;
+const NO_STATS_LINE_MIN_VISIBLE_FILES = 50;
 const NO_STATS_COUNTER_MIN_BYTES = 100 * 1024 * 1024;
 // How long the closing line ("Sync done — …") stays after the operation
 // ends. The user has been watching this notice, so it does not need the

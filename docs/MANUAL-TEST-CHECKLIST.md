@@ -215,7 +215,7 @@ Use it, and note which runs you did.
         installing this build** — shows **"Checking all files…"** at once; it turns into
         **"Checking N of M files"** only for a big commit (more than 500 files, or more
         than 100 MB), otherwise it stays until the result;
-      - …except in a practically EMPTY vault (fewer than 10 visible files — e.g. a fresh
+      - …except in a practically EMPTY vault (fewer than 50 visible files — e.g. a fresh
         vault pulling a repo for the first time): no "Checking all files…" at all, not even
         a blink; the first thing shown is the drain's progress if the sync takes > 2 s;
       - a commit with nothing to do on a vault with statistics shows **no line**, then
