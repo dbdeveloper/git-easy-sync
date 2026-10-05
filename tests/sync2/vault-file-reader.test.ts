@@ -148,6 +148,36 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
       expect(warnings.some((w) => w.includes("own plugin"))).toBe(true);
     });
 
+    // Owner, 2026-10-05: a .gitignore "cannot not exist" — its deletion
+    // arriving from the server is suspicious, and in the field it was
+    // what exposed formerly ignored files to the next commit. At every
+    // level a .gitignore is supported: root, .obsidian/, .obsidian/plugins/
+    // and .obsidian/plugins/<id>/.
+    it("🔑 remove: a .gitignore at every supported level is kept — no removal, a warning", async () => {
+      const all = [
+        ".gitignore",
+        ".obsidian/.gitignore",
+        ".obsidian/plugins/.gitignore",
+        ".obsidian/plugins/templater/.gitignore",
+      ];
+      for (const g of all) await vault.adapter.write(g, "*.log\n");
+      const r = reader();
+      for (const g of all) {
+        await r.remove(g);
+        expect(await vault.adapter.exists(g), g).toBe(true);
+      }
+      expect(captured).toEqual([]);
+      expect(warnings.some((w) => w.includes(".gitignore"))).toBe(true);
+    });
+
+    it("remove: a file merely NAMED like it (notes.gitignore.md, .gitignore.bak) is removed as before", async () => {
+      for (const f of ["notes.gitignore.md", "Actual-projects/private/.gitignore.bak"]) {
+        await vault.adapter.write(f, "x");
+        await reader().remove(f);
+        expect(await vault.adapter.exists(f), f).toBe(false);
+      }
+    });
+
     it("remove: ANOTHER plugin's files are removed as before (the guard is ours only)", async () => {
       await vault.adapter.write(".obsidian/plugins/templater/main.js", "x");
       await reader().remove(".obsidian/plugins/templater/main.js");

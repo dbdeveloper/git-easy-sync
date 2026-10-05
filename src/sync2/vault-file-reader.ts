@@ -177,6 +177,23 @@ export function makeVaultFileReader(
       // stops. Uninstalling is the user's conscious act (Obsidian's own
       // UI, or the file system), never a sync side effect. The files stay,
       // and the next commit sends them back to the repo (owner's option a).
+      // Same for a .gitignore at any level (owner, 2026-10-05): one
+      // "cannot not exist", so its deletion arriving from the server is
+      // suspicious — and in the field it was exactly what exposed
+      // formerly ignored, private files to the next commit. Kept with
+      // its rules; the next commit sends it back. A .gitignore is
+      // supported — and synced — only at the root, in <configDir>/, in
+      // <configDir>/plugins/ and in <configDir>/plugins/<id>/ (DOT-FILES
+      // D5), so those are the only ones a pull could ever delete; the
+      // check is by name.
+      const base = normalized.slice(normalized.lastIndexOf("/") + 1);
+      if (base === ".gitignore") {
+        deps.logger?.warn(
+          "VaultFileReader: remote deletion of a .gitignore NOT applied (kept with its rules; the next commit restores it on the server)",
+          { path: normalized },
+        );
+        return;
+      }
       const ownDir = `${deps.vault.configDir}/plugins/${deps.selfPluginId}/`;
       if (normalized.startsWith(ownDir)) {
         deps.logger?.warn(
