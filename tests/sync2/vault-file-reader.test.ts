@@ -172,7 +172,7 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
       expect(warnings.some((w) => w.includes(".gitignore"))).toBe(true);
     });
 
-    it.fails("🔑 remove: ANOTHER plugin's .gitignore is the user's — a remote deletion IS applied", async () => {
+    it("🔑 remove: ANOTHER plugin's .gitignore is the user's — a remote deletion IS applied", async () => {
       // Owner, 2026-10-05: the user may delete it on purpose; restoring
       // the old one on every device would undo that decision.
       const f = ".obsidian/plugins/templater/.gitignore";

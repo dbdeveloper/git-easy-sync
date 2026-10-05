@@ -177,19 +177,24 @@ export function makeVaultFileReader(
       // stops. Uninstalling is the user's conscious act (Obsidian's own
       // UI, or the file system), never a sync side effect. The files stay,
       // and the next commit sends them back to the repo (owner's option a).
-      // Same for a .gitignore at any level (owner, 2026-10-05): one
-      // "cannot not exist", so its deletion arriving from the server is
+      // Same for OUR managed .gitignore files (owner, 2026-10-05): they
+      // "cannot not exist", so a deletion arriving from the server is
       // suspicious — and in the field it was exactly what exposed
       // formerly ignored, private files to the next commit. Kept with
-      // its rules; the next commit sends it back. A .gitignore is
-      // supported — and synced — only at the root, in <configDir>/, in
-      // <configDir>/plugins/ and in <configDir>/plugins/<id>/ (DOT-FILES
-      // D5), so those are the only ones a pull could ever delete; the
-      // check is by name.
-      const base = normalized.slice(normalized.lastIndexOf("/") + 1);
-      if (base === ".gitignore") {
+      // their rules; the next commit sends them back. ONLY ours: the
+      // root's, the config dir's and plugins/'s — our own plugin
+      // folder's is covered by the own-folder guard below. Another
+      // plugin's folder .gitignore belongs to the user like the folder
+      // itself (owner, correcting this the same day): they may delete it
+      // on purpose, and restoring the old one would undo that.
+      const cfg = deps.vault.configDir;
+      if (
+        normalized === ".gitignore" ||
+        normalized === `${cfg}/.gitignore` ||
+        normalized === `${cfg}/plugins/.gitignore`
+      ) {
         deps.logger?.warn(
-          "VaultFileReader: remote deletion of a .gitignore NOT applied (kept with its rules; the next commit restores it on the server)",
+          "VaultFileReader: remote deletion of a managed .gitignore NOT applied (kept with its rules; the next commit restores it on the server)",
           { path: normalized },
         );
         return;
