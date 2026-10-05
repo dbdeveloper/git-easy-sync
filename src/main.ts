@@ -184,6 +184,10 @@ const NO_STATS_COUNTER_MIN_BYTES = 100 * 1024 * 1024;
 // dwell time of a toast that appears out of nowhere — a second is the
 // owner's call.
 const SYNC_SUMMARY_LINGER_MS = 1000;
+// …except the summary WITH numbers ("Sync done — 1 sent, 454 received"):
+// a second was too short to read them (owner, 2026-10-05). The bare
+// "Sync done" keeps the second above — it is read at a glance.
+const SYNC_SUMMARY_WITH_COUNTS_MS = 2000;
 
 // §35 — the automatic "Sync skipped: token expired" toast. Longer than
 // BRIEF_NOTICE_MS: it carries actionable words the user must actually read,
@@ -1610,13 +1614,11 @@ export default class GitHubSyncPlugin extends Plugin {
           if (!summary.cancelled) this.clearSyncNotice();
           return;
         }
-        this.settleDrainSection(
-          syncSummaryText({
-            sent: summary.pushedFiles,
-            received: summary.pulledFiles,
-            conflicts: summary.conflicts,
-          }),
-        );
+        this.settleSyncSummary({
+          sent: summary.pushedFiles,
+          received: summary.pulledFiles,
+          conflicts: summary.conflicts,
+        });
       },
       onQueueDepthChanged: (depth: number) => {
         this.refreshRibbonPendingBatchesBadge(depth);
@@ -2656,8 +2658,8 @@ export default class GitHubSyncPlugin extends Plugin {
     this.renderNotice();
   }
 
-  private settleAt(): number {
-    return Date.now() + SYNC_SUMMARY_LINGER_MS;
+  private settleAt(lingerMs = SYNC_SUMMARY_LINGER_MS): number {
+    return Date.now() + lingerMs;
   }
 
   // The ONE place the notice text is decided. Also the one place the
@@ -2830,13 +2832,30 @@ export default class GitHubSyncPlugin extends Plugin {
   // The drain's last word, kept visible for a moment like the
   // commit's. ⚠️ Always DISARM here: a pending 2 s timer firing over a
   // finished drain is the 2026-09-26 field bug.
-  private settleDrainSection(text: string): void {
+  private settleDrainSection(
+    text: string,
+    lingerMs = SYNC_SUMMARY_LINGER_MS,
+  ): void {
     this.disarmSyncProgress();
     this.setDrainSection({
       state: "settled",
       text,
-      until: this.settleAt(),
+      until: this.settleAt(lingerMs),
     });
+  }
+
+  // The closing summary of a sync. With any number in it it stays
+  // SYNC_SUMMARY_WITH_COUNTS_MS; the bare "Sync done" the usual second.
+  private settleSyncSummary(n: {
+    sent: number;
+    received: number;
+    conflicts: number;
+  }): void {
+    const hasCounts = n.sent > 0 || n.received > 0 || n.conflicts > 0;
+    this.settleDrainSection(
+      syncSummaryText(n),
+      hasCounts ? SYNC_SUMMARY_WITH_COUNTS_MS : SYNC_SUMMARY_LINGER_MS,
+    );
   }
 
   // ⚰️ `reportCommitOutcome` / `finishCommitOutcome` lived here until

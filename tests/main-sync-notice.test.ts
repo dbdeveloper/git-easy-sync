@@ -60,6 +60,7 @@ interface NoticeHandle {
   setCommitSection(s: NoticeState["commit"]): void;
   setDrainSection(s: NoticeState["drain"]): void;
   settleDrainSection(text: string): void;
+  settleSyncSummary(n: { sent: number; received: number; conflicts: number }): void;
   handleDrainIdle(): void;
   handleDrainStatus(s: { state: string }): void;
   lastDrainState: string | null;
@@ -439,6 +440,29 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(p.syncNotice).not.toBeNull();
     vi.advanceTimersByTime(1500);
     expect(p.syncNotice).toBeNull(); // nothing visible → cleared
+  });
+
+  it("🔑 the summary WITH numbers stays 2 s; the bare \"Sync done\" keeps its 1 s (owner, 2026-10-05)", () => {
+    const p = makePlugin();
+    p.settleSyncSummary({ sent: 1, received: 454, conflicts: 0 });
+    expect(lastMessage()).toBe("Sync done — 1 sent, 454 received");
+    vi.advanceTimersByTime(1900);
+    expect(p.syncNotice).not.toBeNull(); // still readable
+    vi.advanceTimersByTime(200);
+    expect(p.syncNotice).toBeNull();
+
+    const q = makePlugin();
+    q.settleSyncSummary({ sent: 0, received: 0, conflicts: 0 });
+    expect(lastMessage()).toBe("Sync done");
+    vi.advanceTimersByTime(1100);
+    expect(q.syncNotice).toBeNull(); // unchanged: one second
+  });
+
+  it("a conflicts-only summary is a summary with a number too — 2 s", () => {
+    const p = makePlugin();
+    p.settleSyncSummary({ sent: 0, received: 0, conflicts: 2 });
+    vi.advanceTimersByTime(1900);
+    expect(p.syncNotice).not.toBeNull();
   });
 
   it("🔑 the owner's overlap: the commit line drops, the drain's survives", () => {
