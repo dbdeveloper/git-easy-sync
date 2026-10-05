@@ -57,6 +57,7 @@ import ChangeDetector, { type ScanPlan } from "./sync2/change-detector";
 import GitignoreInvariants from "./sync2/gitignore-invariants";
 import GitignoreSeedStore from "./sync2/gitignore-seeds";
 import { pluginUpdatedText, readPluginVersion } from "./sync2/plugin-js";
+import { settleSelfUpdateBaselines } from "./sync2/self-update-applied";
 import DeletedStore from "./diff2/deleted-store";
 import { Sync2Manager, type DrainStatus } from "./sync2/sync2-manager";
 import { IntervalScheduler } from "./sync2/interval-scheduler";
@@ -1170,6 +1171,26 @@ export default class GitHubSyncPlugin extends Plugin {
     this.logger.info("initSync2: hot metadata loaded", {
       lastSyncCommitSha: hotMeta.getLastSyncCommitSha(),
     });
+    // A self-update the bootloader applied on this start: the baseline
+    // follows the new bytes, or the next commit reads the build we just
+    // RECEIVED as a local edit (owner's field finding, 2026-10-05).
+    try {
+      const settled = await settleSelfUpdateBaselines({
+        adapter: this.app.vault.adapter,
+        pluginDir: normalizePath(`${this.app.vault.configDir}/plugins/${manifest.id}`),
+        computeSha: calculateGitBlobSHA,
+        baselines,
+      });
+      if (settled.length > 0) {
+        this.logger.info("initSync2: applied self-update settled in the baseline", {
+          paths: settled,
+        });
+      }
+    } catch (err) {
+      this.logger.warn("initSync2: self-update baseline settle failed", {
+        err: describeError(err),
+      });
+    }
     // AtomicWriteRecovery sweep runs AFTER ConflictStore.load (see
     // block below) so the sweep can resolve `.ges-tmp` staging
     // files owned by conflict records via record.theirsBlobSha

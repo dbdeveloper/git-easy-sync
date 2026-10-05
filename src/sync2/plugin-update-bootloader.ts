@@ -51,6 +51,7 @@
 import type { DataAdapter } from "obsidian";
 import { addRecheckPaths } from "./recheck-paths";
 import { pluginUpdatedText, readPluginVersion } from "./plugin-js";
+import { recordSelfUpdateApplied } from "./self-update-applied";
 
 // Files in our plugin's directory the bootloader recovers. Each gets
 // the same 4-case marker logic. data.json is excluded — we don't
@@ -321,6 +322,23 @@ export async function runSelfUpdateBootloader(
 
   if (appliedFiles.length === 0) {
     return { action: "no-pending" };
+  }
+
+  // Tell the NEXT onload what landed, so the baseline can follow (see
+  // self-update-applied.ts). Only with a hash function: without one we
+  // cannot vouch for the bytes, and the commit re-checks them instead.
+  if (deps.computeSha !== undefined) {
+    const entries: Array<{ path: string; sha: string }> = [];
+    for (const fileName of appliedFiles) {
+      try {
+        const p = `${deps.pluginDir}/${fileName}`;
+        const sha = await shaOfFile(deps.adapter, deps.computeSha, p);
+        if (sha !== null) entries.push({ path: p, sha });
+      } catch {
+        // unreadable right after the apply → no record for it
+      }
+    }
+    await recordSelfUpdateApplied(deps.adapter, deps.pluginDir, entries);
   }
 
   // At least one of (main.js, manifest.json, styles.css) was applied —

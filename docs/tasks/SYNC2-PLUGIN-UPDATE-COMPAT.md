@@ -97,6 +97,34 @@ half-loaded instance after a click-enable, and it read `this.settings` →
 reload went fine) but it looks like a failure. `onUserEnable` now returns when
 settings were never loaded (`tests/main-user-enable.test.ts`).
 
+## ⚠️ FIELD FINDING 2026-10-05 — an applied self-update read as a local edit (FIXED)
+
+The owner's ping-pong between two test vaults: after the bootloader applied a
+staged build of our plugin, the NEXT commit queued "modified main.js" — the build
+just RECEIVED. The drain leaves the baseline old while the bytes are only staged
+(`86c808e`'s downgrade trap), and the bootloader runs before any store is open, so
+nothing ever told the baseline the stage had landed. With the server unchanged it
+was a harmless no-op; with a newer build already there it became a false
+plugin-core collision decided by the clock.
+
+**Fix.** The bootloader records what it applied (`.runtime/.self-update-applied`:
+`<path> <sha>` per file, only when it can hash). The next onload, stores open,
+writes the baseline (sha, size, mtime) for each recorded file whose LIVE bytes
+still hash to that sha, then removes the record. Applies to exactly the three files
+the bootloader stages (`SELF_UPDATE_FILES`: main.js, manifest.json, styles.css) —
+every other file, ours or not, is written by the drain itself and gets its baseline
+in the same sync.
+
+**Failure modes (owner's question).** Record missing → the old behaviour (commit
+sees a change, the drain re-checks it). Torn or stale record → the sha does not
+match the live file, the line is skipped. Crash between the baseline write and the
+removal → the same lines re-apply identically. Baseline write fails → logged, the
+record stays, the next start retries. RESET wipes `.runtime/`. The record is
+removed after every settle, so nothing lingers. The live-sha check is the guard:
+a baseline can only be set to bytes that are actually on disk AND were actually
+applied. Tests: `tests/sync2/self-update-applied.test.ts` (a mutation that drops
+the sha check fails two of them).
+
 ## ⚠️ FIELD BUG 2026-10-05 — the 3.a seam read "never had it" as "deleted it" (FIXED)
 
 The owner's fresh test vault (only `Welcome.md`, the top level of `.obsidian/` and
