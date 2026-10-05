@@ -73,8 +73,13 @@ interface NoticeHandle {
   applyRibbonSyncingState(on: boolean): void;
 }
 
-function makePlugin(progress: unknown = null): NoticeHandle {
+// `indexFiles` = what app.vault.getFiles() returns (visible vault files
+// only). Default: a vault with plenty of notes.
+function makePlugin(progress: unknown = null, indexFiles = 100): NoticeHandle {
   const p = Object.create(GitHubSyncPlugin.prototype) as unknown as NoticeHandle;
+  (p as unknown as { app: unknown }).app = {
+    vault: { getFiles: () => Array.from({ length: indexFiles }, (_, i) => ({ path: `n${i}.md` })) },
+  };
   p.sync2Manager = { getDrainStatus: () => ({ progress }) };
   p.inFullSync = false;
   p.syncCancelRequested = false;
@@ -182,6 +187,37 @@ describe("sync notice lifecycle (§II.16)", () => {
     p.reportCommitPlan(plan(263, 1), 264);
     p.reportCommitChecked(120, 264);
     expect(lastMessage()).toBe("Checking all files…");
+  });
+
+  // Owner, 2026-10-05: a first sync into an (almost) empty vault would
+  // flash "Checking all files…" for a few milliseconds — unreadable, so
+  // only a blink. Fewer than 10 visible files (getFiles: notes, no
+  // dot-space) → the vault is "practically empty", the data will flow
+  // FROM the server, and the line is not shown. The plan-stage counter
+  // rule (> 500 files or > 100 MB, dot-space included) still applies.
+  it("🔑 no statistics, fewer than 10 visible files → NO \"Checking all files…\"", () => {
+    const p = makePlugin(null, 9);
+    p.commitStats = statsWith({ any: false, forecast: null });
+    p.reportCommitStarted(true);
+    expect(recordedNotices).toHaveLength(0);
+    p.reportCommitPlan(plan(18), 18);
+    p.reportCommitChecked(10, 18);
+    expect(recordedNotices).toHaveLength(0);
+  });
+
+  it("no statistics, exactly 10 visible files → the line is shown as before", () => {
+    const p = makePlugin(null, 10);
+    p.commitStats = statsWith({ any: false, forecast: null });
+    p.reportCommitStarted(true);
+    expect(lastMessage()).toBe("Checking all files…");
+  });
+
+  it("no statistics, an almost empty vault with a HUGE hidden part → the counter still appears", () => {
+    const p = makePlugin(null, 1);
+    p.commitStats = statsWith({ any: false, forecast: null });
+    p.reportCommitStarted(true);
+    p.reportCommitPlan(plan(600), 600);
+    expect(lastMessage()).toBe("Checking 0 of 600 files");
   });
 
   it("🔑 no statistics + MORE than 500 files → the counter", () => {

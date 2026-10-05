@@ -180,6 +180,14 @@ const COMMIT_FORECAST_MS = 1500;
 // commit that is big by these plain measures (owner, 2026-10-05) —
 // otherwise "Checking all files…" stays until the result.
 const NO_STATS_COUNTER_MIN_FILES = 500;
+// …and the opening "Checking all files…" is not shown at all when the
+// vault has fewer VISIBLE files than this (owner, 2026-10-05): a first
+// sync into a practically empty vault commits in milliseconds, so the
+// line would only blink — the data is about to flow FROM the server.
+// getFiles() sees notes only, not the dot-space; that is the point
+// ("this is Obsidian, not a store of hidden files"). The plan-stage
+// counter rule above still applies, dot-space included.
+const NO_STATS_LINE_MIN_VISIBLE_FILES = 10;
 const NO_STATS_COUNTER_MIN_BYTES = 100 * 1024 * 1024;
 // How long the closing line ("Sync done — …") stays after the operation
 // ends. The user has been watching this notice, so it does not need the
@@ -2994,7 +3002,9 @@ export default class GitHubSyncPlugin extends Plugin {
     const stats = this.commitStats;
     if (!stats || !stats.hasAny()) {
       this.commitNoStats = true;
-      this.setCommitSection({ state: "live", text: checkingAllFilesNoticeText() });
+      if (this.app.vault.getFiles().length >= NO_STATS_LINE_MIN_VISIBLE_FILES) {
+        this.setCommitSection({ state: "live", text: checkingAllFilesNoticeText() });
+      }
       return;
     }
     if ((stats.dotMs() ?? 0) > COMMIT_FORECAST_MS) {
