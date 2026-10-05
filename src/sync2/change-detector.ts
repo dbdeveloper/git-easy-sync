@@ -30,6 +30,25 @@ import WorkerClient from "../worker/worker-client";
 // canonical on each device via GitignoreInvariants.enforce(), which
 // rewrites the two managed files locally on plugin load; nothing
 // about that mechanism depends on cross-device propagation.
+// What of OUR plugin's own folder may ever sync (owner, 2026-10-05):
+// the plugin itself and the managed .gitignore that describes it for
+// foreign git clients. Never data.json (token, settings), never
+// .runtime/ (queue, conflicts), never anything else.
+const OWN_PLUGIN_SYNCED_FILES = new Set([
+  "main.js",
+  "manifest.json",
+  "styles.css",
+  ".gitignore",
+]);
+
+// `<configDir>/plugins/<id>/data.json` — a plugin's settings file.
+function isPluginDataJson(path: string, configDir: string): boolean {
+  const prefix = `${configDir}/plugins/`;
+  if (!path.startsWith(prefix) || !path.endsWith("/data.json")) return false;
+  const id = path.slice(prefix.length, path.length - "/data.json".length);
+  return id.length > 0 && !id.includes("/");
+}
+
 export async function isSyncable(
   path: string,
   configDir: string,
@@ -43,7 +62,19 @@ export async function isSyncable(
   // means nobody computed it, which is a lifecycle bug, not a state —
   // see the throw below.
   optIn: OptInSet | null,
+  // "Push plugins data.json". Defaults to the SAFE answer: off.
+  pushPluginsDataJson = false,
 ): Promise<boolean> {
+  // ── THE UNCONDITIONAL RULES (owner, 2026-10-05) ──────────────────
+  // They hold whether or not any .gitignore exists: the managed
+  // .gitignore blocks are written for FOREIGN git clients, and a remote
+  // clean-up that deletes every .gitignore must not widen what this
+  // device sends or accepts. The .gitignore rules at the end may only
+  // NARROW what these allow. Both directions — a path refused here is
+  // neither pushed nor pulled.
+  //   1. "Sync .obsidian/" off → nothing under the config dir (below);
+  //   2. "Push plugins data.json" off → no plugin's data.json;
+  //   3. OUR folder → only OWN_PLUGIN_SYNCED_FILES (any subfolder too).
   if (path === `${configDir}/plugins/${selfPluginId}/data.json`) return false;
   // Per-device configDir gate — symmetric: OFF blocks the whole
   // <configDir>/ subtree on both push and pull.
@@ -58,6 +89,16 @@ export async function isSyncable(
   // guards the un-seeded window (tests, partial init) — and by gating the `.runtime/`
   // ROOT it covers every current AND future runtime artifact without a per-item list.
   if (path.startsWith(`${configDir}/plugins/${selfPluginId}/.runtime/`)) return false;
+  // Rule 3. The managed `<self>/.gitignore` above says the same thing to
+  // foreign git clients; this is what makes it hold without the file.
+  const ownDir = `${configDir}/plugins/${selfPluginId}/`;
+  if (path.startsWith(ownDir) && !OWN_PLUGIN_SYNCED_FILES.has(path.slice(ownDir.length))) {
+    return false;
+  }
+  // Rule 2. Until 2026-10-05 this lived ONLY in the managed
+  // .obsidian/plugins/.gitignore (re-written by enforce() before each
+  // operation) — gone with that file, gone with the rule.
+  if (!pushPluginsDataJson && isPluginDataJson(path, configDir)) return false;
   if (path === ".git" || path.startsWith(".git/")) return false;
   if (path.includes("/.git/")) return false;
   // Conflict sibling files (`<base>.conflict-from-<label>-<ts>.<ext>`,
@@ -189,6 +230,9 @@ export interface ChangeDetectorDeps {
   // The getter pattern (vs. a fixed boolean) keeps the manager from
   // re-instantiating the detector on every settings change.
   syncConfigDir: () => boolean;
+  // "Push plugins data.json" — the owner's unconditional rule 2 (see
+  // isSyncable), read live like syncConfigDir. Absent → off (safe).
+  pushPluginsDataJson?: () => boolean;
   // Optional: surfaces the dot-space warnings from readRootGitignore —
   // a `!`-rule that grants nothing is refused by design, and saying so
   // is the difference between a documented limit and a silent feature.
@@ -374,6 +418,7 @@ export default class ChangeDetector {
   private readonly selfPluginId: string;
   private readonly vaultRoot: string;
   private readonly syncConfigDir: () => boolean;
+  private readonly pushPluginsDataJson: () => boolean;
   private readonly logger?: { warn(message: string, data?: unknown): void };
   private readonly queue: PeekableQueue | undefined;
   private readonly conflictBaseSha:
@@ -410,6 +455,7 @@ export default class ChangeDetector {
     this.selfPluginId = deps.selfPluginId;
     this.vaultRoot = deps.vaultRoot;
     this.syncConfigDir = deps.syncConfigDir;
+    this.pushPluginsDataJson = deps.pushPluginsDataJson ?? (() => false);
     this.logger = deps.logger;
     this.queue = deps.queue;
     this.conflictBaseSha = deps.conflictBaseSha;
@@ -972,6 +1018,7 @@ export default class ChangeDetector {
       this.gi,
       this.giReader,
       this.optIn,
+      this.pushPluginsDataJson(),
     );
   }
 

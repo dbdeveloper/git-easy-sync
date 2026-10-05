@@ -187,6 +187,7 @@ export async function createSync2Client(
     selfPluginId: SELF_PLUGIN_ID,
     vaultRoot: vaultPath,
     syncConfigDir: () => settings.syncConfigDir ?? true,
+    pushPluginsDataJson: () => settings.pushPluginsDataJson ?? false,
     queue: {
       peekLatestPathSha: async (p: string) =>
         (await managerRef?.peekLatestPathSha(p)) ?? null,

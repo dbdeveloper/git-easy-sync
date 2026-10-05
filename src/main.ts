@@ -1226,6 +1226,9 @@ export default class GitHubSyncPlugin extends Plugin {
       selfPluginId: manifest.id,
       vaultRoot,
       syncConfigDir: () => this.settings.syncConfigDir ?? true,
+      // Owner's unconditional rule 2 — in code, not only in the managed
+      // .obsidian/plugins/.gitignore (2026-10-05).
+      pushPluginsDataJson: () => this.settings.pushPluginsDataJson ?? false,
       logger: this.logger,
       // DOT-FILES §3.3: a walk target we could not fully enumerate is
       // protected from Pass 2 silently, so the only way anyone learns a

@@ -182,6 +182,8 @@ function makeFixture(initialPushDataJson = false): Fixture {
         // step 3 governs; the set only has to be non-null so the D7
         // fail-loud does not fire.
         { dotFiles: new Set([".gitignore"]), walkTargets: new Set([CONFIG_DIR]) },
+        // Rule 2 is in code too now (2026-10-05) — pass the same toggle.
+        pushDataJson,
       ),
   };
 }

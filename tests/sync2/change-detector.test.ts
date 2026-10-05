@@ -1977,7 +1977,7 @@ describe("unconditional rules — independent of every .gitignore", () => {
     expect(await ask(`${CD}/plugins/other/data.json`, { syncConfigDir: false, pushPluginsDataJson: true })).toBe(false);
   });
 
-  it.fails("🔑 rule 2: data.json off → ANOTHER plugin's data.json is not syncable, with no .gitignore anywhere", async () => {
+  it("🔑 rule 2: data.json off → ANOTHER plugin's data.json is not syncable, with no .gitignore anywhere", async () => {
     expect(await ask(`${CD}/plugins/github-easy-sync/data.json`, { pushPluginsDataJson: false })).toBe(false);
   });
 
@@ -1999,11 +1999,11 @@ describe("unconditional rules — independent of every .gitignore", () => {
     }
   });
 
-  it.fails("🔑 rule 3: ANY other file in our folder is not syncable, with no .gitignore anywhere", async () => {
+  it("🔑 rule 3: ANY other file in our folder is not syncable, with no .gitignore anywhere", async () => {
     expect(await ask(`${CD}/plugins/${ME}/notes.txt`)).toBe(false);
   });
 
-  it.fails("rule 3: nothing in a SUBFOLDER of ours either (not only .runtime/)", async () => {
+  it("rule 3: nothing in a SUBFOLDER of ours either (not only .runtime/)", async () => {
     expect(await ask(`${CD}/plugins/${ME}/backup/main.js`)).toBe(false);
   });
 });
