@@ -11,9 +11,12 @@
 // when the number is non-zero" has four combinations for the summary
 // alone, and three of them are invisible states.
 //
-// No git vocabulary. "Pull" and "push" are empty words to someone who
-// never used git, and this notice exists precisely for the moment the
-// user is waiting and anxious.
+// "Pulling" / "Pushing", not "Downloading" / "Uploading" (owner,
+// 2026-10-05, reversing the earlier "no git vocabulary" rule). The
+// counters advance when the drain TAKES a path, before it knows whether
+// any bytes will move: a file that turns out identical on both sides is
+// counted too. "Uploading 19 of 19" for one file actually sent read as
+// a lie; "Pushing" names a network operation, not a transfer of data.
 
 export interface SyncProgressNumbers {
   pullDone: number;
@@ -27,7 +30,7 @@ const HEADER = "Syncing with GitHub";
 
 // The instant acknowledgement (owner, 2026-10-03). Shown the moment a
 // click is accepted, BEFORE anything is known — no counters exist yet
-// and inventing some would be the "Downloading 0 of 0" mistake the
+// and inventing some would be the "Pulling 0 of 0" mistake the
 // builder below already refuses to make.
 //
 // It is deliberately the same HEADER the progress notice uses, so the
@@ -55,7 +58,7 @@ export function syncStartedNoticeText(): string {
 // the tense is the only thing that says "finished", and it says it for
 // free. A bare "Commit N files" reads as an imperative, a button label
 // telling the user to act; every other notice in this plugin already
-// uses the participle ("Syncing with GitHub", "Downloading N of M"),
+// uses the participle ("Syncing with GitHub", "Pulling N of M"),
 // so that one was the odd one out.
 export function commitStartedNoticeText(): string {
   return "Committing…";
@@ -78,7 +81,7 @@ export function commitDoneNoticeText(count: number): string {
 // The live notice, refreshed in place while the sync runs.
 //
 // Every line is conditional. A sync that only sends files must not
-// carry a dead "Downloading 0 of 0" — a line that never changes reads
+// carry a dead "Pulling 0 of 0" — a line that never changes reads
 // as "stuck", which is the opposite of what a progress display is for.
 // Before the first counter arrives (the commit pass still running) the
 // header stands alone: the honest statement at that moment is "working
@@ -86,10 +89,10 @@ export function commitDoneNoticeText(count: number): string {
 export function progressNoticeText(p: SyncProgressNumbers): string {
   const lines = [HEADER];
   if (p.pullTotal > 0) {
-    lines.push(`Downloading ${p.pullDone} of ${p.pullTotal}`);
+    lines.push(`Pulling ${p.pullDone} of ${p.pullTotal}`);
   }
   if (p.pushTotal > 0) {
-    lines.push(`Uploading ${p.pushDone} of ${p.pushTotal}`);
+    lines.push(`Pushing ${p.pushDone} of ${p.pushTotal}`);
   }
   if (p.conflicts > 0) {
     lines.push(

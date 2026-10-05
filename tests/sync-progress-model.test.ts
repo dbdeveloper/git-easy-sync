@@ -31,13 +31,13 @@ describe("progressNoticeText", () => {
     // A line that never moves reads as a hang — the opposite of what a
     // progress display is for.
     expect(progressNoticeText(nums({ pushDone: 3, pushTotal: 5 }))).toBe(
-      "Syncing with GitHub\nUploading 3 of 5",
+      "Syncing with GitHub\nPushing 3 of 5",
     );
   });
 
   it("a pull-only sync carries NO upload line", () => {
     expect(progressNoticeText(nums({ pullDone: 2, pullTotal: 10 }))).toBe(
-      "Syncing with GitHub\nDownloading 2 of 10",
+      "Syncing with GitHub\nPulling 2 of 10",
     );
   });
 
@@ -48,7 +48,7 @@ describe("progressNoticeText", () => {
       progressNoticeText(
         nums({ pullDone: 2, pullTotal: 10, pushDone: 3, pushTotal: 5 }),
       ),
-    ).toBe("Syncing with GitHub\nDownloading 2 of 10\nUploading 3 of 5");
+    ).toBe("Syncing with GitHub\nPulling 2 of 10\nPushing 3 of 5");
   });
 
   it("the conflict line appears only when there ARE conflicts, and is singular at one", () => {
@@ -61,11 +61,22 @@ describe("progressNoticeText", () => {
     );
   });
 
-  it("no git vocabulary anywhere — the words are for someone who never used it", () => {
+  it("\"Pulling\" / \"Pushing\", never \"Downloading\" / \"Uploading\" (owner, 2026-10-05)", () => {
+    // The counters advance when the drain TAKES a path, before it knows
+    // whether bytes will move — "Uploading" promised a transfer that a
+    // file identical on both sides never makes.
+    const text = progressNoticeText(
+      nums({ pullDone: 1, pullTotal: 2, pushDone: 1, pushTotal: 2, conflicts: 0 }),
+    );
+    expect(text).toBe("Syncing with GitHub\nPulling 1 of 2\nPushing 1 of 2");
+    expect(text).not.toMatch(/Downloading|Uploading/);
+  });
+
+  it("no other git vocabulary — pull/push are the owner's deliberate exception", () => {
     const text = progressNoticeText(
       nums({ pullDone: 1, pullTotal: 2, pushDone: 1, pushTotal: 2, conflicts: 1 }),
     );
-    for (const jargon of ["pull", "push", "commit", "branch", "repo"]) {
+    for (const jargon of ["commit", "branch", "repo"]) {
       expect(text.toLowerCase(), jargon).not.toContain(jargon);
     }
   });

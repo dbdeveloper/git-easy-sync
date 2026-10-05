@@ -2744,7 +2744,7 @@ export default class GitHubSyncPlugin extends Plugin {
     // timer pending, it fired 1.5 s later over an idle plugin, and
     // `syncProgressActive` then stayed true FOREVER — so every later
     // sync had its "Nothing to commit" instantly overwritten by a
-    // STALE progress line ("Uploading 1 of 1" from some earlier drain).
+    // STALE progress line ("Pushing 1 of 1" from some earlier drain).
     this.disarmSyncProgress();
     this.setSyncNotice(text);
     const notice = this.syncNotice;

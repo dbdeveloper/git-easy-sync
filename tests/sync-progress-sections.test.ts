@@ -29,22 +29,22 @@ describe("renderNoticeState", () => {
     ).toBe("Committing…");
     expect(
       renderNoticeState(
-        st({ drain: { state: "live", text: "Syncing with GitHub\nUploading 1 of 4" } }),
+        st({ drain: { state: "live", text: "Syncing with GitHub\nPushing 1 of 4" } }),
         0,
       ),
-    ).toBe("Syncing with GitHub\nUploading 1 of 4");
+    ).toBe("Syncing with GitHub\nPushing 1 of 4");
   });
 
   it("🔑 both live → ONE box, commit above drain", () => {
     const text = renderNoticeState(
       st({
         commit: { state: "live", text: "Committing 100 of 250" },
-        drain: { state: "live", text: "Syncing with GitHub\nUploading 12 of 40" },
+        drain: { state: "live", text: "Syncing with GitHub\nPushing 12 of 40" },
       }),
       0,
     );
     expect(text).toBe(
-      "Committing 100 of 250\nSyncing with GitHub\nUploading 12 of 40",
+      "Committing 100 of 250\nSyncing with GitHub\nPushing 12 of 40",
     );
   });
 

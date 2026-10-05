@@ -529,8 +529,8 @@ a moment:
 
 ```
 Syncing with GitHub
-Downloading 2 of 10
-Uploading 3 of 5
+Pulling 2 of 10
+Pushing 3 of 5
 ⚠ 2 files need resolving
 ```
 

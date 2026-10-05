@@ -283,7 +283,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
 
   it("§II.16 🔑: a new drain starts with a CLEARED progress snapshot — no stale counters from the last run", async () => {
     // Field bug 2026-09-26: a sync with nothing to do painted
-    // "Uploading 1 of 1" — counters from a drain that had finished
+    // "Pushing 1 of 1" — counters from a drain that had finished
     // minutes earlier. The status object outlives a drain, so anything
     // left in it is read as current by whatever paints next.
     const seen: Array<unknown> = [];

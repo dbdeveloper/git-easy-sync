@@ -11,7 +11,7 @@
 //       `syncProgressActive` true FOREVER, so every later sync had its
 //       "Nothing to commit" instantly overwritten;
 //   2026-09-26 (b) the drain status carried the PREVIOUS run's counters,
-//       so what got painted was a real "Uploading 1 of 1" — from a drain
+//       so what got painted was a real "Pushing 1 of 1" — from a drain
 //       twenty seconds in the past;
 //   2026-10-03 (c) the 2 s timer painted the DRAIN's text five seconds
 //       inside a 7.2 s commit pass: "Committing…" → "Syncing with
@@ -137,7 +137,7 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(lastMessage()).toBe("Syncing with GitHub");
     p.syncProgressActive = true;
     p.repaintSyncProgressNotice();
-    expect(lastMessage()).toBe("Syncing with GitHub\nDownloading 2 of 10");
+    expect(lastMessage()).toBe("Syncing with GitHub\nPulling 2 of 10");
   });
 
   it("🔑 (b) a drain that reported NOTHING cannot inherit counters", () => {
@@ -353,7 +353,7 @@ describe("sync notice lifecycle (§II.16)", () => {
     });
     p.syncProgressActive = true;
     p.repaintSyncProgressNotice();
-    expect(lastMessage()).toBe("Syncing with GitHub\nDownloading 2 of 10");
+    expect(lastMessage()).toBe("Syncing with GitHub\nPulling 2 of 10");
   });
 
   it("a SETTLED drain is never resurrected by a repaint", () => {
