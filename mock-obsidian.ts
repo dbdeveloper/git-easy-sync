@@ -396,15 +396,20 @@ export class Vault {
 // plugin showed. Useful because SyncManager.sync() catches errors and
 // surfaces them only via Notice — without capturing, integration
 // tests would silently treat failed syncs as successful.
-export const recordedNotices: { message: string; timestamp: number }[] = [];
+// `duration` is the constructor's timeout (undefined for setMessage).
+export const recordedNotices: {
+  message: string;
+  timestamp: number;
+  duration?: number;
+}[] = [];
 
 export function clearRecordedNotices(): void {
   recordedNotices.length = 0;
 }
 
 export class Notice {
-  constructor(message: string, _timeout?: number) {
-    recordedNotices.push({ message, timestamp: Date.now() });
+  constructor(message: string, timeout?: number) {
+    recordedNotices.push({ message, timestamp: Date.now(), duration: timeout });
     if (process.env.MOCK_OBSIDIAN_NOTICE_LOG === "1") {
       console.log(`NOTICE: ${message}`);
     }

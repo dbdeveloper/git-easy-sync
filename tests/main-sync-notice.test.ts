@@ -60,7 +60,13 @@ interface NoticeHandle {
   setCommitSection(s: NoticeState["commit"]): void;
   setDrainSection(s: NoticeState["drain"]): void;
   settleDrainSection(text: string): void;
-  settleSyncSummary(n: { sent: number; received: number; conflicts: number }): void;
+  settleSyncSummary(n: {
+    sent: number;
+    received: number;
+    conflicts: number;
+    pluginsUpdated?: number;
+    pluginsRemoved?: number;
+  }): void;
   handleDrainIdle(): void;
   handleDrainStatus(s: { state: string }): void;
   lastDrainState: string | null;
@@ -456,6 +462,16 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(lastMessage()).toBe("Sync done");
     vi.advanceTimersByTime(1100);
     expect(q.syncNotice).toBeNull(); // unchanged: one second
+  });
+
+  it("🔑 a summary with a plugin line stays 2.5 s (owner, 2026-10-05)", () => {
+    const p = makePlugin();
+    p.settleSyncSummary({ sent: 1, received: 453, conflicts: 0, pluginsUpdated: 9, pluginsRemoved: 0 });
+    expect(lastMessage()).toBe("Sync done — 1 sent, 453 received\n9 plugins updated");
+    vi.advanceTimersByTime(2400);
+    expect(p.syncNotice).not.toBeNull();
+    vi.advanceTimersByTime(200);
+    expect(p.syncNotice).toBeNull();
   });
 
   it("a conflicts-only summary is a summary with a number too — 2 s", () => {

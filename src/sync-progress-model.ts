@@ -110,16 +110,30 @@ export function progressNoticeText(p: SyncProgressNumbers): string {
 // Same rule: a clause per non-zero number, and when all three are zero
 // the message is the bare "Sync done". "Sync done — 0 sent, 0 received"
 // is noise dressed up as information.
+//
+// Plugins get their own lines underneath (owner, 2026-10-05): EVERY
+// plugin whose files changed, enabled or not — "9 plugins updated" on a
+// first pull is the hint that sends the user to Settings — and removed
+// ones apart.
 export function syncSummaryText(n: {
   sent: number;
   received: number;
   conflicts: number;
+  pluginsUpdated?: number;
+  pluginsRemoved?: number;
 }): string {
   const parts: string[] = [];
   if (n.sent > 0) parts.push(`${n.sent} sent`);
   if (n.received > 0) parts.push(`${n.received} received`);
   if (n.conflicts > 0) parts.push(`${n.conflicts} in conflict`);
-  return parts.length === 0 ? "Sync done" : `Sync done — ${parts.join(", ")}`;
+  const lines = [
+    parts.length === 0 ? "Sync done" : `Sync done — ${parts.join(", ")}`,
+  ];
+  const plugins = (count: number, verb: string): string =>
+    `${count} ${count === 1 ? "plugin" : "plugins"} ${verb}`;
+  if ((n.pluginsUpdated ?? 0) > 0) lines.push(plugins(n.pluginsUpdated!, "updated"));
+  if ((n.pluginsRemoved ?? 0) > 0) lines.push(plugins(n.pluginsRemoved!, "removed"));
+  return lines.join("\n");
 }
 
 // ── THE TWO-SECTION NOTICE (owner, 2026-10-03) ──────────────────────

@@ -50,6 +50,7 @@
 
 import type { DataAdapter } from "obsidian";
 import { addRecheckPaths } from "./recheck-paths";
+import { pluginUpdatedText, readPluginVersion } from "./plugin-js";
 
 // Files in our plugin's directory the bootloader recovers. Each gets
 // the same 4-case marker logic. data.json is excluded — we don't
@@ -83,6 +84,10 @@ export interface BootloaderDeps {
   // Display label for OUR plugin (manifest.id). Used in the notice.
   // Falls back to "git-easy-sync" when omitted.
   pluginLabel?: string;
+  // The version of the code RUNNING this bootloader (its bundled
+  // manifest). Compared with the manifest on disk after the apply so the
+  // toast can say "updated to <new>" (owner, 2026-10-05).
+  fromVersion?: string;
   // Optional. Logger sink for diagnostic lines. Falls back to
   // console in production (logger isn't initialised yet at
   // bootloader time).
@@ -332,7 +337,18 @@ export async function runSelfUpdateBootloader(
   // reload picks up any combination of (main.js, manifest.json,
   // styles.css), so the file list is an implementation detail the user
   // doesn't need; the applied set is still logged below for diagnostics.
-  notice?.(`Plugin "${pluginLabel}" updated`, 3000);
+  let toVersion: string | null = null;
+  try {
+    toVersion = readPluginVersion(
+      await deps.adapter.read(`${deps.pluginDir}/manifest.json`),
+    );
+  } catch {
+    // Unreadable → the toast just says "updated".
+  }
+  notice?.(
+    pluginUpdatedText(pluginLabel, deps.fromVersion ?? null, toVersion),
+    3000,
+  );
   logFn("Self-update bootloader: apply complete, reload scheduled", {
     appliedFiles,
   });

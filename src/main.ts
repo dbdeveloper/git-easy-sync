@@ -56,6 +56,7 @@ import { AtomicWriteRecovery, atomicWriteFile } from "./sync2/atomic-write";
 import ChangeDetector, { type ScanPlan } from "./sync2/change-detector";
 import GitignoreInvariants from "./sync2/gitignore-invariants";
 import GitignoreSeedStore from "./sync2/gitignore-seeds";
+import { pluginUpdatedText, readPluginVersion } from "./sync2/plugin-js";
 import DeletedStore from "./diff2/deleted-store";
 import { Sync2Manager, type DrainStatus } from "./sync2/sync2-manager";
 import { IntervalScheduler } from "./sync2/interval-scheduler";
@@ -188,6 +189,11 @@ const SYNC_SUMMARY_LINGER_MS = 1000;
 // a second was too short to read them (owner, 2026-10-05). The bare
 // "Sync done" keeps the second above — it is read at a glance.
 const SYNC_SUMMARY_WITH_COUNTS_MS = 2000;
+// …and with a plugin line under it ("9 plugins updated"), 2.5 s: one
+// more line to read (owner, 2026-10-05). Our OWN reload is held back
+// past it — the reload tears this instance down, and the notice with it.
+const SYNC_SUMMARY_WITH_PLUGINS_MS = 2500;
+const SELF_RELOAD_DELAY_MS = SYNC_SUMMARY_WITH_PLUGINS_MS + 250;
 
 // §35 — the automatic "Sync skipped: token expired" toast. Longer than
 // BRIEF_NOTICE_MS: it carries actionable words the user must actually read,
@@ -212,6 +218,10 @@ const STARTUP_SYNC_DELAY_MS = 5000;
 interface ObsidianPluginManager {
   enabledPlugins?: Set<string>;
   disablePlugin?: (id: string) => Promise<void>;
+  // Unloads AND drops the id from community-plugins.json. Used for a
+  // plugin the sync REMOVED (owner, 2026-10-05): re-enabling it is a
+  // deliberate act, on each device.
+  disablePluginAndSave?: (id: string) => Promise<void>;
   // ⚠️ Returns `false` on failure rather than throwing (§2.3, verified
   // in 1.12.7 and 1.13.4). Typed as possibly-void because that is an
   // internal detail and not a contract — see reloadPluginById.
@@ -239,6 +249,17 @@ function canReloadPlugins(pm: ObsidianPluginManager | undefined): boolean {
     typeof pm.disablePlugin === "function" &&
     typeof pm.enablePlugin === "function"
   );
+}
+
+// The version of the plugin instance Obsidian is RUNNING, if it says.
+// Read before a reload replaces the instance.
+function runningPluginVersion(
+  pm: ObsidianPluginManager | undefined,
+  id: string,
+): string | null {
+  const v = (pm?.plugins?.[id] as { manifest?: { version?: unknown } } | undefined)
+    ?.manifest?.version;
+  return typeof v === "string" && v.length > 0 ? v : null;
 }
 
 // What a reload attempt actually did. `reason` is for the log; the
@@ -533,6 +554,7 @@ export default class GitHubSyncPlugin extends Plugin {
           adapter: this.app.vault.adapter,
           pluginDir: `${this.app.vault.configDir}/plugins/${manifest.id}`,
           pluginLabel: manifest.id,
+          fromVersion: manifest.version,
           // Main-thread hash, deliberately: this runs before the worker
           // orchestra exists, and it hashes a few hundred KB only when
           // an update is actually waiting (measured elsewhere in this
@@ -1623,6 +1645,8 @@ export default class GitHubSyncPlugin extends Plugin {
           sent: summary.pushedFiles,
           received: summary.pulledFiles,
           conflicts: summary.conflicts,
+          pluginsUpdated: summary.pluginsUpdated,
+          pluginsRemoved: summary.pluginsRemoved,
         });
       },
       onQueueDepthChanged: (depth: number) => {
@@ -2855,11 +2879,18 @@ export default class GitHubSyncPlugin extends Plugin {
     sent: number;
     received: number;
     conflicts: number;
+    pluginsUpdated?: number;
+    pluginsRemoved?: number;
   }): void {
+    const hasPlugins = (n.pluginsUpdated ?? 0) > 0 || (n.pluginsRemoved ?? 0) > 0;
     const hasCounts = n.sent > 0 || n.received > 0 || n.conflicts > 0;
     this.settleDrainSection(
       syncSummaryText(n),
-      hasCounts ? SYNC_SUMMARY_WITH_COUNTS_MS : SYNC_SUMMARY_LINGER_MS,
+      hasPlugins
+        ? SYNC_SUMMARY_WITH_PLUGINS_MS
+        : hasCounts
+          ? SYNC_SUMMARY_WITH_COUNTS_MS
+          : SYNC_SUMMARY_LINGER_MS,
     );
   }
 
@@ -3490,9 +3521,23 @@ export default class GitHubSyncPlugin extends Plugin {
     // (saveDiff2Layout/restoreDiff2Layout, §4.5.3) — untouched by this.
     // A reloaded plugin's OWN windows close (same as when BRAT itself
     // updates it — expected).
+    // Our OWN reload is held back further, past the summary's linger:
+    // it tears this instance down, and the summary notice with it.
+    const selfNotBefore = Date.now() + SELF_RELOAD_DELAY_MS;
     setTimeout(() => {
-      void this.reloadAffectedPlugins(willReload);
+      void this.reloadAffectedPlugins(willReload, selfNotBefore);
     }, 500);
+  }
+
+  private async pluginManifestExists(id: string): Promise<boolean> {
+    try {
+      return await this.app.vault.adapter.exists(
+        normalizePath(`${this.app.vault.configDir}/plugins/${id}/manifest.json`),
+      );
+    } catch {
+      // Unknown is not "gone": never unload a plugin on a failed check.
+      return true;
+    }
   }
 
   // A plugin's manifest AS IT IS ON DISK right now. `null` when it is
@@ -3516,26 +3561,52 @@ export default class GitHubSyncPlugin extends Plugin {
   // instance down mid-loop, so anything after it would never run —
   // with the old per-plugin timers that was a race, and a race whose
   // losers are silently not-updated plugins.
-  private async reloadAffectedPlugins(ids: string[]): Promise<void> {
+  private async reloadAffectedPlugins(
+    ids: string[],
+    selfNotBefore = 0,
+  ): Promise<void> {
     const ordered = [
       ...ids.filter((id) => id !== manifest.id),
       ...ids.filter((id) => id === manifest.id),
     ];
-    const reloaded: string[] = [];
+    const pm = pluginManagerOf(this.app);
     for (const id of ordered) {
+      // REMOVED by the sync (owner, 2026-10-05): its manifest.json is
+      // gone, so the "new version" is "no plugin". Unload it now and drop
+      // it from the enabled list — before this it kept running from
+      // memory until a restart, then vanished silently. Never our own:
+      // the drain refuses a remote deletion of our folder.
+      if (id !== manifest.id && !(await this.pluginManifestExists(id))) {
+        const unload = pm?.disablePluginAndSave ?? pm?.disablePlugin;
+        try {
+          await unload?.call(pm, id);
+          this.logger?.info("Plugin removed by sync: unloaded", { id });
+          new Notice(`Plugin "${id}" removed`, 3000);
+        } catch (err) {
+          this.logger?.error("Plugin removed by sync: unload FAILED", {
+            id,
+            err: describeError(err),
+          });
+        }
+        continue;
+      }
+      if (id === manifest.id) {
+        const wait = selfNotBefore - Date.now();
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      }
       // §4.1 — the gate, and it has to be HERE: before `disablePlugin`,
       // which is the act that does the damage. Read at reload time, from
       // disk, because the disk holds the version Obsidian will actually
       // load (the resolver may have kept ours, §28) — not the manifest
       // cache Obsidian filled at ITS startup.
-      const skip = reloadSkipReason(
-        await this.readPluginManifest(id),
-        Platform.isDesktopApp,
-      );
+      const manifestText = await this.readPluginManifest(id);
+      const skip = reloadSkipReason(manifestText, Platform.isDesktopApp);
       if (skip !== null) {
         this.logger?.info("BRAT-style reload skipped", { id, reason: skip });
         continue;
       }
+      // The RUNNING version, read before the reload replaces it.
+      const oldVersion = runningPluginVersion(pm, id);
       let outcome: ReloadOutcome;
       try {
         outcome = await reloadPluginById(this.app, id);
@@ -3546,8 +3617,17 @@ export default class GitHubSyncPlugin extends Plugin {
         outcome = { ok: false, reason: JSON.stringify(describeError(err)) };
       }
       if (outcome.ok) {
-        reloaded.push(id);
         this.logger?.info("BRAT-style reload done", { id });
+        // One toast PER plugin, after the fact (owner, 2026-10-05) —
+        // they stack, and three seconds each is enough to read them.
+        new Notice(
+          pluginUpdatedText(
+            id,
+            oldVersion,
+            manifestText === null ? null : readPluginVersion(manifestText),
+          ),
+          3000,
+        );
         continue;
       }
       // ⚠️ error, not warn: a plugin the user was running is now
@@ -3564,15 +3644,8 @@ export default class GitHubSyncPlugin extends Plugin {
         10000,
       );
     }
-    // Reported AFTER the fact and counting only what worked. The old
-    // copy was shown BEFORE any reload was attempted, which is how a
-    // torn-down plugin came with a "Plugin updated" toast (§4.3).
-    if (reloaded.length === 0) return;
-    const label =
-      reloaded.length === 1
-        ? `Plugin "${reloaded[0]}" updated`
-        : `${reloaded.length} plugins updated`;
-    new Notice(label, 3000);
+    // ⚰️ The aggregated "N plugins updated" toast lived here. The count
+    // moved to the sync summary's plugin line; the toasts are per plugin.
   }
 
   // 2.0.2-beta2: cancel the currently-running drain. Silently

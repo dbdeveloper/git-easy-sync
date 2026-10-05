@@ -869,3 +869,54 @@ describe("the marker's sha is what makes the staged bytes trustworthy", () => {
     }
   });
 });
+
+// Owner, 2026-10-05: the plugin-updated toasts name the NEW version — the
+// same rule as for other plugins (main.ts pluginUpdatedText).
+describe("the bootloader's toast names the new version", () => {
+  const run = async (files: Record<string, string>, fromVersion?: string) => {
+    const f = makeFixture();
+    try {
+      await setup(f.adapter, f.pluginDir, files);
+      const r = captureReload();
+      const notices: string[] = [];
+      await runSelfUpdateBootloader({
+        adapter: f.adapter,
+        pluginDir: f.pluginDir,
+        pluginLabel: "git-easy-sync",
+        fromVersion,
+        reloadPlugin: r.reloadPlugin,
+        scheduleReload: r.scheduleReload,
+        notice: (msg) => notices.push(msg),
+      });
+      return notices;
+    } finally {
+      f.cleanup();
+    }
+  };
+
+  it("🔑 a staged manifest with a new version → \"updated to <new>\"", async () => {
+    const notices = await run(
+      {
+        [FILES.main.final]: "old-main",
+        [FILES.main.tmp]: "new-main",
+        [FILES.main.marker]: "",
+        [FILES.manifest.final]: '{"version":"2.0.2"}',
+        [FILES.manifest.tmp]: '{"version":"2.0.3"}',
+        [FILES.manifest.marker]: "",
+      },
+      "2.0.2",
+    );
+    expect(notices).toEqual(['Plugin "git-easy-sync" updated to 2.0.3']);
+  });
+
+  it("same version on disk (a rebuild), or no running version known → plain \"updated\"", async () => {
+    const files = {
+      [FILES.main.final]: "old-main",
+      [FILES.main.tmp]: "new-main",
+      [FILES.main.marker]: "",
+      [FILES.manifest.final]: '{"version":"2.0.2-beta"}',
+    };
+    expect(await run(files, "2.0.2-beta")).toEqual(['Plugin "git-easy-sync" updated']);
+    expect(await run(files, undefined)).toEqual(['Plugin "git-easy-sync" updated']);
+  });
+});

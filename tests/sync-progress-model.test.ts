@@ -82,6 +82,31 @@ describe("progressNoticeText", () => {
   });
 });
 
+describe("syncSummaryText — the plugin lines (owner, 2026-10-05)", () => {
+  // Every plugin whose files changed, enabled or not: "9 plugins updated"
+  // on a first pull is the hint that sends the user to Settings.
+  it("updated and removed plugins get their own lines under the summary", () => {
+    expect(
+      syncSummaryText({ sent: 1, received: 453, conflicts: 0, pluginsUpdated: 9, pluginsRemoved: 1 }),
+    ).toBe("Sync done — 1 sent, 453 received\n9 plugins updated\n1 plugin removed");
+  });
+
+  it("singular forms, and a plugin line even when nothing else moved", () => {
+    expect(
+      syncSummaryText({ sent: 0, received: 0, conflicts: 0, pluginsUpdated: 1, pluginsRemoved: 0 }),
+    ).toBe("Sync done\n1 plugin updated");
+    expect(
+      syncSummaryText({ sent: 0, received: 0, conflicts: 0, pluginsUpdated: 0, pluginsRemoved: 2 }),
+    ).toBe("Sync done\n2 plugins removed");
+  });
+
+  it("zero plugins → no plugin lines (and the fields are optional)", () => {
+    expect(syncSummaryText({ sent: 2, received: 0, conflicts: 0, pluginsUpdated: 0, pluginsRemoved: 0 })).toBe(
+      "Sync done — 2 sent",
+    );
+  });
+});
+
 describe("syncSummaryText", () => {
   it("all three zero → the bare message, no empty clauses", () => {
     // "Sync done — 0 sent, 0 received" is noise dressed as information.

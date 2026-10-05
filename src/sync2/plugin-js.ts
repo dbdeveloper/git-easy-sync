@@ -47,6 +47,20 @@ export function readPluginVersion(manifestJson: string): string | null {
   }
 }
 
+// `Plugin "cmdr" updated to 0.5.5` — the version only when it is known
+// on both sides and actually CHANGED; a rebuild of the same version (or
+// an unreadable one) says just "updated" (owner, 2026-10-05). Shared by
+// the reload toast (main.ts) and the self-update bootloader.
+export function pluginUpdatedText(
+  id: string,
+  oldVersion: string | null,
+  newVersion: string | null,
+): string {
+  return oldVersion !== null && newVersion !== null && oldVersion !== newVersion
+    ? `Plugin "${id}" updated to ${newVersion}`
+    : `Plugin "${id}" updated`;
+}
+
 // ⚠️ `compareSemver` USED TO LIVE HERE and was deleted 2026-10-02.
 // There is now exactly one semver comparison in the plugin
 // (`./semver.ts`), because two encodings of one rule drift and the

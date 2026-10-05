@@ -48,6 +48,7 @@ interface FakePM {
   enabledPlugins: Set<string>;
   plugins: Record<string, unknown>;
   disableCalls: string[];
+  disableAndSaveCalls: string[];
   enableCalls: string[];
   // What `enablePlugin` answers, per id. `undefined` models a future
   // Obsidian whose return type changed.
@@ -71,6 +72,7 @@ function makePM(init: FakePMInit = {}): FakePM & {
     enabledPlugins: new Set(init.enabledPlugins ?? []),
     plugins: init.plugins ?? {},
     disableCalls: [],
+    disableAndSaveCalls: [],
     enableCalls: [],
     enableResult: init.enableResult ?? {},
     keepInMap: init.keepInMap ?? {},
@@ -82,6 +84,12 @@ function makePM(init: FakePMInit = {}): FakePM & {
       // Obsidian's bare disable removes the instance but does NOT touch
       // enabledPlugins (§2.5) — the exact asymmetry 6.1.4 leans on.
       delete (this as unknown as FakePM).plugins[id];
+    },
+    async disablePluginAndSave(id: string) {
+      const self = this as unknown as FakePM;
+      self.disableAndSaveCalls.push(id);
+      delete self.plugins[id];
+      self.enabledPlugins.delete(id);
     },
     async enablePlugin(id: string) {
       const self = this as unknown as FakePM;
@@ -260,22 +268,25 @@ describe("§4.1 — the reload is skipped when this Obsidian is too old", () => 
     expect(pm.disableCalls).toEqual([]);
   });
 
-  it("6.2.5 a missing or corrupt manifest → skip, and say so", async () => {
+  it("6.2.5 a corrupt manifest → skip, and say so", async () => {
     // Fail-safe direction: the cost of a wrong SKIP is one restart; the
     // cost of a wrong reload is the incident this phase exists for.
+    // (A MISSING manifest is no longer a skip: since 2026-10-05 it means
+    // the plugin was removed — see "removed plugins" below.)
     setMockApiVersion("1.13.4");
     const pm = makePM({
-      enabledPlugins: ["nomanifest", "broken-json"],
-      enableResult: { nomanifest: true, "broken-json": true },
-      keepInMap: { nomanifest: true, "broken-json": true },
+      enabledPlugins: ["broken-json"],
+      enableResult: { "broken-json": true },
+      keepInMap: { "broken-json": true },
     });
     const f = fixture(pm);
     writeManifest(f.root, "broken-json", "{ not json");
-    f.plugin.handlePluginsAffectedReload(["nomanifest", "broken-json"]);
+    f.plugin.handlePluginsAffectedReload(["broken-json"]);
     await runScheduled();
 
     expect(pm.disableCalls).toEqual([]);
-    expect(f.said("skipped")).toHaveLength(2);
+    expect(pm.disableAndSaveCalls).toEqual([]);
+    expect(f.said("skipped")).toHaveLength(1);
   });
 
   it("6.2.6 a manifest with no minAppVersion reloads — the field is optional de facto", async () => {
@@ -454,5 +465,84 @@ describe("§4.3 — what the user is told", () => {
 
     expect(pm.disableCalls).toEqual([]);
     expect(f.notices()).toEqual([]);
+  });
+});
+
+// ── Owner, 2026-10-05: one toast per plugin, with its version; a removed
+//    plugin is unloaded at once; our own reload waits for the summary ──
+describe("per-plugin toasts, removals, and our own reload delay", () => {
+  const instance = (version: string) => ({ manifest: { version } });
+
+  it("🔑 one toast PER plugin, naming the new version — no aggregated \"N plugins updated\"", async () => {
+    const pm = makePM({
+      enabledPlugins: ["cmdr", "linter"],
+      plugins: { cmdr: instance("0.5.4"), linter: instance("1.31.0") },
+      enableResult: { cmdr: true, linter: true },
+      keepInMap: { cmdr: true, linter: true },
+    });
+    const f = fixture(pm);
+    writeManifest(f.root, "cmdr", { id: "cmdr", version: "0.5.5", minAppVersion: "0.0.1" });
+    writeManifest(f.root, "linter", { id: "linter", version: "1.32.0", minAppVersion: "0.0.1" });
+    f.plugin.handlePluginsAffectedReload(["cmdr", "linter"]);
+    await runScheduled();
+
+    expect(f.notices().sort()).toEqual([
+      'Plugin "cmdr" updated to 0.5.5',
+      'Plugin "linter" updated to 1.32.0',
+    ]);
+    expect(recordedNotices.every((n) => n.duration === 3000)).toBe(true);
+  });
+
+  it("same version (a rebuild) or an unreadable old version → no \"to …\"", async () => {
+    const pm = makePM({
+      enabledPlugins: ["same", "noold"],
+      plugins: { same: instance("2.0.2-beta"), noold: {} },
+      enableResult: { same: true, noold: true },
+      keepInMap: { same: true, noold: true },
+    });
+    const f = fixture(pm);
+    writeManifest(f.root, "same", { id: "same", version: "2.0.2-beta", minAppVersion: "0.0.1" });
+    writeManifest(f.root, "noold", { id: "noold", version: "1.0.0", minAppVersion: "0.0.1" });
+    f.plugin.handlePluginsAffectedReload(["same", "noold"]);
+    await runScheduled();
+
+    expect(f.notices().sort()).toEqual(['Plugin "noold" updated', 'Plugin "same" updated']);
+  });
+
+  it("🔑 an enabled plugin whose manifest.json is GONE was removed → unloaded with disablePluginAndSave, never re-enabled", async () => {
+    // Owner: "if the user removed a plugin, they knew something" — it
+    // leaves the enabled list too; re-enabling is a deliberate act.
+    const pm = makePM({
+      enabledPlugins: ["gone"],
+      plugins: { gone: instance("1.0.0") },
+      enableResult: { gone: true },
+      keepInMap: { gone: true },
+    });
+    const f = fixture(pm); // no manifest written for "gone"
+    f.plugin.handlePluginsAffectedReload(["gone"]);
+    await runScheduled();
+
+    expect(pm.disableAndSaveCalls).toEqual(["gone"]);
+    expect(pm.enableCalls).toEqual([]);
+    expect(f.notices()).toEqual(['Plugin "gone" removed']);
+  });
+
+  it("🔑 OUR OWN reload waits 2.5 s so the summary can be read; others go at 500 ms", async () => {
+    const self = "git-easy-sync";
+    const pm = makePM({
+      enabledPlugins: ["cmdr", self],
+      plugins: { cmdr: instance("0.5.5"), [self]: instance("2.0.2-beta") },
+      enableResult: { cmdr: true, [self]: true },
+      keepInMap: { cmdr: true, [self]: true },
+    });
+    const f = fixture(pm, ["cmdr", self]);
+    f.plugin.handlePluginsAffectedReload(["cmdr", self]);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(pm.enableCalls).toEqual(["cmdr"]); // ours not yet
+    await vi.advanceTimersByTimeAsync(1300); // 2.3 s
+    expect(pm.disableCalls).not.toContain(self);
+    await vi.advanceTimersByTimeAsync(500); // 2.8 s
+    expect(pm.enableCalls).toEqual(["cmdr", self]);
   });
 });

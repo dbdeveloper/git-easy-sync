@@ -64,6 +64,8 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
   let completed: Array<{
     pushedFiles: number;
     pulledFiles: number;
+    pluginsUpdated?: number;
+    pluginsRemoved?: number;
     conflicts: number;
     ok: boolean;
     cancelled: boolean;
@@ -977,6 +979,10 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(completed[0]).toEqual({
       pushedFiles: 0,
       pulledFiles: 3,
+      // other-plugin got a write; dead-plugin lost only styles.css (its
+      // manifest.json is still there) — both are "updated".
+      pluginsUpdated: 2,
+      pluginsRemoved: 0,
       conflicts: 0,
       ok: true,
       cancelled: false,
@@ -1047,6 +1053,27 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     await manager.syncAll();
     expect(pluginReloads).toHaveLength(1);
     expect([...pluginReloads[0]].sort()).toEqual(["cmdr", PLUGIN_ID].sort());
+  });
+
+  it("🔑 the summary counts plugins whose files changed — ALL of them, enabled or not — and removed ones apart", async () => {
+    drainResult = okResult({
+      vaultStepWrites: [
+        `${CONFIG_DIR}/plugins/cmdr/main.js`,
+        `${CONFIG_DIR}/plugins/cmdr/manifest.json`,
+        `${CONFIG_DIR}/plugins/linter/styles.css`,
+        "note.md",
+      ],
+      vaultStepRemoves: [
+        `${CONFIG_DIR}/plugins/gone/main.js`,
+        `${CONFIG_DIR}/plugins/gone/manifest.json`,
+        `${CONFIG_DIR}/plugins/linter/old.css`,
+      ],
+      selfUpdateStaged: [`${CONFIG_DIR}/plugins/${PLUGIN_ID}/main.js`],
+    });
+    await manager.syncAll();
+    // cmdr, linter and our own (staged) are updated; "gone" lost its
+    // manifest.json, so it is removed. A note is not a plugin.
+    expect(completed[0]).toMatchObject({ pluginsUpdated: 3, pluginsRemoved: 1 });
   });
 
   // ── Which vault-step failures the USER hears about ────────────────

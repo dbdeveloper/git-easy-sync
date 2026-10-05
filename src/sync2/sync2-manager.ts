@@ -211,6 +211,11 @@ export interface Sync2ManagerDeps {
     // sentThisSync / receivedThisSync) — not the commit pass's count.
     pushedFiles: number;
     pulledFiles: number;
+    // Plugins whose files this operation changed — ALL of them, enabled
+    // or not (owner, 2026-10-05) — and those it removed (manifest.json
+    // deleted). For the summary's plugin lines.
+    pluginsUpdated: number;
+    pluginsRemoved: number;
     // TRACKED conflicts only, counted in PATHS — the unit the user's
     // wording means ("files in conflict"). Synthetic siblings are a
     // diff2 concern and never a drain one (§III). ⚠️ Deliberately a
@@ -280,6 +285,9 @@ export class Sync2Manager {
   // it said "19 sent" for one file actually changed on the server.
   private sentThisSync = new Set<string>();
   private receivedThisSync = new Set<string>();
+  // Plugin id → what the drains of this operation did to it, last word
+  // wins (a plugin removed and then re-added within one sync is updated).
+  private pluginsThisSync = new Map<string, "updated" | "removed">();
 
   // §II.16 — the most recent progress snapshot, kept so a listener that
   // subscribes mid-drain (the notice arms itself 2 s in) can paint
@@ -439,6 +447,8 @@ export class Sync2Manager {
       this.deps.onSyncCompleted?.({
         pushedFiles: this.sentThisSync.size,
         pulledFiles: this.receivedThisSync.size,
+        pluginsUpdated: this.pluginCount("updated"),
+        pluginsRemoved: this.pluginCount("removed"),
         conflicts: this.trackedConflictPaths(),
         ok,
         cancelled: this.lastDrainWasCancelled,
@@ -460,6 +470,8 @@ export class Sync2Manager {
       this.deps.onSyncCompleted?.({
         pushedFiles: this.sentThisSync.size,
         pulledFiles: this.receivedThisSync.size,
+        pluginsUpdated: this.pluginCount("updated"),
+        pluginsRemoved: this.pluginCount("removed"),
         conflicts: this.trackedConflictPaths(),
         ok,
         cancelled: this.lastDrainWasCancelled,
@@ -500,6 +512,13 @@ export class Sync2Manager {
   private clearSyncCounts(): void {
     this.sentThisSync.clear();
     this.receivedThisSync.clear();
+    this.pluginsThisSync.clear();
+  }
+
+  private pluginCount(kind: "updated" | "removed"): number {
+    let n = 0;
+    for (const v of this.pluginsThisSync.values()) if (v === kind) n += 1;
+    return n;
   }
 
   async resumeQueue(): Promise<void> {
@@ -865,6 +884,17 @@ export class Sync2Manager {
         ...touched,
         ...r.selfUpdateStaged,
       ]);
+      // A plugin whose manifest.json the drain deleted is REMOVED; any
+      // other touched plugin is updated.
+      const removedManifests = new Set(r.vaultStepRemoves);
+      for (const p of r.vaultStepWrites) removedManifests.delete(p);
+      for (const id of pluginIds) {
+        const manifestPath = `${this.deps.configDir}/plugins/${id}/manifest.json`;
+        this.pluginsThisSync.set(
+          id,
+          removedManifests.has(manifestPath) ? "removed" : "updated",
+        );
+      }
       if (pluginIds.length > 0) this.deps.onPluginsAffected?.(pluginIds);
       // Reported from the SAME status-independent block, and for the
       // same reason given above: the cancellation already happened —
