@@ -379,10 +379,10 @@ export default class WorkerClient {
   }
 
   // The SHA of a git blob, with the bytes MOVED to the worker and back
-  // rather than cloned (COMMIT-PASS-PERF, 2026-10-04). Peak memory for a
-  // file of size F drops from 3F (caller's bytes + clone + the worker's
-  // header+bytes concat) to 2F — the concat is unavoidable while
-  // crypto.subtle.digest has no incremental API.
+  // rather than cloned (COMMIT-PASS-PERF, 2026-10-04). Together with the
+  // worker's WASM SHA-1 (no header+bytes concat, no WebCrypto input
+  // copy — see cpu-worker.ts) the peak for a file of size F is about 1F;
+  // cloning would add a second F on top.
   //
   // ⚠️ When the worker path runs, the ARGUMENT is detached on return
   // (byteLength 0). Use ONLY the returned `bytes` afterwards — reading
