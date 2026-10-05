@@ -290,6 +290,22 @@ export async function _diff3(
   if (local.sha === null && remote.sha !== null && remote.sha !== base.sha) {
     return { kind: "file", file: remote }; // 4.5.b — null-as-base
   }
+  // 4.5.c / 4.5.d — one side null-as-base, the other UNCHANGED: nothing
+  // moved, the answer is base's value. Field bug 2026-10-05: without
+  // these the pair fell through every rule to the merge path — 4.5.c
+  // fetched a blob for a null sha (the canonical write-back produced a
+  // batch entry equal to its own baseline while Layer 2 had confirmed the
+  // remote unchanged), 4.5.d hit the rules-1-6 assert. The .obsidian/
+  // branch had exactly this pair since 2026-08-28 (3.b.*.a/b via the
+  // "unmoved" helpers); the standard branch never got it. A null local
+  // is NOT a deletion here — callers pass DELETED for that (B.9) — and
+  // remote equals base, so 4.5.d resurrects nothing.
+  if (local.sha === base.sha && remote.sha === null) {
+    return { kind: "file", file: local }; // 4.5.c
+  }
+  if (local.sha === null && remote.sha === base.sha) {
+    return { kind: "file", file: remote }; // 4.5.d
+  }
   if (local.sha !== base.sha && remote.mode === DELETED) {
     return { kind: "file", file: local }; // 4.6.a — edit beats delete
   }

@@ -279,7 +279,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
   // local == base with remote == null and fetched a blob for a null sha.
   // Every drain failed on that queued batch.
   describe("a batch entry equal to its own baseline", () => {
-    it.fails("🔑 head exists and holds it: ok, and NOTHING is pushed (no empty commit)", async () => {
+    it("🔑 head exists and holds it: ok, and NOTHING is pushed (no empty commit)", async () => {
       await setupAligned();
       const commitsBefore = world.commits.length;
       await stageBatch({ "note.md": V0 });
@@ -289,7 +289,12 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       expect(baselines.get("note.md")?.baselineSha).toBe(await sha(V0));
     });
 
-    it.fails("…but in an EMPTY repo (no head, Layer 2 skipped) it IS pushed — null there means \"nothing on the server\"", async () => {
+    // NB: an empty repo is SEEDED first (seedBareRepoWithFile), so a head
+    // exists by the time Layer 2 runs. The short-circuit's
+    // `headHash !== null` guard covers the case where seeding could not
+    // happen (seed blob missing) — reachable by reasoning, not by this
+    // fake; this test pins the end result: the file reaches the server.
+    it("…and in an EMPTY repo the entry still reaches the server (seeded; no crash)", async () => {
       baselines.set("note.md", {
         baselineSha: await sha(V0),
         mtime: 50,

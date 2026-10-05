@@ -1649,6 +1649,26 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         tracked.base = local;
         continue;
       }
+      // …and the null-as-base form of it (2026-10-05): an empty remote
+      // half means "unchanged since base", and Layer 2 has just CONFIRMED
+      // that against the live ref — so an entry equal to its own base is
+      // already what the server holds; pushing it would make an empty
+      // "Sync at…" commit. ⚠️ Only with a head: with headHash null Layer 2
+      // is skipped and null means "nothing on the server" — that entry
+      // must be pushed (_diff3's 4.5.c returns local, and the push below
+      // runs because null !== its sha). In practice an empty repo is
+      // seeded above first, so headHash is null here only when seeding
+      // could not happen; the guard keeps the rule "skip only what Layer
+      // 2 verified" true regardless.
+      if (
+        headHash !== null &&
+        tracked.remote.sha === null &&
+        tracked.base.sha !== null &&
+        tracked.base.sha === local.sha
+      ) {
+        tracked.base = local;
+        continue;
+      }
 
       // §II.1 п.3.b.e needs a remote mtime, and Layer 2 just above may
       // have nulled it (full-half replacement). _diff3 decides 3.b.e
@@ -2843,11 +2863,16 @@ function siblingInfoFrom(info: FileInfo): FileInfo {
 //     the claim, and the path returns to ordinary rules — including a
 //     legitimate conflict, which is scenario B);
 //   - THE REMOTE ACTUALLY HAS THE PATH. Without this the substitution
-//     would make base == local with remote == null, which no rule
-//     handles: 2.a/2.b need matching nullness, 4.3-4.6 all require
-//     local.sha !== base.sha, so it falls through to the merge path
-//     with a null remote. Today that case is base==null → 4.1.a →
-//     "push ours", which is exactly right and must stay.
+//     would make base == local with remote == null. Until 2026-10-05 no
+//     rule handled that state at all (it fell through to the merge path
+//     — the very hole a canonical write-back later hit in the field;
+//     _diff3 now has 4.5.c for it). The condition matters MORE than
+//     that: Layer 2 runs after this substitution and, finding the path
+//     absent on the server, marks the remote DELETED — and base == local
+//     with remote DELETED resolves as a remote deletion: the user's
+//     file would be REMOVED. Without the substitution the case is
+//     base==null → 4.1.a → "push ours", which is exactly right and
+//     must stay.
 function applySeedAncestor(
   deps: DrainDeps,
   tracked: TrackedFile,

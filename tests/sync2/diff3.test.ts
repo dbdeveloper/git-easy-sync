@@ -222,7 +222,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
   // null fell through every rule to the merge path and fetched a blob
   // for a null sha (TypeError in getBlob). Reached when the canonical
   // write-back produced a batch entry equal to its own baseline.
-  it.fails("A.30: base=A local=A remote=null → A, nothing fetched (4.5.c — null-as-base, local unchanged)", async () => {
+  it("A.30: base=A local=A remote=null → A, nothing fetched (4.5.c — null-as-base, local unchanged)", async () => {
     const base = side("n.md", "A");
     const r = await _diff3(
       makeDeps({ getContentsMetadataAtRef: async () => ({ sha: "live", size: 2 }) }),
@@ -236,7 +236,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
     expect(metaCalls).toEqual([]);
   });
 
-  it.fails("A.31: base=A local=null remote=A → A (4.5.d — the mirror; no caller reaches it today, pinned for totality)", async () => {
+  it("A.31: base=A local=null remote=A → A (4.5.d — the mirror; no caller reaches it today, pinned for totality)", async () => {
     const base = side("n.md", "A");
     const r = await _diff3(makeDeps(), t(base, side("n.md", "A")), null, HEAD);
     expect(r.kind).toBe("file");
@@ -1025,7 +1025,7 @@ describe("_diff3 totality — every (base, local, remote) combination", () => {
     return side(p, st);
   };
 
-  it.fails("no combination fetches by a null sha or falls through to the rules-1-6 assert", async () => {
+  it("no combination fetches by a null sha or falls through to the rules-1-6 assert", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "diff3-total-"));
     const store = new SyncStore({ vault: new Vault(dir) as never, selfPluginId: PLUGIN_ID });
     const problems: string[] = [];
