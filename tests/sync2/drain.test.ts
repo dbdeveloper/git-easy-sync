@@ -2487,6 +2487,39 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
   });
 
 
+  it("🔑 FIELD BUG 2026-10-05: a plugin that exists only on the server is simply WRITTEN — no collision, no mtime request", async () => {
+    // Fresh device (no anchor, no baselines), the server holds a plugin
+    // the vault never had. Before the fix every core file went through
+    // the plugin-collision resolver and paid one commits-for-path
+    // request (~0.5 s each on the owner's vault), logging a collision
+    // that never was.
+    await world.commitFiles({
+      ".obsidian/plugins/cmdr/main.js": "code\n",
+      ".obsidian/plugins/cmdr/manifest.json": '{"id":"cmdr","version":"0.5.5"}\n',
+      ".obsidian/plugins/cmdr/styles.css": "css\n",
+    });
+    const client = world.makeClient();
+    const mtimeAsks: string[] = [];
+    const origInfo = client.getCommitInfoForPath.bind(client);
+    client.getCommitInfoForPath = async (p, ref) => {
+      mtimeAsks.push(p);
+      return origInfo(p, ref);
+    };
+    const infos: string[] = [];
+    const r = await drainOnce(
+      makeDeps({ client, logger: { info: (m) => infos.push(m), warn: () => {} } }),
+    );
+    expect(r.status).toBe("ok");
+    expect([...r.vaultStepWrites].sort()).toEqual([
+      ".obsidian/plugins/cmdr/main.js",
+      ".obsidian/plugins/cmdr/manifest.json",
+      ".obsidian/plugins/cmdr/styles.css",
+    ]);
+    expect(vaultFiles.files.get(".obsidian/plugins/cmdr/main.js")!.content).toBe("code\n");
+    expect(mtimeAsks).toEqual([]);
+    expect(infos.filter((m) => m.startsWith("plugin-core collision"))).toEqual([]);
+  });
+
   // ── "Sync done — N sent, M received": REAL changes only (owner, 2026-10-05) ──
   //
   // Field case: a fresh device committed 19 files, 18 of them already on

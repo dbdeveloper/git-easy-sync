@@ -68,6 +68,36 @@ changes there are answered correctly and the mtime fallback fires only when both
 sides genuinely moved. Only 3.a — the interim plugin-core seam this document
 replaces — was base-blind.
 
+## ⚠️ FIELD BUG 2026-10-05 — the 3.a seam read "never had it" as "deleted it" (FIXED)
+
+The owner's fresh test vault (only `Welcome.md`, the top level of `.obsidian/` and
+our own plugin), reproduced on two clean runs: every core file of each plugin
+that existed **only on the server** was logged as `plugin-core collision resolved
+by mtime (local=?)`. Each one paid an extra commits-for-path request, ~11 s for
+26 files, for a collision that never happened. The result happened to be right:
+the absent local side carried mtime 0, so the clock handed the win to the server.
+
+**Why.** The Vault-step hands `_diff3` a file missing from the disk as `DELETED`
+(B.9 — so a file deleted DURING the drain is not resurrected). `_diff3` replaces
+a DELETED side's sha with the non-null sentinel, and the seam then saw two
+non-null shas, both different from a null base: "deleted here, present there".
+
+**The owner's rule.** With **no base** for the path, nobody can have deleted
+anything — the side that EXISTS wins, through 3.b, with no collision. A new
+plugin from the server is simply installed, and enabled plugins are then reloaded
+BRAT-style. With **a base** (including after a force push, where discovery
+supplies the real one), a deletion on either side IS a genuine collision and
+stays with the version resolver: "Видалення можливе! І локально і віддалено". No
+base with both sides present and different is still a collision.
+
+**Fix:** the seam also requires
+`!(base.sha === null && (local.mode === DELETED || remote.mode === DELETED))`.
+RED first in `diff3.test.ts` (both directions) and in `drain.test.ts` (a
+server-only plugin is written with zero mtime requests and no collision line).
+The two "with a base, a deletion IS a collision" pins catch a fix that excludes
+DELETED everywhere: a mutation that drops the no-base condition fails exactly
+those two.
+
 ✅ **CLOSED 2026-09-30 — was: the mtime fallback's INPUT can be wrong.** The concern was
 that `remote.mtime` comes from the commit's `committer.date`, which is only the edit
 moment because the engine injects `date = batch.createdAt` — and that injection was

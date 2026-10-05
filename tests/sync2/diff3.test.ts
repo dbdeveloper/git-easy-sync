@@ -686,6 +686,74 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
     expect((pull as { file: FileInfo }).file.sha).toBe(side(p, "R", {}).sha);
   });
 
+  // FIELD BUG 2026-10-05 (owner's fresh test vault, reproduced twice):
+  // every core file of a plugin that existed ONLY on the server went
+  // through the plugin-collision resolver — one extra commits-for-path
+  // request each (~11 s for 26 files) and a log line claiming a
+  // collision that never was. The Vault-step hands _diff3 an absent
+  // local file as DELETED (B.9); the DELETED sentinel is a non-null sha,
+  // so isPluginCoreCollision read "never had it" as "deleted it".
+  //
+  // Owner's rule: with NO BASE for the path there is nothing anyone could
+  // have deleted — the side that EXISTS wins, no collision. With a base,
+  // a deletion on either side IS a genuine collision and stays with the
+  // version resolver (pinned below, so a fix cannot simply exclude
+  // DELETED everywhere).
+  describe("plugin core: an absent side with no base is not a collision", () => {
+    const names = ["manifest.json", "main.js", "styles.css"];
+
+    it("🔑 no base, NOT on disk (the Vault-step's DELETED form), on the server → the server's file, no dispatch", async () => {
+      for (const name of names) {
+        const p = `.obsidian/plugins/cmdr/${name}`;
+        const remote = side(p, "R", { mtime: 200 });
+        const r = await _diff3(makeDeps(), t(emptyFileInfo(), remote), deletedSide(p), HEAD);
+        expect(r, name).toEqual({ kind: "file", file: remote });
+      }
+    });
+
+    it("…mirror: no base, on disk, the server's side DELETED → the local file, no dispatch", async () => {
+      for (const name of names) {
+        const p = `.obsidian/plugins/cmdr/${name}`;
+        const local = side(p, "L", { mtime: 100 });
+        const r = await _diff3(makeDeps(), t(emptyFileInfo(), deletedSide(p)), local, HEAD);
+        expect(r, name).toEqual({ kind: "file", file: local });
+      }
+    });
+
+    it("no base, BOTH sides exist and differ → still a genuine collision (version decides)", async () => {
+      const p = ".obsidian/plugins/cmdr/main.js";
+      const r = await _diff3(
+        makeDeps(),
+        t(emptyFileInfo(), side(p, "R", { mtime: 200 })),
+        side(p, "L", { mtime: 100 }),
+        HEAD,
+      );
+      expect(r).toEqual({ kind: "plugin-dispatch" });
+    });
+
+    it("🔑 WITH a base: deleted locally vs edited on the server IS a collision (owner: deletion is possible)", async () => {
+      const p = ".obsidian/plugins/cmdr/main.js";
+      const r = await _diff3(
+        makeDeps(),
+        t(side(p, "A"), side(p, "R", { mtime: 200 })),
+        deletedSide(p),
+        HEAD,
+      );
+      expect(r).toEqual({ kind: "plugin-dispatch" });
+    });
+
+    it("🔑 WITH a base: edited locally vs deleted on the server IS a collision", async () => {
+      const p = ".obsidian/plugins/cmdr/main.js";
+      const r = await _diff3(
+        makeDeps(),
+        t(side(p, "A"), deletedSide(p)),
+        side(p, "L", { mtime: 100 }),
+        HEAD,
+      );
+      expect(r).toEqual({ kind: "plugin-dispatch" });
+    });
+  });
+
   it("A1.19: plugins/<id>/data.json → NOT the plugin branch; resolves via mtime-tiebreak (3.b)", async () => {
     const p = ".obsidian/plugins/some-plugin/data.json";
     const newerRemote = side(p, "R", { mtime: 2000 });

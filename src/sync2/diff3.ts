@@ -148,7 +148,21 @@ function isPluginCoreCollision(
     // collision" since THE SWITCH; the code only checked that both sides
     // EXIST, and "differ" is not "both changed".
     local.sha !== base.sha &&
-    remote.sha !== base.sha
+    remote.sha !== base.sha &&
+    // ⚠️ …and with NO base, an absent side is not a side at all. Field
+    // bug, 2026-10-05, the owner's fresh vault: the Vault-step hands an
+    // absent local file over as DELETED (B.9), the DELETED sentinel is a
+    // non-null sha, and so every core file of a plugin that existed ONLY
+    // on the server read as "deleted here, present there" — one extra
+    // commits-for-path request each and a collision logged that never
+    // was. Without a base nobody can have deleted anything: the side
+    // that EXISTS wins, through 3.b. With a base, a deletion on either
+    // side IS a genuine collision and stays with the version resolver
+    // (owner: "Видалення можливе! І локально і віддалено").
+    !(
+      base.sha === null &&
+      (local.mode === DELETED || remote.mode === DELETED)
+    )
   );
 }
 
