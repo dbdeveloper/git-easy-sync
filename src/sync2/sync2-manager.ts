@@ -856,7 +856,15 @@ export class Sync2Manager {
       for (const p of touched) this.receivedThisSync.add(p);
       for (const p of r.selfUpdateStaged) this.receivedThisSync.add(p);
       for (const p of r.pushedPaths) this.sentThisSync.add(p);
-      const pluginIds = this.derivePluginIds(touched);
+      // A STAGED self-update must reload us too (regression 2026-10-05):
+      // since 86c808e our own loadable files are staged, not written, and
+      // the bootloader applies them at the top of onload — the onload
+      // this reload runs. Without the staged paths here the update waited
+      // for a manual restart of Obsidian.
+      const pluginIds = this.derivePluginIds([
+        ...touched,
+        ...r.selfUpdateStaged,
+      ]);
       if (pluginIds.length > 0) this.deps.onPluginsAffected?.(pluginIds);
       // Reported from the SAME status-independent block, and for the
       // same reason given above: the cancellation already happened —

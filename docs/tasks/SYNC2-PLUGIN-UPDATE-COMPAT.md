@@ -68,6 +68,27 @@ changes there are answered correctly and the mtime fallback fires only when both
 sides genuinely moved. Only 3.a — the interim plugin-core seam this document
 replaces — was base-blind.
 
+## ⚠️ REGRESSION 2026-10-05 — a staged self-update waited for a manual restart (FIXED)
+
+The owner's `~/Obsidian-test`: the drain logged `self-update staged for the next
+start`, and nothing happened until Obsidian was restarted by hand. The design has
+always been that our own plugin updates DYNAMICALLY, BRAT-style, like any other
+(`bcc2cbe`: "We treat self the same as any other plugin"). The tab-layout restore
+across a fast reload exists for exactly that moment.
+
+**Cause.** `86c808e` (2026-10-01) made the bootloader the only writer of our live
+`main.js`: the drain stages the bytes and reports the path in `selfUpdateStaged`,
+not in `vaultStepWrites`. The manager derived the plugin ids for
+`onPluginsAffected` from the written paths only, so our id never reached the
+reload, and the onload that applies the stage never ran.
+
+**Fix.** The ids are derived from `vaultStepWrites + vaultStepRemoves +
+selfUpdateStaged`. The chain is the designed one again: staged → our reload (last,
+after the layout capture) → the bootloader applies the stage at the top of onload
+→ it reloads us with the new code. The 2026-10-01 rule still holds: the live file
+is replaced only by healthy running code at the top of onload. RED first in
+`sync2-manager.test.ts`.
+
 ## ⚠️ FIELD BUG 2026-10-05 — the 3.a seam read "never had it" as "deleted it" (FIXED)
 
 The owner's fresh test vault (only `Welcome.md`, the top level of `.obsidian/` and

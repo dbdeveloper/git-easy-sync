@@ -1020,6 +1020,35 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(completed[1]).toMatchObject({ pushedFiles: 0, pulledFiles: 0 });
   });
 
+  // REGRESSION (owner, 2026-10-05): "Раніше оновлення відбувалось
+  // динамічно в автоматичному (BRAT) режимі і для нашого плагіну!" Since
+  // 86c808e (2026-10-01) our own loadable files are STAGED, not written —
+  // the bootloader alone replaces the live file, at the top of onload. But
+  // the reload that RUNS that onload was derived from the written paths
+  // only, so a staged self-update sat on disk until the user restarted
+  // Obsidian by hand. The design (bcc2cbe: "We treat self the same as any
+  // other plugin") reloads us, and the bootloader applies the stage.
+  it("🔑 a STAGED self-update triggers our own BRAT-style reload (the bootloader then applies it)", async () => {
+    drainResult = okResult({
+      selfUpdateStaged: [
+        `${CONFIG_DIR}/plugins/${PLUGIN_ID}/main.js`,
+        `${CONFIG_DIR}/plugins/${PLUGIN_ID}/manifest.json`,
+      ],
+    });
+    await manager.syncAll();
+    expect(pluginReloads).toEqual([[PLUGIN_ID]]);
+  });
+
+  it("staged self-update + another plugin written in the same drain → both reloaded, each once", async () => {
+    drainResult = okResult({
+      vaultStepWrites: [`${CONFIG_DIR}/plugins/cmdr/main.js`],
+      selfUpdateStaged: [`${CONFIG_DIR}/plugins/${PLUGIN_ID}/main.js`],
+    });
+    await manager.syncAll();
+    expect(pluginReloads).toHaveLength(1);
+    expect([...pluginReloads[0]].sort()).toEqual(["cmdr", PLUGIN_ID].sort());
+  });
+
   // ── Which vault-step failures the USER hears about ────────────────
   //
   // Owner's rule, 2026-10-02: «там де є сподівання, що наступна
