@@ -212,8 +212,9 @@ Use it, and note which runs you did.
       Each line appears at the START of its phase and only if the phase is forecast over
       ~2 s (statistics in `.runtime/commit-stats.json`):
       - no statistics yet — the first commit after a RESET, **and the first commit after
-        installing this build** — shows **"Checking all files…"** at once, then
-        **"Checking N of M files"** whatever the forecast;
+        installing this build** — shows **"Checking all files…"** at once; it turns into
+        **"Checking N of M files"** only for a big commit (more than 500 files, or more
+        than 100 MB), otherwise it stays until the result;
       - a commit with nothing to do on a vault with statistics shows **no line**, then
         "Nothing to commit";
       - the self-heal pass after a large pull shows "Checking N of M files" and ends with

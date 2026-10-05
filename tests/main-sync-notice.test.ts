@@ -166,15 +166,47 @@ describe("sync notice lifecycle (§II.16)", () => {
     deletions,
   });
 
-  it("🔑 no statistics (first commit after RESET): \"Checking all files…\" AT ONCE, then the counter", () => {
+  it("🔑 no statistics (first commit after RESET): \"Checking all files…\" AT ONCE; a SMALL commit keeps it to the end", () => {
     const p = makePlugin();
     p.commitStats = statsWith({ any: false, forecast: null });
     p.reportCommitStarted(true);
     expect(lastMessage()).toBe("Checking all files…"); // no timer, no delay
+    // 264 files, ~0.26 MB: neither > 500 files nor > 100 MB.
     p.reportCommitPlan(plan(263, 1), 264);
-    expect(lastMessage()).toBe("Checking 0 of 264 files");
     p.reportCommitChecked(120, 264);
-    expect(lastMessage()).toBe("Checking 120 of 264 files");
+    expect(lastMessage()).toBe("Checking all files…");
+  });
+
+  it("🔑 no statistics + MORE than 500 files → the counter", () => {
+    const p = makePlugin();
+    p.commitStats = statsWith({ any: false, forecast: null });
+    p.reportCommitStarted(true);
+    p.reportCommitPlan(plan(525, 1), 526);
+    expect(lastMessage()).toBe("Checking 0 of 526 files");
+    p.reportCommitChecked(120, 526);
+    expect(lastMessage()).toBe("Checking 120 of 526 files");
+  });
+
+  it("no statistics + MORE than 100 MB (even under 500 files) → the counter", () => {
+    const p = makePlugin();
+    p.commitStats = statsWith({ any: false, forecast: null });
+    p.reportCommitStarted(true);
+    p.reportCommitPlan(
+      { checks: 10, checkBytes: 100 * 1024 * 1024 + 1, unhashedAdds: 0, deletions: 0 },
+      10,
+    );
+    expect(lastMessage()).toBe("Checking 0 of 10 files");
+  });
+
+  it("no statistics: exactly 500 files / exactly 100 MB is NOT over the line", () => {
+    const p = makePlugin();
+    p.commitStats = statsWith({ any: false, forecast: null });
+    p.reportCommitStarted(true);
+    p.reportCommitPlan(
+      { checks: 500, checkBytes: 100 * 1024 * 1024, unhashedAdds: 0, deletions: 0 },
+      500,
+    );
+    expect(lastMessage()).toBe("Checking all files…");
   });
 
   it("statistics, fast dot-space and a fast check: NO line at all until the result", () => {

@@ -171,6 +171,12 @@ const PHASE_START_DELAY_MS = 700;
 // time, not machine speed. Replaces the commit's timers; the drain's
 // (PHASE_START_DELAY_MS above, SYNC_PROGRESS_DELAY_MS) are unchanged.
 const COMMIT_FORECAST_MS = 2000;
+// No statistics yet (the first commit after a RESET or after installing
+// this build): there is no forecast, so the counter is shown only for a
+// commit that is big by these plain measures (owner, 2026-10-05) —
+// otherwise "Checking all files…" stays until the result.
+const NO_STATS_COUNTER_MIN_FILES = 500;
+const NO_STATS_COUNTER_MIN_BYTES = 100 * 1024 * 1024;
 // How long the closing line ("Sync done — …") stays after the operation
 // ends. The user has been watching this notice, so it does not need the
 // dwell time of a toast that appears out of nowhere — a second is the
@@ -2896,14 +2902,17 @@ export default class GitHubSyncPlugin extends Plugin {
   // without a line; the records update and the next run is right. That
   // is the accepted, cosmetic failure mode.
   private commitCounterOn = false;
+  // This pass started without any statistics (see reportCommitPlan).
+  private commitNoStats = false;
 
   private reportCommitStarted(fullScan: boolean): void {
     this.commitCounterOn = false;
+    this.commitNoStats = false;
     // A single-file commit is quick by nature: no line.
     if (!fullScan) return;
     const stats = this.commitStats;
     if (!stats || !stats.hasAny()) {
-      this.commitCounterOn = true;
+      this.commitNoStats = true;
       this.setCommitSection({ state: "live", text: checkingAllFilesNoticeText() });
       return;
     }
@@ -2915,6 +2924,17 @@ export default class GitHubSyncPlugin extends Plugin {
   // Stage 1 is done, nothing read yet: M = candidates + deletions.
   private reportCommitPlan(plan: ScanPlan, total: number): void {
     if (total === 0) return;
+    if (this.commitNoStats) {
+      // No forecast exists: count and size decide (owner, 2026-10-05).
+      if (
+        total > NO_STATS_COUNTER_MIN_FILES ||
+        plan.checkBytes > NO_STATS_COUNTER_MIN_BYTES
+      ) {
+        this.commitCounterOn = true;
+        this.setCommitSection({ state: "live", text: checkingNoticeText(0, total) });
+      }
+      return;
+    }
     const forecast = this.commitStats?.forecastCheck(
       plan.checks + plan.unhashedAdds,
       plan.checkBytes,
@@ -2922,7 +2942,6 @@ export default class GitHubSyncPlugin extends Plugin {
     // "Unknown" is not "fast": no statistics, or an action never yet
     // measured, shows the counter.
     if (
-      this.commitCounterOn ||
       forecast === null ||
       forecast === undefined ||
       forecast > COMMIT_FORECAST_MS

@@ -300,9 +300,10 @@ const sha = await this.workerClient.computeGitBlobSHA(bytes);     // і ПЕРЕ
   попереднього проходу. Обидва — лише вигляд рядка.
 - ✅ **3c зроблено 2026-10-05.** `main.ts`: `reportCommitStarted(fullScan)` /
   `reportCommitPlan(plan, M)` / `reportCommitChecked(n, M)`; поріг
-  `COMMIT_FORECAST_MS = 2000`. Без статистики — одразу «Checking all files…», а після
-  плану лічильник «Checking N of M files» показується **безумовно** (рішення власника,
-  варіант (а)). Прогноз етапів 2+3 — `forecastCheckMs` (читання + SHA-1 + запис для
+  `COMMIT_FORECAST_MS = 2000`. Без статистики — одразу «Checking all files…»; після
+  плану лічильник «Checking N of M files» — лише якщо **M > 500 файлів АБО сумарний
+  розмір > 100 МБ** (власник, 2026-10-05, уточнення варіанту (а)); інакше «Checking
+  all files…» лишається до підсумку. Прогноз етапів 2+3 — `forecastCheckMs` (читання + SHA-1 + запис для
   кожного кандидата, верхня межа); дія без виміру → прогноз невідомий → лічильник
   показується («невідомо» ≠ «швидко»). Коміт одного файлу — без рядків. Менеджер:
   `onCommitPlan` / `onCommitChecked` (етап 3 — видалення по мірі запису батчів);
