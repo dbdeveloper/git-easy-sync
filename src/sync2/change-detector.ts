@@ -243,6 +243,13 @@ export interface ChangeDetectorDeps {
   // the writer records, and a carried sha is trusted as-is. Absent →
   // off: raw bytes, as before.
   autoCanonicalize?: () => boolean;
+  // COMMIT-PASS-PERF 3a: per-candidate read and SHA-1 times, and the
+  // dot-space enumeration — what step 3's forecast learns from
+  // (commit-stats.ts). Optional: cosmetic, never part of a decision here.
+  stats?: {
+    record(action: "read" | "hash", bytes: number, ms: number): void;
+    recordDot(entries: number, ms: number): void;
+  };
 }
 
 // Where a commit scan's time goes (COMMIT-PASS-PERF, 2026-10-05). Logged
@@ -346,6 +353,7 @@ export default class ChangeDetector {
   ) => Promise<{ sha: string; bytes: ArrayBuffer }>;
   private readonly syncStore: ChangeDetectorDeps["syncStore"];
   private readonly autoCanonicalize: () => boolean;
+  private readonly stats: ChangeDetectorDeps["stats"];
   // The opt-in set for the CURRENT operation (DOT-FILES §5). Null until
   // beginScan() runs, and deliberately not lazily filled: "not computed
   // yet" and "lifecycle bug" have to stay distinguishable, or the
@@ -377,6 +385,7 @@ export default class ChangeDetector {
       (async (bytes) => ({ sha: await calculateGitBlobSHA(bytes), bytes }));
     this.syncStore = deps.syncStore;
     this.autoCanonicalize = deps.autoCanonicalize ?? (() => false);
+    this.stats = deps.stats;
   }
 
   // Compute the dot-space opt-in set for the operation about to run.
@@ -473,6 +482,7 @@ export default class ChangeDetector {
     // This is the other half of D7. Permission and reach are the same
     // set, so there is no way to be permitted here and unreachable.
     const optIn = this.optIn as OptInSet;
+    const tDot = now();
     allFiles.push(...(await this.statOptInDotFiles(optIn.dotFiles)));
     // Targets whose walk did NOT finish. Tracked PER TARGET, never as
     // one flag: if `.myconfig` walked cleanly and `<configDir>` threw,
@@ -487,6 +497,7 @@ export default class ChangeDetector {
         this.logWalkIncomplete?.(target);
       }
     }
+    const tDotEnd = now();
     // §2.2.1 — Pass 1 walks the files GROUPED BY BASELINE BUCKET, so
     // every bucket is opened exactly once per scan. An unordered walk
     // would page buckets through the 6-slot MRU pathologically (a 20k
@@ -500,6 +511,9 @@ export default class ChangeDetector {
       return ba < bb ? -1 : ba > bb ? 1 : 0;
     });
     t.dotEntries = allFiles.length - t.indexFiles;
+    // The dot-space part of the enumeration (named files + walks), for
+    // the "Committing…" forecast. The sort is not in it.
+    this.stats?.recordDot(t.dotEntries, tDotEnd - tDot);
     t.enumerateMs = now() - tEnum;
     const tPass1 = now();
     // Track syncable paths we examined this pass so Pass 2 can tell
@@ -881,8 +895,10 @@ export default class ChangeDetector {
     const t = this.timing;
     const tRead = now();
     const raw = await this.readBinaryOrSkip(path);
-    if (t) t.readMs += now() - tRead;
+    const readMs = now() - tRead;
+    if (t) t.readMs += readMs;
     if (raw === null) return null;
+    this.stats?.record("read", raw.byteLength, readMs);
     const canon = canonicalizeBytes(
       raw,
       shouldCanonicalize(path, this.configDir) && this.autoCanonicalize(),
@@ -893,8 +909,10 @@ export default class ChangeDetector {
     const size = canon.bytes.byteLength; // before hashBlob may move it
     const tHash = now();
     const { sha, bytes } = await this.hashBlob(canon.bytes);
+    const hashMs = now() - tHash;
+    this.stats?.record("hash", size, hashMs);
     if (t) {
-      const ms = now() - tHash;
+      const ms = hashMs;
       t.candidates += 1;
       t.candidateBytes += size;
       t.hashMs += ms;

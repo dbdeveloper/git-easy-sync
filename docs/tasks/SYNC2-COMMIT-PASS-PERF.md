@@ -307,6 +307,15 @@ const sha = await this.workerClient.computeGitBlobSHA(bytes);     // і ПЕРЕ
 - **читання + хешування кандидата** — у детекторі: без неї не передбачити прохід
   самолікування (на сховищі власника 2,75 с, записів — нуль).
 
+✅ **3a зроблено 2026-10-05:** `src/sync2/commit-stats.ts` (`.runtime/commit-stats.json`,
+звичайний запис — режим відмови косметичний, пояснення в шапці модуля). Заміри:
+запис — `SyncStore.saveBlobToSyncStore` (лише `writeBinary`, callback `onWriteTimed`);
+читання і SHA-1 — `ChangeDetector.hashCandidate` по кожному кандидату; перелік
+dot-простору — детектор, раз на скан. Збереження — у `finally` кожного проходу коміту
+(помилка — попередження). Підсумок прогнозів (`overheadMs`, `mbPerSec` на дію + dot)
+— у рядку `Sync2 commit pass timing` як `stats`. RESET: `reinitStores` кличе
+`commitStats.reset()`. Інтерфейс не змінено.
+
 Перелік dot-простору — кількість записів і час (не байти). Запис статистики на
 диск — лише коли змінився рекорд (більший / менший файл) або dot-час розійшовся
 понад ~20%.

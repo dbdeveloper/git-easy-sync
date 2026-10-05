@@ -1784,3 +1784,43 @@ describe("ScanTiming — where a commit scan's time goes", () => {
     expect(f.detector.lastScanTiming).toBe(before);
   });
 });
+
+
+// COMMIT-PASS-PERF 3a: the detector feeds the forecast statistics.
+describe("stats — read and SHA-1 per candidate, one dot-space measurement per scan", () => {
+  let f: ReturnType<typeof fixture>;
+  beforeEach(async () => {
+    f = fixture();
+    await f.hot.load();
+  });
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  it("records read + hash for each candidate with its size, and the dot enumeration once", async () => {
+    writeFile(f.root, "a.md", "aaaa\n"); // 5
+    writeFile(f.root, "b.bin", Buffer.alloc(300, 1)); // 300
+    const rec: string[] = [];
+    let dots = 0;
+    const det = new ChangeDetector({
+      vault: f.vault as unknown as import("obsidian").Vault,
+      hotMeta: f.hot,
+      baselines: f.store,
+      gi: f.gi,
+      configDir: CONFIG_DIR,
+      selfPluginId: SELF_PLUGIN_ID,
+      vaultRoot: f.root,
+      syncConfigDir: () => true,
+      queue: { peekLatestPathSha: async () => null },
+      stats: {
+        record: (a, bytes) => rec.push(`${a}:${bytes}`),
+        recordDot: () => {
+          dots += 1;
+        },
+      },
+    });
+    await det.findChanges();
+    expect(rec.sort()).toEqual(["hash:300", "hash:5", "read:300", "read:5"]);
+    expect(dots).toBe(1);
+  });
+});

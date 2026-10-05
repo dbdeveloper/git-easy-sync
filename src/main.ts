@@ -63,6 +63,7 @@ import ConflictStoreV2 from "./sync2/conflict-store-v2";
 import BatchWriter from "./sync2/batch-writer";
 import BatchClaimer from "./sync2/get-batch";
 import SyncStore from "./sync2/sync-store";
+import CommitStats from "./sync2/commit-stats";
 import DrainJournal from "./sync2/drain-journal";
 import SiblingTx from "./sync2/sibling-tx";
 import BatchHistorySource from "./sync2/batch-history-source";
@@ -372,6 +373,8 @@ export default class GitHubSyncPlugin extends Plugin {
   invariants!: GitignoreInvariants;
   gitignoreSeeds!: GitignoreSeedStore;
   deletedStore!: DeletedStore;
+  // COMMIT-PASS-PERF 3a — held so RESET can forget it (reinitStores).
+  commitStats?: CommitStats;
   // Metadata stores — durable references so reset can re-init their
   // in-memory state after wiping .runtime/ (RESET-PLUGIN O2).
   hotMeta!: HotMetadataStore;
@@ -1052,6 +1055,10 @@ export default class GitHubSyncPlugin extends Plugin {
         // THE SWITCH: conflicts.json cache must also re-read the now-
         // empty disk, or the UI would resurrect pre-reset conflicts.
         await this.conflictStoreV2?.load();
+        // The stats file died with .runtime/; forget the in-memory copy
+        // too, or the next flush would write the old numbers back — and
+        // the first commit after a RESET must say "Checking all files…".
+        this.commitStats?.reset();
         this.conflictCounter?.markDirty();
         await this.conflictCounter?.flush();
       },
@@ -1135,9 +1142,18 @@ export default class GitHubSyncPlugin extends Plugin {
     // content-addressed blob home (batch content, History local
     // versions, conflict bases); the journal is the drain's crash
     // story; SiblingTx guards STEP3 replace transactions.
+    // COMMIT-PASS-PERF 3a — the forecast statistics. Loaded before
+    // anything can write a blob, so the first write is measured too.
+    const commitStats = new CommitStats({
+      vault: this.app.vault,
+      selfPluginId: manifest.id,
+    });
+    await commitStats.load();
+    this.commitStats = commitStats;
     const syncStore = new SyncStore({
       vault: this.app.vault,
       selfPluginId: manifest.id,
+      onWriteTimed: (bytes, ms) => commitStats.record("write", bytes, ms),
     });
     this.syncStore = syncStore;
     // HISTORY-DELETED §5.2.1 — the re-platformed Deleted bin: bytes in
@@ -1208,6 +1224,7 @@ export default class GitHubSyncPlugin extends Plugin {
       // the UI thread (constructed above, before this detector) — and
       // MOVE the bytes there and back rather than clone them.
       hashBlob: (b) => this.workerClient.hashGitBlob(b),
+      stats: commitStats,
       // COMMIT-PASS-PERF Крок 2: store a proven change's blob while
       // hashing it. The toggle getter MUST match BatchWriter's — the
       // writer trusts the sha the detector hands it.
@@ -1439,6 +1456,9 @@ export default class GitHubSyncPlugin extends Plugin {
     void this.reconcileConflictsV2();
 
     this.sync2Manager = new Sync2Manager({
+      // COMMIT-PASS-PERF 3a: summarised into the timing line, flushed
+      // after every commit pass.
+      commitStats,
       vault: this.app.vault,
       selfPluginId: manifest.id,
       configDir: this.app.vault.configDir,

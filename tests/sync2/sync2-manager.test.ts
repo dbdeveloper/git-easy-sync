@@ -837,6 +837,49 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(typeof timing.detectMs).toBe("number");
   });
 
+  describe("COMMIT-PASS-PERF 3a: commit statistics", () => {
+    it("the timing line carries the stats summary, and the stats are flushed after the pass", async () => {
+      const lines: Array<{ m: string; d: unknown }> = [];
+      deps.logger = { ...deps.logger, info: (m: string, d?: unknown) => lines.push({ m, d }) };
+      let flushed = 0;
+      deps.commitStats = {
+        summary: () => ({ hash: { overheadMs: 1, mbPerSec: 50 } }),
+        flush: async () => {
+          flushed += 1;
+        },
+      };
+      findChangesResult = [];
+      await manager.commitOnly();
+      const timing = lines.find((l) => l.m === "Sync2 commit pass timing")?.d as Record<string, unknown>;
+      expect(timing.stats).toEqual({ hash: { overheadMs: 1, mbPerSec: 50 } });
+      expect(flushed).toBe(1);
+    });
+
+    it("a THROWING pass still flushes", async () => {
+      let flushed = 0;
+      deps.commitStats = { summary: () => ({}), flush: async () => void (flushed += 1) };
+      deps.detector.findChanges = async () => {
+        throw new Error("scan boom");
+      };
+      await expect(manager.commitOnly()).rejects.toThrow("scan boom");
+      expect(flushed).toBe(1);
+    });
+
+    it("a failing flush is a warning, never a failed commit", async () => {
+      const warns: string[] = [];
+      deps.logger = { ...deps.logger, warn: (m: string) => warns.push(m) };
+      deps.commitStats = {
+        summary: () => ({}),
+        flush: async () => {
+          throw new Error("disk full");
+        },
+      };
+      findChangesResult = [];
+      await manager.commitOnly(); // must not throw
+      expect(warns.some((w) => w.includes("commit stats: flush failed"))).toBe(true);
+    });
+  });
+
   it("R3a bell escalation: a FULL-scan trigger during a single-file pass re-loops as a FULL scan, never the runner's file", async () => {
     put("a.md", "x");
     put("b.md", "y");

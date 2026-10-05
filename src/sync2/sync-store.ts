@@ -34,6 +34,11 @@ export default class SyncStore {
   private readonly vault: Vault;
   private readonly selfPluginId: string;
   private readonly logger: SyncStoreLogger | undefined;
+  // COMMIT-PASS-PERF 3a: the time of each blob write (writeBinary only),
+  // for the commit-pass forecast. Every write into the store passes
+  // saveBlobToSyncStore — commit, drain downloads, diff3, the bin — so
+  // this one point measures them all.
+  private readonly onWriteTimed: ((bytes: number, ms: number) => void) | undefined;
   // ── Pins (COMMIT-PASS-PERF §6.1) ────────────────────────────────
   // A pin is a TEMPORARY reference held in memory: "this blob is in use,
   // its durable reference (a batch metafile, a deleted.json record) is
@@ -61,10 +66,12 @@ export default class SyncStore {
     vault: Vault;
     selfPluginId: string;
     logger?: SyncStoreLogger;
+    onWriteTimed?: (bytes: number, ms: number) => void;
   }) {
     this.vault = deps.vault;
     this.selfPluginId = deps.selfPluginId;
     this.logger = deps.logger;
+    this.onWriteTimed = deps.onWriteTimed;
   }
 
   private storeDir(): string {
@@ -158,7 +165,10 @@ export default class SyncStore {
   // the next hash-on-load read.
   async saveBlobToSyncStore(sha: string, bytes: ArrayBuffer): Promise<void> {
     await this.ensureDir();
+    const size = bytes.byteLength;
+    const t0 = performance.now();
     await this.vault.adapter.writeBinary(this.blobPath(sha), bytes);
+    this.onWriteTimed?.(size, performance.now() - t0);
   }
 
   // Start referencing `sha` on behalf of `owner` — the ONLY way, outside

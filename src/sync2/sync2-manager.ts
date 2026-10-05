@@ -187,6 +187,13 @@ export interface Sync2ManagerDeps {
   // it stays quiet — the drain is about to send them; a STANDALONE
   // commit always says it, because it speaks only for that one call.
   onNoLocalChanges?(queued: boolean): void;
+  // COMMIT-PASS-PERF 3a: the forecast statistics (commit-stats.ts) —
+  // summarised into the commit-timing line and flushed after each pass.
+  // Optional and cosmetic: a failed flush is a warning, never an error.
+  commitStats?: {
+    summary(): Record<string, unknown>;
+    flush(): Promise<void>;
+  };
   // §II.16 — the whole user-visible operation began. Paired with
   // onSyncCompleted; main.ts arms the 2 s progress timer here, so the
   // wait is measured from the CLICK, not from the drain (a slow commit
@@ -600,6 +607,7 @@ export class Sync2Manager {
           // sweep should reap). Per pass, not per run: a bell re-loop
           // re-detects and re-pins what it still needs.
           this.deps.syncStore.releaseOwner(PIN_OWNER_COMMIT);
+          await this.flushCommitStats();
         }
         if (this.restartCommit && this.bellTarget !== undefined) {
           t = this.bellTarget; // the escalated scope for the re-loop
@@ -694,6 +702,19 @@ export class Sync2Manager {
     return enqueued;
   }
 
+  // COMMIT-PASS-PERF 3a — best effort: the statistics are cosmetic
+  // (commit-stats.ts), so a failed write is worth a warning, not a
+  // failed commit.
+  private async flushCommitStats(): Promise<void> {
+    try {
+      await this.deps.commitStats?.flush();
+    } catch (err) {
+      this.deps.logger.warn("commit stats: flush failed (cosmetic)", {
+        err: `${err}`,
+      });
+    }
+  }
+
   // One line per commit pass: the pass's own phases plus, for a full
   // scan, the detector's breakdown (ScanTiming). Written so that ONE
   // device run answers "which part is slow" — the first measurement
@@ -710,6 +731,9 @@ export class Sync2Manager {
       totalMs: round1(performance.now() - t0),
       changes,
       ...phases,
+      ...(this.deps.commitStats
+        ? { stats: this.deps.commitStats.summary() }
+        : {}),
       ...(scan === null
         ? {}
         : {

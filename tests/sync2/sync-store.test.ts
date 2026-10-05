@@ -284,6 +284,19 @@ describe("SyncStore (§VIII F)", () => {
     expect(await store.existInSyncStore(sha)).toBe(true);
   });
 
+  it("COMMIT-PASS-PERF 3a: every blob write reports its size and time", async () => {
+    const seen: Array<[number, number]> = [];
+    const timed = new SyncStore({
+      vault: vault as never,
+      selfPluginId: PLUGIN_ID,
+      onWriteTimed: (b, ms) => seen.push([b, ms]),
+    });
+    await timed.saveBlobToSyncStore(await shaOf("12345"), enc("12345"));
+    await timed.retain("commit", await shaOf("abc"), async () => enc("abc"));
+    expect(seen.map(([b]) => b)).toEqual([5, 3]);
+    expect(seen.every(([, ms]) => ms >= 0)).toBe(true);
+  });
+
   it("§12.2 dedup shape: same content saved under one name once — a second save is harmless overwrite of identical bytes", async () => {
     const sha = await shaOf("same");
     await store.saveBlobToSyncStore(sha, enc("same"));
