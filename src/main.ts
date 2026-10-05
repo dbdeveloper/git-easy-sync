@@ -3620,6 +3620,12 @@ export default class GitHubSyncPlugin extends Plugin {
         this.logger?.info("BRAT-style reload done", { id });
         // One toast PER plugin, after the fact (owner, 2026-10-05) —
         // they stack, and three seconds each is enough to read them.
+        // ⚠️ Not for OUR OWN id: the bootloader in the new instance
+        // announces an applied stage (with its version), and this loop
+        // keeps running in the torn-down old instance — both spoke, and
+        // the owner saw two toasts for one update. A self-reload with no
+        // stage behind it changed no code, so it says nothing.
+        if (id === manifest.id) continue;
         new Notice(
           pluginUpdatedText(
             id,

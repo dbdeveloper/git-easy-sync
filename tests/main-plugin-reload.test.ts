@@ -527,6 +527,28 @@ describe("per-plugin toasts, removals, and our own reload delay", () => {
     expect(f.notices()).toEqual(['Plugin "gone" removed']);
   });
 
+  it("🔑 OUR OWN reload shows no toast here — the bootloader announces it (owner saw TWO, 2026-10-05)", async () => {
+    // The old instance keeps running this loop after its own reload, and
+    // the bootloader in the new instance says "updated" for the applied
+    // stage. Two toasts for one update. The bootloader is the one that
+    // KNOWS a new build was applied (and names its version), so it speaks.
+    const self = "git-easy-sync";
+    const pm = makePM({
+      enabledPlugins: ["cmdr", self],
+      plugins: { cmdr: instance("0.5.4"), [self]: instance("2.0.2-beta") },
+      enableResult: { cmdr: true, [self]: true },
+      keepInMap: { cmdr: true, [self]: true },
+    });
+    const f = fixture(pm);
+    writeManifest(f.root, "cmdr", { id: "cmdr", version: "0.5.5", minAppVersion: "0.0.1" });
+    writeManifest(f.root, self, { id: self, version: "2.0.3", minAppVersion: "0.0.1" });
+    f.plugin.handlePluginsAffectedReload(["cmdr", self]);
+    await vi.advanceTimersByTimeAsync(4000);
+
+    expect(pm.enableCalls).toEqual(["cmdr", self]); // ours WAS reloaded
+    expect(f.notices()).toEqual(['Plugin "cmdr" updated to 0.5.5']);
+  });
+
   it("🔑 OUR OWN reload waits 2.5 s so the summary can be read; others go at 500 ms", async () => {
     const self = "git-easy-sync";
     const pm = makePM({
