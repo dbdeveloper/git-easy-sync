@@ -36,6 +36,13 @@ it) — it is not source.
 
   When working on `src/diff2/`, read these together with [`docs/PSEUDO-MERGE-MODE.md`](./PSEUDO-MERGE-MODE.md) (the conflict-resolution algorithm diff2 renders) and [`docs/SYNC2.md`](./SYNC2.md) (the sync engine), which the specs cross-reference for Phase A/B, the byte-match rule, staging protocols, filesystem-authoritative resolution, scenarios, cross-platform contracts, and the push pipeline.
 
+- **Engine workstream specs** (each canonical for its slice; status in [`docs/tasks/STATUS.md`](./tasks/STATUS.md)):
+  [`SYNC2-NEW-DRAIN.md`](./tasks/SYNC2-NEW-DRAIN.md) (the drain algorithm, §II.16 progress + summary),
+  [`SYNC2-DOT-FILES-REFACTOR.md`](./tasks/SYNC2-DOT-FILES-REFACTOR.md) (dot-space scope, §3.4 unconditional rules + self-protection guards),
+  [`SYNC2-PLUGIN-UPDATE-COMPAT.md`](./tasks/SYNC2-PLUGIN-UPDATE-COMPAT.md) (plugin reloads, held updates, self-update, plugin notices §4.3),
+  [`SYNC2-COMMIT-PASS-PERF.md`](./tasks/SYNC2-COMMIT-PASS-PERF.md) (commit-pass cost, forecast-based commit notices),
+  [`SYNC2-FIX.md`](./tasks/SYNC2-FIX.md) (§12 sync_store, R3b interaction points), [`SYNC2-MASTER-PLAN.md`](./tasks/SYNC2-MASTER-PLAN.md) (phases and gates).
+
 Behaviour described in these two specs is locked in by the unit + integration suites. If you change anything in the engine and a spec disagrees, fix the code OR update the spec — don't let them drift. Algorithm changes land in PSEUDO-MERGE-MODE.md; implementation changes land in SYNC2.md.
 
 ## Module layout (`src/`)
@@ -162,6 +169,13 @@ src/
     │                                #  main.js and the bootloader applies them at onload, so the
     │                                #  file Obsidian is RUNNING is never overwritten underneath it.
     │                                #  The marker carries the expected SHA and is verified first
+    ├── self-update-applied.ts       # The baseline follows an APPLIED self-update: the bootloader
+    │                                #  records `path sha` in .runtime/.self-update-applied, the
+    │                                #  next onload settles the baseline only if the live bytes
+    │                                #  still hash to it (PLUGIN-UPDATE-COMPAT, 2026-10-05)
+    ├── commit-stats.ts              # COMMIT-PASS-PERF §3.2: per-device read/SHA/write records
+    │                                #  (largest + smallest file) and the dot-scan time — the
+    │                                #  forecast behind the commit's notice lines. Cosmetic cache
     ├── gitignore-invariants.ts      # The TWO managed sections (`invariants` top / `final`
     │                                #  bottom) + the per-device plugins/.gitignore switch;
     │                                #  always-write enforce; §8.0 seed markers; runs before
@@ -200,7 +214,7 @@ src/
     ├── conflict-watcher.ts          # vault.on listener; READ-ONLY counter.markDirty()
     ├── conflict-counter.ts          # UI count formula + debounced recompute + subscribe
     ├── conflict-branch.ts           # buildConflictBranchName + CONFLICT_BRANCH_PREFIX
-    ├── plugin-js.ts                 # isAtomicPluginFile, compareSemver, readPluginVersion
+    ├── plugin-js.ts                 # isAtomicPluginFile, readPluginVersion, pluginUpdatedText
     ├── three-way-merge.ts           # mergeText (diff3-style, restores local's own EOL)
     ├── text-normalize.ts            # CRLF→LF, BOM strip, trailing-NL; shouldCanonicalize;
     │                                #  utf8RoundTrip + utf8RoundTripKeepBom (canonicalize sites)
