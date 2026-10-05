@@ -150,15 +150,17 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
 
     // Owner, 2026-10-05: a .gitignore "cannot not exist" — its deletion
     // arriving from the server is suspicious, and in the field it was
-    // what exposed formerly ignored files to the next commit. At every
-    // level a .gitignore is supported: root, .obsidian/, .obsidian/plugins/
-    // and .obsidian/plugins/<id>/.
-    it("🔑 remove: a .gitignore at every supported level is kept — no removal, a warning", async () => {
+    // what exposed formerly ignored files to the next commit. Only OUR
+    // managed ones (owner, corrected the same day): the root, .obsidian/
+    // and .obsidian/plugins/ — our own plugin's .gitignore is covered by
+    // the own-folder guard. Another plugin's folder .gitignore belongs to
+    // the user, like the folder itself (see the next test).
+    it("🔑 remove: OUR managed .gitignore files are kept — no removal, a warning", async () => {
       const all = [
         ".gitignore",
         ".obsidian/.gitignore",
         ".obsidian/plugins/.gitignore",
-        ".obsidian/plugins/templater/.gitignore",
+        ".obsidian/plugins/git-easy-sync/.gitignore",
       ];
       for (const g of all) await vault.adapter.write(g, "*.log\n");
       const r = reader();
@@ -168,6 +170,15 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
       }
       expect(captured).toEqual([]);
       expect(warnings.some((w) => w.includes(".gitignore"))).toBe(true);
+    });
+
+    it.fails("🔑 remove: ANOTHER plugin's .gitignore is the user's — a remote deletion IS applied", async () => {
+      // Owner, 2026-10-05: the user may delete it on purpose; restoring
+      // the old one on every device would undo that decision.
+      const f = ".obsidian/plugins/templater/.gitignore";
+      await vault.adapter.write(f, "*.log\n");
+      await reader().remove(f);
+      expect(await vault.adapter.exists(f)).toBe(false);
     });
 
     it("remove: a file merely NAMED like it (notes.gitignore.md, .gitignore.bak) is removed as before", async () => {
