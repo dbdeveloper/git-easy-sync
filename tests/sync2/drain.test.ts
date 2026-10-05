@@ -2487,6 +2487,153 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
   });
 
 
+  // ── "Sync done — N sent, M received": REAL changes only (owner, 2026-10-05) ──
+  //
+  // Field case: a fresh device committed 19 files, 18 of them already on
+  // the server byte for byte; the summary said "19 sent" while commit
+  // b88abf3 changed ONE file. The owner's rule: a path counts as sent
+  // when ITS LOCAL SIDE WON and actually changed the server; as received
+  // when the REMOTE side won and actually changed the vault; equal
+  // content counts nowhere; a merge counts in both; a deletion that wins
+  // counts like a file; conflicts are reported separately. `pushedPaths`
+  // is filled only once the commit holding the path is CONFIRMED, so a
+  // 422 restart, a network drop or a cancel can never leave a phantom.
+  describe("pushedPaths — what this drain really changed on the server", () => {
+    it("🔑 field case: entries identical to the server are NOT sent; only the one that differs is", async () => {
+      // Fresh device: no anchor, no baselines. The server already holds
+      // a.md and b.md with exactly the local content.
+      await world.commitFiles({ "a.md": "A\n", "b.md": "B\n" });
+      vaultFiles.files.set("a.md", { content: "A\n", mtime: 100 });
+      vaultFiles.files.set("b.md", { content: "B\n", mtime: 100 });
+      vaultFiles.files.set("c.md", { content: "C\n", mtime: 100 });
+      await stageBatch({ "a.md": "A\n", "b.md": "B\n", "c.md": "C\n" });
+
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(r.pushedPaths).toEqual(["c.md"]);
+      expect(r.vaultStepWrites).toEqual([]); // equal content: received nowhere either
+    });
+
+    it("a local deletion that reaches the server counts as sent", async () => {
+      await setupAligned();
+      vaultFiles.files.delete("note.md");
+      await stageBatch({ "note.md": null });
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(world.headFiles().has("note.md")).toBe(false);
+      expect(r.pushedPaths).toEqual(["note.md"]);
+    });
+
+    it("an auto-merge counts in BOTH: pushed to the server AND written to the vault", async () => {
+      await setupAligned();
+      await world.commitFiles({ "note.md": "one\ntwo\nREMOTE\n" });
+      await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
+      vaultFiles.files.set("note.md", { content: "LOCAL\ntwo\nthree\n", mtime: 100 });
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(r.pushedPaths).toEqual(["note.md"]);
+      expect(r.vaultStepWrites).toEqual(["note.md"]);
+    });
+
+    it("a conflict is neither sent nor received — it is reported on its own", async () => {
+      await setupAligned();
+      await world.commitFiles({ "note.md": "CLASH\ntwo\nthree\n" });
+      await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
+      vaultFiles.files.set("note.md", { content: "LOCAL\ntwo\nthree\n", mtime: 100 });
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(r.conflictVerdicts.length).toBeGreaterThan(0);
+      expect(r.pushedPaths).toEqual([]);
+      expect(r.vaultStepWrites).not.toContain("note.md");
+    });
+
+    it("the same path in two batches of one drain is ONE file", async () => {
+      await setupAligned();
+      await stageBatch({ "note.md": "C1\n" });
+      await stageBatch({ "note.md": "C2\n" });
+      vaultFiles.files.set("note.md", { content: "C2\n", mtime: 100 });
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(r.pushedCommits).toHaveLength(2);
+      expect(r.pushedPaths).toEqual(["note.md"]);
+    });
+
+    it("🔑 422 on the commit: the restarted batch is counted ONCE, never twice", async () => {
+      await setupAligned();
+      await stageBatch({ "a.md": "A\n", "b.md": "B\n", "c.md": "C\n" });
+      const client = world.makeClient();
+      const origPush = client.pushCommitFromTree.bind(client);
+      let failures = 0;
+      client.pushCommitFromTree = async (args) => {
+        if (failures === 0) {
+          failures += 1;
+          await world.commitFiles({ "other.md": "raced\n" });
+          throw new ValidationError("422: head moved");
+        }
+        return origPush(args);
+      };
+      const r = await drainOnce(makeDeps({ client }));
+      expect(r.status).toBe("ok");
+      expect([...r.pushedPaths].sort()).toEqual(["a.md", "b.md", "c.md"]);
+      expect(r.vaultStepWrites).toEqual(["other.md"]); // the raced file arrived
+    });
+
+    it("422-CAP exit: nothing confirmed, nothing counted", async () => {
+      await setupAligned();
+      await stageBatch({ "a.md": "A\n" });
+      const client = world.makeClient();
+      client.pushCommitFromTree = async () => {
+        throw new ValidationError("422: head moved");
+      };
+      const r = await drainOnce(makeDeps({ client }));
+      expect(r.status).toBe("too-many-concurrent-pushes");
+      expect(r.pushedPaths).toEqual([]);
+    });
+
+    it("🔑 network drop on the SECOND batch: the first (confirmed) counts, the second does not", async () => {
+      await setupAligned();
+      await stageBatch({ "a.md": "A\n" });
+      await stageBatch({ "b.md": "B\n" });
+      const client = world.makeClient();
+      const origPush = client.pushCommitFromTree.bind(client);
+      let pushes = 0;
+      client.pushCommitFromTree = async (args) => {
+        pushes += 1;
+        if (pushes === 2) throw new NetworkError("net down");
+        return origPush(args);
+      };
+      const r = await drainOnce(
+        makeDeps({
+          client,
+          retry: new NetworkRetry({
+            vault: vault as never,
+            selfPluginId: PLUGIN_ID,
+            maxAttempts: 1,
+            sleep: async () => {},
+          }),
+        }),
+      );
+      expect(r.status).toBe("network-error");
+      expect(world.headFiles().has("a.md")).toBe(true);
+      expect(world.headFiles().has("b.md")).toBe(false);
+      expect(r.pushedPaths).toEqual(["a.md"]);
+    });
+
+    it("cancel at the push boundary (after the per-file loop, before the commit): nothing counted", async () => {
+      await setupAligned();
+      await stageBatch({ "a.md": "A\n" });
+      // cancelRequested is asked once per entry and once at the push
+      // boundary; answer "yes" only from the second question on.
+      let asks = 0;
+      const r = await drainOnce(
+        makeDeps({ cancelRequested: () => (asks += 1) > 2 }),
+      );
+      expect(r.status).toBe("cancelled");
+      expect(world.headFiles().has("a.md")).toBe(false);
+      expect(r.pushedPaths).toEqual([]);
+    });
+  });
+
   it("S1 forbidden-name port: a remote path the platform can't materialise is written CANONICALLY; the baseline stays the honest remote truth", async () => {
     await setupAligned();
     const BAD = 'notes/we"ird?.md'; // " and ? are forbidden (cross-platform.ts)

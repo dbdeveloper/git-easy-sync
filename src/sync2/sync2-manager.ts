@@ -206,6 +206,9 @@ export interface Sync2ManagerDeps {
   // pass is silence too).
   onSyncStarted?(): void;
   onSyncCompleted?(summary: {
+    // Paths this operation's drains really changed on the server, and
+    // paths really written to / removed from the vault (see
+    // sentThisSync / receivedThisSync) — not the commit pass's count.
     pushedFiles: number;
     pulledFiles: number;
     // TRACKED conflicts only, counted in PATHS — the unit the user's
@@ -267,7 +270,16 @@ export class Sync2Manager {
   // the start of every commit pass, lazily on first out-of-pass read.
   private queueIndex: QueueShaIndex | null = null;
 
-  private pulledFilesThisSync = 0;
+  // The "N sent, M received" of the sync summary — what the drains of
+  // THIS user-visible operation really changed (owner, 2026-10-05).
+  // Sent = paths the drain confirmed on the main branch (drainOnce's
+  // `pushedPaths`); received = paths written to or removed from the
+  // vault, plus our own plugin's staged self-update. Sets: one path is
+  // one file however many drains or batches touched it. NOT the commit
+  // pass's count — that one counts entries queued, and on a fresh device
+  // it said "19 sent" for one file actually changed on the server.
+  private sentThisSync = new Set<string>();
+  private receivedThisSync = new Set<string>();
 
   // §II.16 — the most recent progress snapshot, kept so a listener that
   // subscribes mid-drain (the notice arms itself 2 s in) can paint
@@ -415,19 +427,18 @@ export class Sync2Manager {
     this.deps.logger.info("Sync2 syncAll: remote identity checked", {
       ms: round1(performance.now() - tIdentity),
     });
-    this.pulledFilesThisSync = 0;
+    this.clearSyncCounts();
     this.clearProgressForNewUserSync();
-    let pushedFiles = 0;
     let ok = false;
     this.deps.onSyncStarted?.();
     try {
-      pushedFiles = await this.runCommitPass(null);
+      await this.runCommitPass(null);
       await this.drain();
       ok = !this.lastDrainWasCancelled;
     } finally {
       this.deps.onSyncCompleted?.({
-        pushedFiles,
-        pulledFiles: this.pulledFilesThisSync,
+        pushedFiles: this.sentThisSync.size,
+        pulledFiles: this.receivedThisSync.size,
         conflicts: this.trackedConflictPaths(),
         ok,
         cancelled: this.lastDrainWasCancelled,
@@ -437,20 +448,18 @@ export class Sync2Manager {
 
   async syncFile(path: string): Promise<void> {
     this.deps.logger.info("Sync2 syncFile start", { path });
-    this.pulledFilesThisSync = 0;
+    this.clearSyncCounts();
     this.clearProgressForNewUserSync();
-    let pushedFiles = 0;
     let ok = false;
     this.deps.onSyncStarted?.();
     try {
-      const outcome = await this.commitFile(path);
-      pushedFiles = outcome.kind === "committed" ? outcome.count : 0;
+      await this.commitFile(path);
       await this.drain();
       ok = !this.lastDrainWasCancelled;
     } finally {
       this.deps.onSyncCompleted?.({
-        pushedFiles,
-        pulledFiles: this.pulledFilesThisSync,
+        pushedFiles: this.sentThisSync.size,
+        pulledFiles: this.receivedThisSync.size,
         conflicts: this.trackedConflictPaths(),
         ok,
         cancelled: this.lastDrainWasCancelled,
@@ -488,8 +497,13 @@ export class Sync2Manager {
 
   // Drain any pending batches without re-running findChanges — the
   // onload pulse, the watchdog tick, and split-mode's sync surface.
+  private clearSyncCounts(): void {
+    this.sentThisSync.clear();
+    this.receivedThisSync.clear();
+  }
+
   async resumeQueue(): Promise<void> {
-    this.pulledFilesThisSync = 0;
+    this.clearSyncCounts();
     await this.drain();
   }
 
@@ -839,7 +853,9 @@ export class Sync2Manager {
       // Vault-step outcome → UI signals (independent of status: the
       // writes that DID land are real even on a later abort).
       const touched = [...r.vaultStepWrites, ...r.vaultStepRemoves];
-      this.pulledFilesThisSync += touched.length;
+      for (const p of touched) this.receivedThisSync.add(p);
+      for (const p of r.selfUpdateStaged) this.receivedThisSync.add(p);
+      for (const p of r.pushedPaths) this.sentThisSync.add(p);
       const pluginIds = this.derivePluginIds(touched);
       if (pluginIds.length > 0) this.deps.onPluginsAffected?.(pluginIds);
       // Reported from the SAME status-independent block, and for the

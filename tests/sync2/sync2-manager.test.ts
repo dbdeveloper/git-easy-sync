@@ -43,6 +43,7 @@ const okResult = (over?: Partial<DrainResult>): DrainResult => ({
   vaultStepWrites: [],
   vaultStepRemoves: [],
   selfUpdateStaged: [],
+  pushedPaths: [],
   ...over,
 });
 
@@ -981,6 +982,42 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       cancelled: false,
     });
     expect(pluginReloads).toEqual([["other-plugin", "dead-plugin"]]);
+  });
+
+  // Owner, 2026-10-05: "sent" is what the drain REALLY changed on the
+  // server, never the commit pass's queued count. Field case: 19 queued,
+  // 18 of them already on the server byte for byte → "1 sent".
+  it("🔑 sent comes from the drain's confirmed pushes, NOT from the commit count", async () => {
+    for (const p of ["a.md", "b.md", "c.md"]) put(p, `${p}\n`);
+    findChangesResult = ["a.md", "b.md", "c.md"].map((p) => ({
+      kind: "added" as const,
+      path: p,
+      size: 5,
+      mtime: 1,
+    }));
+    drainResult = okResult({ pushedPaths: ["c.md"] });
+    await manager.syncAll();
+    expect(writtenBatches).toHaveLength(1); // three were queued…
+    expect(completed[0].pushedFiles).toBe(1); // …one changed the server
+  });
+
+  it("received counts our own staged self-update too; a path is one file however often it is touched", async () => {
+    drainResult = okResult({
+      vaultStepWrites: ["note.md", "note.md"],
+      selfUpdateStaged: [`${CONFIG_DIR}/plugins/${PLUGIN_ID}/main.js`],
+      pushedPaths: ["x.md", "x.md"],
+    });
+    await manager.syncAll();
+    expect(completed[0].pulledFiles).toBe(2);
+    expect(completed[0].pushedFiles).toBe(1);
+  });
+
+  it("the counts start from zero for every sync", async () => {
+    drainResult = okResult({ pushedPaths: ["x.md"], vaultStepWrites: ["y.md"] });
+    await manager.syncAll();
+    drainResult = okResult();
+    await manager.syncAll();
+    expect(completed[1]).toMatchObject({ pushedFiles: 0, pulledFiles: 0 });
   });
 
   // ── Which vault-step failures the USER hears about ────────────────

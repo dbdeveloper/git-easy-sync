@@ -431,6 +431,15 @@ export interface DrainResult {
   // Paths staged for the bootloader (our own plugin's loadable files).
   // Reported for the log — the update is pending, not applied.
   selfUpdateStaged: string[];
+  // Paths this drain REALLY changed on the main branch — the "N sent" of
+  // the sync summary (owner, 2026-10-05). A path enters only when its
+  // local side won AND differed from the server (an entry identical to
+  // the server is never added to a tree), and only once the commit
+  // holding it is CONFIRMED: a 422 restart, a network drop or a cancel
+  // before the ref move leaves nothing behind. Distinct, in first-push
+  // order. Conflict-branch pushes are NOT here — a conflict is reported
+  // on its own.
+  pushedPaths: string[];
   // Set when status === "token-expired": the original 401/403 — the
   // manager's latch needs the class (invalid vs scope, §35).
   authErrorStatus?: 401 | 403;
@@ -478,6 +487,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // nothing to reload — the running code is still the old code, by
   // design.
   const selfUpdateStaged: string[] = [];
+  const pushedPaths = new Set<string>();
   const configDir = deps.vault.configDir;
   const selfPluginDir = `${configDir}/plugins/${deps.selfPluginId}`;
   // Paths this run SKIPPED. Each one is invisible to every future
@@ -853,6 +863,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     vaultStepWrites,
     vaultStepRemoves,
     selfUpdateStaged,
+    pushedPaths: [...pushedPaths],
   });
 
   // S1: git identity per push site (main = batch.createdAt; conflict
@@ -1349,6 +1360,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     const conflictCommitEntries: Array<{ path: string; sha: string | null }> =
       [];
     const mainPushTracked: TrackedFile[] = [];
+    const mainPushPaths: string[] = [];
 
     // §II.7.1 — mint the branch name and read its live head, ONCE per
     // batch attempt, at the moment the branch is first touched.
@@ -1788,6 +1800,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           break;
         }
         mainPushTracked.push(tracked);
+        mainPushPaths.push(entry.path);
       }
       // §II.3/II.4 unconditionally: rolling base.
       tracked.base = local;
@@ -1879,6 +1892,8 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // mtime invariant: one authoritative GitHub date per batch,
       // stamped only after the CONFIRMED push.
       for (const t of mainPushTracked) t.remote.mtime = committedAt;
+      // Counted HERE, after the confirmed push, never earlier.
+      for (const p of mainPushPaths) pushedPaths.add(p);
       error422Count = 0;
     }
 
