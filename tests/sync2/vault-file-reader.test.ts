@@ -128,6 +128,40 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
       expect(cfg[0]).toBe(0xef);
     });
 
+    // Owner, 2026-10-05: a deletion that ARRIVES FROM THE SERVER must not
+    // remove our own plugin. A remote clean-up of the repo deleted
+    // main.js / manifest.json / styles.css locally and the running sync
+    // plugin uninstalled itself ("manifest.json not readable"). Removing
+    // the plugin is the user's conscious act, never a sync side effect.
+    // The files stay; the next commit sends them back (owner's option a).
+    it("🔑 remove: OUR plugin's files are kept — no removal, no trash capture, a warning", async () => {
+      const dir = ".obsidian/plugins/git-easy-sync";
+      for (const f of ["main.js", "manifest.json", "styles.css", ".gitignore"]) {
+        await vault.adapter.write(`${dir}/${f}`, "x");
+      }
+      const r = reader();
+      for (const f of ["main.js", "manifest.json", "styles.css", ".gitignore"]) {
+        await r.remove(`${dir}/${f}`);
+        expect(await vault.adapter.exists(`${dir}/${f}`), f).toBe(true);
+      }
+      expect(captured).toEqual([]);
+      expect(warnings.some((w) => w.includes("own plugin"))).toBe(true);
+    });
+
+    it("remove: ANOTHER plugin's files are removed as before (the guard is ours only)", async () => {
+      await vault.adapter.write(".obsidian/plugins/templater/main.js", "x");
+      await reader().remove(".obsidian/plugins/templater/main.js");
+      expect(await vault.adapter.exists(".obsidian/plugins/templater/main.js")).toBe(false);
+    });
+
+    it("remove: a sibling folder that merely STARTS with our id is not ours", async () => {
+      await vault.adapter.write(".obsidian/plugins/git-easy-sync-reload-probe/main.js", "x");
+      await reader().remove(".obsidian/plugins/git-easy-sync-reload-probe/main.js");
+      expect(
+        await vault.adapter.exists(".obsidian/plugins/git-easy-sync-reload-probe/main.js"),
+      ).toBe(false);
+    });
+
     it("remove: trash capture fires BEFORE removal; already-gone is success; a FAILING capture never blocks the removal", async () => {
       await vault.adapter.write("del.md", "x");
       const r = reader();

@@ -170,6 +170,21 @@ export function makeVaultFileReader(
     async remove(path) {
       const normalized = normalizePath(path);
       if (!(await deps.vault.adapter.exists(normalized))) return;
+      // Owner, 2026-10-05: a deletion that ARRIVES FROM THE SERVER never
+      // removes our own plugin. A clean-up of the repo on GitHub deleted
+      // main.js/manifest.json/styles.css here and the running sync plugin
+      // uninstalled itself — on a device nobody is looking at, sync just
+      // stops. Uninstalling is the user's conscious act (Obsidian's own
+      // UI, or the file system), never a sync side effect. The files stay,
+      // and the next commit sends them back to the repo (owner's option a).
+      const ownDir = `${deps.vault.configDir}/plugins/${deps.selfPluginId}/`;
+      if (normalized.startsWith(ownDir)) {
+        deps.logger?.warn(
+          "VaultFileReader: remote deletion of our own plugin file NOT applied (kept; the next commit restores it on the server)",
+          { path: normalized },
+        );
+        return;
+      }
       if (deps.trashHooks) {
         try {
           await deps.trashHooks.captureForDelete(normalized);
