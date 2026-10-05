@@ -222,6 +222,18 @@ Use it, and note which runs you did.
         which is why the threshold is 1.5 s, not 2 s);
       - "Committing…" appears only when listing dot-space files is forecast over 1.5 s;
       - a single-file commit shows no line; inside a Sync there is no "Committed L files".
+- [ ] **"Pulling / Pushing N of M" (new 2026-10-05).** The progress lines say **Pulling** and
+      **Pushing**, never "Downloading" / "Uploading". The counters advance when the drain
+      TAKES a file, so a file identical on both sides is counted too — on a first pull into
+      an almost-empty vault "Pushing 18 of 18" is expected even if only one file changes.
+- [ ] 🌐 **"Sync done — N sent, M received" counts REAL changes (new 2026-10-05).** On a fresh
+      device whose few local files are already on the server, the summary says **"1 sent"**
+      (or "0") — not the number of files queued. Check against the repo: `sent` = files the
+      sync's commit actually changed on GitHub, `received` = files actually written to or
+      removed from the vault. An auto-merged file counts in both; a conflict counts in
+      neither (it has its own clause, which shows ALL tracked conflicts). Deletions count.
+- [ ] **Summary linger (new 2026-10-05):** the summary **with numbers** stays ~**2 s**, the bare
+      "Sync done" ~1 s, and a summary with a **plugin line** (§7) ~**2.5 s**.
 - [ ] **Stop sync (§II.17):** Settings → **Stop sync** during a long run stops it at the
       next checkpoint, says so, and **loses nothing** — the next sync finishes the job.
 - [ ] **⚠️ A cancelled conflict is announced.** If a conflict's remote content vanishes
@@ -264,10 +276,39 @@ Use it, and note which runs you did.
 - [ ] **Token expired — automatic + history (§35)** — an interval/startup sync flashes **"Sync skipped: token expired"** (no modal); opening a file's history shows **"TOKEN EXPIRED! …"** above the local-only versions.
 - [ ] 📱 **Token expired — mobile modal (§35)** — the recovery dialog is the shorter mobile layout and its buttons wrap + center (none pushed off-screen).
 
-## 7. Self-update (🖥️📱)
+## 7. Self-update and plugin updates (🖥️📱🌐)
 
 - [ ] Updating the plugin through itself: it completes and restarts after the update.
 - [ ] 📱 On mobile the plugin auto-reloads (disable + enable) after a self-update, with no manual step.
+- [ ] 🌐 **Our plugin updates ITSELF on the receiving device — no restart (regression fixed
+      2026-10-05).** Device A pushes a new build; on device B press Sync and do nothing else.
+      The log shows `self-update staged`, then `BRAT-style reload scheduled ["git-easy-sync"]`
+      and `BRAT-style reload done`; afterwards `main.js` on B is the new build, no
+      `main.ges-tmp.js` is left, and open diff2 tabs come back. The reload starts ~**2.75 s**
+      after the sync ends, so the summary can be read first.
+- [ ] **Exactly ONE toast for our own update**, `Plugin "git-easy-sync" updated` — with
+      ` to <version>` when the version changed. (A build that still has the old reload loop
+      may show two on the update that replaces it; judge from the NEXT update.)
+- [ ] **No false local edit after a self-update.** On B, the first sync after the update
+      must NOT queue "modified …/git-easy-sync/main.js"; the log at the reload shows
+      `initSync2: applied self-update settled in the baseline`. ⚠️ Needs an update applied
+      by a build that already has this (2026-10-05 `a74b0b1` or later) — the first update
+      onto that build cannot show it.
+- [ ] **Click-enabling the plugin while an update waits staged** raises no `TypeError` in the
+      dev console (the instance that applies the stage exits early; a new one takes over).
+- [ ] 🌐 **Other plugins: one toast each, with the version.** An ENABLED plugin updated by a
+      sync is reloaded and gets its own 3 s toast, `Plugin "cmdr" updated to 0.5.5` (no
+      "to …" for a rebuild of the same version). No aggregated "N plugins updated" toast.
+      A DISABLED plugin gets no toast.
+- [ ] 🌐 **Summary plugin lines.** Under "Sync done — …": `N plugins updated` and/or
+      `N plugins removed`, counting ALL plugins whose files changed, enabled or not — a first
+      pull into an empty vault shows e.g. "9 plugins updated".
+- [ ] 🌐 **A plugin removed from the repo is unloaded at once.** Delete an ENABLED plugin's
+      folder on device A and sync; on B, sync: a toast `Plugin "<id>" removed`, the plugin
+      stops working immediately (not only after a restart), and it is OFF in Settings →
+      Community plugins (`disablePluginAndSave` — re-enabling is a deliberate act).
+- [ ] 🌐 **A plugin that exists only on the server is simply installed** — on a first pull the
+      log has NO `plugin-core collision … (local=?)` lines for plugins the device never had.
 
 ## 8. Crash / recovery / edge cases (🖥️📱)
 
