@@ -48,6 +48,7 @@ interface NoticeHandle {
   clearSyncNotice(): void;
   repaintSyncProgressNotice(): void;
   reportCommitStarted(fullScan: boolean): void;
+  handleCommitStarted(fullScan: boolean): void;
   reportCommitPlan(
     plan: { checks: number; checkBytes: number; unhashedAdds: number; deletions: number },
     total: number,
@@ -176,6 +177,74 @@ describe("sync notice lifecycle (§II.16)", () => {
     checkBytes: checks * 1000,
     unhashedAdds: 0,
     deletions,
+  });
+
+  // FIELD BUG 2026-10-06 (owner, split commit/drain): "Sync" right after
+  // a standalone "Commit" always flashed "Syncing with GitHub" — measured
+  // drains were 420–615 ms, under the 700 ms start delay. The commit's
+  // start handler ARMED the drain's 2 s progress gate; a standalone commit
+  // ends in ~0.2 s and nothing disarmed it, so 2 s later the flag stuck
+  // ON and the next drain painted its header at once. Owner: the SYNC
+  // arms the timer before it runs its commit; the commit itself must know
+  // nothing about it.
+  it("🔑 a standalone commit does NOT arm the drain's gate — the next drain keeps its 700 ms delay", () => {
+    const p = makePlugin();
+    p.commitStats = statsWith({ dotMs: 100, forecast: 100 });
+    p.handleCommitStarted(true);
+    p.reportNothingToCommit(false);
+    vi.advanceTimersByTime(2500); // the old gate would have fired here
+    p.handleDrainStatus({ state: "running" });
+    expect(recordedNotices.some((n) => n.message.includes("Syncing with GitHub"))).toBe(false);
+    vi.advanceTimersByTime(400);
+    p.handleDrainStatus({ state: "idle" });
+    expect(recordedNotices.some((n) => n.message.includes("Syncing with GitHub"))).toBe(false);
+    expect(lastMessage()).toBe("Sync done");
+  });
+
+  // Owner, 2026-10-06: "the flag must switch off as soon as it is no
+  // longer needed, not wait for the next sync or commit." Pinned at every
+  // end: after it, neither the flag nor a pending gate timer survives.
+  describe("the progress gate never outlives its operation", () => {
+    const off = (p: NoticeHandle) => {
+      expect(p.syncProgressActive).toBe(false);
+      expect(p.syncProgressTimer).toBeNull();
+    };
+
+    it("a standalone commit leaves nothing armed", () => {
+      const p = makePlugin();
+      p.commitStats = statsWith({ dotMs: 100, forecast: 100 });
+      p.handleCommitStarted(true);
+      p.reportNothingToCommit(false);
+      off(p);
+    });
+
+    it("a SHORT drain on its own: disarmed at idle, before the 2 s gate could fire", () => {
+      const p = makePlugin();
+      p.handleDrainStatus({ state: "running" });
+      vi.advanceTimersByTime(300);
+      p.handleDrainStatus({ state: "idle" });
+      off(p);
+    });
+
+    it("a LONG drain on its own: the gate fired, and idle switches it off", () => {
+      const p = makePlugin();
+      p.handleDrainStatus({ state: "running" });
+      vi.advanceTimersByTime(2500);
+      expect(p.syncProgressActive).toBe(true); // it did its job…
+      p.handleDrainStatus({ state: "idle" });
+      off(p); // …and stops at once
+    });
+
+    it("a sync's summary switches it off", () => {
+      const p = makePlugin();
+      p.inFullSync = true;
+      p.handleDrainStatus({ state: "running" });
+      vi.advanceTimersByTime(2500);
+      p.handleDrainStatus({ state: "idle" }); // in a full sync idle defers to the summary
+      p.inFullSync = false;
+      p.settleSyncSummary({ sent: 0, received: 0, conflicts: 0 });
+      off(p);
+    });
   });
 
   it("🔑 no statistics (first commit after RESET): \"Checking all files…\" AT ONCE; a SMALL commit keeps it to the end", () => {

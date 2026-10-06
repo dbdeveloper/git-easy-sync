@@ -1617,13 +1617,7 @@ export default class GitHubSyncPlugin extends Plugin {
         repo: this.settings.githubRepo ?? "",
         branch: this.settings.githubBranch ?? "main",
       }),
-      onCommitStarted: (fullScan: boolean) => {
-        this.reportCommitStarted(fullScan);
-        // Still armed here: the DRAIN's counters keep their 2 s gate,
-        // measured from the click (only the commit's lines moved to
-        // forecasts — COMMIT-PASS-PERF §3.1).
-        this.armSyncProgressNotice();
-      },
+      onCommitStarted: (fullScan: boolean) => this.handleCommitStarted(fullScan),
       // 2 — the stage 2+3 counter, by forecast; see reportCommitPlan.
       onCommitPlan: (plan, total) => this.reportCommitPlan(plan, total),
       onCommitChecked: (done, total) => this.reportCommitChecked(done, total),
@@ -2994,6 +2988,20 @@ export default class GitHubSyncPlugin extends Plugin {
   private commitCounterOn = false;
   // This pass started without any statistics (see reportCommitPlan).
   private commitNoStats = false;
+
+  // The commit's start, as the manager reports it — extracted so the
+  // wiring is reachable by a test.
+  //
+  // ⚠️ It does NOT arm the drain's 2 s progress gate (owner, 2026-10-06:
+  // "the commit itself must know nothing about this timer"). A SYNC arms
+  // it in onSyncStarted, before it runs its commit; a drain started on
+  // its own arms it in handleDrainStatus. Arming here was the field bug:
+  // a standalone commit ends in ~0.2 s, nothing disarmed the gate, it
+  // fired 2 s later and left `syncProgressActive` ON — so the next drain
+  // painted "Syncing with GitHub" at once, skipping its 700 ms delay.
+  private handleCommitStarted(fullScan: boolean): void {
+    this.reportCommitStarted(fullScan);
+  }
 
   private reportCommitStarted(fullScan: boolean): void {
     this.commitCounterOn = false;
