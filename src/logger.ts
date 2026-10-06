@@ -119,11 +119,11 @@ export default class Logger {
       additional_data: payload,
     };
 
-    // Mirror to console with a tag prefix so `adb logcat | grep gh-sync`
+    // Mirror to console with a tag prefix so `adb logcat | grep '\[ges\]'`
     // (Android) and Safari Web Inspector (iOS) give a real-time view of
     // the same lines that land in the log file. The tag lets users
     // filter the noisy logcat stream down to plugin events.
-    const mirror = `[gh-sync] [${level}] ${message}${payload !== undefined ? " " + safeStringify(payload) : ""}`;
+    const mirror = `[ges] [${level}] ${message}${payload !== undefined ? " " + safeStringify(payload) : ""}`;
     if (level === "ERROR") console.error(mirror);
     else if (level === "WARN") console.warn(mirror);
     else console.log(mirror);

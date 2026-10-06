@@ -296,7 +296,7 @@ export class HistoryWriterV2 {
       .catch((e) => {
         // A failed append loses one increment; session snapshots + prior history +
         // the [← back] Step-1 drain are the backstop. NEVER propagate into CM6.
-        console.error("[gh-sync] diff2 v2 history append failed", e);
+        console.error("[ges] diff2 v2 history append failed", e);
       });
   }
 
