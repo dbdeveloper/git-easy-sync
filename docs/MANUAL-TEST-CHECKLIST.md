@@ -235,6 +235,9 @@ Use it, and note which runs you did.
       sync's commit actually changed on GitHub, `received` = files actually written to or
       removed from the vault. An auto-merged file counts in both; a conflict counts in
       neither (it has its own clause, which shows ALL tracked conflicts). Deletions count.
+- [ ] **Split mode: "Commit" then "Sync" (new 2026-10-06).** With commit and sync separated,
+      press **Commit**, wait a few seconds, then **Sync** on a quiet vault: only "Sync done"
+      appears — no "Syncing with GitHub" flash first (same as pressing Sync twice).
 - [ ] **Summary linger (new 2026-10-05):** the summary **with numbers** stays ~**2 s**, the bare
       "Sync done" ~1 s, and a summary with a **plugin line** (§7) ~**2.5 s**.
 - [ ] **Stop sync (§II.17):** Settings → **Stop sync** during a long run stops it at the
@@ -292,6 +295,9 @@ Use it, and note which runs you did.
 - [ ] **Exactly ONE toast for our own update**, `Plugin "git-easy-sync" updated` — with
       ` to <version>` when the version changed. (A build that still has the old reload loop
       may show two on the update that replaces it; judge from the NEXT update.)
+- [ ] **No redundant re-ask after a self-update (new 2026-10-06):** the drain on the
+      receiving device logs no `re-asking about a previously skipped path … main.js` after
+      the update was applied.
 - [ ] **No false local edit after a self-update.** On B, the first sync after the update
       must NOT queue "modified …/git-easy-sync/main.js"; the log at the reload shows
       `initSync2: applied self-update settled in the baseline`. ⚠️ Needs an update applied
