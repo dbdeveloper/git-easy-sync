@@ -149,6 +149,35 @@ describe("a self-update the bootloader applied settles its baseline", () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
+  // Owner, 2026-10-06: the drain leaves a "re-ask" note for a staged
+  // path; once the stage is applied AND the baseline settled, that note
+  // only costs one redundant request per self-update. Settle drops it —
+  // for the settled path only.
+  describe("the re-ask note for a settled path", () => {
+    const note = () => abs(`${PLUGIN_DIR}/.runtime/.recheck-paths`);
+    const writeNote = (paths: string[]) =>
+      fs.writeFileSync(note(), paths.map((p) => `${p}\n`).join(""));
+    const readNote = () =>
+      fs.existsSync(note()) ? fs.readFileSync(note(), "utf8").split("\n").filter(Boolean) : [];
+
+    it("🔑 settled → its note is dropped; another path's note stays", async () => {
+      await stagedWorld();
+      writeNote([`${PLUGIN_DIR}/main.js`, "notes/other.md"]);
+      await bootloader();
+      await settle();
+      expect(readNote()).toEqual(["notes/other.md"]);
+    });
+
+    it("NOT settled (hand-installed main.js) → the note stays: the question is still open", async () => {
+      await stagedWorld();
+      writeNote([`${PLUGIN_DIR}/main.js`]);
+      await bootloader();
+      put(`${PLUGIN_DIR}/main.js`, "HAND-INSTALLED BUILD");
+      await settle();
+      expect(readNote()).toEqual([`${PLUGIN_DIR}/main.js`]);
+    });
+  });
+
   it("no record → settle is a no-op", async () => {
     const b = baselines();
     await settle(b);

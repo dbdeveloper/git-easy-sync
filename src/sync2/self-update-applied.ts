@@ -20,11 +20,12 @@
 // So the bootloader records what it applied (path + sha) in
 // `.runtime/.self-update-applied`, and the next onload — stores open —
 // writes the baseline for every recorded file whose LIVE bytes still
-// hash to that sha. Anything else (a hand-installed main.js, an
+// hash to that sha, and drops that path's re-ask note. Anything else (a hand-installed main.js, an
 // unreadable file) leaves the baseline alone: the commit then sees an
 // honest local change.
 
 import type { DataAdapter } from "obsidian";
+import { dropRecheckPath } from "./recheck-paths";
 
 export const SELF_UPDATE_APPLIED_MARKER = ".self-update-applied";
 
@@ -89,6 +90,14 @@ export async function settleSelfUpdateBaselines(deps: {
     }
   }
   if (settled.length > 0) await deps.baselines.setMany(settled);
+  // The drain left a "re-ask" note for each staged path (the pointer
+  // moved past its commit while the bytes were only staged). Applied and
+  // settled, the question is answered — keeping the note would only cost
+  // one redundant request per self-update (owner, 2026-10-06). Only the
+  // SETTLED paths: an unsettled one still has an open question.
+  for (const s of settled) {
+    await dropRecheckPath(adapter, pluginDir, s.path);
+  }
   try {
     await adapter.remove(file);
   } catch {

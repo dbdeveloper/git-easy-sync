@@ -110,7 +110,11 @@ plugin-core collision decided by the clock.
 **Fix.** The bootloader records what it applied (`.runtime/.self-update-applied`:
 `<path> <sha>` per file, only when it can hash). The next onload, stores open,
 writes the baseline (sha, size, mtime) for each recorded file whose LIVE bytes
-still hash to that sha, then removes the record. Applies to exactly the three files
+still hash to that sha, then removes the record. **It also drops that path's
+`.recheck-paths` note** (owner, 2026-10-06): the drain leaves one when it stages,
+and once the stage is applied and settled the question is answered — the field run
+showed it costing one redundant `re-asking …main.js` request per self-update. Only
+SETTLED paths: an unsettled one keeps its open question. Applies to exactly the three files
 the bootloader stages (`SELF_UPDATE_FILES`: main.js, manifest.json, styles.css) —
 every other file, ours or not, is written by the drain itself and gets its baseline
 in the same sync.
