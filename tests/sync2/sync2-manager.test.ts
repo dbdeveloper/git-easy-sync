@@ -834,6 +834,22 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     }
   });
 
+  // Owner's question, 2026-10-06: in split mode "Sync" right after a
+  // "Commit" shows "Syncing with GitHub" (the drain outlived the 700 ms
+  // start delay), repeated "Sync" does not. The log only had the END of
+  // a drain; the timing says where its time goes.
+  it("the drain-done line carries the drain's phase timing", async () => {
+    const lines: Array<{ m: string; d: unknown }> = [];
+    deps.logger = { ...deps.logger, info: (m: string, d?: unknown) => lines.push({ m, d }) };
+    await manager.resumeQueue();
+    const done = lines.find((l) => l.m === "Sync2 drain done")?.d as Record<string, unknown>;
+    const t = done?.timing as Record<string, unknown>;
+    expect(t).toBeDefined();
+    for (const k of ["totalMs", "enforceMs", "beginScanMs", "drainOnceMs", "afterMs", "visibleMs"]) {
+      expect(typeof t[k], k).toBe("number");
+    }
+  });
+
   it("…a pass with nothing to commit logs its timing too", async () => {
     const lines: Array<{ m: string; d: unknown }> = [];
     deps.logger = { ...deps.logger, info: (m: string, d?: unknown) => lines.push({ m, d }) };
