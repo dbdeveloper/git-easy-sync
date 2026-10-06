@@ -818,11 +818,6 @@ export class Sync2Manager {
     this.running = true;
     this.abortRequested = false;
     this.lastDrainWasCancelled = false;
-    // Phase timing for the "drain done" line (owner's question,
-    // 2026-10-06: why "Syncing with GitHub" shows after a Commit but not
-    // on repeated Syncs). `visibleMs` is what the notice sees — from the
-    // "running" flip to the end — against its 700 ms start delay.
-    const tEntry = performance.now();
     // DOT-FILES §3.1.2 / owner 2026-09-20: the managed .gitignore
     // files return to canonical before EVERY operation, not just
     // before a commit. Until now enforce() ran only on the commit
@@ -851,7 +846,6 @@ export class Sync2Manager {
     // root .gitignore the set is read from. Without it an opted-in
     // dot-directory would silently fail to pull: a one-sided break that
     // only surfaces on the second device.
-    const tRunning = performance.now();
     const startedAtMs = this.now();
     // ⚠️ `progress: null` is load-bearing, not tidiness. It used to
     // carry the PREVIOUS drain's snapshot into the next one, so a sync
@@ -873,9 +867,7 @@ export class Sync2Manager {
       // should surface through the drain's own error path rather than
       // escaping the status machine.
       await this.deps.detector.beginScan();
-      const tScanned = performance.now();
       const r = await (this.deps.drainFn ?? drainOnce)(this.buildDeps());
-      const tDrained = performance.now();
 
       // Vault-step outcome → UI signals (independent of status: the
       // writes that DID land are real even on a later abort).
@@ -933,15 +925,7 @@ export class Sync2Manager {
               });
             }
           }
-          const tEnd = performance.now();
-          this.logDrainSummary(r, {
-            totalMs: round1(tEnd - tEntry),
-            enforceMs: round1(tRunning - tEntry),
-            beginScanMs: round1(tScanned - tRunning),
-            drainOnceMs: round1(tDrained - tScanned),
-            afterMs: round1(tEnd - tDrained),
-            visibleMs: round1(tEnd - tRunning),
-          });
+          this.logDrainSummary(r);
           return;
         }
         case "cancelled": {
@@ -1165,9 +1149,8 @@ export class Sync2Manager {
     return [...ids];
   }
 
-  private logDrainSummary(r: DrainResult, timing: Record<string, number>): void {
+  private logDrainSummary(r: DrainResult): void {
     this.deps.logger.info("Sync2 drain done", {
-      timing,
       pushedCommits: r.pushedCommits.length,
       pulled: r.vaultStepWrites.length,
       removed: r.vaultStepRemoves.length,
