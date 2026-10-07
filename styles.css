@@ -1366,6 +1366,10 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
   border-radius: var(--radius-s);
   color: var(--text-normal);
   padding: 3px 10px;
+  /* CM6's base theme sets buttons to 70% — too small to read (owner,
+     2026-10-08). The same size as the switches and the search field. */
+  font-size: var(--font-ui-small);
+  vertical-align: middle;
 }
 .ges-log-body .cm-search .cm-button:hover {
   background: var(--interactive-hover);

@@ -291,7 +291,7 @@ Use it, and note which runs you did.
         steps next/previous only inside the filtered entries;
         the search panel, its fields and buttons, the match highlight and the selection
         follow the THEME (dark theme → dark panel); there is no **[all]** button; its switches read **Aa · W · .\*** in that order and LOOK like the
-        filter's toggle buttons (lit while on); clicking one toggles it and the matches update; Tab
+        filter's toggle buttons (lit while on); **next / previous** are as readable as they are; clicking one toggles it and the matches update; Tab
         reaches them and Space toggles; the 🔍 button is a TOGGLE (second click closes the panel) and
         stays lit while the panel is open, going dark when the panel is closed by its × or Esc;
       - **copy** button puts the shown entries on the clipboard; normal selection + copy
