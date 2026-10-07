@@ -287,6 +287,77 @@ describe("LogViewerPanel", () => {
     expect((root as unknown as { __migrated?: unknown }).__migrated).toBeUndefined();
   });
 
+  // Owner, 2026-10-08: docking the window into a tab, or pulling it out
+  // into its own window, reset the scroll to 0 — a user reading an entry
+  // in the middle lost it. The browser resets scrollTop/Left when the DOM
+  // moves to another window, WITHOUT a scroll event.
+  describe("the scroll position survives a move to another window", () => {
+    const writable = (el: HTMLElement, g: Record<string, number>) => {
+      for (const [k, v] of Object.entries(g)) Object.defineProperty(el, k, { configurable: true, writable: true, value: v });
+    };
+    const fakeWin = () =>
+      ({
+        document: document.implementation.createHTMLDocument("popout"),
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }) as unknown as Window;
+
+    async function mounted() {
+      const d = deps(`${line(1)}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const panel = new LogViewerPanel(d.deps);
+      await panel.mount(root);
+      await new Promise((r) => setTimeout(r, 50));
+      const sc = root.querySelector(".cm-scroller") as HTMLElement;
+      writable(sc, { scrollTop: 900, clientHeight: 100, scrollHeight: 1000, scrollLeft: 0 });
+      sc.dispatchEvent(new Event("scroll"));
+      return { root, panel, sc, p: panel as unknown as { following: boolean } };
+    }
+    const migrate = (root: HTMLElement) =>
+      (root as unknown as { __migrated: (w: Window) => void }).__migrated(fakeWin());
+
+    it("🔑 reading in the middle: the same vertical AND horizontal position after the move", async () => {
+      const m = await mounted();
+      m.sc.scrollTop = 400;
+      m.sc.dispatchEvent(new Event("scroll")); // up, last line gone → following off
+      m.sc.scrollLeft = 120;
+      m.sc.dispatchEvent(new Event("scroll"));
+      expect(m.p.following).toBe(false);
+      m.sc.scrollTop = 0; // the browser's silent reset on the move
+      m.sc.scrollLeft = 0;
+      migrate(m.root);
+      await new Promise((r) => setTimeout(r, 50));
+      expect([m.sc.scrollTop, m.sc.scrollLeft]).toEqual([400, 120]);
+      expect(m.p.following).toBe(false);
+      m.panel.destroy();
+    });
+
+    it("following: after the move it is at the end and column 0, still following", async () => {
+      const m = await mounted();
+      m.sc.scrollTop = 0;
+      migrate(m.root);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(m.sc.scrollTop).toBe(m.sc.scrollHeight);
+      expect(m.sc.scrollLeft).toBe(0);
+      expect(m.p.following).toBe(true);
+      m.panel.destroy();
+    });
+
+    it("a scroll event while DETACHED (zero height) does not overwrite the saved position", async () => {
+      const m = await mounted();
+      m.sc.scrollTop = 400;
+      m.sc.dispatchEvent(new Event("scroll"));
+      writable(m.sc, { scrollTop: 0, clientHeight: 0, scrollHeight: 0, scrollLeft: 0 });
+      m.sc.dispatchEvent(new Event("scroll"));
+      writable(m.sc, { scrollTop: 0, clientHeight: 100, scrollHeight: 1000, scrollLeft: 0 });
+      migrate(m.root);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(m.sc.scrollTop).toBe(400);
+      m.panel.destroy();
+    });
+  });
+
   // Owner, 2026-10-08: the search panel's switches read and sit like the
   // filter's — "Aa", "W", ".*", in that order.
   it("🔑 the search panel's switches are labelled Aa / W / .* and ordered like the filter's", async () => {

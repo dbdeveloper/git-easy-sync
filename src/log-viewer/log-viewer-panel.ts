@@ -148,6 +148,10 @@ export class LogViewerPanel {
     this.unwatchWindow = root.onWindowMigrated?.((win) => {
       this.editor?.setRoot(win.document);
       this.bindKeys(win);
+      // The move also reset the scroll to 0 — silently, no scroll event
+      // (owner, 2026-10-08: a user reading an entry in the middle lost
+      // it). Put it back from the last known position.
+      this.restoreScroll();
     }) ?? null;
 
     // Subscribe BEFORE the file is read: what is logged during the read
@@ -333,6 +337,26 @@ export class LogViewerPanel {
     });
   }
 
+  // After a move to another window: following → the end and column 0 as
+  // usual; otherwise exactly where the user was, both axes.
+  private restoreScroll(): void {
+    const ed = this.editor;
+    if (!ed) return;
+    if (this.following) {
+      this.scrollToBottom();
+      return;
+    }
+    const top = this.lastScrollTop;
+    const left = this.lastScrollLeft;
+    ed.requestMeasure({
+      read: () => null,
+      write: () => {
+        ed.scrollDOM.scrollTop = top;
+        ed.scrollDOM.scrollLeft = left;
+      },
+    });
+  }
+
   // On, and at once to the end and column 0 (owner, 2026-10-08).
   private turnFollowingOn(): void {
     this.following = true;
@@ -385,6 +409,9 @@ export class LogViewerPanel {
       //   down, ending with the last line   → ON (and jump to the end + col 0).
       const sc = ed.scrollDOM;
       sc.addEventListener("scroll", () => {
+        // Detached (mid-move between windows): nothing measurable, and a
+        // reset to 0 here must not overwrite the position to restore.
+        if (sc.clientHeight === 0) return;
         const dx = sc.scrollLeft - this.lastScrollLeft;
         const dy = sc.scrollTop - this.lastScrollTop;
         this.lastScrollLeft = sc.scrollLeft;

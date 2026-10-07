@@ -276,6 +276,8 @@ Use it, and note which runs you did.
       - 🖥️ drag the viewer's tab into the main window, move it between splits, then drag it OUT
         into a new window again: the columns stay aligned (no `|||text`), scrolling works, and
         Ctrl/Cmd+F opens the search in the new window;
+        scrolled to an entry in the MIDDLE (and sideways), each such move keeps the view on that
+        same entry and column; while following, it stays at the end;
       - 📱 it opens as a FULL-SCREEN modal above Settings; closing it returns to Settings; with
         the on-screen keyboard up (typing a filter) the filter field stays visible and the
         log is still scrollable;
