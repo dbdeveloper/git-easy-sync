@@ -287,6 +287,22 @@ describe("LogViewerPanel", () => {
     expect((root as unknown as { __migrated?: unknown }).__migrated).toBeUndefined();
   });
 
+  // Owner, 2026-10-08: the search panel's switches read and sit like the
+  // filter's — "Aa", "W", ".*", in that order.
+  it("🔑 the search panel's switches are labelled Aa / W / .* and ordered like the filter's", async () => {
+    const d = deps(`${line(1)}\n`);
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const panel = new LogViewerPanel(d.deps);
+    await panel.mount(root);
+    root.querySelector<HTMLButtonElement>(".ges-log-search-toggle")!.click();
+    const labels = Array.from(root.querySelectorAll(".cm-search label")).map((l) => l.textContent?.trim());
+    expect(labels).toEqual(["Aa", "W", ".*"]);
+    const inputs = Array.from(root.querySelectorAll<HTMLInputElement>(".cm-search label input")).map((i) => i.name);
+    expect(inputs).toEqual(["case", "word", "re"]);
+    panel.destroy();
+  });
+
   it("🔑 destroy() ends the logger subscription (closing the modal or the tab)", async () => {
     const d = deps(`${line(1)}\n`);
     const panel = new LogViewerPanel(d.deps);

@@ -77,6 +77,21 @@ export function isLastLineVisible(
   return g.scrollTop + g.clientHeight >= g.scrollHeight - lineHeight;
 }
 
+// CM6 builds the search panel's switches as case, regexp, word; the
+// filter's order is Aa, W, .* (owner, 2026-10-08). Re-ordered in place,
+// once per panel: the labels move to just before CM6's own close button.
+function orderSearchSwitches(editorDom: HTMLElement): void {
+  const panel = editorDom.querySelector<HTMLElement>(".cm-search");
+  if (!panel || panel.dataset.gesOrdered === "1") return;
+  const label = (name: string) =>
+    panel.querySelector<HTMLInputElement>(`label input[name="${name}"]`)?.parentElement ?? null;
+  const wanted = [label("case"), label("word"), label("re")];
+  if (wanted.some((l) => l === null)) return;
+  const anchor = panel.querySelector('[name="close"]');
+  for (const l of wanted) panel.insertBefore(l!, anchor);
+  panel.dataset.gesOrdered = "1";
+}
+
 export class LogViewerPanel {
   private editor: EditorView | null = null;
   private items: LogItem[] = [];
@@ -345,8 +360,14 @@ export class LogViewerPanel {
             search({ top: true }),
             keymap.of(searchKeymap),
             EditorView.contentAttributes.of({ spellcheck: "false" }),
+            // The search panel's switches read like the filter's (owner,
+            // 2026-10-08). Phrases are CM6's own UI-text hook — this
+            // editor only, diff2's panel keeps its words.
+            EditorState.phrases.of({ "match case": "Aa", "by word": "W", regexp: ".*" }),
             EditorView.updateListener.of((u) => {
-              this.searchBtn?.toggleClass("is-active", searchPanelOpen(u.state));
+              const open = searchPanelOpen(u.state);
+              this.searchBtn?.toggleClass("is-active", open);
+              if (open) orderSearchSwitches(u.view.dom);
             }),
           ],
         }),
