@@ -918,6 +918,8 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     // ── Logging ─────────────────────────────────────────────────────
     new Setting(containerEl).setName("Logging").setHeading();
 
+    // Created below, shown or hidden IN PLACE by the toggle (see there).
+    let cleanLogsSetting: Setting | null = null;
     new Setting(containerEl)
       .setName("Enable logging")
       .setDesc(
@@ -933,10 +935,12 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
             if (value) await this.plugin.logger.enable();
             else await this.plugin.logger.disable();
             await this.plugin.saveSettings();
-            // The "Clean logs" Setting below is gated on
-            // enableLogging — re-render the whole tab so the
-            // button appears / disappears in sync with the toggle.
-            this.display();
+            // "Clean logs" follows the toggle IN PLACE. It used to call
+            // this.display(), which empties and rebuilds the whole tab —
+            // the page lost its scroll position and jumped (owner,
+            // 2026-10-07: "the screen should not scroll when you change
+            // a switch"). Same pattern as the configs → data.json pair.
+            cleanLogsSetting?.settingEl.toggle(value);
           });
       });
 
@@ -944,16 +948,17 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     // it's off, the file is gone (logger.disable() removed it) and
     // there's nothing to clean. Hide the row entirely so the
     // settings panel doesn't carry dead UI.
-    if (this.plugin.settings.enableLogging) {
-      new Setting(containerEl)
-        .setName("Clean logs")
-        .setDesc("Truncate the log file to 0 bytes.")
-        .addButton((button) => {
-          button.setButtonText("Clean").onClick(async () => {
-            await this.plugin.logger.clean();
-          });
+    // Always created, hidden while logging is off — so the toggle above
+    // can show it without rebuilding the page.
+    cleanLogsSetting = new Setting(containerEl)
+      .setName("Clean logs")
+      .setDesc("Truncate the log file to 0 bytes.")
+      .addButton((button) => {
+        button.setButtonText("Clean").onClick(async () => {
+          await this.plugin.logger.clean();
         });
-    }
+      });
+    cleanLogsSetting.settingEl.toggle(this.plugin.settings.enableLogging);
 
     // ── Danger zone ─────────────────────────────────────────────────
     new Setting(containerEl).setName("Danger zone").setHeading();

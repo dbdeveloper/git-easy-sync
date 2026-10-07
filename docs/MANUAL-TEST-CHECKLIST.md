@@ -264,6 +264,7 @@ Use it, and note which runs you did.
 - [ ] The settings connection test works and does not disturb sync state.
 - [ ] **Reset** (type the confirmation phrase) wipes the token, repo settings, sync history, pending local commits, conflicts, unsaved conflict-editor edits, and the plugin trash (the whole `.runtime/`); vault files are NOT touched — conflict-copy files stay in place and are re-detected as conflicts on re-enable. A `.reset-in-progress` marker in the plugin dir makes an interrupted reset finish on the next load.
 - [ ] Toggling **"sync config folder"** includes/excludes `.obsidian/*` accordingly.
+- [ ] **Changing a switch never scrolls the page (new 2026-10-07).** Scroll down to *Logging* and toggle **Enable logging** on and off: the page stays where it is, and the *Clean logs* row appears/disappears in place. (Tab/Shift-Tab between fields is not expected to work — Obsidian's settings behave that way for every plugin.)
 - [ ] Changing the **device label** makes new commits carry the new `(label)` suffix.
 - [ ] Switching repositories resets state correctly. ⚠️ **Change it in the SETTINGS UI,
       not by editing `data.json`.** A hand edit while Obsidian runs does nothing: the
