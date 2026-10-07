@@ -1437,9 +1437,12 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
    CM6 stretches to the widest content or the viewport — so it always
    reaches the right edge (owner, 2026-10-08). */
 .ges-log-body .cm-line.ges-log-sep {
-  color: var(--text-faint);
-  background-image: linear-gradient(var(--background-modifier-border-hover), var(--background-modifier-border-hover));
+  /* The SAME colour as the "|" bars — the text colour — for both the "+"
+     and the rule (owner, 2026-10-08: the first version was thinner and
+     paler than the bars). Thickness follows the monospace stroke: about
+     1/12 of the font size, never under 1px. */
+  background-image: linear-gradient(currentColor, currentColor);
   background-repeat: no-repeat;
-  background-size: 100% 1px;
+  background-size: 100% max(1px, 0.085em);
   background-position: 0 50%;
 }
