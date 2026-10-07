@@ -103,6 +103,10 @@ export class LogViewerPanel {
   // measured per entry: CM6 inserts at once but scrolls on the next
   // frame, so a per-entry check broke on the second entry of a burst.
   private following = true;
+  // The scroller's last position, to tell a horizontal scroll from a
+  // vertical one in the scroll event.
+  private lastScrollLeft = 0;
+  private lastScrollTop = 0;
 
   constructor(private readonly deps: LogViewerDeps) {}
 
@@ -271,14 +275,25 @@ export class LogViewerPanel {
         });
         this.shownText += add.insert;
         this.shown += 1;
-        if (this.following) {
-          ed.dispatch({
-            effects: EditorView.scrollIntoView(ed.state.doc.length, { y: "end" }),
-          });
-        }
+        if (this.following) this.scrollToBottom();
       }
     }
     this.statusEl.setText(`${this.shown} of ${this.total} entries`);
+  }
+
+  // VERTICAL only (owner, 2026-10-08): scrollIntoView would also bring the
+  // end of the last line into view horizontally — usually a short "}" —
+  // and throw a user who scrolled right back to column 0. Written after
+  // CM6 measured the new height, so scrollHeight includes the insert.
+  private scrollToBottom(): void {
+    const ed = this.editor;
+    if (!ed) return;
+    ed.requestMeasure({
+      read: () => null,
+      write: () => {
+        ed.scrollDOM.scrollTop = ed.scrollDOM.scrollHeight;
+      },
+    });
   }
 
   private render(scrollToEnd: boolean): void {
@@ -310,8 +325,22 @@ export class LogViewerPanel {
       });
       this.editor.dispatch({ effects: setLevelMarks.of(v.marks) });
       const ed = this.editor;
+      // Owner, 2026-10-08: scrolling RIGHT turns following off (the user
+      // is reading a long line); only a vertical scroll that ends at the
+      // bottom turns it back on. Right only — the browser itself pulls
+      // scrollLeft LEFT when a filter leaves shorter lines, and that must
+      // not count as the user's act.
       ed.scrollDOM.addEventListener("scroll", () => {
-        this.following = isLastLineVisible(ed.scrollDOM, ed.defaultLineHeight);
+        const sc = ed.scrollDOM;
+        if (sc.scrollLeft > this.lastScrollLeft) {
+          this.following = false;
+        } else if (sc.scrollLeft < this.lastScrollLeft) {
+          // a leftward move (often the browser's clamp) decides nothing
+        } else if (sc.scrollTop !== this.lastScrollTop) {
+          this.following = isLastLineVisible(sc, ed.defaultLineHeight);
+        }
+        this.lastScrollLeft = sc.scrollLeft;
+        this.lastScrollTop = sc.scrollTop;
       });
     } else {
       this.editor.dispatch({
@@ -321,10 +350,7 @@ export class LogViewerPanel {
     }
     if (scrollToEnd) {
       this.following = true;
-      // The newest entries are at the bottom.
-      this.editor.dispatch({
-        effects: EditorView.scrollIntoView(this.editor.state.doc.length, { y: "end" }),
-      });
+      this.scrollToBottom(); // the newest entries are at the bottom
     }
   }
 }

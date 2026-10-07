@@ -142,6 +142,66 @@ describe("LogViewerPanel", () => {
       panel.destroy();
     });
 
+    const writable = (el: HTMLElement, g: Record<string, number>) => {
+      for (const [k, v] of Object.entries(g)) Object.defineProperty(el, k, { configurable: true, writable: true, value: v });
+    };
+
+    it("🔑 a HORIZONTAL scroll turns following off; only a scroll DOWN to the end turns it back on", async () => {
+      const d = deps(`${line(1)}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const panel = new LogViewerPanel(d.deps);
+      await panel.mount(root);
+      const p = panel as unknown as { following: boolean };
+      const sc = root.querySelector(".cm-scroller") as HTMLElement;
+      writable(sc, { scrollTop: 900, clientHeight: 100, scrollHeight: 1000, scrollLeft: 0 });
+      sc.dispatchEvent(new Event("scroll")); // at the end, no horizontal move
+      expect(p.following).toBe(true);
+      sc.scrollLeft = 250; // the user scrolls RIGHT, still at the bottom
+      sc.dispatchEvent(new Event("scroll"));
+      expect(p.following).toBe(false);
+      sc.scrollTop = 880; // up a bit…
+      sc.dispatchEvent(new Event("scroll"));
+      sc.scrollTop = 900; // …and deliberately back down to the end
+      sc.dispatchEvent(new Event("scroll"));
+      expect(p.following).toBe(true);
+      panel.destroy();
+    });
+
+    it("a LEFTWARD shift (the browser clamping after a filter) does not turn following off", async () => {
+      const d = deps(`${line(1)}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const panel = new LogViewerPanel(d.deps);
+      await panel.mount(root);
+      const p = panel as unknown as { following: boolean; lastScrollLeft: number };
+      const sc = root.querySelector(".cm-scroller") as HTMLElement;
+      writable(sc, { scrollTop: 900, clientHeight: 100, scrollHeight: 1000, scrollLeft: 0 });
+      p.lastScrollLeft = 200;
+      p.following = true;
+      sc.dispatchEvent(new Event("scroll")); // 200 → 0, not the user
+      expect(p.following).toBe(true);
+      panel.destroy();
+    });
+
+    it("🔑 auto-scroll moves VERTICALLY only — the horizontal position is kept", async () => {
+      const d = deps(`${line(1)}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const panel = new LogViewerPanel(d.deps);
+      await panel.mount(root);
+      const sc = root.querySelector(".cm-scroller") as HTMLElement;
+      writable(sc, { scrollTop: 900, clientHeight: 100, scrollHeight: 1000, scrollLeft: 0 });
+      sc.dispatchEvent(new Event("scroll"));
+      sc.scrollLeft = 300;
+      sc.scrollTop = 900;
+      (panel as unknown as { following: boolean }).following = true; // e.g. scrolled right, then down to the end
+      d.subs.forEach((fn) => fn({ seq: 2, line: line(2) }));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(sc.scrollLeft).toBe(300);
+      panel.destroy();
+    });
+
     it("🔑 the user's scroll decides: up → off, back to the end → on", async () => {
       const d = deps(`${line(1)}\n`);
       const root = document.createElement("div");
