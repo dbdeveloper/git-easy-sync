@@ -483,7 +483,7 @@
       1. (так що є) Для desktop
       2. коротша і менша - для mobile devices
    
-36. В Settings, секція "Logging", Підсекція "Clean logs" чи можна в description замість тексту "Truncate the log to 
+36. ✅ DONE (2026-10-07, формат (в): «1.2 MB (1 234 567 bytes)», оновлюється щосекунди, поки відкриті Settings; `src/settings/log-size.ts`). В Settings, секція "Logging", Підсекція "Clean logs" чи можна в description замість тексту "Truncate the log to 
     0 bytes" вказувати "Truncate the log. Current log size is NNN bytes." І NNN — це реальна довжина лог-файлу, яка
     ще й диманічно змінюється, якщо лог в цей момент росте. Тоді, якщо клікнути по кнопці [Clean] в цій під-секції,
     то NNN = 0, і користувач одразу ж "повірить" (бо побачить!), що лог truncated. Це діє краще за 1000 слів!

@@ -17,6 +17,7 @@ import { logFileNameFor } from "src/logger";
 import { formatSyncMessage } from "src/sync2/commit-message";
 import { renderTokenHelpBox } from "src/sync2/views/token-help";
 import { pluginsDataJsonToggleState } from "src/settings/toggle-rules";
+import { cleanLogsDescription } from "src/settings/log-size";
 import { deconflictDeviceLabel } from "src/sync2/conflict-siblings";
 import { tokenExpiredMessage } from "src/token-expired-flag";
 import {
@@ -40,6 +41,9 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
   // when the user toggles a setting that re-renders the page).
   private drainStatusUnsubscribe: (() => void) | null = null;
   private drainStatusTickTimer: ReturnType<typeof setInterval> | null = null;
+  // Refreshes the "Clean logs" size once a second while this page is
+  // open (TODO.md п.36). Stopped in hide() and before every re-display.
+  private logSizeTimer: ReturnType<typeof setInterval> | null = null;
   // §35 — repaint the "GitHub sync status" card on demand. The card's error line
   // is driven by the sticky token-expired marker (not only DrainStatus.lastError,
   // which is in-memory and null after a reload while the marker persists). The
@@ -66,11 +70,20 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       clearInterval(this.drainStatusTickTimer);
       this.drainStatusTickTimer = null;
     }
+    this.stopLogSizeTimer();
+  }
+
+  private stopLogSizeTimer(): void {
+    if (this.logSizeTimer !== null) {
+      clearInterval(this.logSizeTimer);
+      this.logSizeTimer = null;
+    }
   }
 
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    this.stopLogSizeTimer();
 
     // TODO §10 — at the very top: the plugin name + version (+ a small repo
     // link), so the user can see WHOSE settings these are and which version is
@@ -920,6 +933,17 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
 
     // Created below, shown or hidden IN PLACE by the toggle (see there).
     let cleanLogsSetting: Setting | null = null;
+    const refreshLogSize = async (): Promise<void> => {
+      if (cleanLogsSetting === null || !this.plugin.settings.enableLogging) return;
+      let size = 0;
+      try {
+        // A missing file (just enabled, or deleted by hand) reads as 0.
+        size = (await this.app.vault.adapter.stat(logFileNameFor(manifest.id)))?.size ?? 0;
+      } catch {
+        // unreadable → 0; the next tick tries again
+      }
+      cleanLogsSetting.setDesc(cleanLogsDescription(size));
+    };
     new Setting(containerEl)
       .setName("Enable logging")
       .setDesc(
@@ -941,6 +965,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
             // 2026-10-07: "the screen should not scroll when you change
             // a switch"). Same pattern as the configs → data.json pair.
             cleanLogsSetting?.settingEl.toggle(value);
+            await refreshLogSize();
           });
       });
 
@@ -949,16 +974,22 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     // there's nothing to clean. Hide the row entirely so the
     // settings panel doesn't carry dead UI.
     // Always created, hidden while logging is off — so the toggle above
-    // can show it without rebuilding the page.
+    // can show it without rebuilding the page. Its description carries
+    // the LIVE size of the log (TODO.md п.36, owner 2026-10-07): after
+    // [Clean] the user sees 0 rather than taking our word for it. One
+    // local stat a second, only while this page is open and logging is on.
     cleanLogsSetting = new Setting(containerEl)
       .setName("Clean logs")
-      .setDesc("Truncate the log file to 0 bytes.")
+      .setDesc(cleanLogsDescription(0))
       .addButton((button) => {
         button.setButtonText("Clean").onClick(async () => {
           await this.plugin.logger.clean();
+          await refreshLogSize();
         });
       });
     cleanLogsSetting.settingEl.toggle(this.plugin.settings.enableLogging);
+    void refreshLogSize();
+    this.logSizeTimer = setInterval(() => void refreshLogSize(), 1000);
 
     // ── Danger zone ─────────────────────────────────────────────────
     new Setting(containerEl).setName("Danger zone").setHeading();
