@@ -285,6 +285,8 @@ Use it, and note which runs you did.
         under the message, a separator between entries, the view scrolled to the newest
         entry at the bottom; INFO / WARN / ERROR in different colours (light AND dark theme);
       - long lines scroll sideways, the columns never break;
+      - the line between entries reaches the RIGHT EDGE in a wide window and runs under the
+        longest message too; copying (button or Ctrl/Cmd+C) gives dashes there, not spaces;
       - **filter**: `error` keeps only matching entries; `info | drain done` matches level
         then message; `drain done | info` matches nothing (order); the counter shows
         `N of M entries`; the **Aa / W / .\*** switches work; an invalid regexp shows

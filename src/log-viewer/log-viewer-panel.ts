@@ -17,7 +17,14 @@
 
 import { Notice, setIcon } from "obsidian";
 import { EditorState, StateEffect, StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  keymap,
+  ViewPlugin,
+  type ViewUpdate,
+} from "@codemirror/view";
 import {
   closeSearchPanel,
   openSearchPanel,
@@ -27,7 +34,7 @@ import {
 } from "@codemirror/search";
 import { LiveFeed, openLog, renderAppend, renderLog, type LogItem } from "./log-model";
 import { makeFilter } from "./log-filter";
-import type { LevelMark } from "./log-format";
+import { SEPARATOR, separatorsAsDashes, type LevelMark } from "./log-format";
 import type { LogFileAdapter } from "./log-load";
 import { parseLogLine, type LogEntry, type RecentLine } from "./log-parse";
 import { formatLogSize } from "../settings/log-size";
@@ -91,6 +98,49 @@ function orderSearchSwitches(editorDom: HTMLElement): void {
   for (const l of wanted) panel.insertBefore(l!, anchor);
   panel.dataset.gesOrdered = "1";
 }
+
+// Separator lines get a class; CSS draws the rule across the whole line,
+// which CM6 stretches to the widest content or the viewport, whichever is
+// wider. Visible lines only — cheap at any log size.
+const separatorRule = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) {
+      this.decorations = this.build(view);
+    }
+    update(u: ViewUpdate): void {
+      if (u.docChanged || u.viewportChanged) this.decorations = this.build(u.view);
+    }
+    build(view: EditorView): DecorationSet {
+      const deco = Decoration.line({ class: "ges-log-sep" });
+      const out = [];
+      for (const { from, to } of view.visibleRanges) {
+        for (let pos = from; pos <= to; ) {
+          const line = view.state.doc.lineAt(pos);
+          if (line.text === SEPARATOR) out.push(deco.range(line.from));
+          pos = line.to + 1;
+        }
+      }
+      return Decoration.set(out);
+    }
+  },
+  { decorations: (v) => v.decorations },
+);
+
+// Copy / cut from the editor: separators become dashes (owner) so the
+// table reads in plain text elsewhere.
+const copyWithDashes = EditorView.domEventHandlers({
+  copy(e, view) {
+    const text = view.state.selection.ranges
+      .filter((r) => !r.empty)
+      .map((r) => view.state.sliceDoc(r.from, r.to))
+      .join("\n");
+    if (!text || !e.clipboardData) return false;
+    e.clipboardData.setData("text/plain", separatorsAsDashes(text));
+    e.preventDefault();
+    return true;
+  },
+});
 
 export class LogViewerPanel {
   private editor: EditorView | null = null;
@@ -244,7 +294,7 @@ export class LogViewerPanel {
     setIcon(copyBtn, "copy");
     copyBtn.setAttr("aria-label", "Copy the shown entries");
     copyBtn.addEventListener("click", () => {
-      void navigator.clipboard.writeText(this.shownText).then(
+      void navigator.clipboard.writeText(separatorsAsDashes(this.shownText)).then(
         () => new Notice("Log entries copied", 2000),
         (err) => new Notice(`Copy failed: ${err}`, 5000),
       );
@@ -381,6 +431,8 @@ export class LogViewerPanel {
           extensions: [
             EditorState.readOnly.of(true),
             levelMarks,
+            separatorRule,
+            copyWithDashes,
             search({ top: true }),
             keymap.of(searchKeymap),
             EditorView.contentAttributes.of({ spellcheck: "false" }),

@@ -374,6 +374,18 @@ describe("LogViewerPanel", () => {
     panel.destroy();
   });
 
+  it("separator lines carry the class that draws the full-width rule", async () => {
+    const d = deps(`${line(1)}\n${line(2)}\n`);
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const panel = new LogViewerPanel(d.deps);
+    await panel.mount(root);
+    const seps = root.querySelectorAll(".cm-line.ges-log-sep");
+    expect(seps.length).toBe(2);
+    expect(seps[0].textContent).toMatch(/^[ +]+$/);
+    panel.destroy();
+  });
+
   it("🔑 destroy() ends the logger subscription (closing the modal or the tab)", async () => {
     const d = deps(`${line(1)}\n`);
     const panel = new LogViewerPanel(d.deps);

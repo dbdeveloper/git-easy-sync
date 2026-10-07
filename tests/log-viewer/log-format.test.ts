@@ -3,7 +3,7 @@
 // AGPL-3.0 — see LICENSE.
 
 import { describe, it, expect } from "vitest";
-import { formatEntryBlock, formatTable, SEPARATOR, GAP } from "../../src/log-viewer/log-format";
+import { formatEntryBlock, formatTable, SEPARATOR, GAP, separatorsAsDashes } from "../../src/log-viewer/log-format";
 import type { LogEntry } from "../../src/log-viewer/log-parse";
 
 // LOG-VIEWER step 3 (spec §2.6-2.7): the log as a TEXT table —
@@ -96,6 +96,32 @@ describe("formatTable — the whole log", () => {
     for (let i = 0; i < row.length; i++) {
       if (row[i] === "|") expect(SEPARATOR[i]).toBe("+");
     }
+  });
+
+  // Owner, 2026-10-08: a fixed run of dashes was too short in a wide
+  // window and under long messages. The separator line now carries only
+  // the "+" junctions; the view draws the rule across the full width with
+  // CSS. Copying turns it back into dashes so the text reads elsewhere.
+  it("🔑 the separator is only spaces and '+' — the rule itself is drawn by the view", () => {
+    expect(SEPARATOR).toMatch(/^[ +]+$/);
+    expect(SEPARATOR.endsWith("+")).toBe(true);
+  });
+
+  it("🔑 copying: separators become dashes as long as the longest copied line, '+' kept", () => {
+    const t = formatTable([entry({ message: "a much longer message than the separator itself" })], UTC).text;
+    const copied = separatorsAsDashes(t);
+    const lines = copied.split("\n");
+    const longest = Math.max(...lines.map((l) => l.length));
+    expect(lines[0]).toMatch(/^[-+]+$/);
+    expect(lines[0]).toHaveLength(longest);
+    for (let i = 0; i < SEPARATOR.length; i++) {
+      if (SEPARATOR[i] === "+") expect(lines[0][i]).toBe("+");
+    }
+    expect(lines[1]).toBe(t.split("\n")[1]); // other lines untouched
+  });
+
+  it("copying text without separators changes nothing", () => {
+    expect(separatorsAsDashes("just | text")).toBe("just | text");
   });
 
   it("a GAP item draws the gap marker line", () => {

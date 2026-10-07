@@ -1431,3 +1431,15 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
 .ges-log-body .cm-search label:has(input:focus-visible) {
   box-shadow: 0 0 0 2px var(--background-modifier-border-focus, var(--interactive-accent));
 }
+
+/* LOG-VIEWER: the separator between entries. The line holds only the "+"
+   junctions; the rule is a 1px background across the WHOLE line, which
+   CM6 stretches to the widest content or the viewport — so it always
+   reaches the right edge (owner, 2026-10-08). */
+.ges-log-body .cm-line.ges-log-sep {
+  color: var(--text-faint);
+  background-image: linear-gradient(var(--background-modifier-border-hover), var(--background-modifier-border-hover));
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+  background-position: 0 50%;
+}
