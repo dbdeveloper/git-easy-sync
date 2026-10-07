@@ -382,7 +382,7 @@ describe("LogViewerPanel", () => {
     await panel.mount(root);
     const seps = root.querySelectorAll(".cm-line.ges-log-sep");
     expect(seps.length).toBe(2);
-    expect(seps[0].textContent).toMatch(/^[ +]+$/);
+    expect(seps[0].textContent).toMatch(/^[ |]+$/);
     panel.destroy();
   });
 

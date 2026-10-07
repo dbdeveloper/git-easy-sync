@@ -94,7 +94,7 @@ describe("formatTable — the whole log", () => {
   it("the separator lines up with the column bars", () => {
     const row = formatEntryBlock(entry(), UTC).text;
     for (let i = 0; i < row.length; i++) {
-      if (row[i] === "|") expect(SEPARATOR[i]).toBe("+");
+      if (row[i] === "|") expect(SEPARATOR[i]).toBe("|");
     }
   });
 
@@ -102,12 +102,14 @@ describe("formatTable — the whole log", () => {
   // window and under long messages. The separator line now carries only
   // the "+" junctions; the view draws the rule across the full width with
   // CSS. Copying turns it back into dashes so the text reads elsewhere.
-  it("🔑 the separator is only spaces and '+' — the rule itself is drawn by the view", () => {
-    expect(SEPARATOR).toMatch(/^[ +]+$/);
-    expect(SEPARATOR.endsWith("+")).toBe(true);
+  // Owner, 2026-10-08: "+" junctions may sit off the CSS rule depending on
+  // the font; "|" spans the whole line height, so the rule always crosses it.
+  it("🔑 the separator is only spaces and '|' — the rule itself is drawn by the view", () => {
+    expect(SEPARATOR).toMatch(/^[ |]+$/);
+    expect(SEPARATOR.endsWith("|")).toBe(true);
   });
 
-  it("🔑 copying: separators become dashes as long as the longest copied line, '+' kept", () => {
+  it("🔑 copying: separators become dashes as long as the longest copied line, with '+' at the bars", () => {
     const t = formatTable([entry({ message: "a much longer message than the separator itself" })], UTC).text;
     const copied = separatorsAsDashes(t);
     const lines = copied.split("\n");
@@ -115,9 +117,16 @@ describe("formatTable — the whole log", () => {
     expect(lines[0]).toMatch(/^[-+]+$/);
     expect(lines[0]).toHaveLength(longest);
     for (let i = 0; i < SEPARATOR.length; i++) {
-      if (SEPARATOR[i] === "+") expect(lines[0][i]).toBe("+");
+      if (SEPARATOR[i] === "|") expect(lines[0][i]).toBe("+");
     }
     expect(lines[1]).toBe(t.split("\n")[1]); // other lines untouched
+  });
+
+  it("🔑 an EMPTY continuation line is never taken for a separator (it keeps a trailing space)", () => {
+    const lines = formatEntryBlock(entry({ message: "a\n" }), UTC).text.split("\n");
+    expect(lines[1].trim()).toBe(SEPARATOR.trim()); // same bars…
+    expect(lines[1]).not.toBe(SEPARATOR); // …but not the separator: no rule, no dashes on copy
+    expect(separatorsAsDashes(lines.join("\n"))).toBe(lines.join("\n"));
   });
 
   it("copying text without separators changes nothing", () => {

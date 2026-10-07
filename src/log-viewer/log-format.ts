@@ -23,22 +23,25 @@ const DATE_W = 10; // 2026-10-07
 const TIME_W = 12; // 11:42:03.120
 const LEVEL_W = 5; // ERROR
 
-// The separator line carries only the "+" junctions, exactly under the
-// column bars; the RULE itself is drawn by the view with CSS across the
-// full width (owner, 2026-10-08: a fixed run of dashes was too short in a
-// wide window and under long messages). Copying turns it back into dashes
-// (separatorsAsDashes).
+// The separator line carries only the column bars "|", exactly under the
+// bars of the rows; the RULE itself is drawn by the view with CSS across
+// the full width (owner, 2026-10-08: a fixed run of dashes was too short
+// in a wide window and under long messages). "|" and not "+": a "+"
+// crossbar sits wherever the font puts it and may miss the rule, while
+// "|" spans the whole line height, so the rule always crosses it — and
+// the columns run unbroken from top to bottom. Copying turns the line
+// back into dashes with "+" at the bars (separatorsAsDashes).
 export const SEPARATOR =
-  `${" ".repeat(DATE_W + 1)}+${" ".repeat(TIME_W + 2)}+${" ".repeat(LEVEL_W + 2)}+`;
+  `${" ".repeat(DATE_W + 1)}|${" ".repeat(TIME_W + 2)}|${" ".repeat(LEVEL_W + 2)}|`;
 
-// For the clipboard: every separator line becomes dashes with its "+"
-// kept, as long as the longest copied line, so the table still reads in
+// For the clipboard: every separator line becomes dashes with "+" at the
+// bars, as long as the longest copied line, so the table still reads in
 // plain text outside Obsidian.
 export function separatorsAsDashes(text: string): string {
   const lines = text.split("\n");
   if (!lines.includes(SEPARATOR)) return text;
   const width = Math.max(SEPARATOR.length, ...lines.map((l) => l.length));
-  const dashed = SEPARATOR.replace(/ /g, "-").padEnd(width, "-");
+  const dashed = SEPARATOR.replace(/ /g, "-").replace(/\|/g, "+").padEnd(width, "-");
   return lines.map((l) => (l === SEPARATOR ? dashed : l)).join("\n");
 }
 
