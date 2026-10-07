@@ -1297,3 +1297,10 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
   flex: 1 1 auto;
   min-height: 0;
 }
+
+/* LOG-VIEWER: the search panel's [all] selects every match for editing —
+   meaningless in a read-only log (owner, 2026-10-08). Hidden here only;
+   diff2's editor keeps it. Replace controls CM6 already hides itself. */
+.ges-log-body .cm-search button[name="select"] {
+  display: none;
+}
