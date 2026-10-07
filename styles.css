@@ -1304,3 +1304,82 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
 .ges-log-body .cm-search button[name="select"] {
   display: none;
 }
+
+/* LOG-VIEWER: a bare CodeMirror view does not inherit Obsidian's theme —
+   its search panel, fields, buttons, selection and caret came out in
+   CM6's default LIGHT colours on a dark theme (owner, 2026-10-08). The
+   same cure as diff2 (§2.2.17, bug-27): Obsidian's theme variables, so
+   light and dark both follow the user's theme. Kept separate from the
+   diff2 rules so neither can break the other. */
+.ges-log-body .cm-editor {
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+.ges-log-body .cm-content {
+  caret-color: var(--text-normal);
+}
+.ges-log-body .cm-cursor,
+.ges-log-body .cm-cursor-primary {
+  border-left-color: var(--text-normal);
+}
+.ges-log-body .cm-selectionBackground,
+.ges-log-body .cm-focused .cm-selectionBackground {
+  /* !important: CM6 injects its own style module after this sheet. */
+  background-color: var(--text-selection) !important;
+}
+.ges-log-body .cm-searchMatch {
+  background-color: var(--text-highlight-bg);
+  outline: none;
+}
+.ges-log-body .cm-searchMatch.cm-searchMatch-selected {
+  background-color: var(--text-highlight-bg-active, var(--interactive-accent));
+  color: var(--text-on-accent);
+}
+.ges-log-body .cm-panels {
+  background: var(--background-secondary);
+  color: var(--text-normal);
+}
+.ges-log-body .cm-panels.cm-panels-top {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.ges-log-body .cm-search {
+  font-size: var(--font-ui-small);
+  padding: 6px 8px;
+}
+.ges-log-body .cm-search .cm-textfield {
+  background: var(--background-modifier-form-field);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+  padding: 4px 8px;
+  font-size: var(--font-ui-small);
+}
+.ges-log-body .cm-search .cm-textfield:focus {
+  border-color: var(--interactive-accent);
+  outline: none;
+}
+.ges-log-body .cm-search .cm-button {
+  background: var(--interactive-normal);
+  background-image: none;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+  padding: 3px 10px;
+}
+.ges-log-body .cm-search .cm-button:hover {
+  background: var(--interactive-hover);
+}
+.ges-log-body .cm-search label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.ges-log-body .cm-search [name="close"] {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.2em;
+  cursor: pointer;
+}
+.ges-log-body .cm-search [name="close"]:hover {
+  color: var(--text-normal);
+}

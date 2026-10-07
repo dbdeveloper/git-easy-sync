@@ -286,6 +286,8 @@ Use it, and note which runs you did.
         "invalid expression" and keeps everything;
       - **search** (🔍 button, or Ctrl/Cmd+F with the cursor in the log) highlights and
         steps next/previous only inside the filtered entries;
+        the search panel, its fields and buttons, the match highlight and the selection
+        follow the THEME (dark theme → dark panel); there is no **[all]** button;
       - **copy** button puts the shown entries on the clipboard; normal selection + copy
         works too;
       - **live**: with the viewer open at the bottom, run a Sync — new entries appear at the
