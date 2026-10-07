@@ -92,6 +92,23 @@ describe("LogViewerPanel", () => {
     panel.destroy();
   });
 
+  it("🔑 the search button is a TOGGLE: open, close — and it shows the panel's state", async () => {
+    const d = deps(`${line(1)}\n`);
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const panel = new LogViewerPanel(d.deps);
+    await panel.mount(root);
+    const btn = root.querySelector<HTMLButtonElement>(".ges-log-search-toggle")!;
+    const panelOpen = () => root.querySelector(".cm-search") !== null;
+    btn.click();
+    expect(panelOpen()).toBe(true);
+    expect(btn.classList.contains("is-active")).toBe(true);
+    btn.click();
+    expect(panelOpen()).toBe(false);
+    expect(btn.classList.contains("is-active")).toBe(false);
+    panel.destroy();
+  });
+
   it("🔑 destroy() ends the logger subscription (closing the modal or the tab)", async () => {
     const d = deps(`${line(1)}\n`);
     const panel = new LogViewerPanel(d.deps);

@@ -1248,7 +1248,8 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
   font-family: var(--font-monospace);
   min-width: 2.2em;
 }
-.ges-log-switch.is-active {
+.ges-log-switch.is-active,
+.ges-log-search-toggle.is-active {
   background-color: var(--interactive-accent);
   color: var(--text-on-accent);
 }

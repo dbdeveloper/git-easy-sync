@@ -18,7 +18,13 @@
 import { Notice, setIcon } from "obsidian";
 import { EditorState, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
-import { openSearchPanel, search, searchKeymap } from "@codemirror/search";
+import {
+  closeSearchPanel,
+  openSearchPanel,
+  search,
+  searchKeymap,
+  searchPanelOpen,
+} from "@codemirror/search";
 import { LiveFeed, openLog, renderAppend, renderLog, type LogItem } from "./log-model";
 import { makeFilter } from "./log-filter";
 import type { LevelMark } from "./log-format";
@@ -81,6 +87,7 @@ export class LogViewerPanel {
   // Set by destroy(): a read still in flight must not draw into a closed
   // modal or tab.
   private destroyed = false;
+  private searchBtn: HTMLElement | null = null;
 
   constructor(private readonly deps: LogViewerDeps) {}
 
@@ -163,12 +170,18 @@ export class LogViewerPanel {
     toggle("W", "Whole word", "wholeWord");
     toggle(".*", "Regular expression", "regexp");
 
-    const searchBtn = bar.createEl("button", { cls: "ges-log-action" });
+    // A TOGGLE (owner, 2026-10-08): a second click closes the panel. Its
+    // lit state follows the panel however it was opened or closed (×,
+    // Esc, Ctrl/Cmd+F) — see the editor's update listener.
+    const searchBtn = bar.createEl("button", { cls: "ges-log-action ges-log-search-toggle" });
     setIcon(searchBtn, "search");
     searchBtn.setAttr("aria-label", "Search in the shown entries");
     searchBtn.addEventListener("click", () => {
-      if (this.editor) openSearchPanel(this.editor);
+      if (!this.editor) return;
+      if (searchPanelOpen(this.editor.state)) closeSearchPanel(this.editor);
+      else openSearchPanel(this.editor);
     });
+    this.searchBtn = searchBtn;
 
     const copyBtn = bar.createEl("button", { cls: "ges-log-action" });
     setIcon(copyBtn, "copy");
@@ -275,6 +288,9 @@ export class LogViewerPanel {
             search({ top: true }),
             keymap.of(searchKeymap),
             EditorView.contentAttributes.of({ spellcheck: "false" }),
+            EditorView.updateListener.of((u) => {
+              this.searchBtn?.toggleClass("is-active", searchPanelOpen(u.state));
+            }),
           ],
         }),
       });
