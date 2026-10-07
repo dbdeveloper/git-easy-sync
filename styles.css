@@ -1384,3 +1384,46 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
 .ges-log-body .cm-search [name="close"]:hover {
   color: var(--text-normal);
 }
+
+/* LOG-VIEWER: the search panel's switches look like the filter's toggle
+   buttons (owner, 2026-10-08: the small labels next to tiny checkboxes
+   were hard to see). The <input type=checkbox> stays — CM6 listens to
+   its change event — but is hidden visually (still focusable); clicking
+   the label toggles it natively. Lit while checked. */
+.ges-log-body .cm-search label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.2em;
+  margin: 0 4px 0 0;
+  padding: 3px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+  cursor: pointer;
+  user-select: none;
+  vertical-align: middle;
+}
+.ges-log-body .cm-search label:hover {
+  background: var(--interactive-hover);
+}
+.ges-log-body .cm-search label input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+.ges-log-body .cm-search label:has(input:checked) {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+.ges-log-body .cm-search label:has(input:focus-visible) {
+  box-shadow: 0 0 0 2px var(--background-modifier-border-focus, var(--interactive-accent));
+}
