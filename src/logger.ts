@@ -36,8 +36,24 @@ const MAX_DATA_BYTES = 64 * 1024;
 // `logger.info("msg", () => ({ x: walkProto(...), mem: usage() }))`.
 type LogData = unknown | (() => unknown);
 
+// LOG-VIEWER §2.14: how many of the newest lines the logger keeps in
+// memory. The viewer merges this ring with the file it read, so a line
+// torn by a concurrent append — or written during the read — still
+// shows. Only needs to cover what can be written while a file is read.
+export const LOG_RING_SIZE = 200;
+
+// One ring slot: the EXACT line written to the file (no trailing "\n")
+// and its sequence number, which exists only in memory.
+export interface LoggedLine {
+  seq: number;
+  line: string;
+}
+
 export default class Logger {
   private logFile: string;
+  private ring: LoggedLine[] = [];
+  private seq = 0;
+  private readonly listeners = new Set<(l: LoggedLine) => void>();
 
   constructor(
     private vault: Vault,
@@ -135,10 +151,35 @@ export default class Logger {
     // — the throw would silently drop the whole line (fire-and-forget
     // rejection). safeStringify preserves Error fields and emits
     // "[Circular]" instead, matching what the console mirror already shows.
-    await this.vault.adapter.append(
-      this.logFile,
-      safeStringify(logEntry) + "\n",
-    );
+    const line = safeStringify(logEntry);
+    // Into the ring and out to subscribers BEFORE the append: a line can
+    // then never be on disk without being in the ring, which is what the
+    // viewer's merge relies on (LOG-VIEWER §2.14). This part runs
+    // synchronously, before the first await.
+    const logged: LoggedLine = { seq: ++this.seq, line };
+    this.ring.push(logged);
+    if (this.ring.length > LOG_RING_SIZE) this.ring.shift();
+    for (const fn of this.listeners) {
+      try {
+        fn(logged);
+      } catch {
+        // A broken subscriber must not break logging or the others.
+      }
+    }
+    await this.vault.adapter.append(this.logFile, line + "\n");
+  }
+
+  // The newest lines, oldest first (a copy).
+  recentLines(): LoggedLine[] {
+    return [...this.ring];
+  }
+
+  // Every new line, as it is logged. Returns the unsubscribe function.
+  subscribe(fn: (l: LoggedLine) => void): () => void {
+    this.listeners.add(fn);
+    return () => {
+      this.listeners.delete(fn);
+    };
   }
 
   async read(): Promise<string> {
@@ -149,6 +190,9 @@ export default class Logger {
   // enabled; the settings tab gates the Clean button behind the
   // toggle so this isn't reachable on a disabled logger.
   async clean(): Promise<void> {
+    // The ring goes with the file: the viewer's merge would otherwise
+    // bring the cleaned lines back. Sequence numbers keep rising.
+    this.ring = [];
     return await this.vault.adapter.write(this.logFile, "");
   }
 
@@ -159,6 +203,7 @@ export default class Logger {
 
   async disable(): Promise<void> {
     this.enabled = false;
+    this.ring = []; // the file is deleted below — same reason as clean()
     await this.removeFile();
   }
 
