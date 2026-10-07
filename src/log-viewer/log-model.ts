@@ -18,7 +18,15 @@ import {
   type LogEntry,
   type RecentLine,
 } from "./log-parse";
-import { formatTable, GAP, type FormatOptions, type GapItem, type LevelMark } from "./log-format";
+import {
+  formatEntryBlock,
+  formatTable,
+  GAP,
+  SEPARATOR,
+  type FormatOptions,
+  type GapItem,
+  type LevelMark,
+} from "./log-format";
 import { makeFilter, type FilterOptions } from "./log-filter";
 
 export type LogItem = LogEntry | GapItem;
@@ -83,5 +91,76 @@ export function renderLog(
     shown: tidy.filter((i) => i.kind !== "gap").length,
     total,
     error: f.ok ? null : f.error,
+  };
+}
+
+// ── step 7: live tail (spec §2.13-2.14) ────────────────────────────────
+
+// The viewer's subscription to the logger. It is created BEFORE the file
+// is read: lines that arrive during the read wait in `pending`. start()
+// is called after the merge with the ring's newest number (`lastSeq`)
+// and lets through only lines above it — so a line that the merge
+// already took from the ring never shows twice. close() unsubscribes.
+export class LiveFeed {
+  private pending: RecentLine[] = [];
+  private lastSeq: number | null = null;
+  private sink: ((l: RecentLine) => void) | null = null;
+  private started = false;
+  private readonly off: () => void;
+
+  constructor(subscribe: (fn: (l: RecentLine) => void) => () => void) {
+    this.off = subscribe((l) => this.onLine(l));
+  }
+
+  start(lastSeq: number | null, sink: (l: RecentLine) => void): void {
+    this.lastSeq = lastSeq;
+    this.sink = sink;
+    this.started = true;
+    const waiting = this.pending;
+    this.pending = [];
+    for (const l of waiting) this.onLine(l);
+  }
+
+  // A re-read (after a gap) replaced the content with a merge that
+  // reaches `seq`: skip lines at or below it from now on.
+  advanceTo(seq: number | null): void {
+    if (seq !== null && (this.lastSeq === null || seq > this.lastSeq)) this.lastSeq = seq;
+  }
+
+  close(): void {
+    this.off();
+    this.sink = null;
+    this.pending = [];
+  }
+
+  private onLine(l: RecentLine): void {
+    if (!this.started) {
+      this.pending.push(l);
+      return;
+    }
+    if (this.lastSeq !== null && l.seq <= this.lastSeq) return;
+    this.lastSeq = l.seq;
+    this.sink?.(l);
+  }
+}
+
+// One new entry for the end of the document — the same text renderLog
+// would give for the whole list (separator, block), or null when the
+// current filter rejects it. Marks are absolute in the document after
+// the insert.
+export function renderAppend(
+  entry: LogEntry,
+  passes: (e: LogEntry) => boolean,
+  docLength: number,
+  format: FormatOptions = {},
+): { insert: string; marks: LevelMark[] } | null {
+  if (!passes(entry)) return null;
+  const lead = docLength === 0 ? "" : "\n";
+  const block = formatEntryBlock(entry, format);
+  const head = `${lead}${SEPARATOR}\n`;
+  const start = docLength + head.length;
+  return {
+    insert: head + block.text,
+    marks: block.marks.map((m) => ({ ...m, from: m.from + start, to: m.to + start })),
   };
 }

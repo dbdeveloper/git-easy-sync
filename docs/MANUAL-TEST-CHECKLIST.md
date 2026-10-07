@@ -282,6 +282,10 @@ Use it, and note which runs you did.
         steps next/previous only inside the filtered entries;
       - **copy** button puts the shown entries on the clipboard; normal selection + copy
         works too;
+      - **live**: with the viewer open at the bottom, run a Sync — new entries appear at the
+        end and the view follows them; scroll up first and run another Sync — new entries
+        are added but the view stays where you are; an entry the current filter rejects
+        is counted in `M` but not drawn; nothing ever appears twice;
       - a log over **10 MB** shows "too large — open it with your operating system" and
         nothing else;
       - 📱 the same on a phone: opens, scrolls smoothly, filter and copy work.

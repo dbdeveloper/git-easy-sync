@@ -17,10 +17,11 @@ import { ItemView, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import { EditorState, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
 import { openSearchPanel, search, searchKeymap } from "@codemirror/search";
-import { openLog, renderLog, type LogItem } from "./log-model";
+import { LiveFeed, openLog, renderAppend, renderLog, type LogItem } from "./log-model";
+import { makeFilter } from "./log-filter";
 import type { LevelMark } from "./log-format";
 import type { LogFileAdapter } from "./log-load";
-import type { RecentLine } from "./log-parse";
+import { parseLogLine, type LogEntry, type RecentLine } from "./log-parse";
 import { formatLogSize } from "../settings/log-size";
 
 export const LOG_VIEWER_VIEW_TYPE = "git-easy-sync-log-viewer";
@@ -29,7 +30,10 @@ export interface LogViewerDeps {
   adapter: LogFileAdapter;
   logPath: string;
   // A getter: the plugin may replace its logger (RESET).
-  logger: () => { recentLines(): RecentLine[] };
+  logger: () => {
+    recentLines(): RecentLine[];
+    subscribe(fn: (l: RecentLine) => void): () => void;
+  };
 }
 
 const FILTER_DEBOUNCE_MS = 150; // spec §2.12
@@ -37,22 +41,22 @@ const GAP_REREAD_MS = 1000; // spec §2.14: one background re-read
 
 // Level colouring: marks from log-format, drawn as decorations.
 const setLevelMarks = StateEffect.define<LevelMark[]>();
+const addLevelMarks = StateEffect.define<LevelMark[]>(); // live tail
+const markDeco = (m: LevelMark) =>
+  Decoration.mark({
+    class: `ges-log-level ges-log-level-${m.level.toLowerCase()}`,
+  }).range(m.from, m.to);
 const levelMarks = StateField.define<DecorationSet>({
   create: () => Decoration.none,
   update(deco, tr) {
     for (const e of tr.effects) {
-      if (e.is(setLevelMarks)) {
-        return Decoration.set(
-          e.value.map((m) =>
-            Decoration.mark({
-              class: `ges-log-level ges-log-level-${m.level.toLowerCase()}`,
-            }).range(m.from, m.to),
-          ),
-          true,
-        );
-      }
+      if (e.is(setLevelMarks)) return Decoration.set(e.value.map(markDeco), true);
     }
-    return deco.map(tr.changes);
+    deco = deco.map(tr.changes);
+    for (const e of tr.effects) {
+      if (e.is(addLevelMarks)) deco = deco.update({ add: e.value.map(markDeco) });
+    }
+    return deco;
   },
   provide: (f) => EditorView.decorations.from(f),
 });
@@ -67,6 +71,11 @@ export class LogViewerView extends ItemView {
   private bodyEl!: HTMLElement;
   private filterTimer: number | null = null;
   private shownText = "";
+  private shown = 0;
+  private total = 0;
+  // The compiled current filter, reused for every live entry.
+  private passes: (e: LogEntry) => boolean = () => true;
+  private feed: LiveFeed | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -110,10 +119,16 @@ export class LogViewerView extends ItemView {
       { capture: true },
     );
 
+    // Subscribe BEFORE the file is read: what is logged during the read
+    // waits in the feed and is let through after the merge (spec §2.14).
+    const logger = this.deps.logger();
+    this.feed = new LiveFeed((fn) => logger.subscribe(fn));
     await this.loadLog(false);
   }
 
   async onClose(): Promise<void> {
+    this.feed?.close(); // spec §3 step 7: the subscription ends with the window
+    this.feed = null;
     if (this.filterTimer !== null) window.clearTimeout(this.filterTimer);
     this.editor?.destroy();
     this.editor = null;
@@ -181,6 +196,8 @@ export class LogViewerView extends ItemView {
   private async loadLog(isGapReread: boolean): Promise<void> {
     const r = await openLog(this.deps.adapter, this.deps.logPath, this.deps.logger());
     if (r.kind === "too-big") {
+      this.feed?.close();
+      this.feed = null;
       this.showMessage(
         `The log file is too large to open here (${formatLogSize(r.size)}). ` +
           `Open it with your operating system's tools: <vault>/${this.deps.logPath}`,
@@ -194,6 +211,8 @@ export class LogViewerView extends ItemView {
     if (isGapReread && r.gap) return; // still no overlap — keep what we show
     this.items = r.items;
     this.render(true);
+    if (isGapReread) this.feed?.advanceTo(r.lastSeq);
+    else this.feed?.start(r.lastSeq, (l) => this.onLive(l));
     if (r.gap && !isGapReread) {
       window.setTimeout(() => void this.loadLog(true), GAP_REREAD_MS);
     }
@@ -207,9 +226,43 @@ export class LogViewerView extends ItemView {
     this.statusEl.setText("");
   }
 
+  // A new line from the logger (spec §2.13): always kept; drawn at the
+  // end when the current filter accepts it. The view follows it only if
+  // the user is already at the bottom — scrolled up, they are left alone.
+  private onLive(l: RecentLine): void {
+    const entry = parseLogLine(l.line);
+    this.items.push(entry);
+    this.total += 1;
+    const ed = this.editor;
+    if (ed) {
+      const sc = ed.scrollDOM;
+      const atBottom = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 2 * ed.defaultLineHeight;
+      const add = renderAppend(entry, this.passes, ed.state.doc.length);
+      if (add) {
+        const end = ed.state.doc.length;
+        ed.dispatch({
+          changes: { from: end, insert: add.insert },
+          effects: addLevelMarks.of(add.marks),
+        });
+        this.shownText += add.insert;
+        this.shown += 1;
+        if (atBottom) {
+          ed.dispatch({
+            effects: EditorView.scrollIntoView(ed.state.doc.length, { y: "end" }),
+          });
+        }
+      }
+    }
+    this.statusEl.setText(`${this.shown} of ${this.total} entries`);
+  }
+
   private render(scrollToEnd: boolean): void {
+    const f = makeFilter(this.query, this.switches);
+    this.passes = f.ok ? f.test : () => true;
     const v = renderLog(this.items, this.query, this.switches);
     this.shownText = v.text;
+    this.shown = v.shown;
+    this.total = v.total;
     this.statusEl.setText(`${v.shown} of ${v.total} entries`);
     this.errorEl.setText(v.error ?? "");
     if (!this.editor) {
