@@ -83,13 +83,34 @@ describe("mergeWithRecent — the torn tail comes back from the logger's ring", 
   });
 
   it("an empty ring (logger just started) → nothing extra, lastSeq null", () => {
-    expect(mergeWithRecent([L1], [])).toEqual({ extra: [], lastSeq: null });
+    expect(mergeWithRecent([L1], [])).toEqual({ extra: [], lastSeq: null, gap: false });
   });
 
-  it("🔑 NO overlap with the ring (more written than it holds) → file only, no invented lines, no duplicates", () => {
+  // Owner, 2026-10-07: no overlap but the ring is NEWER than the file's
+  // end means the file was read too long ago for the ring to reach back —
+  // the ring is part of the log all the same. Show file, a gap marker,
+  // then the ring.
+  it("🔑 NO overlap and the ring is NEWER than the file → file + GAP + the whole ring", () => {
     const m = mergeWithRecent([L1], [rec(5, L3), rec(6, L4)]);
+    expect(m.gap).toBe(true);
+    expect(m.extra.map((r) => r.line)).toEqual([L3, L4]);
+    expect(m.lastSeq).toBe(6);
+  });
+
+  it("🔑 NO overlap and the ring is NOT newer (an old ring, the file replaced by hand) → file only", () => {
+    const m = mergeWithRecent([L4], [rec(5, L1), rec(6, L2)]);
+    expect(m.gap).toBe(false);
     expect(m.extra).toEqual([]);
     expect(m.lastSeq).toBe(6); // later live entries start after the ring
+  });
+
+  it("no overlap and the file's end has no readable timestamp → file only (never guess)", () => {
+    const m = mergeWithRecent(["garbage"], [rec(5, L3)]);
+    expect(m).toEqual({ extra: [], lastSeq: 5, gap: false });
+  });
+
+  it("an overlap never reports a gap", () => {
+    expect(mergeWithRecent([L1, L2], [rec(1, L2), rec(2, L3)]).gap).toBe(false);
   });
 
   it("🔑 IDENTICAL lines in the ring: the overlap is aligned on the whole tail, not the last look-alike", () => {
