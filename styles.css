@@ -1281,3 +1281,19 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
 .ges-log-level-warn { color: var(--color-orange); }
 .ges-log-level-error { color: var(--color-red); }
 .ges-log-level-raw { color: var(--color-purple); }
+
+/* LOG-VIEWER on a phone: a full-screen modal above Settings. */
+.modal.ges-log-modal {
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  max-width: 100vw;
+  max-height: 100vh;
+  max-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+.modal.ges-log-modal .modal-content.ges-log-viewer {
+  flex: 1 1 auto;
+  min-height: 0;
+}

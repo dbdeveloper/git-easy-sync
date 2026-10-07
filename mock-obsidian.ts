@@ -697,6 +697,10 @@ export async function requestUrl(options: RequestUrlParam) {
 }
 
 // Mock utility functions
+// Obsidian draws a Lucide icon into the element; tests only need the call
+// not to fail.
+export function setIcon(_el: unknown, _icon: string): void {}
+
 export function normalizePath(p: string): string {
   return p.replace(/\\/g, "/");
 }

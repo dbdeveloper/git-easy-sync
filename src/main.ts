@@ -58,6 +58,8 @@ import GitignoreInvariants from "./sync2/gitignore-invariants";
 import GitignoreSeedStore from "./sync2/gitignore-seeds";
 import { pluginUpdatedText, readPluginVersion } from "./sync2/plugin-js";
 import { LogViewerView, LOG_VIEWER_VIEW_TYPE } from "./log-viewer/log-viewer-view";
+import { LogViewerModal } from "./log-viewer/log-viewer-modal";
+import type { LogViewerDeps } from "./log-viewer/log-viewer-panel";
 import { logViewerTarget } from "./log-viewer/log-open-target";
 import { logFileNameFor } from "./logger";
 import { settleSelfUpdateBaselines } from "./sync2/self-update-applied";
@@ -789,11 +791,7 @@ export default class GitHubSyncPlugin extends Plugin {
       this.registerView(
         LOG_VIEWER_VIEW_TYPE,
         (leaf) =>
-          new LogViewerView(leaf, {
-            adapter: this.app.vault.adapter,
-            logPath: normalizePath(logFileNameFor(manifest.id)),
-            logger: () => this.logger,
-          }),
+          new LogViewerView(leaf, this.logViewerDeps()),
       );
       // 7a.2 — the per-file diff2-history list view.
       this.registerView(
@@ -3850,8 +3848,8 @@ export default class GitHubSyncPlugin extends Plugin {
   // LOG-VIEWER, from Settings → Logging → "View log" (owner, 2026-10-08):
   // desktop → its own OS window, ABOVE the Settings dialog (close it and
   // Settings are still there; drag its tab into the main window to keep
-  // it); phone → no pop-outs and Settings cover the screen, so they are
-  // closed first and the log opens as a tab. An open viewer is brought
+  // it); phone → no pop-outs, so a FULL-SCREEN modal above Settings —
+  // closing it returns to Settings. An open viewer is brought
   // forward, never doubled. See log-open-target.ts.
   async openLogViewer(): Promise<void> {
     const { workspace } = this.app;
@@ -3872,16 +3870,21 @@ export default class GitHubSyncPlugin extends Plugin {
         await leaf.setViewState({ type: LOG_VIEWER_VIEW_TYPE, active: true });
         return;
       } catch (err) {
-        // An Electron too old for pop-outs: fall through to a tab.
-        this.logger.warn("log viewer: pop-out window unavailable, opening a tab", {
+        // An Electron too old for pop-outs: the phone's modal works there too.
+        this.logger.warn("log viewer: pop-out window unavailable, opening the modal", {
           err: `${err}`,
         });
       }
     }
-    this.closeSettingsDialog();
-    const leaf = workspace.getLeaf("tab");
-    await leaf.setViewState({ type: LOG_VIEWER_VIEW_TYPE, active: true });
-    await workspace.revealLeaf(leaf);
+    new LogViewerModal(this.app, this.logViewerDeps()).open();
+  }
+
+  private logViewerDeps(): LogViewerDeps {
+    return {
+      adapter: this.app.vault.adapter,
+      logPath: normalizePath(logFileNameFor(manifest.id)),
+      logger: () => this.logger,
+    };
   }
 
   async activateDiffEditView(): Promise<WorkspaceLeaf> {

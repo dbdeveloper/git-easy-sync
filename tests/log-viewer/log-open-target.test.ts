@@ -7,8 +7,9 @@ import { logViewerTarget } from "../../src/log-viewer/log-open-target";
 
 // Owner, 2026-10-08: on desktop the log opens in its OWN window, above
 // Settings (close it → back in Settings; or drag its tab into the main
-// window). Phones have no pop-out windows: Settings are closed first and
-// the log opens as a tab. An already open viewer is shown, never doubled.
+// window). Phones have no pop-out windows: a FULL-SCREEN modal above
+// Settings (closing it returns to Settings). An open viewer is shown,
+// never doubled.
 describe("logViewerTarget", () => {
   it("🔑 an open viewer is revealed — never a second one", () => {
     expect(logViewerTarget({ hasOpenViewer: true, canPopout: true })).toBe("reveal");
@@ -19,7 +20,7 @@ describe("logViewerTarget", () => {
     expect(logViewerTarget({ hasOpenViewer: false, canPopout: true })).toBe("popout");
   });
 
-  it("phone: close Settings, then a tab", () => {
-    expect(logViewerTarget({ hasOpenViewer: false, canPopout: false })).toBe("close-settings-then-tab");
+  it("🔑 phone: a full-screen modal above Settings", () => {
+    expect(logViewerTarget({ hasOpenViewer: false, canPopout: false })).toBe("modal");
   });
 });
