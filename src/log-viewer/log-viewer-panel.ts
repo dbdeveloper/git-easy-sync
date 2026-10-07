@@ -94,6 +94,7 @@ export class LogViewerPanel {
   private feed: LiveFeed | null = null;
   private gapTimer: number | null = null;
   private unbindKeys: (() => void) | null = null;
+  private unwatchWindow: (() => void) | null = null;
   // Set by destroy(): a read still in flight must not draw into a closed
   // modal or tab.
   private destroyed = false;
@@ -121,23 +122,39 @@ export class LogViewerPanel {
     // fix as diff2's editor). ⚠️ On THIS view's window and document, not
     // the global ones: on desktop the viewer lives in its own pop-out
     // window, which has a window and document of its own.
-    const win = root.win ?? window;
-    const doc = root.doc ?? document;
-    const onKey = (e: KeyboardEvent) => {
-      if (!((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "f" || e.key === "F"))) return;
-      if (!this.editor || !this.editor.dom.contains(doc.activeElement)) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      openSearchPanel(this.editor);
-    };
-    win.addEventListener("keydown", onKey, { capture: true });
-    this.unbindKeys = () => win.removeEventListener("keydown", onKey, { capture: true });
+    this.bindKeys(root.win ?? window);
+
+    // Dragged into ANOTHER window (owner's field report, 2026-10-08: a tab
+    // pulled out into a new pop-out showed "|||text" and would not
+    // scroll). CM6 mounts its base styles — white-space: pre, the
+    // scroller — into the document the editor was created in; a new
+    // window's document has none of them. setRoot() is CM6's API for this
+    // exact move; the Mod+F listener moves to the new window as well.
+    this.unwatchWindow = root.onWindowMigrated?.((win) => {
+      this.editor?.setRoot(win.document);
+      this.bindKeys(win);
+    }) ?? null;
 
     // Subscribe BEFORE the file is read: what is logged during the read
     // waits in the feed and is let through after the merge (spec §2.14).
     const logger = this.deps.logger();
     this.feed = new LiveFeed((fn) => logger.subscribe(fn));
     await this.loadLog(false);
+  }
+
+  // The capture-phase Mod+F listener, on the window the panel lives in
+  // (re-bound when it moves to another one).
+  private bindKeys(win: Window): void {
+    this.unbindKeys?.();
+    const onKey = (e: KeyboardEvent) => {
+      if (!((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "f" || e.key === "F"))) return;
+      if (!this.editor || !this.editor.dom.contains(win.document.activeElement)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      openSearchPanel(this.editor);
+    };
+    win.addEventListener("keydown", onKey, { capture: true });
+    this.unbindKeys = () => win.removeEventListener("keydown", onKey, { capture: true });
   }
 
   // Everything the panel started ends here: the logger subscription
@@ -150,6 +167,8 @@ export class LogViewerPanel {
     if (this.gapTimer !== null) window.clearTimeout(this.gapTimer);
     this.unbindKeys?.();
     this.unbindKeys = null;
+    this.unwatchWindow?.();
+    this.unwatchWindow = null;
     this.editor?.destroy();
     this.editor = null;
   }

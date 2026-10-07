@@ -273,6 +273,9 @@ Use it, and note which runs you did.
       - 🖥️ it opens in its OWN window, in front of Settings; closing it leaves Settings open;
         its tab can be dragged into the main window's tab bar and stays there; pressing
         **Open** again brings the existing viewer (and its window) forward — never a second one;
+      - 🖥️ drag the viewer's tab into the main window, move it between splits, then drag it OUT
+        into a new window again: the columns stay aligned (no `|||text`), scrolling works, and
+        Ctrl/Cmd+F opens the search in the new window;
       - 📱 it opens as a FULL-SCREEN modal above Settings; closing it returns to Settings; with
         the on-screen keyboard up (typing a filter) the filter field stays visible and the
         log is still scrollable;

@@ -8,7 +8,8 @@
 // the logger subscription — also when it is closed before the file read
 // has finished, which must then draw nothing.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { EditorView } from "@codemirror/view";
 import { LogViewerPanel, isLastLineVisible } from "../../src/log-viewer/log-viewer-panel";
 import type { RecentLine } from "../../src/log-viewer/log-parse";
 
@@ -47,6 +48,14 @@ if (!P.createEl) {
   };
   P.setAttr = function (this: HTMLElement, k: string, v: string) {
     this.setAttribute(k, v);
+  };
+  // Obsidian calls the listener when the element moves to another window
+  // (a tab dragged out into a pop-out). Tests trigger it by hand.
+  P.onWindowMigrated = function (this: HTMLElement, listener: (win: Window) => void) {
+    (this as unknown as { __migrated?: (win: Window) => void }).__migrated = listener;
+    return () => {
+      (this as unknown as { __migrated?: unknown }).__migrated = undefined;
+    };
   };
 }
 
@@ -249,6 +258,33 @@ describe("LogViewerPanel", () => {
       expect(w.sc.scrollLeft).toBe(250);
       w.panel.destroy();
     });
+  });
+
+  // Owner's field report, 2026-10-08: dragging the viewer's tab OUT into a
+  // new pop-out window broke the text ("|||text", no scrolling). CM6
+  // mounts its base styles (white-space: pre…) into the document it was
+  // created in; a new window's document has none. setRoot() is CM6's API
+  // for exactly this move.
+  it("🔑 moved to another window: the editor is re-rooted there, and Ctrl/Cmd+F listens there too", async () => {
+    const d = deps(`${line(1)}\n`);
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const panel = new LogViewerPanel(d.deps);
+    await panel.mount(root);
+    const setRoot = vi.spyOn(EditorView.prototype, "setRoot");
+    const newDoc = document.implementation.createHTMLDocument("popout");
+    const added: string[] = [];
+    const newWin = {
+      document: newDoc,
+      addEventListener: (t: string) => added.push(t),
+      removeEventListener: () => {},
+    } as unknown as Window;
+    (root as unknown as { __migrated: (w: Window) => void }).__migrated(newWin);
+    expect(setRoot).toHaveBeenCalledWith(newDoc);
+    expect(added).toContain("keydown");
+    setRoot.mockRestore();
+    panel.destroy();
+    expect((root as unknown as { __migrated?: unknown }).__migrated).toBeUndefined();
   });
 
   it("🔑 destroy() ends the logger subscription (closing the modal or the tab)", async () => {
