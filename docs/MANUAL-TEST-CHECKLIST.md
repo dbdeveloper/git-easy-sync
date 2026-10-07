@@ -295,8 +295,10 @@ Use it, and note which runs you did.
         end and the view follows them ALL the way, through the whole burst of a sync;
         while following, each new entry also puts the view back at column 0; scroll sideways
         to read a long line — following stops and new entries no longer move the view; scroll
-        back DOWN to the end (sideways position does not matter) — following resumes, and the
-        next entry returns the view to column 0; scroll up first and run another Sync — new entries
+        back DOWN to the end (sideways position does not matter) — following resumes AT ONCE (the
+        view jumps to the end and column 0); with a TRACKPAD: a sideways swipe at the bottom
+        stops following for good (no new entry moves the view afterwards), and one downward
+        swipe at the bottom is enough to resume — never a second one; scroll up first and run another Sync — new entries
         are added but the view stays where you are; an entry the current filter rejects
         is counted in `M` but not drawn; nothing ever appears twice;
       - a log over **10 MB** shows "too large — open it with your operating system" and

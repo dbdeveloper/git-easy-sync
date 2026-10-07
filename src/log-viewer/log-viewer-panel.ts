@@ -290,10 +290,19 @@ export class LogViewerPanel {
     ed.requestMeasure({
       read: () => null,
       write: () => {
+        // Decided when it RUNS, not when it was scheduled: the user may
+        // have swiped sideways in between (field report, 2026-10-08).
+        if (!this.following) return;
         ed.scrollDOM.scrollTop = ed.scrollDOM.scrollHeight;
         ed.scrollDOM.scrollLeft = 0;
       },
     });
+  }
+
+  // On, and at once to the end and column 0 (owner, 2026-10-08).
+  private turnFollowingOn(): void {
+    this.following = true;
+    this.scrollToBottom();
   }
 
   private render(scrollToEnd: boolean): void {
@@ -325,22 +334,44 @@ export class LogViewerPanel {
       });
       this.editor.dispatch({ effects: setLevelMarks.of(v.marks) });
       const ed = this.editor;
-      // Owner, 2026-10-08: a horizontal scroll that leaves the view NOT at
-      // column 0 turns following off (the user is reading a long line);
-      // a horizontal move back TO 0 decides nothing (our own reset, or the
-      // browser clamping after a filter left shorter lines). Only a
-      // vertical scroll that ends at the bottom turns it back on —
-      // whatever the horizontal position.
-      ed.scrollDOM.addEventListener("scroll", () => {
-        const sc = ed.scrollDOM;
-        if (sc.scrollLeft !== this.lastScrollLeft && sc.scrollLeft > 0) {
-          this.following = false;
-        } else if (sc.scrollTop !== this.lastScrollTop) {
-          this.following = isLastLineVisible(sc, ed.defaultLineHeight);
-        }
+      // Auto-scroll on/off from the user's scrolling (owner, 2026-10-08,
+      // incl. the field report on trackpads). A gesture is never pure:
+      // each event is judged by its DOMINANT axis, so the jitter on the
+      // other one does not count.
+      //   sideways, ending NOT at column 0  → off (reading a long line);
+      //   sideways TO 0                     → nothing (our own reset, or the
+      //                                       browser clamping after a filter);
+      //   up, last line gone from view      → off;  up, still in view → nothing;
+      //   down, ending with the last line   → ON (and jump to the end + col 0).
+      const sc = ed.scrollDOM;
+      sc.addEventListener("scroll", () => {
+        const dx = sc.scrollLeft - this.lastScrollLeft;
+        const dy = sc.scrollTop - this.lastScrollTop;
         this.lastScrollLeft = sc.scrollLeft;
         this.lastScrollTop = sc.scrollTop;
+        if (dx === 0 && dy === 0) return;
+        const atEnd = isLastLineVisible(sc, ed.defaultLineHeight);
+        if (Math.abs(dx) > Math.abs(dy)) {
+          if (sc.scrollLeft > 0) this.following = false;
+        } else if (dy < 0) {
+          if (!atEnd) this.following = false;
+        } else if (atEnd && !this.following) {
+          this.turnFollowingOn();
+        }
       });
+      // At the very bottom a wheel down moves nothing, so no scroll event
+      // fires — the wheel itself is the deliberate "down to the end".
+      sc.addEventListener(
+        "wheel",
+        (e: WheelEvent) => {
+          if (this.following) return;
+          if (e.deltaY > 0 && Math.abs(e.deltaY) > Math.abs(e.deltaX) &&
+              isLastLineVisible(sc, ed.defaultLineHeight)) {
+            this.turnFollowingOn();
+          }
+        },
+        { passive: true },
+      );
     } else {
       this.editor.dispatch({
         changes: { from: 0, to: this.editor.state.doc.length, insert: v.text },

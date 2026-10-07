@@ -146,95 +146,108 @@ describe("LogViewerPanel", () => {
       for (const [k, v] of Object.entries(g)) Object.defineProperty(el, k, { configurable: true, writable: true, value: v });
     };
 
-    it("🔑 a HORIZONTAL scroll turns following off; only a scroll DOWN to the end turns it back on", async () => {
+    // Owner's field report, 2026-10-08: a trackpad gesture is never pure.
+    // A sideways swipe carries vertical jitter, a downward one sideways
+    // jitter, and a wheel at the very bottom fires NO scroll event at all.
+    type P = { following: boolean; lastScrollLeft: number; lastScrollTop: number };
+    async function world(at: { top: number; left: number; following: boolean }) {
       const d = deps(`${line(1)}\n`);
       const root = document.createElement("div");
       document.body.appendChild(root);
       const panel = new LogViewerPanel(d.deps);
       await panel.mount(root);
-      const p = panel as unknown as { following: boolean };
+      await new Promise((r) => setTimeout(r, 50)); // let the open's own scroll land first
+      const p = panel as unknown as P;
       const sc = root.querySelector(".cm-scroller") as HTMLElement;
-      writable(sc, { scrollTop: 900, clientHeight: 100, scrollHeight: 1000, scrollLeft: 0 });
-      sc.dispatchEvent(new Event("scroll")); // at the end, no horizontal move
-      expect(p.following).toBe(true);
-      sc.scrollLeft = 250; // the user scrolls RIGHT, still at the bottom
-      sc.dispatchEvent(new Event("scroll"));
-      expect(p.following).toBe(false);
-      sc.scrollTop = 880; // up a bit…
-      sc.dispatchEvent(new Event("scroll"));
-      sc.scrollTop = 900; // …and deliberately back down to the end
-      sc.dispatchEvent(new Event("scroll"));
-      expect(p.following).toBe(true);
-      panel.destroy();
+      writable(sc, { scrollTop: at.top, clientHeight: 100, scrollHeight: 1000, scrollLeft: at.left });
+      p.lastScrollTop = at.top;
+      p.lastScrollLeft = at.left;
+      p.following = at.following;
+      const move = (top: number, left: number) => {
+        sc.scrollTop = top;
+        sc.scrollLeft = left;
+        sc.dispatchEvent(new Event("scroll"));
+      };
+      return { d, sc, p, panel, move };
+    }
+
+    it("🔑 a sideways swipe turns following off — and its vertical JITTER at the bottom does not turn it back on", async () => {
+      const w = await world({ top: 900, left: 0, following: true });
+      w.move(899, 250); // mostly sideways
+      expect(w.p.following).toBe(false);
+      w.move(898, 250); // momentum: a pixel of vertical, still at the bottom
+      expect(w.p.following).toBe(false);
+      w.panel.destroy();
     });
 
-    it("a horizontal scroll LEFT that still is not at 0 also turns following off", async () => {
-      const d = deps(`${line(1)}\n`);
-      const root = document.createElement("div");
-      document.body.appendChild(root);
-      const panel = new LogViewerPanel(d.deps);
-      await panel.mount(root);
-      const p = panel as unknown as { following: boolean; lastScrollLeft: number; lastScrollTop: number };
-      const sc = root.querySelector(".cm-scroller") as HTMLElement;
-      writable(sc, { scrollTop: 900, clientHeight: 100, scrollHeight: 1000, scrollLeft: 100 });
-      p.lastScrollLeft = 300;
-      p.lastScrollTop = 900;
-      p.following = true;
-      sc.dispatchEvent(new Event("scroll")); // 300 → 100: moved, and not at 0
-      expect(p.following).toBe(false);
-      panel.destroy();
+    it("🔑 a downward scroll to the end with sideways JITTER turns following on", async () => {
+      const w = await world({ top: 600, left: 250, following: false });
+      w.move(900, 252); // mostly down, 2px sideways
+      expect(w.p.following).toBe(true);
+      w.panel.destroy();
     });
 
-    it("a horizontal move back TO 0 (our reset, or the browser clamping after a filter) does not turn following off", async () => {
-      const d = deps(`${line(1)}\n`);
-      const root = document.createElement("div");
-      document.body.appendChild(root);
-      const panel = new LogViewerPanel(d.deps);
-      await panel.mount(root);
-      const p = panel as unknown as { following: boolean; lastScrollLeft: number };
-      const sc = root.querySelector(".cm-scroller") as HTMLElement;
-      writable(sc, { scrollTop: 900, clientHeight: 100, scrollHeight: 1000, scrollLeft: 0 });
-      p.lastScrollLeft = 200;
-      p.following = true;
-      sc.dispatchEvent(new Event("scroll")); // 200 → 0, not the user
-      expect(p.following).toBe(true);
-      panel.destroy();
+    it("scrolling UP keeps it on while the last line is still visible, turns it off once it is gone", async () => {
+      const w = await world({ top: 900, left: 0, following: true });
+      w.move(895, 0);
+      expect(w.p.following).toBe(true);
+      w.move(500, 0);
+      expect(w.p.following).toBe(false);
+      w.move(501, 0); // down, but not to the end
+      expect(w.p.following).toBe(false);
+      w.panel.destroy();
+    });
+
+    it("🔑 already at the bottom: a WHEEL down turns following on (no scroll event fires there)", async () => {
+      const w = await world({ top: 900, left: 250, following: false });
+      w.sc.dispatchEvent(new WheelEvent("wheel", { deltaY: 40, deltaX: 0 }));
+      expect(w.p.following).toBe(true);
+      w.panel.destroy();
+    });
+
+    it("…a wheel down NOT at the bottom, or a sideways wheel, does not", async () => {
+      const w = await world({ top: 500, left: 250, following: false });
+      w.sc.dispatchEvent(new WheelEvent("wheel", { deltaY: 40, deltaX: 0 }));
+      expect(w.p.following).toBe(false);
+      const v = await world({ top: 900, left: 250, following: false });
+      v.sc.dispatchEvent(new WheelEvent("wheel", { deltaY: 2, deltaX: 40 }));
+      expect(v.p.following).toBe(false);
+      w.panel.destroy();
+      v.panel.destroy();
+    });
+
+    it("🔑 turning ON jumps at once to the end and column 0", async () => {
+      const w = await world({ top: 600, left: 250, following: false });
+      w.move(900, 250); // down to the end
+      await new Promise((r) => setTimeout(r, 50));
+      expect(w.sc.scrollLeft).toBe(0);
+      w.panel.destroy();
+    });
+
+    it("a horizontal move back TO 0 (our reset, or the browser clamping after a filter) decides nothing", async () => {
+      const w = await world({ top: 900, left: 200, following: true });
+      w.move(900, 0);
+      expect(w.p.following).toBe(true);
+      w.panel.destroy();
     });
 
     it("🔑 auto-scroll goes to the END and to column 0", async () => {
-      const d = deps(`${line(1)}\n`);
-      const root = document.createElement("div");
-      document.body.appendChild(root);
-      const panel = new LogViewerPanel(d.deps);
-      await panel.mount(root);
-      const sc = root.querySelector(".cm-scroller") as HTMLElement;
-      writable(sc, { scrollTop: 900, clientHeight: 100, scrollHeight: 1000, scrollLeft: 0 });
-      sc.dispatchEvent(new Event("scroll"));
-      sc.scrollLeft = 300;
-      sc.scrollTop = 900;
-      (panel as unknown as { following: boolean }).following = true; // scrolled right, then deliberately down to the end
-      d.subs.forEach((fn) => fn({ seq: 2, line: line(2) }));
+      const w = await world({ top: 900, left: 300, following: true });
+      w.d.subs.forEach((fn) => fn({ seq: 2, line: line(2) }));
       await new Promise((r) => setTimeout(r, 50));
-      expect(sc.scrollLeft).toBe(0);
-      expect(sc.scrollTop).toBe(sc.scrollHeight);
-      panel.destroy();
+      expect(w.sc.scrollLeft).toBe(0);
+      expect(w.sc.scrollTop).toBe(w.sc.scrollHeight);
+      w.panel.destroy();
     });
 
-    it("🔑 the user's scroll decides: up → off, back to the end → on", async () => {
-      const d = deps(`${line(1)}\n`);
-      const root = document.createElement("div");
-      document.body.appendChild(root);
-      const panel = new LogViewerPanel(d.deps);
-      await panel.mount(root);
-      const p = panel as unknown as { following: boolean };
-      const sc = root.querySelector(".cm-scroller") as HTMLElement;
-      geometry(sc, { scrollTop: 100, clientHeight: 100, scrollHeight: 1000 });
-      sc.dispatchEvent(new Event("scroll"));
-      expect(p.following).toBe(false);
-      geometry(sc, { scrollTop: 900, clientHeight: 100, scrollHeight: 1000 });
-      sc.dispatchEvent(new Event("scroll"));
-      expect(p.following).toBe(true);
-      panel.destroy();
+    it("🔑 a scroll already scheduled does NOT run once following was turned off meanwhile", async () => {
+      const w = await world({ top: 900, left: 0, following: true });
+      w.d.subs.forEach((fn) => fn({ seq: 2, line: line(2) })); // schedules a scroll
+      w.p.following = false; // the user swiped sideways before the frame
+      w.sc.scrollLeft = 250;
+      await new Promise((r) => setTimeout(r, 50));
+      expect(w.sc.scrollLeft).toBe(250);
+      w.panel.destroy();
     });
   });
 
