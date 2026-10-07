@@ -72,6 +72,19 @@ function dataLines(data: unknown): string[] {
   return json.split("\n");
 }
 
+// The four columns as TEXT — what the filter (step 4) matches against,
+// exactly as drawn: the local date/time, the level, and the message
+// column, which holds the data under the message.
+export function entryColumns(
+  e: LogEntry,
+  opts: FormatOptions = {},
+): [date: string, time: string, level: string, message: string] {
+  if (e.kind === "raw") return ["", "", "RAW", e.raw];
+  const { date, time } = dateTime(e.timestamp, opts.timeZone === "utc");
+  const data = dataLines(e.data);
+  return [date, time, e.level, [e.message, ...data].join("\n")];
+}
+
 const BLANK_PREFIX =
   `${" ".repeat(DATE_W)} | ${" ".repeat(TIME_W)} | ${" ".repeat(LEVEL_W)} | `;
 
