@@ -210,3 +210,24 @@
   - The console tag became `[ges]`.
 
   The owner then asked why, in split commit/drain mode, "Sync" right after "Commit" always flashed "Syncing with GitHub" while repeated Syncs did not. A temporary timing field on `Sync2 drain done` (`c9cdebd`, reverted in `0f9fb99` once it had served) measured those drains at 420–615 ms, under the 700 ms delay. That proved the drain innocent and pointed at the notice machinery. The commit's START handler armed the drain's 2 s progress gate. A standalone commit ends in ~0.2 s and nothing disarmed the gate, so it fired 2 s later and left `syncProgressActive` on, and the next drain painted its header immediately. It is the 2026-09-26 class again: a timer from one operation firing over the next. The owner's rule fixes the ownership rather than adding another disarm. Only a SYNC (at the click, before its commit) and a drain started on its own arm the gate, and "the commit itself must know nothing about this timer". The follow-up audit (the flag must go off "as soon as it is not needed") found every end already disarming, and tests now pin it at each one.
+
+- **`59b2fdb`…`7d253db` (2026-10-07/08) — the Logging settings group, and the plugin's own log viewer.** Two settings fixes opened the round:
+  - toggling "Enable logging" called `display()` to show or hide one row and rebuilt the whole page, which threw the scroll away. The row now toggles in place;
+  - "Clean logs" shows the live log size.
+
+  Then TODO п.44 became a spec first (`docs/tasks/LOG-VIEWER.md`) and eight test-first steps. The decisions that shaped it were the owner's:
+  - **no temporary file.** A `.md` in the vault is indexed and editable, and one in `.runtime/` cannot be opened at all;
+  - **the whole log in memory behind a 10 MB limit,** shown in a read-only CodeMirror document as a text table, so virtual scrolling and search come built in;
+  - **filter first, then search.** The filter's `|` puts pieces in different columns in left-to-right order.
+
+  Two pieces of design came out of testing rather than up front:
+  - **the merge.** The torn last line of a file read mid-append is recovered from an in-memory ring of the logger's exact lines. The overlap has to be the LONGEST ring-prefix = file-suffix, or two byte-identical lines get confused, and a newer ring with no overlap is appended after a gap marker (the owner's correction);
+  - **the ring's ordering.** A line enters the ring before it reaches the disk, which is the property the merge stands on.
+
+  The window went through a field round on the owner's machine, and most of it was about the gap between "tested" and "right on a trackpad":
+  - a pop-out window above Settings on desktop, a full-screen modal on a phone, one `LogViewerPanel` hosted by both;
+  - CM6 does not inherit Obsidian's theme, and its search-panel controls needed the filter's look and order;
+  - auto-scroll needed three passes. A per-entry "at the bottom?" check broke on a burst, because CM6 inserts now and scrolls next frame. The owner's model resets the view to column 0 and treats a sideways scroll away from 0 as "off". A trackpad gesture is never pure, so each scroll event is judged by its dominant axis, and a wheel at the bottom (where no scroll event fires) turns following back on;
+  - dragging the tab into a NEW window lost CM6's per-document base styles (`|||text`), fixed with `EditorView.setRoot` on `onWindowMigrated`. The same move silently resets the scroll, so the position is restored from the last one known.
+
+  Fuzzy pattern search is deferred with the owner's rules written into the spec. TODO п.55 records the follow-up: rebuild the `.gitignore` editor on the same pattern.

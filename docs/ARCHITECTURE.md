@@ -42,6 +42,7 @@ it) — it is not source.
   [`SYNC2-PLUGIN-UPDATE-COMPAT.md`](./tasks/SYNC2-PLUGIN-UPDATE-COMPAT.md) (plugin reloads, held updates, self-update, plugin notices §4.3),
   [`SYNC2-COMMIT-PASS-PERF.md`](./tasks/SYNC2-COMMIT-PASS-PERF.md) (commit-pass cost, forecast-based commit notices),
   [`SYNC2-FIX.md`](./tasks/SYNC2-FIX.md) (§12 sync_store, R3b interaction points), [`SYNC2-MASTER-PLAN.md`](./tasks/SYNC2-MASTER-PLAN.md) (phases and gates).
+- **Log viewer** (the plugin's own log inside Obsidian): [`docs/tasks/LOG-VIEWER.md`](./tasks/LOG-VIEWER.md).
 
 Behaviour described in these two specs is locked in by the unit + integration suites. If you change anything in the engine and a spec disagrees, fix the code OR update the spec — don't let them drift. Algorithm changes land in PSEUDO-MERGE-MODE.md; implementation changes land in SYNC2.md.
 
@@ -53,7 +54,24 @@ src/
 │                                    #  resetPluginState (calls renameVaultSiblingsToUnresolved
 │                                    #  before clearAll), pushPluginsDataJsonCached
 ├── gi.ts                            # GI (gitignore matcher) — path-browserify, mobile-safe
-├── logger.ts                        # Truncated JSON log file
+├── logger.ts                        # JSONL log file (<vault>/<id>.log) + console mirror tagged [ges];
+│                                    #  an in-memory ring of the last LOG_RING_SIZE exact lines with
+│                                    #  sequence numbers + subscribe() — the log viewer's live feed
+├── log-viewer/                      # LOG-VIEWER (docs/tasks/LOG-VIEWER.md), opened ONLY from
+│   │                                #  Settings → Logging → View log
+│   ├── log-parse.ts                 # JSONL → entries (raw lines kept, marked); mergeWithRecent: the
+│   │                                #  file + the logger's ring (longest prefix-of-ring = suffix-of-file;
+│   │                                #  a newer ring with no overlap → GAP)
+│   ├── log-format.ts                # the text table "date | time | level | message", data under the
+│   │                                #  message; level marks for colour; entryColumns for the filter
+│   ├── log-filter.ts                # the "|" column filter + case / whole word (any script) / regexp
+│   ├── log-load.ts                  # stat-first read behind the 10 MB limit
+│   ├── log-model.ts                 # openLog / renderLog / LiveFeed / renderAppend — the testable half
+│   ├── log-viewer-panel.ts          # the window's content (read-only CM6): filter bar, search toggle,
+│   │                                #  copy, live tail + auto-scroll rules, window migration (setRoot)
+│   ├── log-viewer-view.ts           # desktop host: a tab opened in its own pop-out window
+│   ├── log-viewer-modal.ts          # phone host: a full-screen modal above Settings
+│   └── log-open-target.ts           # reveal / popout / modal choice
 ├── token-expired-flag.ts            # E1 (TODO §5/§35): sticky .runtime/.token_expired marker
 │                                    #  (in-memory authoritative + file mirror; file stores the
 │                                    #  401/403 class tag). authErrorKind + tokenExpiredMessage +
@@ -76,6 +94,7 @@ src/
 ├── settings/
 │   ├── settings.ts                  # GitHubSyncSettings + DEFAULT_SETTINGS (syncStartsWithCommit,
 │   │                                #  showCommitRibbonButton, consolidateCommits, maxAutoMergeSizeBytes)
+│   ├── log-size.ts                  # "Clean logs" description: the live log size, "1.2 MB (1 234 567 bytes)"
 │   ├── toggle-rules.ts              # "Sync plugins data.json" is SUBORDINATE to "Sync configs":
 │   │                                #  parent OFF forces it off + greys it, ON only makes it
 │   │                                #  reachable. Pure, because tab.ts has no render harness.
