@@ -828,8 +828,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
               .setName(name)
               .setDesc(
                   "On open/each resolve, scroll the diff-editor to the FIRST remaining " +
-                  "difference (cursor at its start). Toggleable per-document in the toolbar. " +
-                  "(§2.2.15 / §17)",
+                  "difference (cursor at its start). Toggleable per-document in the toolbar.",
               )
               .addToggle((toggle) => {
                   toggle

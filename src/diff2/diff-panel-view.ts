@@ -418,8 +418,7 @@ export class DiffPanelView extends ItemView {
     body.createEl("p", {
       cls: "diff2-deleted-placeholder",
       text:
-        "Deleted-mode UI lands in Phase 9b. See " +
-        "docs/DIFF2_IMPLEMENTATION_PLAN.md §R3.13 for the Phase 9b enumeration.",
+        "Viewing deleted files is not available yet.",
     });
   }
 

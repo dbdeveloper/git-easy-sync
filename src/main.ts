@@ -984,10 +984,10 @@ export default class GitHubSyncPlugin extends Plugin {
           ([o, n, v]) => `  • ${o} (currently ${JSON.stringify(v)}) → ${n}`,
         );
         this.settingsMigrationNotice =
-          "Stage 7 settings rename detected — update each device's data.json:\n" +
+          "Some settings from an older version of this plugin were renamed — " +
+          "update each device's data.json:\n" +
           lines.join("\n") +
-          "\nThe OLD keys are still loaded for now but no longer read by the engine. " +
-          "Removing them is safe; see docs/tasks/SYNC2-WORKER-REORG.md §7.";
+          "\nThe old names are no longer used; removing them is safe.";
       }
     }
     // One-pass sanitize for GitHub identity fields: Android's
@@ -4380,7 +4380,7 @@ export default class GitHubSyncPlugin extends Plugin {
         }).createLeafInParent;
         placed = make ? make.call(workspace, oldLeaf.parent, -1) : undefined;
       } catch (e) {
-        this.logger?.info?.("diff2 §21 createLeafInParent failed", { err: String(e) });
+        this.logger?.info?.("diff2: could not open the editor next to the previous tab; opening a new tab", { err: String(e) });
       }
       newLeaf = placed ?? workspace.getLeaf("tab");
     }

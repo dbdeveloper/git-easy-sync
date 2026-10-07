@@ -3056,7 +3056,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(world.treeReads).toHaveLength(1); // asked ONCE, not per file
     expect(world.metadataReads).toHaveLength(6); // …then paid honestly
     expect(
-      warnings.some((w) => w.includes("truncated")),
+      warnings.some((w) => w.includes("cut short")),
     ).toBe(true); // and said so out loud
     // Correctness is untouched by the fallback.
     for (const p of paths) {

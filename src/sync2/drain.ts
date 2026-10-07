@@ -1327,7 +1327,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // indistinguishable from a hang. Lifting the ceiling needs the
         // per-directory tree walk recorded in that same §4.
         deps.logger?.warn(
-          "Layer 2: repo tree truncated — falling back to per-path checks",
+          "Remote check: the repository listing was cut short by GitHub — checking files one by one",
           { atCommit: headHash, perPathRequests: batchSize },
         );
         return null;
@@ -1340,7 +1340,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         paths.set(f.path, { sha: f.sha, size: f.size });
       }
       remoteTree = { atCommit: headHash, paths };
-      deps.logger?.info("Layer 2: repo tree read in bulk", {
+      deps.logger?.info("Remote check: repository listing read in one request", {
         atCommit: headHash,
         paths: paths.size,
         batchSize,
@@ -1643,7 +1643,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           // sites only).
           tracked.remote.mtime = null;
           tracked.remote.deviceLabel = null;
-          deps.logger?.warn("Layer 2: discovery mismatch corrected", {
+          deps.logger?.warn("Remote check: the server's file differs from the change list — corrected", {
             path: entry.path,
             expected: trackedSha,
             actual: liveSha,
@@ -2902,7 +2902,7 @@ function applySeedAncestor(
     path,
     sha: localSha,
   };
-  deps.logger?.info("§8.0: seeded .gitignore acts as its own base", {
+  deps.logger?.info(".gitignore written by this plugin is treated as already in sync (no conflict)", {
     path,
   });
 }

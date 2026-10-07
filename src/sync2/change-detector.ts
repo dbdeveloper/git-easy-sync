@@ -141,8 +141,7 @@ export async function isSyncable(
       // isSyncable outside a scan is a bug in the caller.
       throw new Error(
         `isSyncable(${path}): the dot-space opt-in set was never computed ` +
-          `for this operation — call ChangeDetector.beginScan() first ` +
-          `(DOT-FILES §5)`,
+          `for this operation — call ChangeDetector.beginScan() first`,
       );
     }
     // `<configDir>/` is answered by step 3 above, which is the real

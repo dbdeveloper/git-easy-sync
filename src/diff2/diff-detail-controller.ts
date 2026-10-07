@@ -243,7 +243,7 @@ export class DiffDetailController {
   // Ctrl+F search engine + the 7b list-filter that supplies the phrase are wired; the seam
   // (openSearch + this call site) is in place so lighting it up needs no controller change.
   private focusFirstSearchMatch(): void {
-    this.deps.logger?.info?.("diff2 §17 search-driven focus (engine pending)", {
+    this.deps.logger?.info?.("diff2: focusing the first search match is not implemented yet", {
       query: this.openSearch?.query,
     });
   }
