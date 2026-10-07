@@ -933,6 +933,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
 
     // Created below, shown or hidden IN PLACE by the toggle (see there).
     let cleanLogsSetting: Setting | null = null;
+    let viewLogSetting: Setting | null = null;
     const refreshLogSize = async (): Promise<void> => {
       if (cleanLogsSetting === null || !this.plugin.settings.enableLogging) return;
       let size = 0;
@@ -965,6 +966,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
             // 2026-10-07: "the screen should not scroll when you change
             // a switch"). Same pattern as the configs → data.json pair.
             cleanLogsSetting?.settingEl.toggle(value);
+            viewLogSetting?.settingEl.toggle(value);
             await refreshLogSize();
           });
       });
@@ -973,6 +975,21 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     // it's off, the file is gone (logger.disable() removed it) and
     // there's nothing to clean. Hide the row entirely so the
     // settings panel doesn't carry dead UI.
+    // LOG-VIEWER §2.16: the ONLY way to open the log viewer. Shown and
+    // hidden in place with the toggle, like "Clean logs".
+    viewLogSetting = new Setting(containerEl)
+      .setName("View log")
+      .setDesc(
+        "Open the log as a table: filter by column (use | between pieces), " +
+          "search, copy. New entries appear as they are logged.",
+      )
+      .addButton((button) => {
+        button.setButtonText("Open").onClick(() => {
+          void this.plugin.openLogViewer();
+        });
+      });
+    viewLogSetting.settingEl.toggle(this.plugin.settings.enableLogging);
+
     // Always created, hidden while logging is off — so the toggle above
     // can show it without rebuilding the page. Its description carries
     // the LIVE size of the log (TODO.md п.36, owner 2026-10-07): after

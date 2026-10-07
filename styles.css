@@ -1223,3 +1223,61 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
     color: var(--text-muted);
     font-family: var(--font-monospace);
 }
+
+/* ── LOG-VIEWER (docs/tasks/LOG-VIEWER.md) ───────────────────────────── */
+.ges-log-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
+}
+.ges-log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.ges-log-filter {
+  flex: 1 1 220px;
+  min-width: 140px;
+  font-family: var(--font-monospace);
+}
+.ges-log-switch {
+  font-family: var(--font-monospace);
+  min-width: 2.2em;
+}
+.ges-log-switch.is-active {
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+.ges-log-status {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.ges-log-error {
+  color: var(--text-error);
+  font-size: var(--font-ui-smaller);
+}
+.ges-log-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.ges-log-body .cm-editor {
+  height: 100%;
+}
+.ges-log-body .cm-scroller {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+}
+.ges-log-message {
+  padding: 16px;
+  color: var(--text-muted);
+}
+.ges-log-level { font-weight: 600; }
+.ges-log-level-info { color: var(--color-blue); }
+.ges-log-level-warn { color: var(--color-orange); }
+.ges-log-level-error { color: var(--color-red); }
+.ges-log-level-raw { color: var(--color-purple); }

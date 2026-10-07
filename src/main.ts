@@ -57,6 +57,8 @@ import ChangeDetector, { type ScanPlan } from "./sync2/change-detector";
 import GitignoreInvariants from "./sync2/gitignore-invariants";
 import GitignoreSeedStore from "./sync2/gitignore-seeds";
 import { pluginUpdatedText, readPluginVersion } from "./sync2/plugin-js";
+import { LogViewerView, LOG_VIEWER_VIEW_TYPE } from "./log-viewer/log-viewer-view";
+import { logFileNameFor } from "./logger";
 import { settleSelfUpdateBaselines } from "./sync2/self-update-applied";
 import DeletedStore from "./diff2/deleted-store";
 import { Sync2Manager, type DrainStatus } from "./sync2/sync2-manager";
@@ -780,6 +782,17 @@ export default class GitHubSyncPlugin extends Plugin {
       this.registerView(
         DIFF2_EDITOR_VIEW_TYPE,
         (leaf) => new DiffEditorView(leaf, this.diffViewDeps()),
+      );
+      // LOG-VIEWER — opened ONLY from Settings → Logging (spec §2.16), so
+      // no command is registered for it.
+      this.registerView(
+        LOG_VIEWER_VIEW_TYPE,
+        (leaf) =>
+          new LogViewerView(leaf, {
+            adapter: this.app.vault.adapter,
+            logPath: normalizePath(logFileNameFor(manifest.id)),
+            logger: () => this.logger,
+          }),
       );
       // 7a.2 — the per-file diff2-history list view.
       this.registerView(
@@ -3833,6 +3846,17 @@ export default class GitHubSyncPlugin extends Plugin {
   // leaf if one is already open (single-view model — R2.0). Standard
   // Obsidian pattern: query workspace.getLeavesOfType, fall back to
   // getLeaf("tab") + setViewState. Returns once the leaf is revealed.
+  // LOG-VIEWER: reuse an open viewer tab, otherwise open a new one.
+  async openLogViewer(): Promise<void> {
+    const { workspace } = this.app;
+    let leaf = workspace.getLeavesOfType(LOG_VIEWER_VIEW_TYPE)[0];
+    if (!leaf) {
+      leaf = workspace.getLeaf("tab");
+      await leaf.setViewState({ type: LOG_VIEWER_VIEW_TYPE, active: true });
+    }
+    await workspace.revealLeaf(leaf);
+  }
+
   async activateDiffEditView(): Promise<WorkspaceLeaf> {
     const { workspace } = this.app;
     let leaf = workspace.getLeavesOfType(DIFF2_PANEL_VIEW_TYPE)[0];

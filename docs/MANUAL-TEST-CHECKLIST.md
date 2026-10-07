@@ -268,6 +268,23 @@ Use it, and note which runs you did.
       the row reads `Truncate the log. Current log size is 1.2 MB (1 234 567 bytes).`; the
       number grows while the plugin logs (run a Sync with the page open), and right after
       **[Clean]** it shows `0 bytes`. Deleting the log file by hand also shows `0 bytes`.
+- [ ] **Log viewer (LOG-VIEWER, new 2026-10-08)** — Settings → Logging → **View log** → **Open**
+      (the row exists only while logging is on; there is NO command for it):
+      - the log appears as a table `date | time | level | message`, data pretty-printed
+        under the message, a separator between entries, the view scrolled to the newest
+        entry at the bottom; INFO / WARN / ERROR in different colours (light AND dark theme);
+      - long lines scroll sideways, the columns never break;
+      - **filter**: `error` keeps only matching entries; `info | drain done` matches level
+        then message; `drain done | info` matches nothing (order); the counter shows
+        `N of M entries`; the **Aa / W / .\*** switches work; an invalid regexp shows
+        "invalid expression" and keeps everything;
+      - **search** (🔍 button, or Ctrl/Cmd+F with the cursor in the log) highlights and
+        steps next/previous only inside the filtered entries;
+      - **copy** button puts the shown entries on the clipboard; normal selection + copy
+        works too;
+      - a log over **10 MB** shows "too large — open it with your operating system" and
+        nothing else;
+      - 📱 the same on a phone: opens, scrolls smoothly, filter and copy work.
 - [ ] **Changing a switch never scrolls the page (new 2026-10-07).** Scroll down to *Logging* and toggle **Enable logging** on and off: the page stays where it is, and the *Clean logs* row appears/disappears in place. (Tab/Shift-Tab between fields is not expected to work — Obsidian's settings behave that way for every plugin.)
 - [ ] Changing the **device label** makes new commits carry the new `(label)` suffix.
 - [ ] Switching repositories resets state correctly. ⚠️ **Change it in the SETTINGS UI,
