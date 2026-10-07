@@ -293,9 +293,10 @@ Use it, and note which runs you did.
         works too;
       - **live**: with the viewer open at the bottom, run a Sync — new entries appear at the
         end and the view follows them ALL the way, through the whole burst of a sync;
-        scroll RIGHT to read a long line — following stops and new entries no longer move the
-        view; scroll back DOWN to the end — following resumes and KEEPS your horizontal position
-        (it never jumps back to column 0); scroll up first and run another Sync — new entries
+        while following, each new entry also puts the view back at column 0; scroll sideways
+        to read a long line — following stops and new entries no longer move the view; scroll
+        back DOWN to the end (sideways position does not matter) — following resumes, and the
+        next entry returns the view to column 0; scroll up first and run another Sync — new entries
         are added but the view stays where you are; an entry the current filter rejects
         is counted in `M` but not drawn; nothing ever appears twice;
       - a log over **10 MB** shows "too large — open it with your operating system" and

@@ -281,10 +281,9 @@ export class LogViewerPanel {
     this.statusEl.setText(`${this.shown} of ${this.total} entries`);
   }
 
-  // VERTICAL only (owner, 2026-10-08): scrollIntoView would also bring the
-  // end of the last line into view horizontally — usually a short "}" —
-  // and throw a user who scrolled right back to column 0. Written after
-  // CM6 measured the new height, so scrollHeight includes the insert.
+  // The auto-scroll step (owner, 2026-10-08): to the END vertically and
+  // to column 0 horizontally — the start of every line in view. Written
+  // after CM6 measured the new height, so scrollHeight includes the insert.
   private scrollToBottom(): void {
     const ed = this.editor;
     if (!ed) return;
@@ -292,6 +291,7 @@ export class LogViewerPanel {
       read: () => null,
       write: () => {
         ed.scrollDOM.scrollTop = ed.scrollDOM.scrollHeight;
+        ed.scrollDOM.scrollLeft = 0;
       },
     });
   }
@@ -325,17 +325,16 @@ export class LogViewerPanel {
       });
       this.editor.dispatch({ effects: setLevelMarks.of(v.marks) });
       const ed = this.editor;
-      // Owner, 2026-10-08: scrolling RIGHT turns following off (the user
-      // is reading a long line); only a vertical scroll that ends at the
-      // bottom turns it back on. Right only — the browser itself pulls
-      // scrollLeft LEFT when a filter leaves shorter lines, and that must
-      // not count as the user's act.
+      // Owner, 2026-10-08: a horizontal scroll that leaves the view NOT at
+      // column 0 turns following off (the user is reading a long line);
+      // a horizontal move back TO 0 decides nothing (our own reset, or the
+      // browser clamping after a filter left shorter lines). Only a
+      // vertical scroll that ends at the bottom turns it back on —
+      // whatever the horizontal position.
       ed.scrollDOM.addEventListener("scroll", () => {
         const sc = ed.scrollDOM;
-        if (sc.scrollLeft > this.lastScrollLeft) {
+        if (sc.scrollLeft !== this.lastScrollLeft && sc.scrollLeft > 0) {
           this.following = false;
-        } else if (sc.scrollLeft < this.lastScrollLeft) {
-          // a leftward move (often the browser's clamp) decides nothing
         } else if (sc.scrollTop !== this.lastScrollTop) {
           this.following = isLastLineVisible(sc, ed.defaultLineHeight);
         }

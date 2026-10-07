@@ -168,7 +168,24 @@ describe("LogViewerPanel", () => {
       panel.destroy();
     });
 
-    it("a LEFTWARD shift (the browser clamping after a filter) does not turn following off", async () => {
+    it("a horizontal scroll LEFT that still is not at 0 also turns following off", async () => {
+      const d = deps(`${line(1)}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const panel = new LogViewerPanel(d.deps);
+      await panel.mount(root);
+      const p = panel as unknown as { following: boolean; lastScrollLeft: number; lastScrollTop: number };
+      const sc = root.querySelector(".cm-scroller") as HTMLElement;
+      writable(sc, { scrollTop: 900, clientHeight: 100, scrollHeight: 1000, scrollLeft: 100 });
+      p.lastScrollLeft = 300;
+      p.lastScrollTop = 900;
+      p.following = true;
+      sc.dispatchEvent(new Event("scroll")); // 300 → 100: moved, and not at 0
+      expect(p.following).toBe(false);
+      panel.destroy();
+    });
+
+    it("a horizontal move back TO 0 (our reset, or the browser clamping after a filter) does not turn following off", async () => {
       const d = deps(`${line(1)}\n`);
       const root = document.createElement("div");
       document.body.appendChild(root);
@@ -184,7 +201,7 @@ describe("LogViewerPanel", () => {
       panel.destroy();
     });
 
-    it("🔑 auto-scroll moves VERTICALLY only — the horizontal position is kept", async () => {
+    it("🔑 auto-scroll goes to the END and to column 0", async () => {
       const d = deps(`${line(1)}\n`);
       const root = document.createElement("div");
       document.body.appendChild(root);
@@ -195,10 +212,11 @@ describe("LogViewerPanel", () => {
       sc.dispatchEvent(new Event("scroll"));
       sc.scrollLeft = 300;
       sc.scrollTop = 900;
-      (panel as unknown as { following: boolean }).following = true; // e.g. scrolled right, then down to the end
+      (panel as unknown as { following: boolean }).following = true; // scrolled right, then deliberately down to the end
       d.subs.forEach((fn) => fn({ seq: 2, line: line(2) }));
       await new Promise((r) => setTimeout(r, 50));
-      expect(sc.scrollLeft).toBe(300);
+      expect(sc.scrollLeft).toBe(0);
+      expect(sc.scrollTop).toBe(sc.scrollHeight);
       panel.destroy();
     });
 
