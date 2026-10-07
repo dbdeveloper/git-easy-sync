@@ -292,7 +292,7 @@ Use it, and note which runs you did.
       - **copy** button puts the shown entries on the clipboard; normal selection + copy
         works too;
       - **live**: with the viewer open at the bottom, run a Sync — new entries appear at the
-        end and the view follows them; scroll up first and run another Sync — new entries
+        end and the view follows them ALL the way, through the whole burst of a sync; scroll up first and run another Sync — new entries
         are added but the view stays where you are; an entry the current filter rejects
         is counted in `M` but not drawn; nothing ever appears twice;
       - a log over **10 MB** shows "too large — open it with your operating system" and

@@ -67,6 +67,16 @@ const levelMarks = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
+// "The last line is in view" — the auto-scroll switch (owner,
+// 2026-10-08). Within one line of the end counts: sub-pixel rounding and
+// a horizontal scrollbar must not read as "the user scrolled up".
+export function isLastLineVisible(
+  g: { scrollTop: number; clientHeight: number; scrollHeight: number },
+  lineHeight: number,
+): boolean {
+  return g.scrollTop + g.clientHeight >= g.scrollHeight - lineHeight;
+}
+
 export class LogViewerPanel {
   private editor: EditorView | null = null;
   private items: LogItem[] = [];
@@ -88,6 +98,11 @@ export class LogViewerPanel {
   // modal or tab.
   private destroyed = false;
   private searchBtn: HTMLElement | null = null;
+  // Auto-scroll: follow new entries while the last line is in view. Set
+  // ONLY by scrolling (the user's or our own scroll to the end) — never
+  // measured per entry: CM6 inserts at once but scrolls on the next
+  // frame, so a per-entry check broke on the second entry of a burst.
+  private following = true;
 
   constructor(private readonly deps: LogViewerDeps) {}
 
@@ -238,16 +253,15 @@ export class LogViewerPanel {
   }
 
   // A new line from the logger (spec §2.13): always kept; drawn at the
-  // end when the current filter accepts it. The view follows it only if
-  // the user is already at the bottom — scrolled up, they are left alone.
+  // end when the current filter accepts it. The view follows it only
+  // while `following` — the last line was in view at the user's last
+  // scroll; scrolled up, they are left alone.
   private onLive(l: RecentLine): void {
     const entry = parseLogLine(l.line);
     this.items.push(entry);
     this.total += 1;
     const ed = this.editor;
     if (ed) {
-      const sc = ed.scrollDOM;
-      const atBottom = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 2 * ed.defaultLineHeight;
       const add = renderAppend(entry, this.passes, ed.state.doc.length);
       if (add) {
         const end = ed.state.doc.length;
@@ -257,7 +271,7 @@ export class LogViewerPanel {
         });
         this.shownText += add.insert;
         this.shown += 1;
-        if (atBottom) {
+        if (this.following) {
           ed.dispatch({
             effects: EditorView.scrollIntoView(ed.state.doc.length, { y: "end" }),
           });
@@ -295,6 +309,10 @@ export class LogViewerPanel {
         }),
       });
       this.editor.dispatch({ effects: setLevelMarks.of(v.marks) });
+      const ed = this.editor;
+      ed.scrollDOM.addEventListener("scroll", () => {
+        this.following = isLastLineVisible(ed.scrollDOM, ed.defaultLineHeight);
+      });
     } else {
       this.editor.dispatch({
         changes: { from: 0, to: this.editor.state.doc.length, insert: v.text },
@@ -302,6 +320,7 @@ export class LogViewerPanel {
       });
     }
     if (scrollToEnd) {
+      this.following = true;
       // The newest entries are at the bottom.
       this.editor.dispatch({
         effects: EditorView.scrollIntoView(this.editor.state.doc.length, { y: "end" }),

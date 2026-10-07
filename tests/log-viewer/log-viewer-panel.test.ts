@@ -9,7 +9,7 @@
 // has finished, which must then draw nothing.
 
 import { describe, it, expect } from "vitest";
-import { LogViewerPanel } from "../../src/log-viewer/log-viewer-panel";
+import { LogViewerPanel, isLastLineVisible } from "../../src/log-viewer/log-viewer-panel";
 import type { RecentLine } from "../../src/log-viewer/log-parse";
 
 // Obsidian's HTMLElement helpers, the subset the panel uses (happy-dom has none).
@@ -107,6 +107,57 @@ describe("LogViewerPanel", () => {
     expect(panelOpen()).toBe(false);
     expect(btn.classList.contains("is-active")).toBe(false);
     panel.destroy();
+  });
+
+  // Owner, 2026-10-08: follow new entries ONLY while the last line is in
+  // view; scrolling up even a little turns it off, scrolling back to the
+  // end turns it on. The old per-entry "am I at the bottom?" check broke
+  // on a burst: CM6 inserts at once but scrolls on the next frame, so the
+  // second entry of a burst saw "not at bottom" and stopped following.
+  describe("auto-scroll follows only while the last line is visible", () => {
+    it("isLastLineVisible: at the end yes; scrolled up by more than a line no", () => {
+      expect(isLastLineVisible({ scrollTop: 900, clientHeight: 100, scrollHeight: 1000 }, 20)).toBe(true);
+      expect(isLastLineVisible({ scrollTop: 885, clientHeight: 100, scrollHeight: 1000 }, 20)).toBe(true);
+      expect(isLastLineVisible({ scrollTop: 870, clientHeight: 100, scrollHeight: 1000 }, 20)).toBe(false);
+      expect(isLastLineVisible({ scrollTop: 0, clientHeight: 500, scrollHeight: 300 }, 20)).toBe(true);
+    });
+
+    const geometry = (el: HTMLElement, g: { scrollTop: number; clientHeight: number; scrollHeight: number }) => {
+      for (const [k, v] of Object.entries(g)) Object.defineProperty(el, k, { configurable: true, value: v });
+    };
+
+    it("🔑 a BURST of live entries keeps following (the burst bug)", async () => {
+      const d = deps(`${line(1)}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const panel = new LogViewerPanel(d.deps);
+      await panel.mount(root);
+      const p = panel as unknown as { following: boolean };
+      expect(p.following).toBe(true); // opens at the end
+      // The geometry says "not at the bottom" — as it does between an
+      // insert and the next frame — but no USER scroll happened.
+      geometry(root.querySelector(".cm-scroller") as HTMLElement, { scrollTop: 0, clientHeight: 100, scrollHeight: 5000 });
+      for (let i = 2; i <= 6; i++) d.subs.forEach((fn) => fn({ seq: i, line: line(i) }));
+      expect(p.following).toBe(true);
+      panel.destroy();
+    });
+
+    it("🔑 the user's scroll decides: up → off, back to the end → on", async () => {
+      const d = deps(`${line(1)}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const panel = new LogViewerPanel(d.deps);
+      await panel.mount(root);
+      const p = panel as unknown as { following: boolean };
+      const sc = root.querySelector(".cm-scroller") as HTMLElement;
+      geometry(sc, { scrollTop: 100, clientHeight: 100, scrollHeight: 1000 });
+      sc.dispatchEvent(new Event("scroll"));
+      expect(p.following).toBe(false);
+      geometry(sc, { scrollTop: 900, clientHeight: 100, scrollHeight: 1000 });
+      sc.dispatchEvent(new Event("scroll"));
+      expect(p.following).toBe(true);
+      panel.destroy();
+    });
   });
 
   it("🔑 destroy() ends the logger subscription (closing the modal or the tab)", async () => {
