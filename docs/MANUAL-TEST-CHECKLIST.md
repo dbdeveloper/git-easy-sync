@@ -270,6 +270,10 @@ Use it, and note which runs you did.
       **[Clean]** it shows `0 bytes`. Deleting the log file by hand also shows `0 bytes`.
 - [ ] **Log viewer (LOG-VIEWER, new 2026-10-08)** — Settings → Logging → **View log** → **Open**
       (the row exists only while logging is on; there is NO command for it):
+      - 🖥️ it opens in its OWN window, in front of Settings; closing it leaves Settings open;
+        its tab can be dragged into the main window's tab bar and stays there; pressing
+        **Open** again brings the existing viewer (and its window) forward — never a second one;
+      - 📱 Settings close and the log opens as a tab;
       - the log appears as a table `date | time | level | message`, data pretty-printed
         under the message, a separator between entries, the view scrolled to the newest
         entry at the bottom; INFO / WARN / ERROR in different colours (light AND dark theme);

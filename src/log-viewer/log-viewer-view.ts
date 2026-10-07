@@ -105,13 +105,17 @@ export class LogViewerView extends ItemView {
 
     // Obsidian takes Mod+F before a custom view's keymap; a capture-phase
     // listener wins, gated on focus being inside THIS editor (the same
-    // fix as diff2's editor).
+    // fix as diff2's editor). ⚠️ On THIS view's window and document, not
+    // the global ones: on desktop the viewer lives in its own pop-out
+    // window, which has a window and document of its own.
+    const win = this.containerEl.win ?? window;
+    const doc = this.containerEl.doc ?? document;
     this.registerDomEvent(
-      window,
+      win,
       "keydown",
       (e) => {
         if (!((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "f" || e.key === "F"))) return;
-        if (!this.editor || !this.editor.dom.contains(document.activeElement)) return;
+        if (!this.editor || !this.editor.dom.contains(doc.activeElement)) return;
         e.preventDefault();
         e.stopImmediatePropagation();
         openSearchPanel(this.editor);

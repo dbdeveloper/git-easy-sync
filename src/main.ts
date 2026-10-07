@@ -58,6 +58,7 @@ import GitignoreInvariants from "./sync2/gitignore-invariants";
 import GitignoreSeedStore from "./sync2/gitignore-seeds";
 import { pluginUpdatedText, readPluginVersion } from "./sync2/plugin-js";
 import { LogViewerView, LOG_VIEWER_VIEW_TYPE } from "./log-viewer/log-viewer-view";
+import { logViewerTarget } from "./log-viewer/log-open-target";
 import { logFileNameFor } from "./logger";
 import { settleSelfUpdateBaselines } from "./sync2/self-update-applied";
 import DeletedStore from "./diff2/deleted-store";
@@ -3846,14 +3847,40 @@ export default class GitHubSyncPlugin extends Plugin {
   // leaf if one is already open (single-view model — R2.0). Standard
   // Obsidian pattern: query workspace.getLeavesOfType, fall back to
   // getLeaf("tab") + setViewState. Returns once the leaf is revealed.
-  // LOG-VIEWER: reuse an open viewer tab, otherwise open a new one.
+  // LOG-VIEWER, from Settings → Logging → "View log" (owner, 2026-10-08):
+  // desktop → its own OS window, ABOVE the Settings dialog (close it and
+  // Settings are still there; drag its tab into the main window to keep
+  // it); phone → no pop-outs and Settings cover the screen, so they are
+  // closed first and the log opens as a tab. An open viewer is brought
+  // forward, never doubled. See log-open-target.ts.
   async openLogViewer(): Promise<void> {
     const { workspace } = this.app;
-    let leaf = workspace.getLeavesOfType(LOG_VIEWER_VIEW_TYPE)[0];
-    if (!leaf) {
-      leaf = workspace.getLeaf("tab");
-      await leaf.setViewState({ type: LOG_VIEWER_VIEW_TYPE, active: true });
+    const open = workspace.getLeavesOfType(LOG_VIEWER_VIEW_TYPE)[0];
+    const target = logViewerTarget({
+      hasOpenViewer: open !== undefined,
+      canPopout: Platform.isDesktopApp,
+    });
+    if (target === "reveal" && open) {
+      await workspace.revealLeaf(open);
+      // A pop-out window must be raised too, or it stays behind Settings.
+      open.view.containerEl.win?.focus();
+      return;
     }
+    if (target === "popout") {
+      try {
+        const leaf = workspace.openPopoutLeaf({ size: { width: 1000, height: 700 } });
+        await leaf.setViewState({ type: LOG_VIEWER_VIEW_TYPE, active: true });
+        return;
+      } catch (err) {
+        // An Electron too old for pop-outs: fall through to a tab.
+        this.logger.warn("log viewer: pop-out window unavailable, opening a tab", {
+          err: `${err}`,
+        });
+      }
+    }
+    this.closeSettingsDialog();
+    const leaf = workspace.getLeaf("tab");
+    await leaf.setViewState({ type: LOG_VIEWER_VIEW_TYPE, active: true });
     await workspace.revealLeaf(leaf);
   }
 
