@@ -43,8 +43,22 @@ it) — it is not source.
   [`SYNC2-COMMIT-PASS-PERF.md`](./tasks/SYNC2-COMMIT-PASS-PERF.md) (commit-pass cost, forecast-based commit notices),
   [`SYNC2-FIX.md`](./tasks/SYNC2-FIX.md) (§12 sync_store, R3b interaction points), [`SYNC2-MASTER-PLAN.md`](./tasks/SYNC2-MASTER-PLAN.md) (phases and gates).
 - **Log viewer** (the plugin's own log inside Obsidian): [`docs/tasks/LOG-VIEWER.md`](./tasks/LOG-VIEWER.md).
+- **Root `.gitignore` editor** (Settings → .gitignore, behind a warning): [`docs/tasks/GITIGNORE-EDITOR.md`](./tasks/GITIGNORE-EDITOR.md).
 
 Behaviour described in these two specs is locked in by the unit + integration suites. If you change anything in the engine and a spec disagrees, fix the code OR update the spec — don't let them drift. Algorithm changes land in PSEUDO-MERGE-MODE.md; implementation changes land in SYNC2.md.
+
+## Log levels (owner, 2026-10-08)
+
+The log is for someone debugging alone, later — so the level says what kind of thing happened:
+
+- **ERROR** — something failed. **Every error the user is SHOWN** (a Notice, red text in a
+  pane, a tab that closes itself after a failure) is also logged as ERROR, with the
+  reason. Also: a token that was there and is gone.
+- **WARN** — not a failure of the system, but **unexpected information that changes the
+  normal course**: a file not found, a version that is a deletion, a conflict cancelled,
+  a write refused because the file changed meanwhile, a command run while not configured,
+  a timeout, no network.
+- **INFO** — the normal course.
 
 ## Module layout (`src/`)
 

@@ -151,6 +151,9 @@ export async function loadHistoryVersions(
 ): Promise<{
   versions: HistoryVersion[];
   githubError: boolean;
+  // Why the GitHub part failed — for the log (owner, 2026-10-08: an error
+  // the user sees must reach the log too).
+  githubErrorText?: string;
   tokenExpired: boolean;
 }> {
   const local = await enumeratePushQueueVersions(queue, path, deviceLabel);
@@ -164,17 +167,19 @@ export async function loadHistoryVersions(
   }
   let github: GithubCommit[] = [];
   let githubError = false;
+  let githubErrorText: string | undefined;
   let tokenExpired = false;
   try {
     github = await client.listCommitsForPath({ path, branch });
   } catch (err) {
     githubError = true;
+    githubErrorText = String(err);
     if (err instanceof AuthError) {
       tokenExpired = true;
       noteAuthError?.(err); // latch the marker so the rest of the UI reflects it
     }
   }
-  return { versions: mergeVersionList(local, github), githubError, tokenExpired };
+  return { versions: mergeVersionList(local, github), githubError, githubErrorText, tokenExpired };
 }
 
 // ── A row whose commit DELETED the file (owner, 2026-10-08) ─────────────────

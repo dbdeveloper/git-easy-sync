@@ -623,6 +623,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
             try {
               await this.plugin.invariants?.enforce();
             } catch (err) {
+              this.plugin.logger.error("Settings: could not update gitignore", `${err}`);
               new Notice(`Could not update gitignore: ${err}`);
             }
           });
@@ -670,6 +671,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           try {
             await this.plugin.invariants?.enforce();
           } catch (err) {
+            this.plugin.logger.error("Settings: could not update gitignore", `${err}`);
             new Notice(`Could not update gitignore: ${err}`);
           }
         });
@@ -1039,6 +1041,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
                 );
                 this.display();
               } catch (err) {
+                this.plugin.logger.error("Reset failed", `${err}`);
                 new Notice(`Reset failed: ${err}`, 10000);
               }
             }).open();

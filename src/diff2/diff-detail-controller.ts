@@ -381,6 +381,7 @@ export class DiffDetailController {
       const conflictId = autosaveIdForEntry(entry);
       const dir = autosaveDir(conflictId);
       if (await adapter.exists(`${dir}/done.json`)) {
+        this.deps.logger?.warn("diff2: a previous save is still recovering — not opening", { base: entry.basePath });
         new Notice(
           "A previous save for this conflict is still recovering. " +
             "Reload the plugin and reopen.",
@@ -710,6 +711,7 @@ export class DiffDetailController {
         return;
       }
     } catch (err) {
+      this.deps.logger?.error("diff2: failed to load the diff", { base: entry.basePath, err: String(err) });
       body.createEl("p", {
         cls: "diff2-detail-error",
         text: `Failed to load diff: ${String(err)}`,
@@ -901,6 +903,7 @@ export class DiffDetailController {
         }
         // outcome.kind === "discarded": §4.1 silent wipe — no Notice, no write.
       } catch (err) {
+        this.deps.logger?.error("diff2: failed to save the resolution", { base: entry.basePath, err: String(err) });
         new Notice(`Failed to save ${entry.basePath}: ${String(err)}`);
         // Commit failed — stay in detail view so the user doesn't lose work. commit7Step
         // is pair-atomic; recoverCommit at onload reconciles any partially-applied commit
@@ -980,7 +983,7 @@ export class DiffDetailController {
           `"${entry.basePath}" changed since you opened this version — not ` +
             `overwriting. Reopen its history to try again.`,
         );
-        this.deps.logger?.info("diff2 history [←] refused — currentFile changed", {
+        this.deps.logger?.warn("diff2 history [←] refused — currentFile changed", {
           base: entry.basePath,
         });
         return; // stay in the editor
@@ -999,6 +1002,7 @@ export class DiffDetailController {
       lap("commitUnchangedSide", { totalMs: Math.round(performance.now() - tExit0) });
       new Notice(`Saved ${writtenPath}`);
     } catch (err) {
+      this.deps.logger?.error("diff2 history: failed to save", { base: entry.basePath, err: String(err) });
       new Notice(`Failed to save ${entry.basePath}: ${String(err)}`);
       return; // stay in the editor so the user doesn't lose work
     }

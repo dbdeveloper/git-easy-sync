@@ -549,6 +549,7 @@ export default class GitHubSyncPlugin extends Plugin {
           this.resetSettingsInPlace();
           await this.saveSettings();
           await removeResetMarker(this.app.vault, manifest.id);
+          this.logger?.warn("An interrupted reset was completed on load");
           try {
             new Notice(
               "Git Easy Sync: an interrupted reset was completed.",
@@ -1152,6 +1153,7 @@ export default class GitHubSyncPlugin extends Plugin {
       // O3: never wipe under a live drain. The cancel was requested;
       // something (a long network retry) is holding it past the
       // ceiling — tell the user and change nothing.
+      this.logger.warn("Reset aborted: the running sync did not finish within the wait limit");
       new Notice(
         "Reset aborted: a sync is still finishing. Try again in a moment.",
         8000,
@@ -1437,6 +1439,9 @@ export default class GitHubSyncPlugin extends Plugin {
         this.logger.info("gitignore migration resume", r);
       }
       if (r.kind === "stalled") {
+        this.logger.error("gitignore migration stalled: rules of renamed files were not saved", {
+          sources: r.sources,
+        });
         new Notice(
           `The .gitignore migration did not finish: ${r.sources.length} ` +
             `file(s) were renamed to .bak but their rules were not saved. ` +
@@ -1722,7 +1727,7 @@ export default class GitHubSyncPlugin extends Plugin {
             `unchanged. Details are in the log.`,
           15000,
         );
-        this.logger?.info("Conflict cancelled: remote content vanished", {
+        this.logger?.warn("Conflict cancelled: remote content vanished", {
           path,
         });
       },
@@ -1732,7 +1737,7 @@ export default class GitHubSyncPlugin extends Plugin {
             `corruption). The empty version was NOT uploaded.`,
           10000,
         );
-        this.logger?.info("Zero-byte file restored by guard", { path });
+        this.logger?.warn("Zero-byte file restored by guard", { path });
       },
     });
 
@@ -1791,6 +1796,7 @@ export default class GitHubSyncPlugin extends Plugin {
   async sync(forceCommit = false, opts: { background?: boolean } = {}): Promise<void> {
     const background = opts.background ?? false;
     if (!this.isConfigured()) {
+      this.logger?.warn("Sync plugin not configured — command ignored");
       new Notice("Sync plugin not configured");
       return;
     }
@@ -1914,6 +1920,7 @@ export default class GitHubSyncPlugin extends Plugin {
       return;
     }
     if (!this.isConfigured()) {
+      this.logger?.warn("Sync plugin not configured — command ignored");
       new Notice("Sync plugin not configured");
       return;
     }
@@ -2358,6 +2365,8 @@ export default class GitHubSyncPlugin extends Plugin {
         // rules they just changed. One call covers both.
         await this.invariants?.enforce();
       },
+      logError: (message, err) => this.logger.error(message, err),
+      logWarn: (message) => this.logger.warn(message),
     };
   }
 
@@ -3514,6 +3523,7 @@ export default class GitHubSyncPlugin extends Plugin {
   // log path goes through the same error-handling shape as sync().
   async uploadOnly(): Promise<void> {
     if (!this.isConfigured()) {
+      this.logger?.warn("Sync plugin not configured — command ignored");
       new Notice("Sync plugin not configured");
       return;
     }
@@ -3558,6 +3568,7 @@ export default class GitHubSyncPlugin extends Plugin {
   // was a no-op.
   async commitFile(): Promise<void> {
     if (!this.isConfigured()) {
+      this.logger?.warn("Sync plugin not configured — command ignored");
       new Notice("Sync plugin not configured");
       return;
     }
@@ -3572,6 +3583,7 @@ export default class GitHubSyncPlugin extends Plugin {
     try {
       const outcome = await this.sync2Manager.commitFile(path);
       if (outcome.kind === "ignored") {
+        this.logger?.warn("commit-file: the file is ignored by .gitignore — not committed", { path });
         new Notice("File is in git-ignore list", 6000);
       } else if (outcome.kind === "no-change") {
         new Notice("File was not changed", 3000);
@@ -3790,6 +3802,8 @@ export default class GitHubSyncPlugin extends Plugin {
   // ugly "Failed to get branch head sha, status 401" toast).
   private gateOnTokenExpired(origin: "user" | "auto"): boolean {
     if (!(this.tokenExpiredFlag?.isExpiredCached() ?? false)) return false;
+    // The token was there and is gone: an ERROR, not a WARN (owner, 2026-10-08).
+    this.logger?.error("Sync skipped: the GitHub token has expired", { origin });
     if (origin === "user") this.showTokenExpiredModal();
     else new Notice("Sync skipped: token expired", SYNC_SKIPPED_NOTICE_MS);
     return true;

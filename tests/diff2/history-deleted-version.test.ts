@@ -13,6 +13,7 @@ import {
   fetchRemoteVersionContent,
   historyMountFailureText,
   historyRowWhoText,
+  loadHistoryVersions,
   VersionDeletedError,
 } from "../../src/diff2/history-versions";
 
@@ -49,5 +50,22 @@ describe("a History row whose commit deleted the file", () => {
     expect(historyRowWhoText(v, false)).toBe("unknown");
     expect(historyRowWhoText(v, true)).toBe("unknown · deleted in this version");
     expect(historyRowWhoText({ ...v, local: true, deviceLabel: "Mac" }, false)).toBe("Mac · not pushed");
+  });
+});
+
+// Owner, 2026-10-08: every error the user sees must reach the log too. The
+// GitHub part of a History list failing used to be swallowed into a flag —
+// the view had nothing to log.
+describe("loadHistoryVersions — the GitHub failure is kept for the log", () => {
+  it("🔑 githubErrorText carries the reason", async () => {
+    const queue = { list: async () => [], read: async () => ({ id: "", createdAt: 0, files: [] }) };
+    const client = {
+      listCommitsForPath: async () => {
+        throw new Error("HTTP 502");
+      },
+    };
+    const r = await loadHistoryVersions(queue, client, ".gitignore", "main", "Mac");
+    expect(r.githubError).toBe(true);
+    expect(r.githubErrorText).toBe("Error: HTTP 502");
   });
 });

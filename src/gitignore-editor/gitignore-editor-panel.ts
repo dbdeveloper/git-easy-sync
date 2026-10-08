@@ -26,6 +26,9 @@ export interface GitignoreEditorDeps {
   readCurrent(): Promise<string>;
   // Atomic write + the plugin's managed-block pass.
   save(content: string): Promise<void>;
+  // Every error the user sees reaches the log too (owner, 2026-10-08).
+  logError?(message: string, err: string): void;
+  logWarn?(message: string): void;
 }
 
 export interface GitignoreEditorHost {
@@ -69,6 +72,7 @@ export class GitignoreEditorPanel {
       area.disabled = false;
     } catch (err) {
       save.disabled = true;
+      this.deps.logError?.("Could not read .gitignore", `${err}`);
       this.errorEl.setText(`Could not read .gitignore: ${err}`);
     }
   }
@@ -83,6 +87,7 @@ export class GitignoreEditorPanel {
     this.errorEl?.setText("");
     try {
       if ((await this.deps.readCurrent()) !== this.initial) {
+        this.deps.logWarn?.(".gitignore changed on disk while it was being edited — not saved");
         this.errorEl?.setText(
           ".gitignore changed on disk while you were editing. " +
             "Copy your text, Cancel, and open it again.",
@@ -94,6 +99,7 @@ export class GitignoreEditorPanel {
       new Notice("Root .gitignore saved.");
       this.host.close();
     } catch (err) {
+      this.deps.logError?.("Could not save .gitignore", `${err}`);
       this.errorEl?.setText(`Could not save .gitignore: ${err}`);
       save.disabled = false;
     }

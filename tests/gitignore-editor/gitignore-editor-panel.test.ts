@@ -58,7 +58,7 @@ if (!P.createEl) {
 }
 
 function setup(onDisk: string, opts: { failSave?: boolean } = {}) {
-  const state = { disk: onDisk, saved: [] as string[], closed: 0 };
+  const state = { disk: onDisk, saved: [] as string[], closed: 0, logged: [] as string[] };
   const deps = {
     load: async () => state.disk,
     readCurrent: async () => state.disk,
@@ -67,6 +67,7 @@ function setup(onDisk: string, opts: { failSave?: boolean } = {}) {
       state.saved.push(content);
       state.disk = content;
     },
+    logError: (message: string) => state.logged.push(message),
   };
   const root = document.createElement("div");
   document.body.appendChild(root);
@@ -141,6 +142,7 @@ describe("GitignoreEditorPanel", () => {
     await flush();
     expect(s.state.closed).toBe(0);
     expect(s.root.querySelector(".ges-gitignore-error")?.textContent).toContain("disk full");
+    expect(s.state.logged).toEqual(["Could not save .gitignore"]); // shown AND logged
     expect(button(s.root, "Save").disabled).toBe(false);
   });
 });

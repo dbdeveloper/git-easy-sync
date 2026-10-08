@@ -47,6 +47,7 @@ export interface LogViewerDeps {
     recentLines(): RecentLine[];
     subscribe(fn: (l: RecentLine) => void): () => void;
     onLifecycle(fn: (e: "cleaned" | "disabled") => void): () => void;
+    error?(message: string, data?: unknown): void;
   };
 }
 
@@ -322,7 +323,10 @@ export class LogViewerPanel {
     copyBtn.addEventListener("click", () => {
       void navigator.clipboard.writeText(separatorsAsDashes(this.shownText)).then(
         () => new Notice("Log entries copied", 2000),
-        (err) => new Notice(`Copy failed: ${err}`, 5000),
+        (err) => {
+          this.deps.logger().error?.("Log viewer: copy to the clipboard failed", `${err}`);
+          new Notice(`Copy failed: ${err}`, 5000);
+        },
       );
     });
 

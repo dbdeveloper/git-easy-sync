@@ -203,6 +203,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       if (!entry) {
         // Not a `*.conflict-from-*` sibling (stale / hand-edited state) — nothing to
         // resolve. Detach so a dead tab doesn't linger.
+        this.deps.logger?.warn("diff2: an editor tab points at a file that is no longer a conflict — closing", { siblingPath });
         new Notice("This diff-editor tab points at a file that is no longer a conflict.");
         this.leaf.detach();
         return;
@@ -260,7 +261,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
         });
       });
     } catch (err) {
-      this.deps.logger?.info("diff2 editor tryMount failed — detaching", { err: String(err) });
+      this.deps.logger?.error("diff2 editor tryMount failed — detaching", { err: String(err) });
       this.leaf.detach();
     }
   }
@@ -272,6 +273,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     const state = this.state!;
     const entry = historyEntryFromState(state);
     if (!entry) {
+      this.deps.logger?.warn("diff2 history: a tab is missing its version — closing");
       new Notice("This history tab is missing its version — reopen it from the file's history.");
       this.leaf.detach();
       return;
@@ -282,6 +284,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     try {
       // currentFile deleted between sessions → nothing to diff against. Close cleanly.
       if (!(await this.deps.vault.adapter.exists(currentFile))) {
+        this.deps.logger?.warn("diff2 history: the file no longer exists — closing its editor", { path: currentFile });
         new Notice("The file no longer exists — closing its history editor.");
         this.leaf.detach();
         return;
@@ -305,6 +308,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
         return;
       }
       if (!this.deps.fetchHistoryVersionBytes) {
+        this.deps.logger?.warn("diff2 history: not available — GitHub sync not configured");
         new Notice("History editing isn't available (GitHub sync not configured).");
         this.leaf.detach();
         return;
@@ -337,7 +341,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
           });
         });
     } catch (err) {
-      this.deps.logger?.info("diff2 history tryMount failed — detaching", {
+      this.deps.logger?.error("diff2 history tryMount failed — detaching", {
         err: String(err),
       });
       this.leaf.detach();

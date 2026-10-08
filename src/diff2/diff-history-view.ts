@@ -34,7 +34,7 @@ export interface DiffHistoryViewDeps {
   client: () => HistoryCommitSource | null;
   branch: () => string;
   localDeviceLabel: () => string;
-  logger?: { info(message: string, o?: unknown): void };
+  logger?: { info(message: string, o?: unknown): void; error?(message: string, o?: unknown): void };
   // §35 — token-expired gate for the GitHub history load: skip the network when
   // set (→ "TOKEN EXPIRED!" message), and latch the marker on a first-time 401.
   isTokenExpired?: () => boolean;
@@ -232,7 +232,7 @@ export class DiffHistoryView extends ItemView {
 
     // local-always + caught GitHub failure (see loadHistoryVersions). A GitHub throw
     // is logged here (the seam swallows it into `githubError`) so the log still shows why.
-    const { versions, githubError, tokenExpired } = await loadHistoryVersions(
+    const { versions, githubError, githubErrorText, tokenExpired } = await loadHistoryVersions(
       queue,
       client,
       path,
@@ -242,9 +242,11 @@ export class DiffHistoryView extends ItemView {
       this.deps.noteAuthError,
     );
     if (githubError) {
-      this.deps.logger?.info("diff2 history github load failed", {
+      // The user sees "Couldn't load GitHub history" — an ERROR (owner, 2026-10-08).
+      this.deps.logger?.error?.("diff2 history: could not load the GitHub history", {
         path,
         tokenExpired,
+        err: githubErrorText,
       });
     }
     // Superseded by a newer render, OR this leaf was detached mid-fetch (the move-guard
