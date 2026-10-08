@@ -158,7 +158,7 @@
     diff-editor); заодно потрібна для History-проброса пошукової фрази (див.
     `docs/tasks/HISTORY-DELETED.md` §4.6).
 
-16. Протестувати Settings->Reset Plugin. Він, зокрема, повинен закривати УСІ ВІКНА, відкриті нашим плагіном і
+16. ✅ DONE: Протестувати Settings->Reset Plugin. Він, зокрема, повинен закривати УСІ ВІКНА, відкриті нашим плагіном і
     повністю очищати каталог `.obsidian/plugins/<plugin-id>/.runtime/` перед повторною ініціалізацією.
 
 17. ✅ DONE: В diff-editor сторону, яка представляє Vault-file (в conflict mode це - `base-file`) підписувати
@@ -227,7 +227,7 @@
     весь кеш з диску. Так само перевірка цього режиму має відбуватись при старті plugin з такою ж дією. Таким чином
     перемикання цього параметру: ON->OFF->ON працює як скидання кешу.
 
-19. Додати коментар (див коментар "HERE:") в `.obsidian/.gitignore` :
+19. ✅ DONE: Додати коментар (див коментар "HERE:") в `.obsidian/.gitignore` :
     ```
     # ===== git-easy-sync invariants — DO NOT EDIT =====
     # Editing this block triggers a rewrite to canonical on next load.
