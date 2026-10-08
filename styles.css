@@ -1155,6 +1155,19 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
     font-size: 0.9em;
 }
 
+/* A row whose version DELETED the file (found on opening): a small trash icon,
+ * hint "Deleted in this version". */
+.diff2-history-deleted {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 0.4em;
+    color: var(--text-muted);
+}
+.diff2-history-deleted svg {
+    width: 0.9em;
+    height: 0.9em;
+}
+
 /* Local (not-yet-pushed) versions get a subtle accent so they read as "yours, pending". */
 .diff2-history-row[data-local="true"] .diff2-history-who {
     color: var(--text-accent);

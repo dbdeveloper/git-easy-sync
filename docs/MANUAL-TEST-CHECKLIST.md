@@ -188,7 +188,8 @@ Use it, and note which runs you did.
       - **[History]** closes Settings and shows the History list of `.gitignore`; opening a
         version works; a row whose commit DELETED the file (e.g. "Delete .gitignore" made on
         github.com) opens like a deleted file in a conflict — an EMPTY side against the current
-        file, no error; after that its row reads "· deleted in this version" (no strike-through);
+        file, no error; after that its row shows a small trash icon after the device name,
+        whose hint reads "Deleted in this version";
         the log has a WARN line for it.
 
 ## 5c. Plugin updates across Obsidian versions (📱🖥️🌐 · PLUGIN-UPDATE-COMPAT)

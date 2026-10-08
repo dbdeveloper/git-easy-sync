@@ -13,6 +13,7 @@
 import { describe, expect, it } from "vitest";
 import {
   fetchRemoteVersionContent,
+  HISTORY_DELETED_MARK,
   historyRowWhoText,
   loadHistoryVersions,
 } from "../../src/diff2/history-versions";
@@ -31,11 +32,13 @@ describe("a History version whose commit deleted the file", () => {
     });
   });
 
-  it("🔑 once opened, the row reads as a deletion", () => {
+  // Owner, 2026-10-08: a trash ICON with the hint "Deleted in this version",
+  // not the words in the row (less space) — the text column stays as it was.
+  it("🔑 once opened, the row gets a trash icon with the hint; the who-text is unchanged", () => {
     const v = { local: false, date: 0, id: "ac4d3de", deviceLabel: "unknown" };
-    expect(historyRowWhoText(v, false)).toBe("unknown");
-    expect(historyRowWhoText(v, true)).toBe("unknown · deleted in this version");
-    expect(historyRowWhoText({ ...v, local: true, deviceLabel: "Mac" }, false)).toBe("Mac · not pushed");
+    expect(historyRowWhoText(v)).toBe("unknown");
+    expect(historyRowWhoText({ ...v, local: true, deviceLabel: "Mac" })).toBe("Mac · not pushed");
+    expect(HISTORY_DELETED_MARK).toEqual({ icon: "trash-2", hint: "Deleted in this version" });
   });
 });
 

@@ -204,7 +204,10 @@ export async function fetchRemoteVersionContent(
 }
 
 /** The "who" column of a History row. */
-export function historyRowWhoText(v: HistoryVersion, deleted: boolean): string {
-  if (v.local) return `${v.deviceLabel} · not pushed`;
-  return deleted ? `${v.deviceLabel} · deleted in this version` : v.deviceLabel;
+export function historyRowWhoText(v: HistoryVersion): string {
+  return v.local ? `${v.deviceLabel} · not pushed` : v.deviceLabel;
 }
+
+/** A row found (on opening) to be a deletion: an ICON with a hint, not words —
+ *  less space (owner, 2026-10-08). */
+export const HISTORY_DELETED_MARK = { icon: "trash-2", hint: "Deleted in this version" } as const;

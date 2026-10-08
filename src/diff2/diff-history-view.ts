@@ -13,9 +13,10 @@
 //     real `{path}` lands, so `currentPath()` returns null then (the dup-guard
 //     treats null as "no match").
 
-import { ItemView, WorkspaceLeaf } from "obsidian";
+import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
 import {
   historyIsoTimestamp,
+  HISTORY_DELETED_MARK,
   historyRowWhoText,
   loadHistoryVersions,
   type HistoryCommitSource,
@@ -23,6 +24,16 @@ import {
   type QueueVersionSource,
 } from "./history-versions";
 import { formatConflictTimestamp } from "./strip-conflict-suffix";
+
+// The trash icon on a row whose version deleted the file; the hint says so.
+// Inside the "who" span, after its text — the row is a two-ended flex line.
+function addDeletedMark(row: HTMLElement): void {
+  const who = row.querySelector<HTMLElement>(".diff2-history-who");
+  if (!who) return;
+  const mark = who.createEl("span", { cls: "diff2-history-deleted" });
+  setIcon(mark, HISTORY_DELETED_MARK.icon);
+  mark.setAttr("aria-label", HISTORY_DELETED_MARK.hint);
+}
 
 export const DIFF2_HISTORY_VIEW_TYPE = "diff2-history-view";
 
@@ -296,11 +307,11 @@ export class DiffHistoryView extends ItemView {
       const row = list.createEl("div", { cls: "diff2-history-row" });
       row.dataset.local = String(v.local);
       row.createEl("span", { text: formatRowDate(v.date), cls: "diff2-history-date" });
-      const deleted = this.deps.isVersionDeleted?.(path, v.id) ?? false;
       row.createEl("span", {
-        text: historyRowWhoText(v, deleted),
+        text: historyRowWhoText(v),
         cls: "diff2-history-who",
       });
+      if (this.deps.isVersionDeleted?.(path, v.id)) addDeletedMark(row);
       // Click both SELECTS (shows the bar) and OPENS. Ctrl+Click → open to the right.
       row.addEventListener("click", (e) => {
         this.select(i);
@@ -330,9 +341,8 @@ export class DiffHistoryView extends ItemView {
     if (this.currentPath() !== path) return;
     this.versions.forEach((v, i) => {
       const row = this.rows[i];
-      if (!row) return;
-      const deleted = this.deps.isVersionDeleted?.(path, v.id) ?? false;
-      row.querySelector(".diff2-history-who")?.setText(historyRowWhoText(v, deleted));
+      if (!row || row.querySelector(".diff2-history-deleted")) return;
+      if (this.deps.isVersionDeleted?.(path, v.id)) addDeletedMark(row);
     });
   }
 
