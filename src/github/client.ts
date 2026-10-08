@@ -104,6 +104,9 @@ export const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 // caller of this. See docs/ARCHITECTURE.md "Log levels".
 export type HttpLogLevel = "info" | "warn" | "error";
 
+// Makes every cache-buster unique, also for two requests in one millisecond.
+let cacheBusterSeq = 0;
+
 export function httpLogLevel(status: number, headers?: Record<string, string>): HttpLogLevel {
   if (status < 400) return "info";
   if (status === 429) return "warn";
@@ -786,6 +789,14 @@ export default class GithubClient {
     if (since !== undefined) query += `&since=${encodeURIComponent(since)}`;
     if (perPage !== undefined) query += `&per_page=${perPage}`;
     if (page !== undefined) query += `&page=${page}`;
+    // The commit list of a BRANCH NAME changes with every push, and GitHub
+    // allows caching it for 60 s ("Cache-Control: private, max-age=60"), which
+    // native fetch honours — a History tab missed the commit a Sync had just
+    // pushed (owner's field report, 2026-10-08; a 17 ms "list-commits-for-
+    // path"). So a unique `ts` there, the same cure as the branch head's
+    // (see getBranchHeadSha). At a fixed SHA (the engine's
+    // getCommitInfoForPath) the answer never changes: it stays cacheable.
+    if (!/^[0-9a-f]{40}$/i.test(branch)) query += `&ts=${Date.now()}-${++cacheBusterSeq}`;
     const response = await retryUntil(
       async () => {
         return this.timed(
@@ -1433,7 +1444,8 @@ export default class GithubClient {
             // be a cache hit, GitHub ignores the unknown param, and — unlike a `Cache-Control`
             // REQUEST header — it does NOT trigger a CORS preflight (GitHub's
             // Access-Control-Allow-Headers doesn't list cache-control, so that header gets the
-            // request BLOCKED). All other GETs are @sha-addressed and stay cacheable. VERIFY
+            // request BLOCKED). The other GETs are @sha-addressed and stay cacheable — EXCEPT
+            // listCommitsForPath on a branch NAME (History), which gets the same `ts`. VERIFY
             // on device: a fixed head GET should be ~300 ms (network), NOT ~6 ms (cache).
             url: `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/git/refs/heads/${this.settings.githubBranch}?ts=${Date.now()}`,
             headers: this.headers(),

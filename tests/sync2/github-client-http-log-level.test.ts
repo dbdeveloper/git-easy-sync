@@ -112,3 +112,46 @@ describe("GithubClient — the HTTP line's level", () => {
     expect(f.calls.find((c) => c.message.startsWith("HTTP GET"))?.level).toBe("info");
   });
 });
+
+// Owner's field report (2026-10-08): a History tab did not show the commit a
+// Sync had just pushed — for up to 60 s. GitHub answers API GETs with
+// "Cache-Control: private, max-age=60", and native fetch honoured it (a 17 ms
+// "list-commits-for-path"). The commit list of a BRANCH NAME changes with
+// every push, so it must never come from the cache; the same list at a fixed
+// SHA (the engine's getCommitInfoForPath) and every @sha-addressed read
+// never change, so they stay cacheable (owner: only what changes skips it).
+describe("listCommitsForPath — the cache-buster only where the answer can change", () => {
+  let cleanup = () => {};
+  afterEach(() => {
+    installRequestFaultInjector(null);
+    cleanup();
+  });
+  const urls: string[] = [];
+  const capture = () => {
+    urls.length = 0;
+    installRequestFaultInjector({
+      intercept: (url: string) => {
+        urls.push(url);
+        return { status: 200, body: "[]" };
+      },
+    });
+  };
+
+  it("🔑 a branch NAME → a unique ?ts= (never a cache hit)", async () => {
+    const f = makeClient();
+    cleanup = f.cleanup;
+    capture();
+    await f.client.listCommitsForPath({ path: ".gitignore", branch: "main" });
+    await f.client.listCommitsForPath({ path: ".gitignore", branch: "main" });
+    expect(urls[0]).toMatch(/[?&]ts=\d+/);
+    expect(urls[0]).not.toBe(urls[1]); // two reads, two different URLs
+  });
+
+  it("a fixed commit SHA → no buster (the answer can never change)", async () => {
+    const f = makeClient();
+    cleanup = f.cleanup;
+    capture();
+    await f.client.listCommitsForPath({ path: "a.md", branch: "4220dbf0a1b2c3d4e5f60718293a4b5c6d7e8f90" });
+    expect(urls[0]).not.toMatch(/[?&]ts=/);
+  });
+});
