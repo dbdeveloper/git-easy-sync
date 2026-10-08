@@ -128,7 +128,6 @@ import {
 import {
   fetchRemoteVersionContent,
   historyIsoTimestamp,
-  VersionDeletedError,
   type HistoryVersion,
 } from "./diff2/history-versions";
 import {
@@ -3995,11 +3994,6 @@ export default class GitHubSyncPlugin extends Plugin {
       openHistoryVersion: (path, version, toRight) =>
         this.openHistoryVersion(path, version, toRight),
       isVersionDeleted: (path, id) => this.deletedHistoryVersions.has(`${path}\0${id}`),
-      fileExistsAt: async (path, id) => {
-        if (!this.githubClient) return true;
-        return (await this.githubClient.getContentsMetadataAtRef({ path, ref: id })) !== null;
-      },
-      markVersionDeleted: (path, id) => this.markHistoryVersionDeleted(path, id),
     };
   }
 
@@ -4165,24 +4159,24 @@ export default class GitHubSyncPlugin extends Plugin {
     if (version.local) {
       return await this.batchHistorySource.readFileBytes(version.id, path);
     }
-    let content: string;
-    try {
-      content = await fetchRemoteVersionContent(this.githubClient, path, version.id);
-    } catch (err) {
-      if (err instanceof VersionDeletedError) this.markHistoryVersionDeleted(path, version.id);
-      throw err;
+    const got = await fetchRemoteVersionContent(this.githubClient, path, version.id);
+    if (got.deleted) {
+      // The file is ABSENT in this version — open it as an EMPTY side, the way a
+      // delete-vs-modify conflict shows a deleted file (owner, 2026-10-08).
+      this.markHistoryVersionDeleted(path, version.id);
+      return new ArrayBuffer(0);
     }
     // content is base64 (Contents API / Blobs-API fallback) → decode on the cpu-worker.
-    return await this.workerClient.decodeBase64(content);
+    return await this.workerClient.decodeBase64(got.content);
   }
 
   // History rows whose commit DELETED the file, found by opening them (a 404) —
-  // in memory until restart (owner, 2026-10-08: no extra request per row).
+  // in memory until restart; the row then says so (owner, 2026-10-08).
   private readonly deletedHistoryVersions = new Set<string>();
 
   private markHistoryVersionDeleted(path: string, id: string): void {
     if (this.deletedHistoryVersions.has(`${path}\0${id}`)) return;
-    this.logger.warn("History: the file was deleted in this version — nothing to open", {
+    this.logger.warn("History: the file is absent in this version (deleted) — opened as empty", {
       path,
       version: id.slice(0, 7),
     });

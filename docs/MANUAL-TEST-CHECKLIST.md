@@ -187,11 +187,9 @@ Use it, and note which runs you did.
         then **[Save]**: refused with "changed on disk…", your text still in the editor;
       - **[History]** closes Settings and shows the History list of `.gitignore`; opening a
         version works; a row whose commit DELETED the file (e.g. "Delete .gitignore" made on
-        github.com) opens to the calm "… was deleted in this version — there is nothing to
-        open." (no red error), and its row then reads "· deleted in this version" with the date
-        struck through; the log has a WARN line for it. Rows by device **unknown** (commits made
-        outside the plugin) are checked while the list loads: such a deletion is ALREADY marked
-        when the list appears; an unknown commit that changed the file is a normal row.
+        github.com) opens like a deleted file in a conflict — an EMPTY side against the current
+        file, no error; after that its row reads "· deleted in this version" (no strike-through);
+        the log has a WARN line for it.
 
 ## 5c. Plugin updates across Obsidian versions (📱🖥️🌐 · PLUGIN-UPDATE-COMPAT)
 

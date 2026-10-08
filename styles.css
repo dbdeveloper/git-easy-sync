@@ -241,10 +241,6 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
 .diff2-detail-error {
     color: var(--text-error);
 }
-/* A History version whose commit deleted the file — said calmly, not as an error. */
-.diff2-detail-note {
-    color: var(--text-muted);
-}
 
 /* §2.2.15 — diff-editor-v2 toolbar. Two ROWS; each row is a LEFT group + a RIGHT group that
  * wrap independently (the right group right-aligned). Row 2's left/right groups hold 2-LINE
@@ -1157,12 +1153,6 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
 .diff2-history-who {
     color: var(--text-muted);
     font-size: 0.9em;
-}
-
-/* A row found to be a DELETION of the file (its open got a 404): nothing to open there. */
-.diff2-history-row.is-deleted .diff2-history-date {
-    text-decoration: line-through;
-    color: var(--text-faint);
 }
 
 /* Local (not-yet-pushed) versions get a subtle accent so they read as "yours, pending". */

@@ -31,7 +31,6 @@
 import {
   parseDeviceSuffix,
   parseLocalTimestamp,
-  UNKNOWN_DEVICE_LABEL,
 } from "../sync2/commit-message";
 import { AuthError } from "../errors";
 
@@ -149,13 +148,8 @@ export async function loadHistoryVersions(
   // this path becomes a full participant in the §35 gate.
   isTokenExpired?: () => boolean,
   noteAuthError?: (err: unknown) => void,
-  // Does the file exist at this commit? (a cheap HEAD; false on 404). Asked
-  // ONLY for commits this plugin did not make — see below.
-  fileExistsAt?: (path: string, id: string) => Promise<boolean>,
 ): Promise<{
   versions: HistoryVersion[];
-  // GitHub versions found, up front, to be a DELETION of the file.
-  deletedIds: string[];
   githubError: boolean;
   // Why the GitHub part failed — for the log (owner, 2026-10-08: an error
   // the user sees must reach the log too).
@@ -167,7 +161,6 @@ export async function loadHistoryVersions(
   if (isTokenExpired?.() ?? false) {
     return {
       versions: mergeVersionList(local, []),
-      deletedIds: [],
       githubError: true,
       tokenExpired: true,
     };
@@ -186,63 +179,28 @@ export async function loadHistoryVersions(
       noteAuthError?.(err); // latch the marker so the rest of the UI reflects it
     }
   }
-  const versions = mergeVersionList(local, github);
-  // A commit NOT made by this plugin (device "unknown" — e.g. "Delete
-  // .gitignore" on github.com) is checked BEFORE the list is shown (owner,
-  // 2026-10-08): rare, usually none per file, one request each, one after
-  // another. Our own commits are not checked — a deletion there is found
-  // when it is opened. A failing probe (no network) stops the probing and
-  // marks nothing: the open still finds out.
-  const deletedIds: string[] = [];
-  if (fileExistsAt) {
-    for (const v of versions) {
-      if (v.local || v.deviceLabel !== UNKNOWN_DEVICE_LABEL) continue;
-      try {
-        if (!(await fileExistsAt(path, v.id))) deletedIds.push(v.id);
-      } catch {
-        break;
-      }
-    }
-  }
-  return { versions, deletedIds, githubError, githubErrorText, tokenExpired };
+  return { versions: mergeVersionList(local, github), githubError, githubErrorText, tokenExpired };
 }
 
 // ── A row whose commit DELETED the file (owner, 2026-10-08) ─────────────────
 // `listCommitsForPath` lists every commit that touched the path, deletions
-// included, and says nothing about which is which; asking per row would cost a
-// request each. So the open finds out: a 404 at that commit means the file was
-// deleted there. It is not an error — the editor says so calmly and the row is
-// marked from then on.
+// included. A deletion is a version too: the file is ABSENT there, so the
+// History editor opens it like a delete-vs-modify conflict — an EMPTY side
+// against the current file, labelled by its date (no "deleted" mark in the
+// editor, the same as delete-vs-modify and the Deleted mode). No up-front
+// checks: the 404 on open tells, and the row says "deleted in this version"
+// from then on.
 
-export class VersionDeletedError extends Error {
-  constructor(
-    readonly path: string,
-    readonly id: string,
-  ) {
-    super(`${path} was deleted in version ${id}`);
-    this.name = "VersionDeletedError";
-  }
-}
-
-/** A GitHub version's content (base64), or VersionDeletedError when the file is not there. */
+/** A GitHub version's content (base64), or `deleted` when the file is absent at that commit. */
 export async function fetchRemoteVersionContent(
   client: {
     getContentsAtRef(args: { path: string; ref: string; retry?: boolean }): Promise<{ content: string } | null>;
   },
   path: string,
   id: string,
-): Promise<string> {
+): Promise<{ deleted: false; content: string } | { deleted: true }> {
   const contents = await client.getContentsAtRef({ path, ref: id, retry: true });
-  if (contents === null) throw new VersionDeletedError(path, id);
-  return contents.content;
-}
-
-/** What the History editor shows when it could not start. */
-export function historyMountFailureText(err: unknown): { text: string; isError: boolean } {
-  if (err instanceof VersionDeletedError) {
-    return { text: `${err.path} was deleted in this version — there is nothing to open.`, isError: false };
-  }
-  return { text: `Failed to start the edit session: ${String(err)}`, isError: true };
+  return contents === null ? { deleted: true } : { deleted: false, content: contents.content };
 }
 
 /** The "who" column of a History row. */
