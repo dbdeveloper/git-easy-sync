@@ -16,6 +16,7 @@
 import { ItemView, WorkspaceLeaf } from "obsidian";
 import {
   historyIsoTimestamp,
+  historyRowWhoText,
   loadHistoryVersions,
   type HistoryCommitSource,
   type HistoryVersion,
@@ -45,6 +46,9 @@ export interface DiffHistoryViewDeps {
     version: HistoryVersion,
     toRight?: boolean,
   ) => void;
+  // A version found to be a DELETION of the file (its open got a 404) — the
+  // row reads "deleted in this version" from then on (owner, 2026-10-08).
+  isVersionDeleted?: (path: string, id: string) => boolean;
 }
 
 interface HistoryViewState {
@@ -290,8 +294,10 @@ export class DiffHistoryView extends ItemView {
       const row = list.createEl("div", { cls: "diff2-history-row" });
       row.dataset.local = String(v.local);
       row.createEl("span", { text: formatRowDate(v.date), cls: "diff2-history-date" });
+      const deleted = this.deps.isVersionDeleted?.(path, v.id) ?? false;
+      row.toggleClass("is-deleted", deleted);
       row.createEl("span", {
-        text: v.local ? `${v.deviceLabel} · not pushed` : v.deviceLabel,
+        text: historyRowWhoText(v, deleted),
         cls: "diff2-history-who",
       });
       // Click both SELECTS (shows the bar) and OPENS. Ctrl+Click → open to the right.
@@ -315,6 +321,19 @@ export class DiffHistoryView extends ItemView {
     list.addEventListener("keydown", (e) => this.onKeyDown(e, path));
     // Focus the list so the arrows work the instant the tab is shown / returned to.
     list.focus({ preventScroll: true });
+  }
+
+  // A version of `path` just turned out to be a deletion: re-label its row in place
+  // (no reload — the list and the selection stay).
+  refreshDeletedMarks(path: string): void {
+    if (this.currentPath() !== path) return;
+    this.versions.forEach((v, i) => {
+      const row = this.rows[i];
+      if (!row) return;
+      const deleted = this.deps.isVersionDeleted?.(path, v.id) ?? false;
+      row.toggleClass("is-deleted", deleted);
+      row.querySelector(".diff2-history-who")?.setText(historyRowWhoText(v, deleted));
+    });
   }
 
   // Paint the selection bar on the selected row and reveal it.

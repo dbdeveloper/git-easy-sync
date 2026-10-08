@@ -176,3 +176,47 @@ export async function loadHistoryVersions(
   }
   return { versions: mergeVersionList(local, github), githubError, tokenExpired };
 }
+
+// ── A row whose commit DELETED the file (owner, 2026-10-08) ─────────────────
+// `listCommitsForPath` lists every commit that touched the path, deletions
+// included, and says nothing about which is which; asking per row would cost a
+// request each. So the open finds out: a 404 at that commit means the file was
+// deleted there. It is not an error — the editor says so calmly and the row is
+// marked from then on.
+
+export class VersionDeletedError extends Error {
+  constructor(
+    readonly path: string,
+    readonly id: string,
+  ) {
+    super(`${path} was deleted in version ${id}`);
+    this.name = "VersionDeletedError";
+  }
+}
+
+/** A GitHub version's content (base64), or VersionDeletedError when the file is not there. */
+export async function fetchRemoteVersionContent(
+  client: {
+    getContentsAtRef(args: { path: string; ref: string; retry?: boolean }): Promise<{ content: string } | null>;
+  },
+  path: string,
+  id: string,
+): Promise<string> {
+  const contents = await client.getContentsAtRef({ path, ref: id, retry: true });
+  if (contents === null) throw new VersionDeletedError(path, id);
+  return contents.content;
+}
+
+/** What the History editor shows when it could not start. */
+export function historyMountFailureText(err: unknown): { text: string; isError: boolean } {
+  if (err instanceof VersionDeletedError) {
+    return { text: `${err.path} was deleted in this version — there is nothing to open.`, isError: false };
+  }
+  return { text: `Failed to start the edit session: ${String(err)}`, isError: true };
+}
+
+/** The "who" column of a History row. */
+export function historyRowWhoText(v: HistoryVersion, deleted: boolean): string {
+  if (v.local) return `${v.deviceLabel} · not pushed`;
+  return deleted ? `${v.deviceLabel} · deleted in this version` : v.deviceLabel;
+}

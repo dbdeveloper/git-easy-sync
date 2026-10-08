@@ -47,6 +47,7 @@ import {
 } from "./recovery-dialog";
 import { assessHistoryV2, replayHistoryV2, scanHistoryV2 } from "./history-replay-v2";
 import { compactSessionLog } from "./history-rewrite";
+import { historyMountFailureText } from "./history-versions";
 import { readCursor } from "./cursor-store";
 import { atomicWriteFile } from "../sync2/atomic-write";
 import {
@@ -701,10 +702,11 @@ export class DiffDetailController {
         // already focused).
         this.owner?.focus();
       } catch (err) {
-        body.createEl("p", {
-          cls: "diff2-detail-error",
-          text: `Failed to start the edit session: ${String(err)}`,
-        });
+        // A History row whose commit DELETED the file is not an error (owner,
+        // 2026-10-08) — said calmly; main.ts logs it as a WARN when it finds out.
+        const f = historyMountFailureText(err);
+        body.createEl("p", { cls: f.isError ? "diff2-detail-error" : "diff2-detail-note", text: f.text });
+        if (f.isError) this.deps.logger?.error("diff2: could not start the edit session", { base: entry.basePath, err: String(err) });
         return;
       }
     } catch (err) {

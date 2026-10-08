@@ -125,7 +125,12 @@ import {
   DIFF2_HISTORY_VIEW_TYPE,
   type DiffHistoryViewDeps,
 } from "./diff2/diff-history-view";
-import { historyIsoTimestamp, type HistoryVersion } from "./diff2/history-versions";
+import {
+  fetchRemoteVersionContent,
+  historyIsoTimestamp,
+  VersionDeletedError,
+  type HistoryVersion,
+} from "./diff2/history-versions";
 import {
   alignOpenDescs,
   ephemeralAutosaveIdFromState,
@@ -3975,6 +3980,7 @@ export default class GitHubSyncPlugin extends Plugin {
       noteAuthError: (err) => this.tokenExpiredFlag?.note(err),
       openHistoryVersion: (path, version, toRight) =>
         this.openHistoryVersion(path, version, toRight),
+      isVersionDeleted: (path, id) => this.deletedHistoryVersions.has(`${path}\0${id}`),
     };
   }
 
@@ -4140,16 +4146,30 @@ export default class GitHubSyncPlugin extends Plugin {
     if (version.local) {
       return await this.batchHistorySource.readFileBytes(version.id, path);
     }
-    const contents = await this.githubClient.getContentsAtRef({
-      path,
-      ref: version.id,
-      retry: true,
-    });
-    if (contents === null) {
-      throw new Error(`Version ${version.id} of ${path} not found on GitHub`);
+    let content: string;
+    try {
+      content = await fetchRemoteVersionContent(this.githubClient, path, version.id);
+    } catch (err) {
+      if (err instanceof VersionDeletedError) this.markHistoryVersionDeleted(path, version.id);
+      throw err;
     }
     // content is base64 (Contents API / Blobs-API fallback) → decode on the cpu-worker.
-    return await this.workerClient.decodeBase64(contents.content);
+    return await this.workerClient.decodeBase64(content);
+  }
+
+  // History rows whose commit DELETED the file, found by opening them (a 404) —
+  // in memory until restart (owner, 2026-10-08: no extra request per row).
+  private readonly deletedHistoryVersions = new Set<string>();
+
+  private markHistoryVersionDeleted(path: string, id: string): void {
+    this.logger.warn("History: the file was deleted in this version — nothing to open", {
+      path,
+      version: id.slice(0, 7),
+    });
+    this.deletedHistoryVersions.add(`${path}\0${id}`);
+    for (const leaf of this.app.workspace.getLeavesOfType(DIFF2_HISTORY_VIEW_TYPE)) {
+      if (leaf.view instanceof DiffHistoryView) leaf.view.refreshDeletedMarks(path);
+    }
   }
 
   // ── §4.5.3 (B3) cross-fast-reload layout restore ─────────────────────────────

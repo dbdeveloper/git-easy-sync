@@ -186,7 +186,10 @@ Use it, and note which runs you did.
       - change the file on ANOTHER device, Sync here while the editor is open with your edit,
         then **[Save]**: refused with "changed on disk…", your text still in the editor;
       - **[History]** closes Settings and shows the History list of `.gitignore`; opening a
-        version works (see GITIGNORE-EDITOR.md §3 for the open question about saving there).
+        version works; a row whose commit DELETED the file (e.g. "Delete .gitignore" made on
+        github.com) opens to the calm "… was deleted in this version — there is nothing to
+        open." (no red error), and its row then reads "· deleted in this version" with the date
+        struck through; the log has a WARN line for it.
 
 ## 5c. Plugin updates across Obsidian versions (📱🖥️🌐 · PLUGIN-UPDATE-COMPAT)
 

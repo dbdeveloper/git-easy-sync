@@ -327,6 +327,15 @@ current-file = sibling).
   період-фільтр; `page`/`perPage` ← infinite-scroll (§4.3 п.4).
 - Байти конкретної версії — через `getContentsAtRef` (вже є; Blobs-API fallback >1MB, SYNC2
   §7.6) за commit-SHA.
+- **Коміт, що ВИДАЛИВ файл** (польовий звіт власника 2026-10-08: кожен другий рядок History
+  `.gitignore` падав «Version … not found on GitHub» — це були коміти «Delete .gitignore»).
+  `listCommitsForPath` повертає й такі коміти й не каже, що це видалення; питати про кожен
+  рядок — по запиту на рядок. **Рішення власника (1a):** без нових запитів — 404 при відкритті
+  означає «у цій версії файл видалено». Редактор пише спокійно (не як помилку):
+  «`<path>` was deleted in this version — there is nothing to open.»; рядок у списку відтоді
+  позначено «· deleted in this version» (дата закреслена) — у пам'яті до перезапуску; у лог —
+  WARN. Код: `VersionDeletedError` / `fetchRemoteVersionContent` / `historyMountFailureText` /
+  `historyRowWhoText` (`history-versions.ts`), тест `history-deleted-version.test.ts`.
 - ⚠️ **Серверного пошуку по історичних версіях GitHub НЕ має** (перевірено 2026-07-03):
   Code Search (`/search/code`) індексує **лише default-branch HEAD** (+ файли <384 КБ, потрібна
   індексація); commit-search — лише **повідомлення**, не вміст; довільний commit-SHA не шукається.
