@@ -47,6 +47,7 @@ import {
 } from "./gitignore-editor/gitignore-editor-view";
 import type { GitignoreEditorDeps } from "./gitignore-editor/gitignore-editor-panel";
 import { bringLeafToFront } from "./bring-to-front";
+import { enforceIfRootGitignore } from "./gitignore-editor/after-history-write";
 import { GitignoreDecisionModal } from "./sync2/views/gitignore-modal";
 import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
 import {
@@ -4339,6 +4340,18 @@ export default class GitHubSyncPlugin extends Plugin {
   // open (same pattern Sync2Manager uses for commit messages).
   private diffViewDeps(): DiffEditViewDeps {
     return {
+      afterHistoryWrite: async (path) => {
+        try {
+          const restored = await enforceIfRootGitignore(normalizePath(path), async () => {
+            await this.invariants?.enforce();
+          });
+          if (restored) this.logger.info("History save over the root .gitignore — managed blocks restored");
+        } catch (err) {
+          // The save itself succeeded — do not report it as failed; the next
+          // Sync restores the blocks anyway.
+          this.logger.error("Could not restore the .gitignore blocks after a History save", `${err}`);
+        }
+      },
       vault: this.app.vault,
       conflictStore: this.conflictStoreV2,
       conflictCounter: this.conflictCounter,

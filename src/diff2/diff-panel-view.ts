@@ -99,6 +99,9 @@ export interface DiffEditViewDeps {
     path: string,
     version: HistoryVersion,
   ) => Promise<ArrayBuffer>;
+  // After a History save wrote `path` (main.ts restores the root .gitignore's
+  // managed blocks at once — owner, 2026-10-08). Optional for test fixtures.
+  afterHistoryWrite?: (path: string) => Promise<void>;
 }
 
 // Which sub-tab is active. (The pre-split list↔detail state machine is gone — the

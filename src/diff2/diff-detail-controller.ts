@@ -999,6 +999,7 @@ export class DiffDetailController {
         "base", // write resolved.sibling → meta.siblingPath (= currentFile)
       );
       lap("commitUnchangedSide", { totalMs: Math.round(performance.now() - tExit0) });
+      await this.deps.afterHistoryWrite?.(writtenPath);
       new Notice(`Saved ${writtenPath}`);
     } catch (err) {
       this.deps.logger?.error("diff2 history: failed to save", { base: entry.basePath, err: String(err) });
