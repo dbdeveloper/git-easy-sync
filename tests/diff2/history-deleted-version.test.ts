@@ -69,3 +69,42 @@ describe("loadHistoryVersions — the GitHub failure is kept for the log", () =>
     expect(r.githubErrorText).toBe("Error: HTTP 502");
   });
 });
+
+// Owner, 2026-10-08: a commit NOT made by this plugin (device "unknown" —
+// e.g. "Delete .gitignore" on github.com) is checked BEFORE the list is
+// shown — rare, usually none per file — so a deletion is marked from the
+// start. One request each, one after another. Our own commits are not
+// checked (a deletion there is marked when it is opened). An unknown
+// commit that CHANGED the file stays an ordinary row.
+describe("loadHistoryVersions — unknown commits are checked up front", () => {
+  const queue = { list: async () => [], read: async () => ({ id: "", createdAt: 0, files: [] }) };
+  const commits = [
+    { sha: "del1", date: "2026-10-05T10:00:00Z", message: "Delete .gitignore" },
+    { sha: "ours", date: "2026-10-05T09:00:00Z", message: "Sync at 2026-10-05 11:00:00.000+02:00 (Mac)" },
+    { sha: "edit", date: "2026-10-05T08:00:00Z", message: "Update .gitignore" },
+  ];
+  const client = { listCommitsForPath: async () => commits };
+
+  it("🔑 only the unknown ones are probed, in order; a 404 one comes back as deleted", async () => {
+    const probed: string[] = [];
+    const exists = async (_p: string, id: string) => {
+      probed.push(id);
+      return id !== "del1";
+    };
+    const r = await loadHistoryVersions(queue, client, ".gitignore", "main", "Mac", undefined, undefined, exists);
+    expect(probed).toEqual(["del1", "edit"]);
+    expect(r.deletedIds).toEqual(["del1"]);
+    expect(r.versions.map((v) => v.id)).toEqual(["del1", "ours", "edit"]); // all rows stay
+  });
+
+  it("a probe that fails (no network) marks nothing and stops probing", async () => {
+    const probed: string[] = [];
+    const exists = async (_p: string, id: string) => {
+      probed.push(id);
+      throw new Error("offline");
+    };
+    const r = await loadHistoryVersions(queue, client, ".gitignore", "main", "Mac", undefined, undefined, exists);
+    expect(probed).toEqual(["del1"]);
+    expect(r.deletedIds).toEqual([]);
+  });
+});

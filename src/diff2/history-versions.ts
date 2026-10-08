@@ -31,6 +31,7 @@
 import {
   parseDeviceSuffix,
   parseLocalTimestamp,
+  UNKNOWN_DEVICE_LABEL,
 } from "../sync2/commit-message";
 import { AuthError } from "../errors";
 
@@ -148,8 +149,13 @@ export async function loadHistoryVersions(
   // this path becomes a full participant in the §35 gate.
   isTokenExpired?: () => boolean,
   noteAuthError?: (err: unknown) => void,
+  // Does the file exist at this commit? (a cheap HEAD; false on 404). Asked
+  // ONLY for commits this plugin did not make — see below.
+  fileExistsAt?: (path: string, id: string) => Promise<boolean>,
 ): Promise<{
   versions: HistoryVersion[];
+  // GitHub versions found, up front, to be a DELETION of the file.
+  deletedIds: string[];
   githubError: boolean;
   // Why the GitHub part failed — for the log (owner, 2026-10-08: an error
   // the user sees must reach the log too).
@@ -161,6 +167,7 @@ export async function loadHistoryVersions(
   if (isTokenExpired?.() ?? false) {
     return {
       versions: mergeVersionList(local, []),
+      deletedIds: [],
       githubError: true,
       tokenExpired: true,
     };
@@ -179,7 +186,25 @@ export async function loadHistoryVersions(
       noteAuthError?.(err); // latch the marker so the rest of the UI reflects it
     }
   }
-  return { versions: mergeVersionList(local, github), githubError, githubErrorText, tokenExpired };
+  const versions = mergeVersionList(local, github);
+  // A commit NOT made by this plugin (device "unknown" — e.g. "Delete
+  // .gitignore" on github.com) is checked BEFORE the list is shown (owner,
+  // 2026-10-08): rare, usually none per file, one request each, one after
+  // another. Our own commits are not checked — a deletion there is found
+  // when it is opened. A failing probe (no network) stops the probing and
+  // marks nothing: the open still finds out.
+  const deletedIds: string[] = [];
+  if (fileExistsAt) {
+    for (const v of versions) {
+      if (v.local || v.deviceLabel !== UNKNOWN_DEVICE_LABEL) continue;
+      try {
+        if (!(await fileExistsAt(path, v.id))) deletedIds.push(v.id);
+      } catch {
+        break;
+      }
+    }
+  }
+  return { versions, deletedIds, githubError, githubErrorText, tokenExpired };
 }
 
 // ── A row whose commit DELETED the file (owner, 2026-10-08) ─────────────────

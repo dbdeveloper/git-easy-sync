@@ -3995,6 +3995,11 @@ export default class GitHubSyncPlugin extends Plugin {
       openHistoryVersion: (path, version, toRight) =>
         this.openHistoryVersion(path, version, toRight),
       isVersionDeleted: (path, id) => this.deletedHistoryVersions.has(`${path}\0${id}`),
+      fileExistsAt: async (path, id) => {
+        if (!this.githubClient) return true;
+        return (await this.githubClient.getContentsMetadataAtRef({ path, ref: id })) !== null;
+      },
+      markVersionDeleted: (path, id) => this.markHistoryVersionDeleted(path, id),
     };
   }
 
@@ -4176,6 +4181,7 @@ export default class GitHubSyncPlugin extends Plugin {
   private readonly deletedHistoryVersions = new Set<string>();
 
   private markHistoryVersionDeleted(path: string, id: string): void {
+    if (this.deletedHistoryVersions.has(`${path}\0${id}`)) return;
     this.logger.warn("History: the file was deleted in this version — nothing to open", {
       path,
       version: id.slice(0, 7),

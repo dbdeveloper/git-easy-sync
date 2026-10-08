@@ -336,6 +336,12 @@ current-file = sibling).
   позначено «· deleted in this version» (дата закреслена) — у пам'яті до перезапуску; у лог —
   WARN. Код: `VersionDeletedError` / `fetchRemoteVersionContent` / `historyMountFailureText` /
   `historyRowWhoText` (`history-versions.ts`), тест `history-deleted-version.test.ts`.
+  **Доповнення власника (того ж дня):** коміти, зроблені НЕ нашим плагіном (пристрій
+  «unknown» — напр. «Delete .gitignore» з github.com), перевіряються ОДРАЗУ при завантаженні
+  списку — їх мало, зазвичай 0: по одному HEAD-запиту (`getContentsMetadataAtRef`),
+  послідовно; видалення позначаються ще до показу. Такий коміт, що ЗМІНИВ файл, лишається
+  звичайним рядком. Наші коміти не перевіряються (видалення там знаходить відкриття). Збій
+  перевірки (немає мережі) зупиняє перевірки й нічого не позначає.
 - ⚠️ **Серверного пошуку по історичних версіях GitHub НЕ має** (перевірено 2026-07-03):
   Code Search (`/search/code`) індексує **лише default-branch HEAD** (+ файли <384 КБ, потрібна
   індексація); commit-search — лише **повідомлення**, не вміст; довільний commit-SHA не шукається.

@@ -49,6 +49,10 @@ export interface DiffHistoryViewDeps {
   // A version found to be a DELETION of the file (its open got a 404) — the
   // row reads "deleted in this version" from then on (owner, 2026-10-08).
   isVersionDeleted?: (path: string, id: string) => boolean;
+  // Commits NOT made by this plugin are checked up front (owner, 2026-10-08):
+  // does the file exist there? The deletions found are marked before the list shows.
+  fileExistsAt?: (path: string, id: string) => Promise<boolean>;
+  markVersionDeleted?: (path: string, id: string) => void;
 }
 
 interface HistoryViewState {
@@ -232,7 +236,7 @@ export class DiffHistoryView extends ItemView {
 
     // local-always + caught GitHub failure (see loadHistoryVersions). A GitHub throw
     // is logged here (the seam swallows it into `githubError`) so the log still shows why.
-    const { versions, githubError, githubErrorText, tokenExpired } = await loadHistoryVersions(
+    const { versions, deletedIds, githubError, githubErrorText, tokenExpired } = await loadHistoryVersions(
       queue,
       client,
       path,
@@ -240,7 +244,9 @@ export class DiffHistoryView extends ItemView {
       this.deps.localDeviceLabel(),
       this.deps.isTokenExpired,
       this.deps.noteAuthError,
+      this.deps.fileExistsAt,
     );
+    for (const id of deletedIds) this.deps.markVersionDeleted?.(path, id);
     if (githubError) {
       // The user sees "Couldn't load GitHub history" — an ERROR (owner, 2026-10-08).
       this.deps.logger?.error?.("diff2 history: could not load the GitHub history", {

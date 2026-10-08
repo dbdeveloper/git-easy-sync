@@ -189,7 +189,9 @@ Use it, and note which runs you did.
         version works; a row whose commit DELETED the file (e.g. "Delete .gitignore" made on
         github.com) opens to the calm "… was deleted in this version — there is nothing to
         open." (no red error), and its row then reads "· deleted in this version" with the date
-        struck through; the log has a WARN line for it.
+        struck through; the log has a WARN line for it. Rows by device **unknown** (commits made
+        outside the plugin) are checked while the list loads: such a deletion is ALREADY marked
+        when the list appears; an unknown commit that changed the file is a normal row.
 
 ## 5c. Plugin updates across Obsidian versions (📱🖥️🌐 · PLUGIN-UPDATE-COMPAT)
 
