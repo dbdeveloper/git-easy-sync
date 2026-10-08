@@ -96,6 +96,27 @@ function headerValue(
 // every read path that can meet a repo with no files has to know it.
 export const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+// The level of an "HTTP …" log line (owner, 2026-10-08). A status that
+// changes the normal course — not found, conflict, a stale ref, a rate
+// limit — is unexpected INFORMATION: WARN. A token that is gone, missing
+// permissions, or a server failure: ERROR, whoever is at fault. No
+// response at all (no network, a timeout) is logged as a WARN by the
+// caller of this. See docs/ARCHITECTURE.md "Log levels".
+export type HttpLogLevel = "info" | "warn" | "error";
+
+export function httpLogLevel(status: number, headers?: Record<string, string>): HttpLogLevel {
+  if (status < 400) return "info";
+  if (status === 429) return "warn";
+  if (status === 403) {
+    const h = (name: string) =>
+      Object.entries(headers ?? {}).find(([k]) => k.toLowerCase() === name)?.[1];
+    if (h("x-ratelimit-remaining") === "0" || h("retry-after") !== undefined) return "warn";
+    return "error";
+  }
+  if (status === 401 || status >= 500) return "error";
+  return "warn";
+}
+
 export default class GithubClient {
   // Optional Worker orchestra controller. When provided, every
   // HTTP request below routes through the network worker (Stage 6:
@@ -153,14 +174,21 @@ export default class GithubClient {
           : body instanceof ArrayBuffer
           ? new TextDecoder().decode(body)
           : undefined;
-      const wr = await this.workerClient.httpRequest({
-        url: (opts as { url: string }).url,
-        method,
-        headers: (opts as { headers?: Record<string, string> }).headers,
-        body: reqBody,
-      });
+      let wr: Awaited<ReturnType<WorkerClient["httpRequest"]>>;
+      try {
+        wr = await this.workerClient.httpRequest({
+          url: (opts as { url: string }).url,
+          method,
+          headers: (opts as { headers?: Record<string, string> }).headers,
+          body: reqBody,
+        });
+      } catch (err) {
+        this.logHttpFailure(method, label, Date.now() - t0, err);
+        throw err;
+      }
       const dt = Date.now() - t0;
-      void this.logger.info(
+      this.logHttp(
+        httpLogLevel(wr.status, wr.headers),
         `HTTP ${method} ${label} duration=${dt}ms status=${wr.status} reqKB=${(reqBytes / 1024).toFixed(1)} respKB=${(wr.text.length / 1024).toFixed(1)}`,
       );
       // Shape the worker response to match requestUrl's
@@ -176,13 +204,36 @@ export default class GithubClient {
       } as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never;
     }
 
-    const res = await requestUrl(opts);
+    let res: Awaited<ReturnType<typeof requestUrl>>;
+    try {
+      res = await requestUrl(opts);
+    } catch (err) {
+      this.logHttpFailure(method, label, Date.now() - t0, err);
+      throw err;
+    }
     const dt = Date.now() - t0;
     const respBytes = res.arrayBuffer?.byteLength ?? 0;
-    void this.logger.info(
+    this.logHttp(
+      httpLogLevel(res.status, res.headers),
       `HTTP ${method} ${label} duration=${dt}ms status=${res.status} reqKB=${(reqBytes / 1024).toFixed(1)} respKB=${(respBytes / 1024).toFixed(1)}`,
     );
     return res;
+  }
+
+  private logHttp(level: HttpLogLevel, line: string): void {
+    void this.logger[level](line);
+  }
+
+  // No response at all: no network, DNS, a timeout — or requestUrl throwing
+  // on an HTTP status (it does unless `throw: false`), which then gets the
+  // status's own level.
+  private logHttpFailure(method: string, label: string, dt: number, err: unknown): void {
+    const status = (err as { status?: unknown })?.status;
+    if (typeof status === "number") {
+      this.logHttp(httpLogLevel(status), `HTTP ${method} ${label} duration=${dt}ms status=${status} (thrown)`);
+      return;
+    }
+    this.logHttp("warn", `HTTP ${method} ${label} failed after ${dt}ms: ${String(err)}`);
   }
 
   /**

@@ -60,6 +60,12 @@ The log is for someone debugging alone, later — so the level says what kind of
   a timeout, no network.
 - **INFO** — the normal course.
 
+The `HTTP <method> <what> … status=N` line of every GitHub request (`httpLogLevel` in
+`src/github/client.ts`): 2xx/3xx → INFO; 404, 409, 410, 422 and other 4xx → WARN; 429, or
+403 with the rate limit used up / a `Retry-After` → WARN; 401, 403 otherwise, 5xx → ERROR. A
+request with no response at all (no network, a timeout) → WARN `HTTP … failed after Nms:
+<reason>`.
+
 ## Module layout (`src/`)
 
 ```

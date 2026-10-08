@@ -135,7 +135,8 @@ export class MainHeadGuard {
         );
         return got;
       }
-      this.logger?.info(
+      // A retry the normal course does not take — WARN (owner, 2026-10-08).
+      this.logger?.warn(
         "monotonic-head: read is a SUPERSEDED confirmed head (replica lag) — backoff + re-read",
         { read: got, delayMs: delay },
       );
