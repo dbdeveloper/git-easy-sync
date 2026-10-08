@@ -196,6 +196,10 @@ export class LogViewerPanel {
     root.addClass("ges-log-viewer");
     this.buildToolbar(root.createDiv("ges-log-toolbar"));
     this.bodyEl = root.createDiv("ges-log-body");
+    // Reading and preparing a big log takes a while (10 MB: ~0.7 s on a
+    // desktop, seconds on a phone — owner, 2026-10-08). The first table
+    // drawn, "too large" or a read error replaces this text.
+    this.showMessage("Loading the log…");
 
     // Obsidian takes Mod+F before a custom view's keymap; a capture-phase
     // listener wins, gated on focus being inside THIS editor (the same

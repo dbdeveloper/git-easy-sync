@@ -458,6 +458,25 @@ describe("LogViewerPanel", () => {
     });
   });
 
+  // Owner, 2026-10-08: preparing a 10 MB log takes ~0.7 s here and
+  // seconds on a phone — the body must not look empty and broken.
+  it("🔑 'Loading the log…' while the file is read and prepared; gone once the table is drawn", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const d = deps(`${line(1)}\n`, gate);
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const panel = new LogViewerPanel(d.deps);
+    const mounting = panel.mount(root);
+    await Promise.resolve();
+    expect(root.querySelector(".ges-log-message")?.textContent).toBe("Loading the log…");
+    open();
+    await mounting;
+    expect(root.querySelector(".ges-log-message")).toBeNull();
+    expect(status(root)).toBe("1 of 1 entries");
+    panel.destroy();
+  });
+
   it("🔑 destroy() ends the logger subscription (closing the modal or the tab)", async () => {
     const d = deps(`${line(1)}\n`);
     const panel = new LogViewerPanel(d.deps);

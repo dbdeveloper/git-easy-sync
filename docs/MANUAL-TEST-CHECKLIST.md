@@ -310,6 +310,8 @@ Use it, and note which runs you did.
         swipe at the bottom is enough to resume — never a second one; scroll up first and run another Sync — new entries
         are added but the view stays where you are; an entry the current filter rejects
         is counted in `M` but not drawn; nothing ever appears twice;
+      - with a big log (a few MB; 📱 especially), "Loading the log…" shows until the table
+        appears — the window never sits empty;
       - a log over **10 MB** shows "too large — open it with your operating system" and
         nothing else;
       - 📱 the same on a phone: opens, scrolls smoothly, filter and copy work;
