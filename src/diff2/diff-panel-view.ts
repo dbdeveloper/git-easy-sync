@@ -95,10 +95,15 @@ export interface DiffEditViewDeps {
   // batchId → queue.readFile). Called LAZILY by the controller's fresh path only (a
   // resume reads snapshots). Lives in main.ts (has client + queue). Optional (conflict-
   // only hosts / test fixtures omit it).
+  // `deleted`: the file is ABSENT in that version (its commit deleted it) — the
+  // bytes are then empty and the session records it (owner, 2026-10-08).
   fetchHistoryVersionBytes?: (
     path: string,
     version: HistoryVersion,
-  ) => Promise<ArrayBuffer>;
+  ) => Promise<{ bytes: ArrayBuffer; deleted: boolean }>;
+  // Park a file's current bytes in the Deleted bin before History deletes it
+  // (best-effort). Optional for test fixtures.
+  captureForDelete?: (path: string) => Promise<void>;
   // After a History save wrote `path` (main.ts restores the root .gitignore's
   // managed blocks at once — owner, 2026-10-08). Optional for test fixtures.
   afterHistoryWrite?: (path: string) => Promise<void>;

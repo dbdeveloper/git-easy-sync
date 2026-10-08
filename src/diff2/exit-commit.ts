@@ -512,6 +512,37 @@ export async function commitUnchangedSide(
   return { writtenPath };
 }
 
+// History [←] save (owner, 2026-10-08). The version side is read-only; the
+// current file is written — EXCEPT when that version is a DELETION of the
+// file (meta.baseExistedAtStart === false) and the result is empty, i.e. the
+// deleted side was taken whole: then the file is DELETED. Its current bytes
+// go to the Deleted bin first (`capture`, best-effort — the bin is a safety
+// net, not a precondition), no confirmation. Any other empty result is an
+// empty file "\n" (commitUnchangedSide's guard): a 0-byte file would be
+// "restored" from the repo by the zero-byte guard.
+export async function commitHistoryResult(
+  vault: Vault,
+  autosaveId: string,
+  meta: AutosaveMeta,
+  resolved: ResolvedSides,
+  capture: (path: string) => Promise<void>,
+): Promise<{ path: string; deleted: boolean }> {
+  if (!meta.baseExistedAtStart && resolved.sibling === "") {
+    const p = meta.siblingPath;
+    try {
+      await capture(p);
+    } catch {
+      // best-effort, see above
+    }
+    if (await vault.adapter.exists(p)) await vault.adapter.remove(p);
+    await vault.adapter.rmdir(autosaveDir(autosaveId), true);
+    return { path: p, deleted: true };
+  }
+  // "base" = the version side changed → write resolved.sibling onto the current file.
+  const { writtenPath } = await commitUnchangedSide(vault, autosaveId, meta, resolved, "base");
+  return { path: writtenPath, deleted: false };
+}
+
 // empty→"\n" guard for SINGLE-write resolved-content paths (the resolvedFromView
 // guard moved into commit7Step's baseCommitAction; paths that write one resolved
 // side directly — commitUnchangedSide, commitToAlt, and the §3.2.a reopen

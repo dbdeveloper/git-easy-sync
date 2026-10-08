@@ -4153,22 +4153,22 @@ export default class GitHubSyncPlugin extends Plugin {
   private async fetchHistoryVersionBytes(
     path: string,
     version: HistoryVersion,
-  ): Promise<ArrayBuffer> {
+  ): Promise<{ bytes: ArrayBuffer; deleted: boolean }> {
     if (!this.githubClient || !this.batchHistorySource) {
       throw new Error("GitHub sync is not configured");
     }
     if (version.local) {
-      return await this.batchHistorySource.readFileBytes(version.id, path);
+      return { bytes: await this.batchHistorySource.readFileBytes(version.id, path), deleted: false };
     }
     const got = await fetchRemoteVersionContent(this.githubClient, path, version.id);
     if (got.deleted) {
       // The file is ABSENT in this version — open it as an EMPTY side, the way a
       // delete-vs-modify conflict shows a deleted file (owner, 2026-10-08).
       this.markHistoryVersionDeleted(path, version.id);
-      return new ArrayBuffer(0);
+      return { bytes: new ArrayBuffer(0), deleted: true };
     }
     // content is base64 (Contents API / Blobs-API fallback) → decode on the cpu-worker.
-    return await this.workerClient.decodeBase64(got.content);
+    return { bytes: await this.workerClient.decodeBase64(got.content), deleted: false };
   }
 
   // History rows whose commit DELETED the file, found by opening them (a 404) —
@@ -4340,6 +4340,15 @@ export default class GitHubSyncPlugin extends Plugin {
   // open (same pattern Sync2Manager uses for commit messages).
   private diffViewDeps(): DiffEditViewDeps {
     return {
+      // History deleting a file (a deletion version taken whole): its current
+      // bytes go to the Deleted bin first (owner, 2026-10-08). Best-effort.
+      captureForDelete: async (path) => {
+        try {
+          await this.deletedStore?.captureForDelete(path);
+        } catch (err) {
+          this.logger.warn("History delete: could not keep a copy in the Deleted bin", { path, err: `${err}` });
+        }
+      },
       afterHistoryWrite: async (path) => {
         try {
           const restored = await enforceIfRootGitignore(normalizePath(path), async () => {

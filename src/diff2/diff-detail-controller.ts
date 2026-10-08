@@ -50,6 +50,7 @@ import { compactSessionLog } from "./history-rewrite";
 import { readCursor } from "./cursor-store";
 import { atomicWriteFile } from "../sync2/atomic-write";
 import {
+  commitHistoryResult,
   commitOrDiscardExit,
   commitToAlt,
   commitUnchangedSide,
@@ -295,7 +296,7 @@ export class DiffDetailController {
       // a resume works offline). `classifyReopen`/`startSession` get ignoreBase/
       // readOnlyBase; commit routes to commitUnchangedSide. Absent ⇒ conflict path
       // is textually today's code.
-      history?: { versionSha: string; fetchBytes: () => Promise<ArrayBuffer> };
+      history?: { versionSha: string; fetchBytes: () => Promise<{ bytes: ArrayBuffer; deleted: boolean }> };
       // TODO §17 — external search context (history/deleted opened from a searched list). Seam
       // only for now: stored + drives the open-focus priority; engine/source wired later.
       search?: DiffEditorSearchContext;
@@ -428,15 +429,15 @@ export class DiffDetailController {
         // History — fetch the read-only version bytes ONLY here (the fresh path).
         // RAW bytes: startSession recomputes baseShaAtStart + normalizes internally;
         // `ours` (the model's base side) is the \n-normalized decode.
-        let readOnlyBase: { bytes: ArrayBuffer } | undefined;
+        let readOnlyBase: { bytes: ArrayBuffer; absent: boolean } | undefined;
         if (history) {
-          const bytes = await history.fetchBytes();
+          const { bytes, deleted } = await history.fetchBytes();
           // The version fetch is a (multi-second) network call — the ONLY guard ran
           // before it. Re-check here so closing the tab mid-fetch doesn't create a
           // live owner/session into a detached body (a "ghost editor" + leaked dir).
           // Return BEFORE startSession so no dir is created either.
           if (!body.isConnected) return;
-          readOnlyBase = { bytes };
+          readOnlyBase = { bytes, absent: deleted };
           ours = toLf(new TextDecoder().decode(bytes));
         }
         const meta = await startSession(
@@ -991,16 +992,20 @@ export class DiffDetailController {
       // Open-tab preservation is now handled UNIFORMLY inside atomicWriteFile (via the
       // view-preserve hook): a large write to an open file closes the tab → renames →
       // reopens fresh + cursor. So this call is a plain write.
-      const { writtenPath } = await commitUnchangedSide(
+      // Writes resolved.sibling → meta.siblingPath (= currentFile) — or DELETES the
+      // file when this version is a deletion taken whole (commitHistoryResult).
+      const done = await commitHistoryResult(
         this.deps.vault,
         session.conflictId,
         session.meta,
         resolved,
-        "base", // write resolved.sibling → meta.siblingPath (= currentFile)
+        async (p) => {
+          await this.deps.captureForDelete?.(p);
+        },
       );
-      lap("commitUnchangedSide", { totalMs: Math.round(performance.now() - tExit0) });
-      await this.deps.afterHistoryWrite?.(writtenPath);
-      new Notice(`Saved ${writtenPath}`);
+      lap("commitHistoryResult", { totalMs: Math.round(performance.now() - tExit0), deleted: done.deleted });
+      await this.deps.afterHistoryWrite?.(done.path);
+      new Notice(done.deleted ? `Deleted ${done.path}` : `Saved ${done.path}`);
     } catch (err) {
       this.deps.logger?.error("diff2 history: failed to save", { base: entry.basePath, err: String(err) });
       new Notice(`Failed to save ${entry.basePath}: ${String(err)}`);

@@ -209,15 +209,20 @@ export async function startSession(
   // them, so the sha MUST match or every reopen classifies corrupt→fresh. Bytes
   // must be RAW (byte-exact, pre-EOL-normalization), like a vault read. Default-
   // off ⇒ the conflict path below is textually unchanged.
-  readOnlyBase?: { bytes: ArrayBuffer },
+  // `absent`: this version is a DELETION of the file (its commit removed it —
+  // owner, 2026-10-08). `bytes` is then empty, and baseExistedAtStart=false
+  // records it in the meta, so a deletion survives a restart mid-session.
+  readOnlyBase?: { bytes: ArrayBuffer; absent?: boolean },
 ): Promise<AutosaveMeta> {
   // Steps 2–5.5 — read inputs ONCE, derive every fingerprint from those bytes.
   // An ABSENT base is a legit delete-vs-modify input — read it as 0 bytes rather
   // than letting readBinary throw ENOENT (the bug that broke opening an absent-
   // base conflict). baseExistedAtStart records the distinction SHA("") can't.
-  // A History version always "existed" (History never deletes) ⇒ true.
+  // A History version existed unless it is a deletion (`absent`) — History
+  // once assumed every version had content; a commit that DELETED the file is
+  // a version too (owner, 2026-10-08).
   const baseExistedAtStart = readOnlyBase
-    ? true
+    ? !readOnlyBase.absent
     : await vault.adapter.exists(basePath);
   const baseBytes = readOnlyBase
     ? readOnlyBase.bytes

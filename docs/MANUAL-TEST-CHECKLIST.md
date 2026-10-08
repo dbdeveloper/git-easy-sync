@@ -189,7 +189,11 @@ Use it, and note which runs you did.
         version works; a row whose commit DELETED the file (e.g. "Delete .gitignore" made on
         github.com) opens like a deleted file in a conflict — an EMPTY side against the current
         file, no error; after that its row shows a small trash icon after the device name,
-        whose hint reads "Deleted in this version";
+        whose hint reads "Deleted in this version"; take the EMPTY (deleted) side whole and save:
+        the notice says "Deleted .gitignore", and the plugin re-creates the file AT ONCE as in a
+        new vault — the recommended defaults included; the old content is in the Deleted bin.
+        The same with an ordinary note: saving the deleted side whole DELETES the note (it is in
+        the Deleted bin); erasing a non-deleted version's text instead leaves an empty note;
         the log has a WARN line for it.
 
 ## 5c. Plugin updates across Obsidian versions (📱🖥️🌐 · PLUGIN-UPDATE-COMPAT)
