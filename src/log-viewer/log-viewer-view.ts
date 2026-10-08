@@ -34,7 +34,8 @@ export class LogViewerView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
-    this.panel = new LogViewerPanel(this.deps);
+    // Logging turned off in Settings closes the tab (owner, 2026-10-08).
+    this.panel = new LogViewerPanel(this.deps, { onClose: () => this.leaf.detach() });
     await this.panel.mount(this.contentEl);
   }
 

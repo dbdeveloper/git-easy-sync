@@ -62,13 +62,16 @@ if (!P.createEl) {
 const line = (n: number) =>
   JSON.stringify({ timestamp: "2026-10-07T10:00:00.000Z", level: "INFO", message: `m${n}` });
 
-function deps(text: string, readGate?: Promise<void>) {
+function deps(text: string, readGate?: Promise<void>, size?: number) {
   const subs = new Set<(l: RecentLine) => void>();
+  const life = new Set<(e: "cleaned" | "disabled") => void>();
   return {
     subs,
+    life,
+    lifecycle: (e: "cleaned" | "disabled") => life.forEach((fn) => fn(e)),
     deps: {
       adapter: {
-        stat: async () => ({ size: text.length }),
+        stat: async () => ({ size: size ?? text.length }),
         read: async () => {
           await readGate;
           return text;
@@ -80,6 +83,10 @@ function deps(text: string, readGate?: Promise<void>) {
         subscribe: (fn: (l: RecentLine) => void) => {
           subs.add(fn);
           return () => subs.delete(fn);
+        },
+        onLifecycle: (fn: (e: "cleaned" | "disabled") => void) => {
+          life.add(fn);
+          return () => life.delete(fn);
         },
       }),
     },
@@ -384,6 +391,71 @@ describe("LogViewerPanel", () => {
     expect(seps.length).toBe(2);
     expect(seps[0].textContent).toMatch(/^[ |]+$/);
     panel.destroy();
+  });
+
+  // Owner, 2026-10-08: Settings → Logging acts on EVERY open viewer.
+  describe("reacting to Settings → Logging", () => {
+    it("🔑 [Clean]: the table empties in every open viewer, and they all follow", async () => {
+      const d = deps(`${line(1)}\n${line(2)}\n`);
+      const roots = [document.createElement("div"), document.createElement("div")];
+      const panels = roots.map(() => new LogViewerPanel(d.deps));
+      for (let i = 0; i < 2; i++) {
+        document.body.appendChild(roots[i]);
+        await panels[i].mount(roots[i]);
+        (panels[i] as unknown as { following: boolean }).following = false;
+      }
+      d.lifecycle("cleaned");
+      for (let i = 0; i < 2; i++) {
+        expect(status(roots[i])).toBe("0 of 0 entries");
+        expect((panels[i] as unknown as { following: boolean }).following).toBe(true);
+      }
+      d.subs.forEach((fn) => fn({ seq: 9, line: line(9) })); // logging goes on
+      expect(status(roots[0])).toBe("1 of 1 entries");
+      panels.forEach((p) => p.destroy());
+    });
+
+    it("[Clean] while the viewer showed 'too large': it becomes an empty, live log", async () => {
+      const d = deps(`${line(1)}\n`, undefined, 11 * 1024 * 1024);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const panel = new LogViewerPanel(d.deps);
+      await panel.mount(root);
+      expect(root.querySelector(".ges-log-message")).not.toBeNull();
+      d.lifecycle("cleaned");
+      expect(root.querySelector(".ges-log-message")).toBeNull();
+      d.subs.forEach((fn) => fn({ seq: 1, line: line(1) }));
+      expect(status(root)).toBe("1 of 1 entries");
+      panel.destroy();
+    });
+
+    it("[Clean] during the first read: the stale read does not bring the cleaned lines back", async () => {
+      let open!: () => void;
+      const gate = new Promise<void>((r) => (open = r));
+      const d = deps(`${line(1)}\n${line(2)}\n`, gate);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const panel = new LogViewerPanel(d.deps);
+      const mounting = panel.mount(root);
+      await Promise.resolve();
+      d.lifecycle("cleaned");
+      open();
+      await mounting;
+      expect(status(root)).toBe("0 of 0 entries");
+      d.subs.forEach((fn) => fn({ seq: 5, line: line(5) }));
+      expect(status(root)).toBe("1 of 1 entries");
+      panel.destroy();
+    });
+
+    it("🔑 disabling logging asks EVERY viewer's host to close", async () => {
+      const d = deps(`${line(1)}\n`);
+      const closed: number[] = [];
+      const panels = [0, 1].map((i) => new LogViewerPanel(d.deps, { onClose: () => closed.push(i) }));
+      for (const p of panels) await p.mount(document.createElement("div"));
+      d.lifecycle("disabled");
+      expect(closed.sort()).toEqual([0, 1]);
+      panels.forEach((p) => p.destroy());
+      expect(d.life.size).toBe(0); // destroy() also ends the lifecycle subscription
+    });
   });
 
   it("🔑 destroy() ends the logger subscription (closing the modal or the tab)", async () => {

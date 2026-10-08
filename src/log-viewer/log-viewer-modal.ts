@@ -23,7 +23,8 @@ export class LogViewerModal extends Modal {
   onOpen(): void {
     this.modalEl.addClass("ges-log-modal");
     this.titleEl.setText("git-easy-sync log");
-    this.panel = new LogViewerPanel(this.deps);
+    // Logging turned off in Settings closes the modal (owner, 2026-10-08).
+    this.panel = new LogViewerPanel(this.deps, { onClose: () => this.close() });
     void this.panel.mount(this.contentEl);
   }
 

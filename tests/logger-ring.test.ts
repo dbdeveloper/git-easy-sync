@@ -124,6 +124,21 @@ describe("Logger ring + subscription (LOG-VIEWER step 2)", () => {
     expect(log.recentLines().map((r) => r.seq)).toEqual([2]);
   });
 
+  // Owner, 2026-10-08: open log viewers react to Settings → Logging:
+  // [Clean] empties them, disabling logging closes them.
+  it("🔑 lifecycle: clean() announces 'cleaned', disable() announces 'disabled'; unsubscribe stops it", async () => {
+    const log = make();
+    await log.init();
+    const got: string[] = [];
+    const off = log.onLifecycle((e) => got.push(e));
+    await log.clean();
+    await log.disable();
+    off();
+    await log.enable();
+    await log.clean();
+    expect(got).toEqual(["cleaned", "disabled"]);
+  });
+
   it("end to end: a torn read is completed by the ring", async () => {
     const log = make();
     await log.init();

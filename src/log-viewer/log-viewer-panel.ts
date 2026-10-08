@@ -46,7 +46,14 @@ export interface LogViewerDeps {
   logger: () => {
     recentLines(): RecentLine[];
     subscribe(fn: (l: RecentLine) => void): () => void;
+    onLifecycle(fn: (e: "cleaned" | "disabled") => void): () => void;
   };
+}
+
+// What the panel needs from whoever shows it (the tab or the modal).
+export interface LogViewerHost {
+  // Logging was turned off in Settings: close the viewer.
+  onClose?: () => void;
 }
 
 const FILTER_DEBOUNCE_MS = 150; // spec §2.12
@@ -174,7 +181,15 @@ export class LogViewerPanel {
   private lastScrollLeft = 0;
   private lastScrollTop = 0;
 
-  constructor(private readonly deps: LogViewerDeps) {}
+  private unLifecycle: (() => void) | null = null;
+  // Bumped by [Clean]: a file read started before it is stale and must
+  // not draw the cleaned lines back.
+  private generation = 0;
+
+  constructor(
+    private readonly deps: LogViewerDeps,
+    private readonly host: LogViewerHost = {},
+  ) {}
 
   async mount(root: HTMLElement): Promise<void> {
     root.empty();
@@ -208,6 +223,11 @@ export class LogViewerPanel {
     // waits in the feed and is let through after the merge (spec §2.14).
     const logger = this.deps.logger();
     this.feed = new LiveFeed((fn) => logger.subscribe(fn));
+    // Settings → Logging (owner, 2026-10-08): every open viewer reacts.
+    this.unLifecycle = logger.onLifecycle((e) => {
+      if (e === "cleaned") this.onCleaned();
+      else this.host.onClose?.();
+    });
     await this.loadLog(false);
   }
 
@@ -232,6 +252,8 @@ export class LogViewerPanel {
     this.destroyed = true;
     this.feed?.close();
     this.feed = null;
+    this.unLifecycle?.();
+    this.unLifecycle = null;
     if (this.filterTimer !== null) window.clearTimeout(this.filterTimer);
     if (this.gapTimer !== null) window.clearTimeout(this.gapTimer);
     this.unbindKeys?.();
@@ -308,8 +330,9 @@ export class LogViewerPanel {
   // if the second read overlaps the ring, the content is replaced quietly
   // and the "…" goes away (spec §2.14).
   private async loadLog(isGapReread: boolean): Promise<void> {
+    const gen = this.generation;
     const r = await openLog(this.deps.adapter, this.deps.logPath, this.deps.logger());
-    if (this.destroyed) return;
+    if (this.destroyed || gen !== this.generation) return;
     if (r.kind === "too-big") {
       this.feed?.close();
       this.feed = null;
@@ -334,6 +357,27 @@ export class LogViewerPanel {
         void this.loadLog(true);
       }, GAP_REREAD_MS);
     }
+  }
+
+  // [Clean] in Settings: the file and the logger's ring are empty now.
+  // The viewer becomes an empty, live log — whatever it showed before
+  // ("too large" and read errors included): auto-scroll on, both scrolls
+  // at 0, and the next entry appears at once (owner, 2026-10-08).
+  private onCleaned(): void {
+    this.generation += 1;
+    if (this.gapTimer !== null) window.clearTimeout(this.gapTimer);
+    this.gapTimer = null;
+    // A fresh feed: the old one may be closed ("too large") or still
+    // waiting for a read that will now never finish. Every line from
+    // here on is new — sequence numbers keep rising, the ring is empty.
+    this.feed?.close();
+    const logger = this.deps.logger();
+    this.feed = new LiveFeed((fn) => logger.subscribe(fn));
+    this.feed.start(null, (l) => this.onLive(l));
+    this.items = [];
+    this.lastScrollLeft = 0;
+    this.lastScrollTop = 0;
+    this.render(true); // with no editor yet, this also removes the "too large" / error text
   }
 
   private showMessage(text: string): void {

@@ -49,11 +49,14 @@ export interface LoggedLine {
   line: string;
 }
 
+export type LogLifecycle = "cleaned" | "disabled";
+
 export default class Logger {
   private logFile: string;
   private ring: LoggedLine[] = [];
   private seq = 0;
   private readonly listeners = new Set<(l: LoggedLine) => void>();
+  private readonly lifecycleListeners = new Set<(e: LogLifecycle) => void>();
 
   constructor(
     private vault: Vault,
@@ -182,6 +185,26 @@ export default class Logger {
     };
   }
 
+  // Settings → Logging acted on the log: [Clean] ("cleaned") or the
+  // toggle off ("disabled"). Open log viewers follow it (owner,
+  // 2026-10-08). Returns the unsubscribe function.
+  onLifecycle(fn: (e: LogLifecycle) => void): () => void {
+    this.lifecycleListeners.add(fn);
+    return () => {
+      this.lifecycleListeners.delete(fn);
+    };
+  }
+
+  private announce(e: LogLifecycle): void {
+    for (const fn of [...this.lifecycleListeners]) {
+      try {
+        fn(e);
+      } catch {
+        // A broken listener must not break Settings or the others.
+      }
+    }
+  }
+
   async read(): Promise<string> {
     return await this.vault.adapter.read(this.logFile);
   }
@@ -193,7 +216,8 @@ export default class Logger {
     // The ring goes with the file: the viewer's merge would otherwise
     // bring the cleaned lines back. Sequence numbers keep rising.
     this.ring = [];
-    return await this.vault.adapter.write(this.logFile, "");
+    await this.vault.adapter.write(this.logFile, "");
+    this.announce("cleaned");
   }
 
   async enable(): Promise<void> {
@@ -205,6 +229,7 @@ export default class Logger {
     this.enabled = false;
     this.ring = []; // the file is deleted below — same reason as clean()
     await this.removeFile();
+    this.announce("disabled");
   }
 
   // Touch the log file into existence at 0 bytes if it's not

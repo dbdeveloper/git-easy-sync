@@ -312,7 +312,13 @@ Use it, and note which runs you did.
         is counted in `M` but not drawn; nothing ever appears twice;
       - a log over **10 MB** shows "too large — open it with your operating system" and
         nothing else;
-      - 📱 the same on a phone: opens, scrolls smoothly, filter and copy work.
+      - 📱 the same on a phone: opens, scrolls smoothly, filter and copy work;
+      - **Settings acts on EVERY open viewer** (new 2026-10-08): open two viewers (drag the first
+        tab into the main window, then press **Open** again… or one tab + scroll it up); press
+        **[Clean]** — every viewer empties (`0 of 0 entries`), scrolled to the top and column 0,
+        following ON; run a Sync — the new entries appear in all of them. A viewer that showed
+        "too large" becomes an empty live log the same way. Turn **Enable logging** off — every
+        viewer (tab, window, 📱 modal) closes.
 - [ ] **Changing a switch never scrolls the page (new 2026-10-07).** Scroll down to *Logging* and toggle **Enable logging** on and off: the page stays where it is, and the *Clean logs* row appears/disappears in place. (Tab/Shift-Tab between fields is not expected to work — Obsidian's settings behave that way for every plugin.)
 - [ ] Changing the **device label** makes new commits carry the new `(label)` suffix.
 - [ ] Switching repositories resets state correctly. ⚠️ **Change it in the SETTINGS UI,
