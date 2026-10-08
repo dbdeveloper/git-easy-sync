@@ -213,7 +213,15 @@ export class DiffHistoryView extends ItemView {
   // Both-ready gate + generation token. Loads local (instant, can't throw) always,
   // then GitHub (may throw — offline / unconfigured / rate-limited); a GitHub failure
   // still shows the local unpushed versions (advisor: don't let a throw hide local).
-  private async render(): Promise<void> {
+  // After every Sync (owner, 2026-10-08): re-read the list so a commit the
+  // sync just made or brought shows at once. QUIET — no "Loading…", the
+  // scroll position kept, and focus NOT taken: a background sync must not
+  // pull the cursor out of the note the user is typing in.
+  refresh(): void {
+    void this.render(true);
+  }
+
+  private async render(quiet = false): Promise<void> {
     if (!this.contentEl || !this.state.path) return;
     const gen = ++this.gen;
     const path = this.state.path;
@@ -230,7 +238,8 @@ export class DiffHistoryView extends ItemView {
 
     const queue = this.deps.queue();
     const client = this.deps.client();
-    container.empty();
+    if (quiet && (!queue || !client)) return;
+    if (!quiet) container.empty();
     container.addClass("diff2-history-view-root");
     if (!queue || !client) {
       container.createEl("div", {
@@ -239,7 +248,7 @@ export class DiffHistoryView extends ItemView {
       });
       return;
     }
-    container.createEl("div", { text: "Loading…", cls: "diff2-history-loading" });
+    if (!quiet) container.createEl("div", { text: "Loading…", cls: "diff2-history-loading" });
 
     // local-always + caught GitHub failure (see loadHistoryVersions). A GitHub throw
     // is logged here (the seam swallows it into `githubError`) so the log still shows why.
@@ -263,7 +272,10 @@ export class DiffHistoryView extends ItemView {
     // Superseded by a newer render, OR this leaf was detached mid-fetch (the move-guard
     // detaching a same-path leaf that was still loading) → don't render into a dead node.
     if (gen !== this.gen || !this.contentEl.isConnected) return;
-    this.renderList(container, path, versions, githubError, tokenExpired);
+    const hadFocus = container.contains(container.ownerDocument.activeElement);
+    const scrollTop = container.scrollTop;
+    this.renderList(container, path, versions, githubError, tokenExpired, !quiet || hadFocus);
+    if (quiet) container.scrollTop = scrollTop;
   }
 
   private renderList(
@@ -272,6 +284,7 @@ export class DiffHistoryView extends ItemView {
     versions: readonly HistoryVersion[],
     githubError: boolean,
     tokenExpired: boolean,
+    takeFocus = true,
   ): void {
     container.empty();
     if (githubError) {
@@ -332,7 +345,7 @@ export class DiffHistoryView extends ItemView {
     this.applySelection();
     list.addEventListener("keydown", (e) => this.onKeyDown(e, path));
     // Focus the list so the arrows work the instant the tab is shown / returned to.
-    list.focus({ preventScroll: true });
+    if (takeFocus) list.focus({ preventScroll: true });
   }
 
   // A version of `path` just turned out to be a deletion: re-label its row in place

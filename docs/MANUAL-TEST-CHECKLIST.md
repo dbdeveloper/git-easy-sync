@@ -194,6 +194,10 @@ Use it, and note which runs you did.
         new vault — the recommended defaults included; the old content is in the Deleted bin.
         The same with an ordinary note: saving the deleted side whole DELETES the note (it is in
         the Deleted bin); erasing a non-deleted version's text instead leaves an empty note;
+      - **History follows Sync** (any Sync file → its open History tab): edit a note whose
+        History is open, Sync — the new row appears at once, no "Loading…" flash, the list
+        keeps its scroll and selected row, and typing in another note is NOT interrupted (the
+        cursor stays there, also on an interval/background sync);
         the log has a WARN line for it.
 
 ## 5c. Plugin updates across Obsidian versions (📱🖥️🌐 · PLUGIN-UPDATE-COMPAT)

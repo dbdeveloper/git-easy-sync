@@ -2946,6 +2946,11 @@ export default class GitHubSyncPlugin extends Plugin {
   // notice tests green, because every one of them drove
   // `settleDrainSection` directly and none drove the wiring.
   private handleDrainIdle(): void {
+    // Every Sync re-reads every open History list (owner, 2026-10-08), so a
+    // commit it just made or brought shows at once. Quiet — see refresh().
+    for (const leaf of this.app?.workspace?.getLeavesOfType(DIFF2_HISTORY_VIEW_TYPE) ?? []) {
+      if (leaf.view instanceof DiffHistoryView) leaf.view.refresh();
+    }
     // The cancel confirmation lives HERE, not on the sync summary,
     // because a background drain (interval tick, watchdog) never
     // produces one — cancelling such a drain used to report nothing at
