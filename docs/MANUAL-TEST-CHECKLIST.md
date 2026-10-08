@@ -273,6 +273,9 @@ Use it, and note which runs you did.
       - 🖥️ it opens in its OWN window, in front of Settings; closing it leaves Settings open;
         its tab can be dragged into the main window's tab bar and stays there; pressing
         **Open** again brings the existing viewer (and its window) forward — never a second one;
+        put the viewer's window BEHIND another app's window, and once MINIMIZED: **Open** raises
+        it to the front (restored); with the viewer as a tab in the MAIN window, **Open** closes
+        Settings and shows that tab (new 2026-10-08);
       - 🖥️ drag the viewer's tab into the main window, move it between splits, then drag it OUT
         into a new window again: the columns stay aligned (no `|||text`), scrolling works, and
         Ctrl/Cmd+F opens the search in the new window;

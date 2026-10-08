@@ -40,6 +40,7 @@ import {
 } from "./sync2/gitignore-migration";
 import { GitignoreAnalysisModal } from "./sync2/views/gitignore-analysis-modal";
 import { GitignoreEditModal } from "./sync2/views/gitignore-edit-modal";
+import { bringLeafToFront } from "./bring-to-front";
 import { GitignoreDecisionModal } from "./sync2/views/gitignore-modal";
 import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
 import {
@@ -3859,9 +3860,11 @@ export default class GitHubSyncPlugin extends Plugin {
       canPopout: Platform.isDesktopApp,
     });
     if (target === "reveal" && open) {
-      await workspace.revealLeaf(open);
-      // A pop-out window must be raised too, or it stays behind Settings.
-      open.view.containerEl.win?.focus();
+      await bringLeafToFront(open, {
+        mainWindow: window,
+        revealLeaf: (l) => workspace.revealLeaf(l),
+        closeSettings: () => this.closeSettingsDialog(),
+      });
       return;
     }
     if (target === "popout") {
