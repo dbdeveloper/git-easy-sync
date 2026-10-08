@@ -168,6 +168,25 @@ Use it, and note which runs you did.
       files gets ONE commit removing them, with its own message naming the count.
 - [ ] 🌐 **One release = one `.gitignore` commit.** The first sync after a version bump
       rewrites three files and produces exactly ONE commit. Expected, not a defect.
+- [ ] **Root `.gitignore` editor (GITIGNORE-EDITOR, new 2026-10-08)** — Settings → `.gitignore`
+      → *Edit the root .gitignore*:
+      - **[Open]** shows the warning EVERY time: "Edit .gitignore?", two short sentences,
+        [Cancel] / [I know .gitignore rules] (red); 📱 it fits a small screen even with a
+        large font; the ".gitignore rules" link opens git's docs in the browser; [Cancel]
+        (or Esc) opens nothing;
+      - after the confirm: 🖥️ the editor opens in its OWN window above Settings; 📱 a
+        full-screen modal above Settings; the [Cancel]/[Save] row is always visible, long
+        lines scroll sideways (no wrap);
+      - with the editor open, **[Open]** again brings it to the front WITHOUT the warning
+        (🖥️ also when its window is behind another app or minimized; and when its tab was
+        dragged into the main window — Settings close);
+      - **[Cancel]** / closing the window: nothing written (the file's mtime unchanged);
+      - **[Save]** without a change: nothing written; with a change: "Root .gitignore saved.",
+        the editor closes, the next Sync sends the change;
+      - change the file on ANOTHER device, Sync here while the editor is open with your edit,
+        then **[Save]**: refused with "changed on disk…", your text still in the editor;
+      - **[History]** closes Settings and shows the History list of `.gitignore`; opening a
+        version works (see GITIGNORE-EDITOR.md §3 for the open question about saving there).
 
 ## 5c. Plugin updates across Obsidian versions (📱🖥️🌐 · PLUGIN-UPDATE-COMPAT)
 

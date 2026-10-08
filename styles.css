@@ -1174,33 +1174,28 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
     flex-direction: column;
 }
 
-/* bug-gitignore-editor (field report 2026-09-28) — the SAME shape as bug-23
- * above, and it appeared for the same reason: a content box that grows with
- * its child instead of clipping. The modal scrolled, the textarea scrolled
- * inside it (two scrollbars), and the Save/Cancel row was pushed below the
- * fold — so the editor had no visible way to commit.
- *
- * Fix: the content box is a flex COLUMN that clips, the textarea is the only
- * thing that flexes, and the button row cannot shrink. Then exactly one
- * element scrolls and the buttons are always reachable. */
-.git-easy-sync-gitignore-modal {
-    width: min(760px, 92vw);
-}
-.git-easy-sync-gitignore-modal .modal-content {
+/* The root .gitignore editor (docs/tasks/GITIGNORE-EDITOR.md) — the same
+ * panel in a pop-out tab (desktop) and a full-screen modal (phone).
+ * bug-gitignore-editor (field report 2026-09-28) still applies: the box is a
+ * flex COLUMN that clips, the textarea is the only thing that flexes and
+ * scrolls, and the button row cannot shrink — so the buttons are always
+ * reachable and there is exactly one scrollbar. */
+.ges-gitignore-editor {
     display: flex;
     flex-direction: column;
-    max-height: 70vh;
+    height: 100%;
+    min-height: 0;
     overflow: hidden;
 }
-.git-easy-sync-gitignore-hint {
+.ges-gitignore-hint {
     flex-shrink: 0;
     margin-top: 0;
     color: var(--text-muted);
     font-size: var(--font-ui-smaller);
 }
-.git-easy-sync-gitignore-editor {
+.ges-gitignore-text {
     flex: 1 1 auto;
-    min-height: 12em;
+    min-height: 8em;
     width: 100%;
     box-sizing: border-box;
     font-family: var(--font-monospace);
@@ -1211,9 +1206,33 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
     overflow: auto;
     resize: none;
 }
-.git-easy-sync-gitignore-modal .modal-button-container {
+.ges-gitignore-error {
     flex-shrink: 0;
+    color: var(--text-error);
+}
+.ges-gitignore-error:empty {
+    display: none;
+}
+.ges-gitignore-buttons {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
     margin-top: 0.75em;
+}
+.modal.ges-gitignore-modal {
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    max-width: 100vw;
+    max-height: 100vh;
+    max-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+}
+.modal.ges-gitignore-modal .modal-content.ges-gitignore-editor {
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 /* §8.1.5b — the running count in the analysis wait. Muted and monospaced

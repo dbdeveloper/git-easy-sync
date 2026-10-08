@@ -918,8 +918,13 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Edit the root .gitignore")
       .setDesc(
-        "Open it in a normal editor tab. Obsidian hides files whose name " +
-          "starts with a dot, so this is the way to reach it from inside the app.",
+        "Obsidian hides files whose name starts with a dot, so this is the " +
+          "way to reach it from inside the app.",
+      )
+      .addButton((button) =>
+        button.setButtonText("History").onClick(async () => {
+          await this.plugin.openRootGitignoreHistory();
+        }),
       )
       .addButton((button) =>
         button.setButtonText("Open").onClick(async () => {

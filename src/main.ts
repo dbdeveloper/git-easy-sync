@@ -39,7 +39,13 @@ import {
   type MigrationResult,
 } from "./sync2/gitignore-migration";
 import { GitignoreAnalysisModal } from "./sync2/views/gitignore-analysis-modal";
-import { GitignoreEditModal } from "./sync2/views/gitignore-edit-modal";
+import { GitignoreWarningModal } from "./gitignore-editor/gitignore-warning";
+import { GitignoreEditorModal } from "./gitignore-editor/gitignore-editor-modal";
+import {
+  GitignoreEditorView,
+  GITIGNORE_EDITOR_VIEW_TYPE,
+} from "./gitignore-editor/gitignore-editor-view";
+import type { GitignoreEditorDeps } from "./gitignore-editor/gitignore-editor-panel";
 import { bringLeafToFront } from "./bring-to-front";
 import { GitignoreDecisionModal } from "./sync2/views/gitignore-modal";
 import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
@@ -793,6 +799,12 @@ export default class GitHubSyncPlugin extends Plugin {
         LOG_VIEWER_VIEW_TYPE,
         (leaf) =>
           new LogViewerView(leaf, this.logViewerDeps()),
+      );
+      // The root .gitignore editor — opened ONLY from Settings → .gitignore,
+      // after the warning (docs/tasks/GITIGNORE-EDITOR.md).
+      this.registerView(
+        GITIGNORE_EDITOR_VIEW_TYPE,
+        (leaf) => new GitignoreEditorView(leaf, this.gitignoreEditorDeps()),
       );
       // 7a.2 — the per-file diff2-history list view.
       this.registerView(
@@ -2272,19 +2284,64 @@ export default class GitHubSyncPlugin extends Plugin {
     }
   }
 
-  // Settings → "Open" (§8.1.5, TODO §4). Obsidian's indexer hides dotted
-  // paths, so there is no TFile to hand an editor tab — see
-  // GitignoreEditModal for the whole reason this is a modal.
+  // Settings → .gitignore → [Open] (docs/tasks/GITIGNORE-EDITOR.md). An
+  // editor already open is brought to the front, without the warning —
+  // the editing has begun. Otherwise the warning comes EVERY time, and
+  // only its confirm opens the editor: on desktop in its own window above
+  // Settings, on a phone as a full-screen modal (the log viewer's way).
+  // Obsidian hides dotted paths, so there is no TFile for a normal tab.
   async openRootGitignore(): Promise<void> {
-    try {
+    const { workspace } = this.app;
+    const open = workspace.getLeavesOfType(GITIGNORE_EDITOR_VIEW_TYPE)[0];
+    if (open) {
+      await bringLeafToFront(open, {
+        mainWindow: window,
+        revealLeaf: (l) => workspace.revealLeaf(l),
+        closeSettings: () => this.closeSettingsDialog(),
+      });
+      return;
+    }
+    new GitignoreWarningModal(this.app, () => void this.openGitignoreEditor()).open();
+  }
+
+  private async openGitignoreEditor(): Promise<void> {
+    // The same choice as the log viewer's (pop-out on desktop, modal on a phone).
+    const target = logViewerTarget({ hasOpenViewer: false, canPopout: Platform.isDesktopApp });
+    if (target === "popout") {
+      try {
+        const leaf = this.app.workspace.openPopoutLeaf({ size: { width: 800, height: 600 } });
+        await leaf.setViewState({ type: GITIGNORE_EDITOR_VIEW_TYPE, active: true });
+        return;
+      } catch (err) {
+        this.logger.warn(".gitignore editor: pop-out window unavailable, opening the modal", {
+          err: `${err}`,
+        });
+      }
+    }
+    new GitignoreEditorModal(this.app, this.gitignoreEditorDeps()).open();
+  }
+
+  // Settings → .gitignore → [History]: the ordinary History list for the
+  // root .gitignore (the file menu cannot offer it — Obsidian hides the
+  // file). Settings close, or they would cover the History tab.
+  async openRootGitignoreHistory(): Promise<void> {
+    this.closeSettingsDialog();
+    await this.openHistoryView(normalizePath(".gitignore"));
+  }
+
+  private gitignoreEditorDeps(): GitignoreEditorDeps {
+    const path = normalizePath(".gitignore");
+    const adapter = this.app.vault.adapter;
+    const read = async () => ((await adapter.exists(path)) ? await adapter.read(path) : "");
+    return {
       // enforce() first so the user edits the assembled file rather than a
       // version about to be rewritten under them.
-      await this.invariants?.enforce();
-      const path = normalizePath(".gitignore");
-      const current = (await this.app.vault.adapter.exists(path))
-        ? await this.app.vault.adapter.read(path)
-        : "";
-      new GitignoreEditModal(this.app, current, async (content) => {
+      load: async () => {
+        await this.invariants?.enforce();
+        return await read();
+      },
+      readCurrent: read,
+      save: async (content) => {
         await atomicWriteFile(
           this.app.vault,
           path,
@@ -2295,11 +2352,8 @@ export default class GitHubSyncPlugin extends Plugin {
         // parse for that level — a stale cache would keep applying the
         // rules they just changed. One call covers both.
         await this.invariants?.enforce();
-      }).open();
-    } catch (err) {
-      this.logger.error("opening root .gitignore failed", `${err}`);
-      new Notice(`Could not open .gitignore: ${err}`);
-    }
+      },
+    };
   }
 
   // `origin` follows the §35 convention next door (gateOnTokenExpired):

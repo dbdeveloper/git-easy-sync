@@ -231,3 +231,8 @@
   - dragging the tab into a NEW window lost CM6's per-document base styles (`|||text`), fixed with `EditorView.setRoot` on `onWindowMigrated`. The same move silently resets the scroll, so the position is restored from the last one known.
 
   Fuzzy pattern search is deferred with the owner's rules written into the spec. TODO п.55 records the follow-up: rebuild the `.gitignore` editor on the same pattern.
+
+- **2026-10-08 — the root `.gitignore` editor on the log viewer's pattern (TODO п.55, GITIGNORE-EDITOR.md).**
+  The fixed textarea modal became one `GitignoreEditorPanel` hosted by a pop-out tab (desktop) and a full-screen modal (phone). The owner added a warning shown EVERY time before it opens, deliberately short so it fits a small phone screen: a link to git's own pattern-format docs, [Cancel] / [I know .gitignore rules]. [Save] writes only a real change, and refuses to write over a file that a Sync changed while it was open (the user keeps their text). [History] in Settings opens the ordinary History list for the hidden file.
+
+  Building it surfaced a log-viewer defect: [Open] for a viewer already open "did nothing". `window.focus()` does not raise an Electron window; Obsidian raises its own pop-outs through `electronWindow` (read from the 1.13.4 asar), and a tab in the MAIN window sat under the Settings dialog. `bring-to-front.ts` now serves both windows.

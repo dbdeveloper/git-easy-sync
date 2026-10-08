@@ -72,6 +72,16 @@ src/
 │   ├── log-viewer-view.ts           # desktop host: a tab opened in its own pop-out window
 │   ├── log-viewer-modal.ts          # phone host: a full-screen modal above Settings
 │   └── log-open-target.ts           # reveal / popout / modal choice
+├── gitignore-editor/                # the root .gitignore editor (docs/tasks/GITIGNORE-EDITOR.md),
+│   │                                #  opened ONLY from Settings → .gitignore → Open, after a warning.
+│   │                                #  Not a normal tab: Obsidian hides dotted paths (no TFile)
+│   ├── gitignore-warning.ts         # the warning shown EVERY time before the editor opens
+│   ├── gitignore-editor-panel.ts    # textarea + [Cancel]/[Save]: unchanged → no write; changed on
+│   │                                #  disk meanwhile → refused, the text kept
+│   ├── gitignore-editor-view.ts     # desktop host: a tab in its own pop-out window
+│   └── gitignore-editor-modal.ts    # phone host: a full-screen modal above Settings
+├── bring-to-front.ts                # [Open] for an already open window: raise the pop-out
+│                                    #  (electronWindow) or close Settings over a main-window tab
 ├── token-expired-flag.ts            # E1 (TODO §5/§35): sticky .runtime/.token_expired marker
 │                                    #  (in-memory authoritative + file mirror; file stores the
 │                                    #  401/403 class tag). authErrorKind + tokenExpiredMessage +
@@ -251,9 +261,6 @@ src/
         ├── gitignore-analysis-modal.ts    # §8.1.5b the wait a Sync click meets while the one-time
         │                                  #  scan is still walking. A RACE, not a question: finishing
         │                                  #  closes it and the click continues, [Back] CANCELS the sync
-        ├── gitignore-edit-modal.ts        # The root `.gitignore` editor. A modal, not a tab, and FORCED:
-        │                                  #  Obsidian's indexer hides dotted paths, so the file is not a
-        │                                  #  TFile and leaf.openFile has nothing to open
         └── token-expired-modal.ts         # 401/403 recovery dialog (Stage 7/§35): class-aware intro + shorter mobile layout
 ```
 
