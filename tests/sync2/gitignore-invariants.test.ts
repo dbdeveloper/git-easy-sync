@@ -831,6 +831,68 @@ describe("section CONTENT: two strengths in the root file (DOT-FILES §3.1)", ()
   });
 });
 
+// Owner, 2026-10-08: `*.log` lives in the root file's OVERRIDABLE top
+// section, not only among the recommended defaults. A recommended default
+// is seeded only into a NEW file, so a vault with its own rules — or an
+// emptied file — never got it, and the plugin's own log went to GitHub.
+// In the top section it is always there, and the user can still opt
+// logs back in below it (`!*.log` / `!/git-easy-sync.log`).
+describe("*.log in the root file's top (overridable) section", () => {
+  let f: ReturnType<typeof fixture>;
+  beforeEach(() => {
+    f = fixture();
+  });
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+  const rootPath = () => path.join(f.root, ".gitignore");
+  const topSection = (c: string) => c.slice(c.indexOf(I_BEGIN), c.indexOf(INVARIANTS_END));
+
+  it("🔑 an EMPTIED file (\"\\n\") still gets *.log — in the top section, once", async () => {
+    fs.writeFileSync(rootPath(), "\n");
+    await f.inv.enforce();
+    const c = fs.readFileSync(rootPath(), "utf8");
+    expect(topSection(c)).toContain("\n*.log\n");
+    expect(c.split("\n").filter((l) => l === "*.log")).toHaveLength(1);
+    const gi = new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR));
+    expect(gi.ignored("git-easy-sync.log")).toBe(true);
+    expect(gi.ignored("notes/debug.log")).toBe(true);
+  });
+
+  it("🔑 a file with the user's own rules gets it too", async () => {
+    fs.writeFileSync(rootPath(), "private/\n");
+    await f.inv.enforce();
+    expect(topSection(fs.readFileSync(rootPath(), "utf8"))).toContain("\n*.log\n");
+  });
+
+  // The count of copies is 1 before and 1 after — the rule MOVED, none
+  // stopped existing — so this is not reported as a removal (countExtras).
+  it("🔑 the old user-zone `*.log` line moves up by itself; its comment stays", async () => {
+    fs.writeFileSync(rootPath(), "# Logs (covers the plugin's own log)\n*.log\n");
+    await f.inv.enforce();
+    const c = fs.readFileSync(rootPath(), "utf8");
+    expect(c.split("\n").filter((l) => l === "*.log")).toHaveLength(1);
+    expect(topSection(c)).toContain("\n*.log\n");
+    expect(c).toContain("# Logs (covers the plugin's own log)");
+  });
+
+  it("🔑 the user can still opt logs back in below the section", async () => {
+    await f.inv.enforce();
+    const c = fs.readFileSync(rootPath(), "utf8");
+    fs.writeFileSync(rootPath(), c.replace(F_BEGIN, `!/git-easy-sync.log\n\n${F_BEGIN}`));
+    const gi = new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR));
+    expect(gi.ignored("git-easy-sync.log")).toBe(false);
+    expect(gi.ignored("notes/debug.log")).toBe(true);
+  });
+
+  it("a NEW file: *.log is in the top section, not repeated among the recommended defaults", async () => {
+    await f.inv.enforce();
+    const c = fs.readFileSync(rootPath(), "utf8");
+    expect(c.split("\n").filter((l) => l === "*.log")).toHaveLength(1);
+    expect(topSection(c)).toContain("\n*.log\n");
+  });
+});
+
 describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () => {
   let f: ReturnType<typeof fixture>;
   const foreignDir = () => path.join(f.root, CONFIG_DIR, "plugins", "brat");

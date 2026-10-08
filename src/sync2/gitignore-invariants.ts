@@ -279,7 +279,13 @@ const ROOT_INVARIANTS_BODY = `# Editing this block triggers a rewrite to canonic
 .*/
 
 # ...except this file, the one that decides the rest.
-!/.gitignore`;
+!/.gitignore
+
+# Logs, the plugin's own <plugin-id>.log at the vault root included.
+# To sync logs anyway, add below this block: !*.log (all) or
+# !/<plugin-id>.log (only the plugin's) - useful for reading a phone's
+# log on a desktop, but several devices will write the same file.
+*.log`;
 
 // BODY of the `final` section at the END of <vault>/.gitignore: the
 // rules that are NOT up for discussion (DOT-FILES §3.1).
@@ -316,14 +322,10 @@ function rootFinalBody(configDir: string): string {
 // Recommended root-level defaults seeded ONLY when sync2 first
 // creates <vault>/.gitignore. They sit BETWEEN the two managed
 // sections: overridable like everything in the user's zone.
+// (`*.log` moved to the top section on 2026-10-08 — owner: a default
+// reaches only NEW files, so vaults with their own rules, or an emptied
+// file, sent the plugin's own log to GitHub.)
 const ROOT_RECOMMENDED_DEFAULTS = `# Recommended defaults - feel free to edit.
-
-# Logs (covers the plugin's own <plugin-id>.log at the vault root
-# plus any other *.log anywhere in the vault). Remove this line if
-# you want logs to sync to GitHub - useful for analysing mobile
-# logs from desktop, but multi-device writes will collide on the
-# same filename.
-*.log
 
 # OS noise
 .DS_Store
