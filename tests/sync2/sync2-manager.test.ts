@@ -918,6 +918,54 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     });
   });
 
+  // Owner, 2026-10-10: a forbidden file name (: ? * | < > " \ # ^ [ ]) is
+  // made safe BEFORE the commit on the ONE-FILE path too ("Commit/Sync
+  // active file") — it used to happen only in the full pass, so the file went
+  // to the server under its forbidden name. A safe name that is TAKEN gets
+  // the first free " (N)" (N from 2) — the same rule on both paths — and a
+  // WARN in the log.
+  describe("forbidden file names on the one-file path", () => {
+    const renames: Array<[string, string]> = [];
+    const warns: string[] = [];
+    const wire = () => {
+      renames.length = 0;
+      warns.length = 0;
+      deps.renameFile = async (from: string, to: string) => {
+        renames.push([from, to]);
+        fs.renameSync(path.join(dir, from), path.join(dir, to));
+      };
+      deps.logger = { ...deps.logger, warn: (m: string) => warns.push(m) };
+      manager = new Sync2Manager(deps);
+    };
+
+    it("🔑 the active file is renamed to the safe name, and THAT name is committed", async () => {
+      wire();
+      put("a:b.md", "x");
+      await manager.commitFile("a:b.md");
+      expect(renames).toEqual([["a:b.md", "a꞉b.md"]]);
+      expect(writtenBatches.flat().map((c) => c.path)).toEqual(["a꞉b.md"]);
+    });
+
+    it("🔑 the safe name is taken → \" (2)\", a WARN, and the numbered name is committed", async () => {
+      wire();
+      put("a:b.md", "x");
+      put("a꞉b.md", "already here");
+      await manager.commitFile("a:b.md");
+      expect(renames).toEqual([["a:b.md", "a꞉b (2).md"]]);
+      expect(writtenBatches.flat().map((c) => c.path)).toEqual(["a꞉b (2).md"]);
+      expect(warns.some((w) => w.includes("taken"))).toBe(true);
+    });
+
+    it("the full pass uses the same rule (a taken safe name → \" (2)\", not a skip)", async () => {
+      wire();
+      put("c:d.md", "x");
+      put("c꞉d.md", "already here");
+      (vault as unknown as { getFiles: () => Array<{ path: string }> }).getFiles = () => [{ path: "c:d.md" }, { path: "c꞉d.md" }];
+      await manager.commitOnly();
+      expect(renames).toEqual([["c:d.md", "c꞉d (2).md"]]);
+    });
+  });
+
   // COMMIT-PASS-PERF (2026-10-05): one timing line per commit pass, so a
   // device run says which phase is slow; syncAll also times the remote
   // identity check that sits before the pass.

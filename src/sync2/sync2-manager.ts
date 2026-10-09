@@ -54,7 +54,7 @@ import ConflictStoreV2 from "./conflict-store-v2";
 import SiblingTx from "./sibling-tx";
 import HotMetadataStore from "./hot-metadata";
 import FileBaselinesStore from "./file-baselines";
-import { needsSanitization, sanitizeFilename } from "./cross-platform";
+import { freeNameFor, needsSanitization, sanitizeFilename } from "./cross-platform";
 import { newBatchId } from "./timestamp-id";
 import { AuthError, NetworkError } from "../errors";
 import type { TrashHooks } from "./trash-hooks";
@@ -758,7 +758,11 @@ export class Sync2Manager {
     };
     if (this.deps.invariants) await this.deps.invariants.enforce();
     lap("enforceMs");
+    // Forbidden names are made safe on BOTH paths (owner, 2026-10-10): the
+    // one-file path used to skip it, so "Commit/Sync active file" sent a
+    // forbidden name to the server. The renamed path is what gets committed.
     if (target === null) await this.sanitizeForbiddenFilenames();
+    else target = await this.sanitizeOne(target);
     lap("sanitizeMs");
     // Fresh dedup reference for THIS pass.
     this.queueIndex = await buildQueueShaIndex(
@@ -1138,21 +1142,30 @@ export class Sync2Manager {
       ).getFiles?.() ?? [];
     for (const f of files) {
       if (!needsSanitization(f.path)) continue;
-      const canonical = sanitizeFilename(f.path);
-      if (canonical === f.path) continue;
-      if (await this.deps.vault.adapter.exists(canonical)) {
-        this.deps.logger.warn("Sync2 sanitize-filename: target exists, skipping", {
-          from: f.path,
-          to: canonical,
-        });
-        continue;
-      }
-      this.deps.logger.info("Sync2 sanitize-filename: renaming", {
-        from: f.path,
-        to: canonical,
-      });
-      await this.deps.renameFile(f.path, canonical);
+      await this.sanitizeOne(f.path);
     }
+  }
+
+  // One path made safe — the rule both commit passes share. A safe name
+  // that is already TAKEN gets the first free " (N)" (owner, 2026-10-10 —
+  // it used to SKIP the file, which left it to go out under its forbidden
+  // name or never). Returns the path the file has now.
+  private async sanitizeOne(path: string): Promise<string> {
+    if (!this.deps.renameFile || !needsSanitization(path)) return path;
+    const canonical = sanitizeFilename(path);
+    if (canonical === path) return path;
+    const to = await freeNameFor(canonical, (p) => this.deps.vault.adapter.exists(p));
+    if (to !== canonical) {
+      this.deps.logger.warn("Sync2 sanitize-filename: the safe name is taken — renaming to a numbered name", {
+        from: path,
+        taken: canonical,
+        to,
+      });
+    } else {
+      this.deps.logger.info("Sync2 sanitize-filename: renaming", { from: path, to });
+    }
+    await this.deps.renameFile(path, to);
+    return to;
   }
 
   // Zero-byte restore guard (2.0.2-beta2 field fix, re-homed from the

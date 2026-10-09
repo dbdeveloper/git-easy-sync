@@ -9,6 +9,7 @@ import {
   sanitizeFilename,
   needsSanitization,
   safeRename,
+  freeNameFor,
 } from "../../src/sync2/cross-platform";
 
 describe("cross-platform — filename sanitizer", () => {
@@ -232,5 +233,28 @@ describe("cross-platform — safeRename", () => {
       "dst.txt",
     );
     expect(await vault.adapter.read("dst.txt")).toBe("data");
+  });
+});
+
+// Owner, 2026-10-10: a sanitized name that is already TAKEN is not a reason
+// to skip the file (it would then go to the server under the forbidden
+// name, or never). Take the first free " (N)" name, N from 2; a name that
+// already ends in " (N)" before its extension continues from N+1.
+describe("freeNameFor", () => {
+  const taken = (...names: string[]) => (p: string) => names.includes(p);
+
+  it("🔑 free → the name itself", async () => {
+    expect(await freeNameFor("notes/a꞉b.md", taken())).toBe("notes/a꞉b.md");
+  });
+  it("🔑 taken → \" (2)\" before the extension, then (3), (4)…", async () => {
+    expect(await freeNameFor("notes/file.md", taken("notes/file.md"))).toBe("notes/file (2).md");
+    expect(await freeNameFor("notes/file.md", taken("notes/file.md", "notes/file (2).md"))).toBe("notes/file (3).md");
+  });
+  it("🔑 a name that already ends in \" (N)\" continues from N+1", async () => {
+    expect(await freeNameFor("notes/file (2).md", taken("notes/file (2).md"))).toBe("notes/file (3).md");
+  });
+  it("no extension; a dot only in a folder name", async () => {
+    expect(await freeNameFor("notes/README", taken("notes/README"))).toBe("notes/README (2)");
+    expect(await freeNameFor("a.b/file", taken("a.b/file"))).toBe("a.b/file (2)");
   });
 });

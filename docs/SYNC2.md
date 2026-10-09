@@ -609,7 +609,14 @@ the vault walk before `findChanges`: any local file whose name
 contains a forbidden character is renamed in place through
 Obsidian's link-aware rename API (so wiki-links pointing at the old
 name follow the file), and only then does change-detection see the
-canonical form. The pull side runs them over the incoming GitHub
+canonical form. **Since 2026-10-10 (owner) the ONE-FILE commit path
+("Commit/Sync active file") does the same for its file before
+`findChangeForPath`** — it used to skip it and send the forbidden name
+to the server. And when the canonical name is already TAKEN, the file
+is renamed to the first free `" (N)"` name (N from 2, or N+1 when the
+name already ends in `" (N)"`) with a WARN, on both push paths — it
+used to be skipped (`freeNameFor`, `sanitizeOne` in sync2-manager).
+The PULL side below still skips on a taken name. The pull side runs them over the incoming GitHub
 paths: any forbidden-named GitHub file is materialised under its
 canonical local name, and the forbidden remote path is recorded in
 the pending-deletions queue (§4.2) so the next push cleans GitHub.

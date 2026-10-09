@@ -88,6 +88,34 @@ export function sanitizeFilename(path: string): string {
   return out;
 }
 
+// The first FREE name for `path` (owner, 2026-10-10): `path` itself when
+// free; otherwise " (N)" before the extension, N from 2 — or from N+1 when
+// the name already ends in " (N)" ("file (2).md" taken → "file (3).md").
+// Used when a sanitized name is already taken: skipping the file instead
+// would send it to the server under its forbidden name, or never.
+export async function freeNameFor(
+  path: string,
+  exists: (p: string) => boolean | Promise<boolean>,
+): Promise<string> {
+  if (!(await exists(path))) return path;
+  const slash = path.lastIndexOf("/");
+  const dir = path.slice(0, slash + 1);
+  const name = path.slice(slash + 1);
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.slice(dot) : "";
+  let stem = dot > 0 ? name.slice(0, dot) : name;
+  let n = 2;
+  const numbered = / \((\d+)\)$/.exec(stem);
+  if (numbered) {
+    n = Number(numbered[1]) + 1;
+    stem = stem.slice(0, numbered.index);
+  }
+  for (;; n++) {
+    const candidate = `${dir}${stem} (${n})${ext}`;
+    if (!(await exists(candidate))) return candidate;
+  }
+}
+
 // Cheap predicate — short-circuits as soon as one forbidden char is
 // found. Use to gate work that's only relevant when a rename is
 // actually needed (logging, queueing).
