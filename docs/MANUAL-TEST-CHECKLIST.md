@@ -91,6 +91,10 @@ Use it, and note which runs you did.
 - [ ] 🖥️📱 Two devices edit the same file → a conflict sibling `*.conflict-from-<device>-<timestamp>.*` is created.
 - [ ] 🖥️ The conflict counter (🔀) in the status bar updates as siblings appear and clear.
 - [ ] 🖥️ **Auto-merge:** non-overlapping edits merge cleanly (3-way); overlapping edits produce a sibling.
+- [ ] 🖥️ **One Sync at a time (new 2026-10-09).** Double-click Sync (or click + hotkey): only ONE
+      sync runs; a click during its commit part shows "A sync is already running", a click during
+      its drain shows the Cancel/Keep window. "Pull from repo and push stored commits" during a Sync
+      does nothing (log line). A standalone Commit during a Sync is NOT refused.
 - [ ] 🖥️ **Edit while in conflict:** editing the base file while a sibling exists does not lose the edit.
 - [ ] 🖥️ **A newer server version REPLACES the conflict copy (new 2026-10-09).** Device A and B both
       change the same line → B gets a conflict copy. Leave it unresolved; A changes that line AGAIN and

@@ -218,6 +218,87 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  // ── ONE guard for Sync and a standalone drain (owner, 2026-10-09) ──
+  // Field report: two Sync clicks 107 ms apart both ran. The old guard
+  // (in main.ts) only checked "is a DRAIN running?", and a Sync spends its
+  // first ~0.4 s in the commit pass — the second click walked in, rang the
+  // commit bell and started a drain beside the first Sync's commit pass.
+  // Owner's rule: protect the SYNC, not the drain. A Sync (commit+drain)
+  // and a standalone drain exclude each other; a standalone COMMIT is not
+  // part of it (it only rings the bell of the commit inside).
+  describe("one guard: a Sync and a standalone drain exclude each other", () => {
+    const gateCommit = () => {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      deps.detector.findChanges = async () => {
+        detectorCalls += 1;
+        await gate;
+        return findChangesResult;
+      };
+      return () => release();
+    };
+    const until = async (cond: () => boolean) => {
+      while (!cond()) await new Promise((r) => setTimeout(r, 1));
+    };
+
+    it("🔑 a second Sync during the FIRST Sync's commit pass → busy: no 2nd commit pass, no drain of its own", async () => {
+      const release = gateCommit();
+      const p1 = manager.syncAll();
+      await until(() => detectorCalls === 1);
+      expect(await manager.syncAll()).toBe("busy");
+      expect(detectorCalls).toBe(1);
+      expect(drainCalls).toBe(0);
+      release();
+      expect(await p1).toBe("done");
+      expect(detectorCalls).toBe(1); // no bell re-run either
+      expect(drainCalls).toBe(1);
+    });
+
+    it("🔑 a standalone drain during a Sync → busy (not started)", async () => {
+      const release = gateCommit();
+      const p1 = manager.syncAll();
+      await until(() => detectorCalls === 1);
+      expect(await manager.resumeQueue()).toBe("busy");
+      release();
+      await p1;
+      expect(drainCalls).toBe(1);
+    });
+
+    it("🔑 a Sync during a standalone drain → busy (not started)", async () => {
+      let release!: () => void;
+      drainGate = new Promise<void>((r) => (release = r));
+      const p1 = manager.resumeQueue();
+      await until(() => drainCalls === 1);
+      expect(await manager.syncAll()).toBe("busy");
+      expect(detectorCalls).toBe(0);
+      release();
+      expect(await p1).toBe("done");
+      expect(drainCalls).toBe(1);
+    });
+
+    it("isSyncBusy() covers the whole Sync, its commit pass included", async () => {
+      const release = gateCommit();
+      expect(manager.isSyncBusy()).toBe(false);
+      const p1 = manager.syncAll();
+      await until(() => detectorCalls === 1);
+      expect(manager.isSyncBusy()).toBe(true);
+      expect(manager.isDrainRunning()).toBe(false); // the old guard's blind spot
+      release();
+      await p1;
+      expect(manager.isSyncBusy()).toBe(false);
+    });
+
+    it("a standalone COMMIT during a Sync is not refused — it rings the bell of the commit inside", async () => {
+      const release = gateCommit();
+      const p1 = manager.syncAll();
+      await until(() => detectorCalls === 1);
+      const c = manager.commitOnly();
+      release();
+      await Promise.all([p1, c]);
+      expect(detectorCalls).toBe(2); // the bell re-ran the commit pass
+    });
+  });
+
   // ── H3: drain re-entrancy collapse ─────────────────────────────────
 
   it("H3: a second entry point arriving MID-DRAIN collapses into the running drain", async () => {

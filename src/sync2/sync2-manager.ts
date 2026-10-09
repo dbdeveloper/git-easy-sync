@@ -432,7 +432,41 @@ export class Sync2Manager {
     await this.deps.conflictStore.save(conflicts);
   }
 
-  async syncAll(): Promise<void> {
+  // ONE guard for a Sync (commit + drain) and a standalone drain (owner,
+  // 2026-10-09): while one runs, the other is NOT started — "busy" goes back
+  // to the caller, which tells the user (the Sync button's Cancel/Keep
+  // modal) or skips quietly (hotkey, menu, interval). Checked AND set in one
+  // synchronous step at the entry, so two clicks cannot both get through a
+  // gap. A standalone COMMIT is outside it: it only rings the bell of the
+  // commit pass inside a running Sync. Field report: two Sync clicks 107 ms
+  // apart both ran — the old guard (main.ts) looked only at the DRAIN, and a
+  // Sync spends its first part in the commit pass.
+  private syncBusy = false;
+
+  isSyncBusy(): boolean {
+    return this.syncBusy || this.running;
+  }
+
+  private claimSync(what: string): boolean {
+    if (this.isSyncBusy()) {
+      this.deps.logger.info(`Sync2 ${what}: a sync is already running — not started`);
+      return false;
+    }
+    this.syncBusy = true;
+    return true;
+  }
+
+  async syncAll(): Promise<"done" | "busy"> {
+    if (!this.claimSync("syncAll")) return "busy";
+    try {
+      await this.syncAllInner();
+    } finally {
+      this.syncBusy = false;
+    }
+    return "done";
+  }
+
+  private async syncAllInner(): Promise<void> {
     this.deps.logger.info("Sync2 syncAll start");
     // Timed: it sits between "syncAll start" and the commit pass, so a
     // device measurement of "the commit" includes it (COMMIT-PASS-PERF).
@@ -462,7 +496,17 @@ export class Sync2Manager {
     }
   }
 
-  async syncFile(path: string): Promise<void> {
+  async syncFile(path: string): Promise<"done" | "busy"> {
+    if (!this.claimSync("syncFile")) return "busy";
+    try {
+      await this.syncFileInner(path);
+    } finally {
+      this.syncBusy = false;
+    }
+    return "done";
+  }
+
+  private async syncFileInner(path: string): Promise<void> {
     this.deps.logger.info("Sync2 syncFile start", { path });
     this.clearSyncCounts();
     this.clearProgressForNewUserSync();
@@ -527,9 +571,15 @@ export class Sync2Manager {
     return n;
   }
 
-  async resumeQueue(): Promise<void> {
-    this.clearSyncCounts();
-    await this.drain();
+  async resumeQueue(): Promise<"done" | "busy"> {
+    if (!this.claimSync("drain")) return "busy";
+    try {
+      this.clearSyncCounts();
+      await this.drain();
+    } finally {
+      this.syncBusy = false;
+    }
+    return "done";
   }
 
   async hasPendingBatches(): Promise<boolean> {

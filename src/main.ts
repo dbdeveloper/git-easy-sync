@@ -1817,6 +1817,23 @@ export default class GitHubSyncPlugin extends Plugin {
     // gives an in-place [Cancel sync] / [Keep going] choice.
     // The `sync` command (vs the ribbon button) still silently
     // ignores — keystroke shortcuts shouldn't open modals.
+    //
+    // ONE guard for the whole Sync (owner, 2026-10-09): the manager refuses
+    // a second Sync or drain while one runs (isSyncBusy, checked-and-set in
+    // one step there). Here only the user's feedback is decided:
+    //   background → skip quietly (a background run never opens a modal);
+    //   still in the COMMIT part (no drain yet) → a short notice — the
+    //     modal's [Cancel sync] stops a drain, and there is none yet;
+    //   drain running → the Cancel/Keep modal below, as before.
+    if (this.sync2Manager.isSyncBusy() && background) {
+      this.logger.info("Background sync skipped: a sync is already running");
+      return;
+    }
+    if (this.sync2Manager.isSyncBusy() && !this.sync2Manager.isDrainRunning()) {
+      this.logger.info("Sync click ignored: a sync is already running (commit part)");
+      new Notice("A sync is already running", 2000);
+      return;
+    }
     if (this.sync2Manager.getDrainStatus().state === "running") {
       const modal = new CancelSyncModal(this.app, () => {
         // No "cancellation requested" toast: the user just clicked a
@@ -3545,9 +3562,11 @@ export default class GitHubSyncPlugin extends Plugin {
     // queue another drain attempt. The Settings drain-status
     // section + the [Cancel sync] command remain available for
     // direct control.
-    if (this.sync2Manager.getDrainStatus().state === "running") {
+    // The SAME guard as Sync (owner, 2026-10-09): a running Sync — its
+    // commit part included — or drain means this drain is not started.
+    if (this.sync2Manager.isSyncBusy()) {
       this.logger?.info(
-        "uploadOnly command: drain already running, ignoring",
+        "uploadOnly command: a sync is already running, ignoring",
       );
       return;
     }
