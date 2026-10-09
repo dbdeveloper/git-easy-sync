@@ -884,7 +884,9 @@ export class Sync2Manager {
       totalMs: round1(performance.now() - t0),
       changes,
       ...phases,
-      ...(this.deps.commitStats
+      // Full pass only (owner, 2026-10-10): the stats are learned from FULL
+      // scans; on a one-file pass they are not its work and misled.
+      ...(target === null && this.deps.commitStats
         ? { stats: this.deps.commitStats.summary() }
         : {}),
       ...(scan === null

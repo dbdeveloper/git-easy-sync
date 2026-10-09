@@ -966,6 +966,23 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       expect(flushed).toBe(1);
     });
 
+    // Owner, 2026-10-10: a ONE-FILE pass reads one file — the stats block
+    // (learned from the last FULL scan: dot entries, read/hash rates) is
+    // not its work and misled in the log. Only the full pass carries it.
+    it("🔑 a one-file pass (commit active file) logs NO stats block", async () => {
+      const lines: Array<{ m: string; d: unknown }> = [];
+      deps.logger = { ...deps.logger, info: (m: string, d?: unknown) => lines.push({ m, d }) };
+      deps.commitStats = {
+        summary: () => ({ dot: { entries: 53, ms: 12.8 } }),
+        flush: async () => {},
+      };
+      put("one.md", "x");
+      await manager.commitFile("one.md");
+      const timing = lines.find((l) => l.m === "Sync2 commit pass timing")?.d as Record<string, unknown>;
+      expect(timing).toBeDefined();
+      expect("stats" in timing).toBe(false);
+    });
+
     it("a THROWING pass still flushes", async () => {
       let flushed = 0;
       deps.commitStats = { summary: () => ({}), flush: async () => void (flushed += 1) };

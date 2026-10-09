@@ -3640,11 +3640,10 @@ export default class GitHubSyncPlugin extends Plugin {
       if (outcome.kind === "ignored") {
         this.logger?.warn("commit-file: the file is ignored by .gitignore — not committed", { path });
         new Notice("File is in git-ignore list", 6000);
-      } else if (outcome.kind === "no-change") {
-        new Notice("File was not changed", 3000);
-      } else if (outcome.kind === "committed") {
-        new Notice(`File committed`, BRIEF_NOTICE_MS);
       }
+      // No own notice for "no-change" / "committed" (owner, 2026-10-10): the
+      // commit pass already says "Nothing to commit" / "Committed 1 file" —
+      // a second toast for the same thing was noise.
     } catch (err) {
       this.logger?.error("commit-file command failed", {
         err: describeError(err),
