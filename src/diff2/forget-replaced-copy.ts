@@ -10,8 +10,8 @@
 // already half gone (it writes nothing on close today; the order keeps it
 // that way by construction).
 //
-// The dir id carries the kind the editor saw at open: normally "tracked",
-// but a copy can be opened while it counted as "synthetic" — both go.
+// Only the "tracked" dir: the drain replaces only tracked copies, so that is
+// the kind their editor sessions were opened with.
 
 import { autosaveDir, deriveAutosaveId } from "./autosave-store";
 
@@ -36,9 +36,8 @@ export async function forgetReplacedConflictCopy(
     closedTabs++;
   }
   let wipedDirs = 0;
-  for (const kind of ["tracked", "synthetic"] as const) {
-    const dir = autosaveDir(deriveAutosaveId(kind, basePath, oldSiblingPath));
-    if (!(await deps.adapter.exists(dir))) continue;
+  const dir = autosaveDir(deriveAutosaveId("tracked", basePath, oldSiblingPath));
+  if (await deps.adapter.exists(dir)) {
     await deps.adapter.rmdir(dir, true);
     wipedDirs++;
   }

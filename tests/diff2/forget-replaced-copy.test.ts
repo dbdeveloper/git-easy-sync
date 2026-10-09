@@ -34,7 +34,6 @@ function setup(openTabs: (string | null)[], dirs: string[]) {
 
 describe("forgetReplacedConflictCopy", () => {
   const trackedDir = autosaveDir(deriveAutosaveId("tracked", BASE, OLD));
-  const syntheticDir = autosaveDir(deriveAutosaveId("synthetic", BASE, OLD));
   const newDir = autosaveDir(deriveAutosaveId("tracked", BASE, NEW));
 
   it("🔑 closes the OLD copy's tabs FIRST, then wipes its autosave dir; the new copy is untouched", async () => {
@@ -50,12 +49,6 @@ describe("forgetReplacedConflictCopy", () => {
     const r = await forgetReplacedConflictCopy(s.deps, BASE, OLD);
     expect(s.existing.has(trackedDir)).toBe(false);
     expect(r).toEqual({ closedTabs: 0, wipedDirs: 1 });
-  });
-
-  it("a session opened while the copy counted as synthetic is wiped too", async () => {
-    const s = setup([], [syntheticDir]);
-    await forgetReplacedConflictCopy(s.deps, BASE, OLD);
-    expect(s.existing.has(syntheticDir)).toBe(false);
   });
 
   it("nothing there → nothing done", async () => {

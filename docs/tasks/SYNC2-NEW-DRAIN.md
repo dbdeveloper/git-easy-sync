@@ -774,8 +774,9 @@ sibling-file в diff-editor
    > **Забути старий sibling при заміні (власник, 2026-10-09).** Одразу після транзакції заміни
    > (§II.11) drain викликає хук `onConflictCopyReplaced(path, oldSiblingPath)`; хост
    > (`main.ts` → `forgetReplacedConflictCopy`, `src/diff2/`) (1) закриває відкриті вкладки
-   > редактора зі СТАРИМ sibling-ом, (2) стирає його `diff2-autosave/<id>/` (обидва можливі
-   > id — tracked і synthetic) — НЕЗАЛЕЖНО від того, чи вкладка була відкрита. Лише в цьому
+   > редактора зі СТАРИМ sibling-ом, (2) стирає його `diff2-autosave/<id>/` (id типу
+   > `tracked` — drain замінює лише відстежені sibling-и) — НЕЗАЛЕЖНО від того, чи вкладка
+   > була відкрита. Лише в цьому
    > випадку (не append, не no-op, не інші зникнення файлу). Хук, бо рушій не має права
    > імпортувати diff2; помилка хука — WARN, drain іде далі.
    >
