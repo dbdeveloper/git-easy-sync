@@ -80,6 +80,12 @@
     padding: 4px 0;
 }
 
+/* A file with a TRACKED conflict — kept from the server until resolved
+ * (owner, 2026-10-09). Red rows add up to the diff badge's number. The
+ * theme's error colour, so it reads in both light and dark themes. */
+.diff2-conflicts-base-path-tracked {
+    color: var(--text-error);
+}
 .diff2-conflicts-version-count {
     color: var(--text-muted);
     font-weight: normal;

@@ -59,19 +59,9 @@ export function renderConflictsList(
     return [];
   }
 
-  // Group by basePath, preserving newest-first order. Map insertion
-  // order corresponds to the input order, which findAllConflicts
-  // already sorts newest-first → group iteration also newest-first.
-  const grouped = new Map<string, ConflictEntry[]>();
-  for (const entry of entries) {
-    const bucket = grouped.get(entry.basePath);
-    if (bucket) bucket.push(entry);
-    else grouped.set(entry.basePath, [entry]);
-  }
-
   const refs: ConflictRowRef[] = [];
-  for (const [basePath, group] of grouped.entries()) {
-    renderBaseGroup(container, basePath, group, callbacks, refs);
+  for (const g of orderConflictGroups(entries)) {
+    renderBaseGroup(container, g.basePath, g.entries, g.tracked, callbacks, refs);
   }
   if (selectedKey) {
     for (const r of refs) {
@@ -84,10 +74,36 @@ export function renderConflictsList(
   return refs;
 }
 
+// The list's order (owner, 2026-10-09). Files with a TRACKED conflict first —
+// kept from the server until resolved, drawn in RED, so the red rows add up
+// to the diff badge's number (files in conflict) — then files with only
+// synthetic copies, in the normal colour. Within each class the files keep
+// the input's newest-first order (findAllConflicts sorts it). Under a file:
+// its tracked copies first, then the synthetic ones, each newest first.
+export function orderConflictGroups(
+  entries: ConflictEntry[],
+): Array<{ basePath: string; tracked: boolean; entries: ConflictEntry[] }> {
+  const grouped = new Map<string, ConflictEntry[]>();
+  for (const entry of entries) {
+    const bucket = grouped.get(entry.basePath);
+    if (bucket) bucket.push(entry);
+    else grouped.set(entry.basePath, [entry]);
+  }
+  const newestFirst = (a: ConflictEntry, b: ConflictEntry) =>
+    a.isoTimestamp < b.isoTimestamp ? 1 : a.isoTimestamp > b.isoTimestamp ? -1 : 0;
+  const groups = [...grouped.entries()].map(([basePath, list]) => {
+    const tracked = list.filter((x) => x.kind === "tracked").sort(newestFirst);
+    const synthetic = list.filter((x) => x.kind !== "tracked").sort(newestFirst);
+    return { basePath, tracked: tracked.length > 0, entries: [...tracked, ...synthetic] };
+  });
+  return [...groups.filter((g) => g.tracked), ...groups.filter((g) => !g.tracked)];
+}
+
 function renderBaseGroup(
   container: HTMLElement,
   basePath: string,
   group: ConflictEntry[],
+  tracked: boolean,
   callbacks: ConflictsListCallbacks,
   refs: ConflictRowRef[],
 ): void {
@@ -96,7 +112,12 @@ function renderBaseGroup(
   // Header line: <basePath> · (N versions). When N === 1, omit the
   // count — single-sibling case shouldn't read as "1 version".
   const header = groupEl.createDiv({ cls: "diff2-conflicts-group-header" });
-  header.createSpan({ cls: "diff2-conflicts-base-path", text: basePath });
+  // RED for a file with a tracked conflict (owner, 2026-10-09) — see
+  // orderConflictGroups.
+  header.createSpan({
+    cls: tracked ? "diff2-conflicts-base-path diff2-conflicts-base-path-tracked" : "diff2-conflicts-base-path",
+    text: basePath,
+  });
   if (group.length > 1) {
     header.createSpan({
       cls: "diff2-conflicts-version-count",

@@ -90,6 +90,11 @@ Use it, and note which runs you did.
 
 - [ ] 🖥️📱 Two devices edit the same file → a conflict sibling `*.conflict-from-<device>-<timestamp>.*` is created.
 - [ ] 🖥️ The conflict counter (🔀) in the status bar updates as siblings appear and clear.
+- [ ] 🖥️ **Files in conflict, everywhere (new 2026-10-09).** One file with TWO conflict copies: the
+      diff badge says 1, its tooltip "(1 file in conflict)", the pre-sync window "1 file…", "Sync
+      done … 1 in conflict". In the Diff Panel that file's name is RED (light AND dark theme) and
+      listed first; its tracked copies come first under it, then synthetic ones, each newest first;
+      a file with only synthetic copies is listed after the red ones in the normal colour.
 - [ ] 🖥️ **Auto-merge:** non-overlapping edits merge cleanly (3-way); overlapping edits produce a sibling.
 - [ ] 🖥️ **One Sync at a time (new 2026-10-09).** Double-click Sync (or click + hotkey): only ONE
       sync runs; a second click (commit part or drain) shows the Cancel/Keep window. [Cancel sync]
