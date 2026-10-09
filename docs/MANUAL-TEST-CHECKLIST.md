@@ -92,6 +92,13 @@ Use it, and note which runs you did.
 - [ ] 🖥️ The conflict counter (🔀) in the status bar updates as siblings appear and clear.
 - [ ] 🖥️ **Auto-merge:** non-overlapping edits merge cleanly (3-way); overlapping edits produce a sibling.
 - [ ] 🖥️ **Edit while in conflict:** editing the base file while a sibling exists does not lose the edit.
+- [ ] 🖥️ **A newer server version REPLACES the conflict copy (new 2026-10-09).** Device A and B both
+      change the same line → B gets a conflict copy. Leave it unresolved; A changes that line AGAIN and
+      syncs; B changes its file again and syncs: B still has ONE conflict copy, now with A's newest
+      value (the old copy is gone), and the log says "Conflict copy updated to the newer server
+      version". Edit a DIFFERENT line inside B's conflict copy first → the edit survives the update.
+      Edit the SAME line inside the copy first → a second copy appears instead, and the log has a
+      WARN "…a second conflict copy is added".
 - [ ] 🖥️ The pre-sync conflict dialog shows the count and lets you confirm.
 - [ ] 🖥️ When a sibling is reconciled to match the base (identical content), the sibling is cleared on the next sync.
 - [ ] 🖥️ **Multi-device rotation:** run a realistic round-trip across 2+ devices.

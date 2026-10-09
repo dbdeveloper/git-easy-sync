@@ -2193,6 +2193,13 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           conflictBase: current.conflictBase,
           siblings: [siblingInfoFrom(tracked.remote)],
         });
+        // Every conflict decision is in the log (owner, 2026-10-09 — a
+        // field test could not tell from it why a copy stayed).
+        deps.logger?.warn("Conflict: the server's version is saved as a conflict copy next to the file", {
+          path,
+          server: tracked.remote.sha?.slice(0, 7),
+          from: tracked.remote.deviceLabel,
+        });
         conflictVerdicts.push({ path, site: "vault-step" });
         continue;
       }
@@ -2227,16 +2234,33 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // was skipped and the conflict's theirs-side froze at the FIRST
       // remote version forever. The bytes are in hand — the size is
       // knowable for free.
+      // The sha of the bytes ON DISK, not the recorded one: the user may
+      // have edited the sibling, and with the recorded sha _diff3 would see
+      // "ours unchanged vs the origin" and drop that edit (owner, 2026-10-09).
       const prevWithBlob: FileInfo = {
         ...previousSibling,
         blob: prevBlob,
-        size: previousSibling.size ?? prevBlob.byteLength,
+        sha: await deps.computeSha(prevBlob),
+        size: prevBlob.byteLength,
+      };
+      // The ANCESTOR is the main version the sibling was last made from
+      // (owner, 2026-10-09) — NOT conflictBase: that is OUR side, and with
+      // it every repeated remote change of the same line appended one more
+      // sibling instead of replacing the old one. A fresh remote descends
+      // on main from exactly the origin, so diff3 carries main's change
+      // onto the sibling and keeps any edit the user made in it. Its bytes
+      // come sync_store → GitHub inside _diff3 (owner's choice a).
+      const foldAncestor: FileInfo = {
+        ...emptyFileInfo(),
+        path,
+        sha: previousSibling.originSha ?? previousSibling.sha,
+        mode: "",
       };
       let foldVerdict;
       try {
         foldVerdict = await _diff3(
           diff3Deps,
-          { base: current.conflictBase, remote: tracked.remote },
+          { base: foldAncestor, remote: tracked.remote },
           prevWithBlob,
           headHash,
         );
@@ -2259,12 +2283,26 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // diff3 OK → REPLACE the last sibling via the §II.11 mark
         // transaction (the only branch that destroys evidence).
         const merged = foldVerdict.file;
-        if (merged.sha === previousSibling.sha) {
+        if (merged.sha === prevWithBlob.sha) {
           // No-op fold (the fresh pull equals the sibling — §II.6
           // "якщо тільки послідовно вони не однакові"): nothing to
           // replace. Running the transaction here would be worse than
           // wasteful — old and new derive the SAME file name, so
           // step 4 would delete the file step 2 just wrote.
+          // The ORIGIN still moves on to the remote just folded (a copy
+          // — `merged` may be previousSibling itself), or the next fold
+          // would start from an older ancestor than main has passed.
+          conflicts!.entries.set(path, {
+            conflictBase: current.conflictBase,
+            siblings: [
+              ...current.siblings.slice(0, -1),
+              { ...previousSibling, originSha: tracked.remote.sha },
+            ],
+          });
+          deps.logger?.info("Conflict copy already holds the newer server version — left as is", {
+            path,
+            server: tracked.remote.sha?.slice(0, 7),
+          });
           conflictVerdicts.push({ path, site: "vault-step" });
           continue;
         }
@@ -2316,12 +2354,18 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // always returns mtime=null for a fresh merge.
         merged.mtime = tracked.remote.mtime;
         merged.deviceLabel = tracked.remote.deviceLabel;
+        merged.originSha = tracked.remote.sha; // the next fold's ancestor
         await deps.siblingTx.runReplaceTransaction(
           conflicts!,
           path,
           previousSibling,
           merged,
         );
+        deps.logger?.info("Conflict copy updated to the newer server version (old copy replaced)", {
+          path,
+          from: foldAncestor.sha?.slice(0, 7),
+          to: tracked.remote.sha?.slice(0, 7),
+        });
       } else {
         // MANUAL_CONFLICT (or the plugin seam, impossible here in
         // practice) → APPEND a new sibling; the old one stays tracked
@@ -2345,6 +2389,11 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           mtime: tracked.remote.mtime ?? 0,
           deviceLabel: tracked.remote.deviceLabel,
           blob: tracked.remote.blob,
+        });
+        deps.logger?.warn("Conflict: the newer server version clashes with the edits in the conflict copy — a second conflict copy is added", {
+          path,
+          server: tracked.remote.sha?.slice(0, 7),
+          from: tracked.remote.deviceLabel,
         });
         conflicts!.entries.set(path, {
           conflictBase: current.conflictBase,
@@ -2484,6 +2533,11 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       conflicts!.entries.set(path, {
         conflictBase: siblingInfoFrom(tracked.remote),
         siblings: [siblingInfoFrom(tracked.remote)],
+      });
+      deps.logger?.warn("Conflict: the server's version is saved as a conflict copy next to the file", {
+        path,
+        server: tracked.remote.sha?.slice(0, 7),
+        from: tracked.remote.deviceLabel,
       });
       tracked.isManualConflict = true;
       conflictVerdicts.push({ path, site: "vault-step" });
@@ -2849,11 +2903,14 @@ async function loadLocalFromBatch(
 // hand. Discovery's compare path yields size=null, and a null size in
 // a stored sibling later trips _diff3's rule-6 assert on the fold
 // (gate finding 2026-08-31).
+// A sibling is born from a remote version — that version is its origin
+// (the next fold's ancestor, §II.6 STEP3 п.4).
 function siblingInfoFrom(info: FileInfo): FileInfo {
   return {
     ...info,
     size: info.size ?? info.blob?.byteLength ?? null,
     blob: null,
+    originSha: info.sha,
   };
 }
 

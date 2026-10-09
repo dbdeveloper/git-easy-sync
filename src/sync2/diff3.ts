@@ -53,6 +53,12 @@ export interface FileInfo {
   // getCommitInfoForPath at the conflict-birth sites only (§III);
   // base/local never carry it.
   deviceLabel: string | null;
+  // CONFLICT SIBLINGS ONLY: the sha of the main-branch version this sibling
+  // was last made from (its birth remote, or the remote last folded into it).
+  // It is the fold's ANCESTOR (§II.6 STEP3 п.4, owner 2026-10-09): a fresh
+  // remote descends on main from exactly this version. Absent in records
+  // written before the field existed — then the sibling's own sha stands in.
+  originSha?: string | null;
 }
 
 export function emptyFileInfo(): FileInfo {

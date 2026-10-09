@@ -473,7 +473,7 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     expect(rec.siblings[0].mtime).toBe(world.committedAt);
   });
 
-  it("C.5b: a NO-OP fold (the fresh remote reverts to conflictBase → ours wins → merged == sibling) must not run the replace transaction", async () => {
+  it("C.5b: a NO-OP fold (the user's sibling edit already equals the fresh remote → merged == sibling) must not run the replace transaction", async () => {
     // Found by mutation probe (§IX.3, 2026-09-23): deleting the
     // `merged.sha === previousSibling.sha` short-circuit left the
     // whole suite green, and the §II.11 mark transaction is the ONE
@@ -490,12 +490,14 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     const firstName = remoteSiblingName(firstSibling.mtime!);
     expect(vaultHas(firstName)).toBe(true);
 
-    // The other device REVERTS to our version. New sha → a real pull;
-    // but diff3(base=conflictBase=LOCAL, ours=sibling=REMOTE_CLASH,
-    // theirs=LOCAL) has theirs == base, so ours wins verbatim and the
-    // fold reproduces the sibling byte for byte.
+    // The user already edited the sibling to exactly what the other
+    // device then pushes. diff3(origin=REMOTE_CLASH, ours=edited sibling,
+    // theirs=the same text) → both sides made the same change → merged ==
+    // the sibling on disk, byte for byte: nothing to replace.
+    const SAME = "REMOTE\ntwo\nTHREE-both\n";
+    fs.writeFileSync(path.join(dir, firstName), SAME);
     world.committedAt += 5000;
-    await world.commitFiles({ [NOTE]: LOCAL_CLASH });
+    await world.commitFiles({ [NOTE]: SAME });
     baseCommit = world.commits[world.commits.length - 2];
 
     const r2 = await drainOnce(makeDeps());
@@ -512,9 +514,10 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     // record keeps pointing at a file that is no longer there.
     expect(rec.siblings[0].sha).toBe(firstSibling.sha);
     expect(vaultHas(firstName)).toBe(true);
-    expect(fs.readFileSync(path.join(dir, firstName), "utf8")).toBe(
-      REMOTE_CLASH,
-    );
+    expect(fs.readFileSync(path.join(dir, firstName), "utf8")).toBe(SAME);
+    // The origin still moved on to the remote just folded — the next
+    // fold must start from it, not from the older version.
+    expect(rec.siblings[0].originSha).toBe(await sha(SAME));
     // And no transaction mark was left behind by a run that should
     // never have started.
     expect(fs.existsSync(path.join(dir, ".obsidian/plugins", PLUGIN_ID, ".runtime", SIBLING_TX_MARK_FILE))).toBe(false);
@@ -565,11 +568,12 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     const r2 = await drainOnce(makeDeps());
     expect(r2.status).toBe("ok");
     const e2 = conflictStore.getCachedState().entries.get(NOTE)!;
-    // The fold RAN: the theirs-side moved on (2 siblings here because
-    // v1-vs-v2 same-line divergence cannot auto-merge → §III STEP3
-    // п.2 ERROR branch appends; a clean fold would have replaced).
+    // The fold RAN: the theirs-side moved on. ONE sibling: the fold's
+    // ancestor is the sibling's origin (theirs v1), and the sibling is
+    // unedited, so v2 replaces it (owner, 2026-10-09 — it used to
+    // APPEND, because the ancestor was conflictBase, i.e. OUR side).
     expect(r2.vaultStepErrors).toEqual([]); // ← the defect surfaced HERE
-    expect(e2.siblings.length).toBeGreaterThan(1);
+    expect(e2.siblings).toHaveLength(1);
     expect(e2.siblings.at(-1)!.sha).not.toBe(e1.siblings[0].sha);
     // conflictBase (ours) is carried through verbatim.
     expect(e2.conflictBase.sha).toBe(e1.conflictBase.sha);
@@ -583,8 +587,11 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     await drainOnce(makeDeps());
     const sib1 = (await conflictStore.load()).entries.get(NOTE)!.siblings[0];
 
-    // Remote rewrites line 1 AGAIN differently → conflicts with the
-    // sibling relative to conflictBase → append.
+    // The fold's ancestor is the sibling's ORIGIN (owner, 2026-10-09), so
+    // an unedited sibling always folds cleanly. An append needs a REAL
+    // clash: the user edited line 1 in the sibling, and the remote
+    // rewrites the same line differently.
+    fs.writeFileSync(path.join(dir, remoteSiblingName(sib1.mtime!)), "MINE\ntwo\nthree\n");
     const REMOTE_2 = "REMOTE-OTHER\ntwo\nthree\n";
     world.committedAt += 5000;
     await world.commitFiles({ [NOTE]: REMOTE_2 });
@@ -599,6 +606,94 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     expect(rec.siblings[0].mtime!).toBeLessThan(rec.siblings[1].mtime!);
     expect(vaultHas(remoteSiblingName(rec.siblings[0].mtime!))).toBe(true);
     expect(vaultHas(remoteSiblingName(rec.siblings[1].mtime!))).toBe(true);
+  });
+
+  // ── The fold's ANCESTOR (owner's field test, 2026-10-09) ─────────────
+  // A fresh remote version descends, on main, from the remote version the
+  // previous sibling was made from. So the fold's ancestor is THAT version
+  // (recorded per sibling), not conflictBase — conflictBase is OUR side,
+  // and with it as the ancestor every repeated remote change of the same
+  // line appended one more sibling instead of replacing the old one.
+  //   Field run: common 6 → remote 8 / local 7 → conflict (sibling 8) →
+  //   remote 10 / local 9 → expected ONE sibling (10), got two (8, 10).
+  describe("🔑 the fold's ancestor is the remote version the sibling was made from", () => {
+    // A gap line between "head" and the value: diff3 treats changes on
+    // ADJACENT lines as one clash, and the edit-survives test needs two.
+    const ver = (n: number) => `head\ngap\nsyncInterval ${n}\ntail\n`;
+
+    const birth = async () => {
+      baseCommit = await world.commitFiles({ [NOTE]: ver(6) });
+      baselines.set(NOTE, { baselineSha: await sha(ver(6)), mtime: 50, size: enc(ver(6)).byteLength });
+      vaultFiles.files.set(NOTE, { content: ver(7), mtime: 100 });
+      await world.commitFiles({ [NOTE]: ver(8) });
+      await stageBatch({ [NOTE]: ver(7) });
+      const r1 = await drainOnce(makeDeps());
+      expect(r1.status).toBe("ok");
+      const rec1 = (await conflictStore.load()).entries.get(NOTE)!;
+      expect(rec1.siblings).toHaveLength(1);
+      return rec1.siblings[0];
+    };
+
+    // Every conflict decision reaches the log (owner, 2026-10-09).
+    const logged: { level: string; message: string }[] = [];
+    const logger = {
+      info: (message: string) => logged.push({ level: "info", message }),
+      warn: (message: string) => logged.push({ level: "warn", message }),
+    };
+
+    const nextRound = async (remote: string, local: string) => {
+      baseCommit = world.head;
+      world.committedAt += 5000;
+      await world.commitFiles({ [NOTE]: remote });
+      vaultFiles.files.set(NOTE, { content: local, mtime: 200 });
+      await stageBatch({ [NOTE]: local });
+      logged.length = 0;
+      const r2 = await drainOnce(makeDeps({ logger }));
+      expect(r2.status).toBe("ok");
+      expect(r2.vaultStepErrors).toEqual([]);
+      return (await conflictStore.load()).entries.get(NOTE)!;
+    };
+
+    it("🔑 the field run: 6 → 8/7 → 10/9 leaves ONE sibling, holding 10; the old file is gone", async () => {
+      const sib1 = await birth();
+      const rec = await nextRound(ver(10), ver(9));
+      expect(rec.siblings).toHaveLength(1); // replaced, not appended
+      const p = remoteSiblingName(rec.siblings[0].mtime!);
+      expect(fs.readFileSync(path.join(dir, p), "utf8")).toBe(ver(10));
+      expect(vaultHas(remoteSiblingName(sib1.mtime!))).toBe(false);
+      // Our side moved on to 9 (the conflict branch's job — unchanged).
+      expect(rec.conflictBase.sha).toBe(await sha(ver(9)));
+      expect(logged).toContainEqual({ level: "info", message: "Conflict copy updated to the newer server version (old copy replaced)" });
+    });
+
+    it("🔑 THREE rounds (8 → 10 → 12) still leave ONE sibling — the origin moves on with each fold", async () => {
+      await birth();
+      await nextRound(ver(10), ver(9));
+      const rec = await nextRound(ver(12), ver(11));
+      expect(rec.siblings).toHaveLength(1);
+      expect(fs.readFileSync(path.join(dir, remoteSiblingName(rec.siblings[0].mtime!)), "utf8")).toBe(ver(12));
+      expect(rec.siblings[0].originSha).toBe(await sha(ver(12)));
+    });
+
+    it("the user's own edit in the sibling (another line) survives the fold", async () => {
+      const sib1 = await birth();
+      const sibPath = path.join(dir, remoteSiblingName(sib1.mtime!));
+      fs.writeFileSync(sibPath, "HEAD-EDITED\ngap\nsyncInterval 8\ntail\n");
+      const rec = await nextRound(ver(10), ver(9));
+      expect(rec.siblings).toHaveLength(1);
+      const p = remoteSiblingName(rec.siblings[0].mtime!);
+      expect(fs.readFileSync(path.join(dir, p), "utf8")).toBe("HEAD-EDITED\ngap\nsyncInterval 10\ntail\n");
+    });
+
+    it("the user's own edit in the sibling ON THE SAME LINE as the new remote change → a second sibling (a real clash)", async () => {
+      const sib1 = await birth();
+      const sibPath = path.join(dir, remoteSiblingName(sib1.mtime!));
+      fs.writeFileSync(sibPath, ver(42));
+      const rec = await nextRound(ver(10), ver(9));
+      expect(rec.siblings).toHaveLength(2);
+      expect(fs.readFileSync(sibPath, "utf8")).toBe(ver(42)); // the user's edit untouched
+      expect(logged.some((l) => l.level === "warn" && l.message.includes("a second conflict copy is added"))).toBe(true);
+    });
   });
 
   it("C.7: the sibling's filename timestamp is the REMOTE COMMIT date, never the write moment", async () => {

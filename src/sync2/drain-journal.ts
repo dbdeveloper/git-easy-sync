@@ -66,6 +66,7 @@ export function fileInfoToJson(f: FileInfo): Record<string, unknown> {
     sha: f.sha,
     mode: f.mode,
     deviceLabel: f.deviceLabel,
+    ...(f.originSha ? { originSha: f.originSha } : {}),
   };
 }
 
@@ -79,6 +80,7 @@ export function fileInfoFromJson(raw: unknown): FileInfo {
   if (typeof r.sha === "string") out.sha = r.sha;
   if (r.mode === "" || r.mode === DELETED) out.mode = r.mode;
   if (typeof r.deviceLabel === "string") out.deviceLabel = r.deviceLabel;
+  if (typeof r.originSha === "string") out.originSha = r.originSha;
   return out;
 }
 

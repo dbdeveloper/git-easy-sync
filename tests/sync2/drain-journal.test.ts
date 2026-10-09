@@ -144,3 +144,20 @@ describe("DrainJournal (§V)", () => {
     expect(await journal.load()).toBeNull();
   });
 });
+
+// Owner, 2026-10-09: a conflict sibling's origin (the fold's ancestor)
+// must survive every place a FileInfo is written down — conflicts.json,
+// the journal and the §II.11 replace-transaction mark all go through
+// these two functions.
+describe("fileInfo JSON keeps a sibling's originSha", () => {
+  it("🔑 round trip with the field; absent stays absent", async () => {
+    const { fileInfoToJson, fileInfoFromJson } = await import("../../src/sync2/drain-journal");
+    const { emptyFileInfo } = await import("../../src/sync2/diff3");
+    const withOrigin = { ...emptyFileInfo(), path: "a.md", sha: "s1", originSha: "o1" };
+    expect(fileInfoFromJson(JSON.parse(JSON.stringify(fileInfoToJson(withOrigin)))).originSha).toBe("o1");
+    const without = { ...emptyFileInfo(), path: "a.md", sha: "s1" };
+    const json = fileInfoToJson(without);
+    expect("originSha" in json).toBe(false);
+    expect(fileInfoFromJson(json).originSha).toBeUndefined();
+  });
+});

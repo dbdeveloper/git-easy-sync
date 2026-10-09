@@ -633,7 +633,9 @@ Vault ------- [] -> зберігаємо base (R_{last})) як conflict-sibling-
    потрапляв у conflicts.json. Урок про тести: фейковий discovery в юніт-сюїтах
    заповнював size з байтів і тим ХОВАВ цей клас — тепер conflict-сюїта віддає
    `size: null`, як реальний compare.
-Vault ------- (_diff3(current_conflict.conflictBase, prev_conflict_sibling_file, base) -> D_{conflict}:
+Vault ------- (_diff3(prev_conflict_sibling_file.originSha, prev_conflict_sibling_file, base) -> D_{conflict}:
+                  # ⚠️ ВИПРАВЛЕНО 2026-10-09 (власник, польовий тест): предок — originSha, НЕ
+                  # current_conflict.conflictBase. Див. примітку «Предок злиття» нижче.
                          - OK: 1. видаляємо previous conflict-sibling-file з Vault;
                                2. зберігаємо D_{conflict} як нoвий conflict-sibling-file (timestamp у назві —
                                   R_m.mtime, дата ОСТАННЬОГО remote-коміту, що увійшов у D_{conflict}; див.
@@ -743,11 +745,32 @@ sibling-file в diff-editor
       зберігаємо як conflict-sibling-file.
 4. Якщо conflict-sibling-file вже існує в Vault (`prev_conflict_sibling_file = last(current_conflict.siblings)`, тобто
    `len(current_conflict.siblings) > 0`), тоді робиться
-   `_diff3(conflict_base, prev_conflict_sibling_file, tracked.remote)`
-   (спроба замінити останній елемент списку). `conflict_base` тут — те саме, що `current_conflict.conflictBase`;
-   довантажується так само (sync_store → GitHub), якщо `blob` ще не на руках, — але, на відміну від
-   `tracked.remote`, зазвичай уже локально: поки конфлікт живий, sweep НЕ прибирає його `conflictBase`-blob із
-   `.runtime/sync_store/` (SYNC2-FIX.md §12.5.D, рішення 2026-08-25).
+   `_diff3(origin, prev_conflict_sibling_file, tracked.remote)`
+   (спроба замінити останній елемент списку).
+
+   > **⚠️ Предок злиття — ВИПРАВЛЕНО 2026-10-09 (власник, польовий тест).** Раніше тут стояв
+   > `current_conflict.conflictBase` — це НАШ бік (останній локальний коміт, що пішов у
+   > conflict-branch). З ним будь-яка повторна зміна ТОГО САМОГО рядка на сервері давала
+   > три різні значення (наше / sibling / новий remote) → MANUAL_CONFLICT → ще один sibling
+   > (поле: спільне 6 → remote 8 / local 7 → конфлікт → remote 10 / local 9 → ДВА sibling-и
+   > 8 і 10 замість одного з 10). Помилка виникла саме тому, що справжній предок «блукає»:
+   > чужий R, наш D (злиття з §II.3, що пішло в main), а для sibling-а ще й злиття, яке живе
+   > лише на диску — і взяли те, що завжди під рукою.
+   >
+   > **Тепер:** `origin` = версія **main**, з якої sibling востаннє зроблено. Новий remote
+   > продовжує саме цю лінію main, тож diff3 переносить на sibling рівно зміни main між двома
+   > моментами, а правки користувача у sibling-файлі (якщо є) зберігаються. Зберігається в
+   > записі sibling-а в `conflicts.json` полем **`originSha`**: при народженні — sha самого
+   > remote (усі три сайти, `siblingInfoFrom`); при заміні (п.5) — `tracked.remote.sha`; при
+   > no-op злитті — теж `tracked.remote.sha` (файл не чіпаємо, лише запис); при append (п.6)
+   > новий sibling — свій remote. Старі записи без поля беруть sha самого sibling-а (при
+   > народженні це те саме). `origin` — це завжди блоб у main, тож довантажується в `_diff3`
+   > як звичайно (sync_store → GitHub), нічого додатково не закріплюємо (рішення власника
+   > «a»). «Наш» бік злиття — sibling-файл **з диска** з sha, **порахованим від байтів на
+   > диску**, а не записаним: інакше правка користувача давала б «ours == origin» і губилась.
+   > Кожне рішення STEP3 пишеться в лог (народження — WARN, заміна — INFO, no-op — INFO,
+   > append — WARN). Тести: `drain-conflicts.test.ts`, «the fold's ancestor is the remote
+   > version the sibling was made from»; C.5b/C.6/C.20 переписані під нове правило.
 5. Якщо спроба п.4 - вдала, тоді новий conflict-sibling-file (timestamp у назві — `tracked.remote.mtime`,
    дата remote-коміту, НЕ момент запису на диск) ЗАМІНЮЄ останній елемент `current_conflict.siblings` (зберігається
    з результатом _diff3 на файловій системі, а старий — видаляється(!); довжина списку не змінюється).
