@@ -769,7 +769,17 @@ sibling-file в diff-editor
    > «a»). «Наш» бік злиття — sibling-файл **з диска** з sha, **порахованим від байтів на
    > диску**, а не записаним: інакше правка користувача давала б «ours == origin» і губилась.
    > Кожне рішення STEP3 пишеться в лог (народження — WARN, заміна — INFO, no-op — INFO,
-   > append — WARN). Тести: `drain-conflicts.test.ts`, «the fold's ancestor is the remote
+   > append — WARN).
+   >
+   > **Запасний шлях (власник, 2026-10-09, варіант «a»):** якщо байтів `origin` немає ні в
+   > sync_store, ні на GitHub (історію гілки переписано, локальне сховище прибране) —
+   > `_diff3` кидає `BaseFileNotInRepoError`. Без запасного шляху злиття падало б на КОЖНОМУ
+   > Sync, а sibling застиг би на старій версії. Тоді — і лише тоді — злиття робиться
+   > по-старому, від `conflictBase` (нашого боку): це дає append (другий sibling), але не
+   > застигання; у лог — WARN. Помітно: байти `origin` потрібні ЛИШЕ для відредагованого
+   > sibling-а — незмінений вирішується за sha (`origin == sibling` → береться remote), тож
+   > там і без байтів відбувається звичайна заміна. Мережеві й auth-помилки, як і раніше,
+   > обривають увесь drain. Тести: `drain-conflicts.test.ts`, «the fold's ancestor is the remote
    > version the sibling was made from»; C.5b/C.6/C.20 переписані під нове правило.
 5. Якщо спроба п.4 - вдала, тоді новий conflict-sibling-file (timestamp у назві — `tracked.remote.mtime`,
    дата remote-коміту, НЕ момент запису на диск) ЗАМІНЮЄ останній елемент `current_conflict.siblings` (зберігається

@@ -80,7 +80,7 @@ import {
   readSiblingFileFromVault,
   saveConflictSiblingFile,
 } from "./conflict-siblings";
-import { NetworkError, AuthError, ValidationError } from "../errors";
+import { NetworkError, AuthError, ValidationError, BaseFileNotInRepoError } from "../errors";
 import NetworkRetry from "./retry-network";
 import SyncStore from "./sync-store";
 import DrainJournal, {
@@ -2258,12 +2258,32 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       };
       let foldVerdict;
       try {
-        foldVerdict = await _diff3(
-          diff3Deps,
-          { base: foldAncestor, remote: tracked.remote },
-          prevWithBlob,
-          headHash,
-        );
+        try {
+          foldVerdict = await _diff3(
+            diff3Deps,
+            { base: foldAncestor, remote: tracked.remote },
+            prevWithBlob,
+            headHash,
+          );
+        } catch (e) {
+          // The origin's bytes are in neither sync_store nor GitHub (history
+          // rewritten on GitHub, the local store swept). Only an EDITED copy
+          // needs them — an unedited one is decided by sha alone. Without a
+          // fallback the fold failed on every sync and the copy froze at its
+          // old version (owner, 2026-10-09, choice a): fold the old way, from
+          // OUR side — it appends a second copy instead of freezing.
+          if (!(e instanceof BaseFileNotInRepoError)) throw e;
+          deps.logger?.warn("Conflict copy: its origin version is gone from GitHub — merging from your side instead (a second copy may appear)", {
+            path,
+            origin: foldAncestor.sha?.slice(0, 7),
+          });
+          foldVerdict = await _diff3(
+            diff3Deps,
+            { base: current.conflictBase, remote: tracked.remote },
+            prevWithBlob,
+            headHash,
+          );
+        }
       } catch (e) {
         if (e instanceof NetworkError || e instanceof AuthError) {
           return statusFromError(e, result); // abort — journal stays (§II.6 п.8)

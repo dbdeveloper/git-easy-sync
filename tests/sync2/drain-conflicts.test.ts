@@ -676,6 +676,39 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
       expect(rec.siblings[0].originSha).toBe(await sha(ver(12)));
     });
 
+    // Owner, 2026-10-09 (choice a): the origin is fetched sync_store →
+    // GitHub. If it is in NEITHER (history rewritten on GitHub, the local
+    // store swept), the fold has no ancestor. It must not FREEZE — an error
+    // on every sync and the copy stuck at the old version forever. Fallback,
+    // for this case only: the old fold from our side (conflictBase), which
+    // appends a second copy.
+    const dropOrigin = async () => {
+      const originSha = await sha(ver(8));
+      world.blobs.delete(originSha);
+      const stored = path.join(dir, ".obsidian/plugins", PLUGIN_ID, ".runtime/sync_store", originSha);
+      if (fs.existsSync(stored)) fs.rmSync(stored);
+    };
+
+    it("🔑 the origin is gone from sync_store AND GitHub, copy EDITED → fall back to the old fold (a second copy), never freeze", async () => {
+      const sib1 = await birth();
+      const sibPath = path.join(dir, remoteSiblingName(sib1.mtime!));
+      fs.writeFileSync(sibPath, "HEAD-EDITED\ngap\nsyncInterval 8\ntail\n");
+      await dropOrigin();
+      const rec = await nextRound(ver(10), ver(9)); // asserts status ok + NO vaultStepErrors
+      expect(rec.siblings).toHaveLength(2);
+      expect(fs.readFileSync(sibPath, "utf8")).toBe("HEAD-EDITED\ngap\nsyncInterval 8\ntail\n");
+      expect(fs.readFileSync(path.join(dir, remoteSiblingName(rec.siblings[1].mtime!)), "utf8")).toBe(ver(10));
+      expect(logged.some((l) => l.level === "warn" && l.message.includes("origin"))).toBe(true);
+    });
+
+    it("the origin gone but the copy UNEDITED → still a clean replace (sha alone decides, no bytes needed)", async () => {
+      await birth();
+      await dropOrigin();
+      const rec = await nextRound(ver(10), ver(9));
+      expect(rec.siblings).toHaveLength(1);
+      expect(fs.readFileSync(path.join(dir, remoteSiblingName(rec.siblings[0].mtime!)), "utf8")).toBe(ver(10));
+    });
+
     it("the user's own edit in the sibling (another line) survives the fold", async () => {
       const sib1 = await birth();
       const sibPath = path.join(dir, remoteSiblingName(sib1.mtime!));
