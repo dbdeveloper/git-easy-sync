@@ -61,6 +61,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
   let notices: { committed: number[]; noChanges: number };
   let pluginReloads: string[][];
   let cancelledConflicts: string[];
+  let conflictsTouched: number;
   let completed: Array<{
     pushedFiles: number;
     pulledFiles: number;
@@ -162,6 +163,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     notices = { committed: [], noChanges: 0 };
     pluginReloads = [];
     cancelledConflicts = [];
+    conflictsTouched = 0;
     completed = [];
     latched = [];
 
@@ -199,6 +201,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       onSyncCompleted: (s) => completed.push(s),
       onPluginsAffected: (ids) => pluginReloads.push(ids),
       onConflictCancelled: (p) => cancelledConflicts.push(p),
+      onConflictsTouched: () => conflictsTouched++,
       logger: { info: () => {}, warn: () => {}, error: () => {} },
       drainFn: async () => {
         drainCalls += 1;
@@ -1134,6 +1137,42 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       // the scenario rather than something to work around.
       await expect(manager.syncAll()).rejects.toThrow(/network/i);
       expect(cancelledConflicts).toEqual(["b.md"]);
+    });
+  });
+
+  // Owner, 2026-10-09: the drain leaves a "message" whenever it touched a
+  // conflict, and the Diff Panel reloads on it. The panel used to reload
+  // only when the conflict COUNT changed — a conflict copy REPLACED by a
+  // newer server version keeps the count (1 → 1), so the panel kept the
+  // old file name and a click opened a file that was gone.
+  describe("the drain's message: conflicts touched", () => {
+    it("🔑 any conflict verdict → the message (also when the count stays the same)", async () => {
+      drainResult = okResult({ conflictVerdicts: [{ path: "a.md", site: "vault-step" }] });
+      await manager.syncAll();
+      expect(conflictsTouched).toBe(1);
+    });
+    it("a cancelled conflict → the message", async () => {
+      drainResult = okResult({ cancelledConflicts: ["b.md"] });
+      await manager.syncAll();
+      expect(conflictsTouched).toBe(1);
+    });
+    it("a finalized conflict branch (all resolved) → the message", async () => {
+      drainResult = okResult({ finalizedMergeSha: "abc" });
+      await manager.syncAll();
+      expect(conflictsTouched).toBe(1);
+    });
+    it("a drain that touched no conflict → no message", async () => {
+      drainResult = okResult();
+      await manager.syncAll();
+      expect(conflictsTouched).toBe(0);
+    });
+    it("sent even when the drain later FAILED — what it changed already happened", async () => {
+      drainResult = okResult({
+        status: "network-error" as DrainOutcome,
+        conflictVerdicts: [{ path: "a.md", site: "vault-step" }],
+      });
+      await expect(manager.syncAll()).rejects.toThrow(/network/i);
+      expect(conflictsTouched).toBe(1);
     });
   });
 

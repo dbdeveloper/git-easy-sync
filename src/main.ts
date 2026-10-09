@@ -1716,6 +1716,13 @@ export default class GitHubSyncPlugin extends Plugin {
       onPluginsAffected: (ids: string[]) => {
         this.handlePluginsAffectedReload(ids);
       },
+      // The drain touched a conflict (owner, 2026-10-09): every open Diff
+      // Panel re-reads its list — the count alone misses a replaced copy.
+      onConflictsTouched: () => {
+        for (const leaf of this.app.workspace.getLeavesOfType(DIFF2_PANEL_VIEW_TYPE)) {
+          if (leaf.view instanceof DiffPanelView) void leaf.view.refreshConflicts();
+        }
+      },
       onConflictCancelled: (path: string) => {
         // Plain language, no engine words (the sync2-engine rule). It
         // says WHAT changed, that nothing of theirs was touched, and

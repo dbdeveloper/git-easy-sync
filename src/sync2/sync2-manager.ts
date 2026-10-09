@@ -239,6 +239,12 @@ export interface Sync2ManagerDeps {
   // vault-step failure the user hears about (owner's rule, 2026-10-02:
   // log what the next sync will retry, tell them what it will not).
   onConflictCancelled?(path: string): void;
+  // The drain's "message" (owner, 2026-10-09): it touched a conflict —
+  // born, folded, replaced, appended, cancelled, or the conflict branch
+  // finalized. The Diff Panel reloads on it: it otherwise reloaded only
+  // when the conflict COUNT changed, and a REPLACED conflict copy keeps
+  // the count, so the panel held a file name that was gone.
+  onConflictsTouched?(): void;
   logger: Sync2Logger;
   now?: () => number;
   // Test seam — the shell's unit suite fakes the engine.
@@ -903,6 +909,14 @@ export class Sync2Manager {
       // runs that went worst.
       for (const path of r.cancelledConflicts) {
         this.deps.onConflictCancelled?.(path);
+      }
+      // Status-independent, the same reason: what changed, changed.
+      if (
+        r.conflictVerdicts.length > 0 ||
+        r.cancelledConflicts.length > 0 ||
+        r.finalizedMergeSha !== null
+      ) {
+        this.deps.onConflictsTouched?.();
       }
       await this.fireQueueDepth();
 
