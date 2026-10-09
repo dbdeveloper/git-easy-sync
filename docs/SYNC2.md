@@ -616,7 +616,8 @@ to the server. And when the canonical name is already TAKEN, the file
 is renamed to the first free `" (N)"` name (N from 2, or N+1 when the
 name already ends in `" (N)"`) with a WARN, on both push paths — it
 used to be skipped (`freeNameFor`, `sanitizeOne` in sync2-manager).
-The PULL side below still skips on a taken name. The pull side runs them over the incoming GitHub
+The PULL side below follows the same rule since 2026-10-10 (owner: a
+skipped file is never seen at all — an unusual name is the lesser evil). The pull side runs them over the incoming GitHub
 paths: any forbidden-named GitHub file is materialised under its
 canonical local name, and the forbidden remote path is recorded in
 the pending-deletions queue (§4.2) so the next push cleans GitHub.

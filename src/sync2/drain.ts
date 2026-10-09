@@ -117,7 +117,7 @@ import {
 } from "./tree-accumulator";
 import { buildConflictBranchName } from "./conflict-branch";
 import { toGitAuthorDate } from "./commit-message";
-import { needsSanitization, sanitizeFilename } from "./cross-platform";
+import { freeNameFor, needsSanitization, sanitizeFilename } from "./cross-platform";
 
 export interface DrainClient {
   getGuardedHead(): Promise<string | null>;
@@ -2701,25 +2701,28 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     let writePath = path;
     if (needsSanitization(path)) {
       const canonical = sanitizeFilename(path);
-      if ((await deps.vaultFiles.stat(canonical)) !== null) {
-        // Mirror of the old engine's collision rule: skip LOUDLY and
-        // drop the tracked record — recording baselines[P] here would
-        // make the next commit-pass push a DELETION of remote P whose
-        // content never landed anywhere locally (silent loss). The
-        // absent baseline makes the next drain re-report P instead.
+      // A TAKEN canonical name gets the first free " (N)" (owner,
+      // 2026-10-10 — the push side's rule). It used to SKIP the file:
+      // the user then never saw it at all, which is worse than seeing it
+      // under an unusual name. The content now lands locally, so the
+      // baseline for P is as true as in a plain sanitize — the next
+      // commit pass pushes the rename, nothing is lost.
+      const target = await freeNameFor(
+        canonical,
+        async (p) => (await deps.vaultFiles.stat(p)) !== null,
+      );
+      if (target !== canonical) {
         deps.logger?.warn(
-          "Vault-step: forbidden-path target exists, sanitize skipped",
-          { remote: path, local_canonical: canonical },
+          "Vault-step: the safe name for a forbidden remote path is taken — writing to a numbered name",
+          { remote: path, taken: canonical, to: target },
         );
-        state.trackedFiles.delete(path);
-        await noteRecheck(path);
-        continue;
+      } else {
+        deps.logger?.info("Vault-step: sanitized remote forbidden path", {
+          from: path,
+          to: canonical,
+        });
       }
-      deps.logger?.info("Vault-step: sanitized remote forbidden path", {
-        from: path,
-        to: canonical,
-      });
-      writePath = canonical;
+      writePath = target;
     }
     await deps.vaultFiles.write(writePath, bytes);
     vaultStepWrites.push(writePath);

@@ -2791,7 +2791,10 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     ]);
   });
 
-  it("S1 forbidden-name collision: canonical target exists → LOUD skip, NO baseline for the original (no silent remote deletion)", async () => {
+  // Owner, 2026-10-10: a skip is worse — the user never sees the file. The
+  // pull side now takes the first free " (N)" name (the push side's rule),
+  // so the file lands under an unusual name instead of not at all.
+  it("S1 forbidden-name collision: canonical target exists → the first free \" (N)\" name, a WARN; the taken file untouched", async () => {
     await setupAligned();
     const BAD = 'we"ird.md';
     await world.commitFiles({ [BAD]: "remote content\n" });
@@ -2799,6 +2802,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     const { sanitizeFilename } = await import("../../src/sync2/cross-platform");
     const canonical = sanitizeFilename(BAD);
     vaultFiles.files.set(canonical, { content: "user content", mtime: 60 });
+    const numbered = canonical.replace(/\.md$/, " (2).md");
 
     const warns: string[] = [];
     const r = await drainOnce(
@@ -2808,10 +2812,11 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     );
     expect(r.status).toBe("ok");
     expect(vaultFiles.files.get(canonical)!.content).toBe("user content"); // untouched
-    expect(warns.some((w) => w.includes("sanitize skipped"))).toBe(true);
-    // NO baseline for BAD: recording it would make the next commit-pass
-    // DELETE remote content that never landed anywhere locally.
-    expect(baselines.has(BAD)).toBe(false);
+    expect(vaultFiles.files.get(numbered)?.content).toBe("remote content\n"); // landed, numbered
+    expect(warns.some((w) => w.includes("taken"))).toBe(true);
+    // The content DID land locally, so the original gets its baseline —
+    // the same as a plain sanitize: the next commit pass pushes the rename.
+    expect(baselines.has(BAD)).toBe(true);
   });
 
   // ── P.29 — Layer 2 answered from discovery's tree snapshot ────────
