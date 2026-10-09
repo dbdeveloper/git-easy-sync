@@ -104,6 +104,8 @@ Use it, and note which runs you did.
       version". Edit a DIFFERENT line inside B's conflict copy first → the edit survives the update.
       Edit the SAME line inside the copy first → a second copy appears instead, and the log has a
       WARN "…a second conflict copy is added".
+      If the OLD copy was open in an editor tab (or had unsaved editor work), that tab closes during
+      the sync and its autosave is gone (no "resume" offer for it later).
       With the Diff Panel OPEN during that second sync: its row switches to the new copy's name
       by itself (the count stayed 1), and clicking it opens the editor on the new copy.
 - [ ] 🖥️ The pre-sync conflict dialog shows the count and lets you confirm.

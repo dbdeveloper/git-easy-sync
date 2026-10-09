@@ -245,6 +245,10 @@ export interface Sync2ManagerDeps {
   // when the conflict COUNT changed, and a REPLACED conflict copy keeps
   // the count, so the panel held a file name that was gone.
   onConflictsTouched?(): void;
+  // The drain REPLACED a conflict copy: forget the OLD one at once (its
+  // editor tabs, its diff2-autosave dir — owner, 2026-10-09). Passed
+  // straight to the drain (DrainDeps.onConflictCopyReplaced).
+  onConflictCopyReplaced?(path: string, oldSiblingPath: string): Promise<void>;
   logger: Sync2Logger;
   now?: () => number;
   // Test seam — the shell's unit suite fakes the engine.
@@ -1100,6 +1104,10 @@ export class Sync2Manager {
       now: this.now,
     };
     const built = buildDrainDeps(args);
+    if (this.deps.onConflictCopyReplaced) {
+      const hook = this.deps.onConflictCopyReplaced.bind(this.deps);
+      built.onConflictCopyReplaced = (p, old) => hook(p, old);
+    }
     // §II.16 — the status bar's "↑ N" must fall as batches land, not
     // jump to zero at the end. fireQueueDepth() used to run ONCE after
     // the whole drain, so a four-batch run showed "↑ 4" throughout.

@@ -77,6 +77,7 @@ import ConflictStoreV2, {
 import SiblingTx from "./sibling-tx";
 import { processConflicts } from "./process-conflicts";
 import {
+  buildSiblingFilePath,
   readSiblingFileFromVault,
   saveConflictSiblingFile,
 } from "./conflict-siblings";
@@ -366,6 +367,12 @@ export interface DrainDeps {
     info(message: string, data?: unknown): void;
     warn(message: string, data?: unknown): void;
   };
+  // A conflict copy was REPLACED by a newer server version (STEP3): the
+  // host forgets the OLD copy at once — closes its editor tabs and wipes its
+  // diff2-autosave dir (owner, 2026-10-09). A hook because the engine must
+  // not touch the diff2 layer. Best-effort: a failure is logged, the drain
+  // goes on.
+  onConflictCopyReplaced?: (path: string, oldSiblingPath: string) => Promise<void>;
 }
 
 export interface Layer2Correction {
@@ -2390,6 +2397,19 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           from: foldAncestor.sha?.slice(0, 7),
           to: tracked.remote.sha?.slice(0, 7),
         });
+        const oldSiblingPath = buildSiblingFilePath(
+          path,
+          previousSibling.mtime ?? 0,
+          previousSibling.deviceLabel,
+        );
+        try {
+          await deps.onConflictCopyReplaced?.(path, oldSiblingPath);
+        } catch (err) {
+          deps.logger?.warn("Could not forget the replaced conflict copy (tabs / autosave)", {
+            path,
+            err: String(err),
+          });
+        }
       } else {
         // MANUAL_CONFLICT (or the plugin seam, impossible here in
         // practice) → APPEND a new sibling; the old one stays tracked

@@ -667,6 +667,56 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
       expect(logged).toContainEqual({ level: "info", message: "Conflict copy updated to the newer server version (old copy replaced)" });
     });
 
+    // Owner, 2026-10-09: when a copy is REPLACED, the OLD copy is forgotten
+    // at once — its editor tabs close and its diff2-autosave dir goes. The
+    // engine cannot touch diff2 (layer rule), so it says so through a hook,
+    // right after the replace transaction. Only on a replace.
+    describe("the replace hook (forget the old copy)", () => {
+      const calls: Array<[string, string]> = [];
+      const hooked = () => ({
+        logger,
+        onConflictCopyReplaced: async (p: string, old: string) => {
+          calls.push([p, old]);
+        },
+      });
+      const round = async (remote: string, local: string) => {
+        baseCommit = world.head;
+        world.committedAt += 5000;
+        await world.commitFiles({ [NOTE]: remote });
+        vaultFiles.files.set(NOTE, { content: local, mtime: 200 });
+        await stageBatch({ [NOTE]: local });
+        const r = await drainOnce(makeDeps(hooked()));
+        expect(r.status).toBe("ok");
+      };
+
+      it("🔑 a replace → called once with the OLD copy's file name", async () => {
+        calls.length = 0;
+        const sib1 = await birth();
+        await round(ver(10), ver(9));
+        expect(calls).toEqual([[NOTE, remoteSiblingName(sib1.mtime!)]]);
+      });
+
+      it("an append (a real clash) → not called: the old copy stays", async () => {
+        calls.length = 0;
+        const sib1 = await birth();
+        fs.writeFileSync(path.join(dir, remoteSiblingName(sib1.mtime!)), ver(42));
+        await round(ver(10), ver(9));
+        expect(calls).toEqual([]);
+      });
+
+      it("a hook that throws does not break the drain", async () => {
+        await birth();
+        baseCommit = world.head;
+        world.committedAt += 5000;
+        await world.commitFiles({ [NOTE]: ver(10) });
+        vaultFiles.files.set(NOTE, { content: ver(9), mtime: 200 });
+        await stageBatch({ [NOTE]: ver(9) });
+        const r = await drainOnce(makeDeps({ logger, onConflictCopyReplaced: async () => { throw new Error("ui gone"); } }));
+        expect(r.status).toBe("ok");
+        expect(r.vaultStepErrors).toEqual([]);
+      });
+    });
+
     it("🔑 THREE rounds (8 → 10 → 12) still leave ONE sibling — the origin moves on with each fold", async () => {
       await birth();
       await nextRound(ver(10), ver(9));

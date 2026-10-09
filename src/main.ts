@@ -48,6 +48,7 @@ import {
 import type { GitignoreEditorDeps } from "./gitignore-editor/gitignore-editor-panel";
 import { bringLeafToFront } from "./bring-to-front";
 import { enforceIfRootGitignore } from "./gitignore-editor/after-history-write";
+import { forgetReplacedConflictCopy } from "./diff2/forget-replaced-copy";
 import { GitignoreDecisionModal } from "./sync2/views/gitignore-modal";
 import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
 import {
@@ -1724,6 +1725,28 @@ export default class GitHubSyncPlugin extends Plugin {
       },
       // The drain touched a conflict (owner, 2026-10-09): every open Diff
       // Panel re-reads its list — the count alone misses a replaced copy.
+      // The drain REPLACED a conflict copy (owner, 2026-10-09): forget the
+      // OLD one at once — close its editor tabs, wipe its autosave dir,
+      // whether a tab was open or not. Tabs are read from their SERIALIZED
+      // state, so a deferred (background) leaf counts too.
+      onConflictCopyReplaced: async (path: string, oldSiblingPath: string) => {
+        const r = await forgetReplacedConflictCopy(
+          {
+            editorTabs: () =>
+              this.app.workspace.getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE).map((l) => {
+                const st = l.getViewState()?.state as { siblingPath?: unknown } | undefined;
+                return {
+                  siblingPath: typeof st?.siblingPath === "string" ? st.siblingPath : null,
+                  detach: () => l.detach(),
+                };
+              }),
+            adapter: this.app.vault.adapter,
+          },
+          path,
+          oldSiblingPath,
+        );
+        this.logger.info("Replaced conflict copy forgotten", { path, oldSiblingPath, ...r });
+      },
       onConflictsTouched: () => {
         for (const leaf of this.app.workspace.getLeavesOfType(DIFF2_PANEL_VIEW_TYPE)) {
           if (leaf.view instanceof DiffPanelView) void leaf.view.refreshConflicts();
