@@ -197,6 +197,10 @@ export class ConflictCounter {
     // (tracked + synthetic siblings, via findAllConflicts) so the badge / status
     // bar / menu can't undercount. The store-only walk below is the default.
     if (this.countConflicts) return this.countConflicts();
+    // FILES IN CONFLICT, not conflict copies (owner, 2026-10-09): the badge
+    // says how many files are kept from the server until resolved. A file
+    // with three copies is ONE such file — the Diff Panel shows it in red,
+    // so the red rows and the badge agree.
     let count = 0;
     for (const [basePath, entry] of this.store.getCachedState().entries) {
       for (const sibling of entry.siblings) {
@@ -206,8 +210,12 @@ export class ConflictCounter {
           sibling.deviceLabel,
         );
         // A tracked sibling whose file is gone is resolved-pending-prune
-        // (the next process_conflicts drops it) — not counted.
-        if (await this.vault.adapter.exists(name)) count++;
+        // (the next process_conflicts drops it) — not counted. One copy
+        // still on disk is enough to count the file.
+        if (await this.vault.adapter.exists(name)) {
+          count++;
+          break;
+        }
       }
     }
     return count;

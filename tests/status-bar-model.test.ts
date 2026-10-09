@@ -142,8 +142,9 @@ describe("buildStatusMenu — §7 three states", () => {
     const mk = (c: number) =>
       labelOf(buildStatusMenu({ state: "normal", pluginName: "x", queueDepth: 0, conflictCount: c, hasActiveFile: true }), "open-diff");
     expect(mk(0)).toBe("Open diff-panel");
-    expect(mk(1)).toBe("Open diff-panel (1 open conflict)");
-    expect(mk(5)).toBe("Open diff-panel (5 open conflicts)");
+    // Files in conflict, not conflict copies (owner, 2026-10-09).
+    expect(mk(1)).toBe("Open diff-panel (1 file in conflict)");
+    expect(mk(5)).toBe("Open diff-panel (5 files in conflict)");
   });
 
   it("7a.4 — open-history is greyed (disabled) exactly when there is no active file", () => {
@@ -176,7 +177,7 @@ describe("ribbon tooltips — §8 sync / §9 diff", () => {
   });
   it("diffTooltip surfaces the open-conflict count (matches the menu suffix)", () => {
     expect(diffTooltip(0)).toBe("Diff-Panel");
-    expect(diffTooltip(1)).toBe("Diff-Panel (1 open conflict)");
-    expect(diffTooltip(5)).toBe("Diff-Panel (5 open conflicts)");
+    expect(diffTooltip(1)).toBe("Diff-Panel (1 file in conflict)");
+    expect(diffTooltip(5)).toBe("Diff-Panel (5 files in conflict)");
   });
 });

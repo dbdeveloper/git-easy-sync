@@ -87,10 +87,12 @@ export interface StatusMenuInput {
   hasActiveFile: boolean;
 }
 
-// "(1 open conflict)" / "(N open conflicts)" / "" — §7 open-diff suffix.
+// "(1 file in conflict)" / "(N files in conflict)" / "" — §7 open-diff suffix.
+// The count is FILES in conflict (kept from the server until resolved), not
+// conflict copies (owner, 2026-10-09).
 function openDiffSuffix(count: number): string {
   if (count <= 0) return "";
-  return count === 1 ? " (1 open conflict)" : ` (${count} open conflicts)`;
+  return count === 1 ? " (1 file in conflict)" : ` (${count} files in conflict)`;
 }
 
 // "Pull from repo and push stored (N) commits" — the "(N)" only when N > 0 (§7).

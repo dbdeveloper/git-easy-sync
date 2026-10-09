@@ -313,6 +313,33 @@ describe("ConflictCounter", () => {
     expect(f.counter.getValue()).toBe(2);
   });
 
+  // Owner, 2026-10-09: the badge counts FILES IN CONFLICT — files kept from
+  // the server until resolved — not the conflict copies. One file with three
+  // copies is ONE blocked file; the panel shows that file in red, so the red
+  // rows and the badge agree.
+  it("🔑 a file with SEVERAL tracked copies counts ONCE (files in conflict, not copies)", async () => {
+    await f.store.load();
+    writeVaultFile(f.root, "a.md", "local-a\n");
+    writeVaultFile(f.root, "b.md", "local-b\n");
+    await track(f, "a.md");
+    await track(f, "a.md");
+    await track(f, "a.md");
+    await track(f, "b.md");
+    f.counter.markDirty();
+    await f.counter.flush();
+    expect(f.counter.getValue()).toBe(2);
+  });
+
+  it("a file whose copies are ALL gone from disk does not count; one copy left is enough", async () => {
+    await f.store.load();
+    const c1 = await track(f, "a.md");
+    await track(f, "a.md");
+    fs.unlinkSync(path.join(f.root, c1.siblingPath));
+    f.counter.markDirty();
+    await f.counter.flush();
+    expect(f.counter.getValue()).toBe(1);
+  });
+
   // ─── bulk vault events coalesce ─────────────────────────────────────
 
   it("100 markDirty calls in tight loop produce a single scheduled recompute", async () => {
