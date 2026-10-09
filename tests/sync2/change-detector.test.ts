@@ -1275,6 +1275,22 @@ describe("scope belongs to the OPERATION, not to the detector", () => {
     );
   });
 
+  // Owner's field report (2026-10-09, ~/Obsidian-test): a drain and a
+  // commit pass ran at the same time — by design they may (R3b) — and both
+  // opened a scope on the ONE detector. The drain ended first and dropped
+  // the scope under the commit pass still scanning: "the dot-space opt-in
+  // set was never computed for this operation". The scope is now counted:
+  // it stays until the LAST open operation ends.
+  it("🔑 overlapping operations: one ending does not drop the scope under the other", async () => {
+    writeFile(f.root, ".gitignore", "");
+    await f.detector.beginScan(); // drain
+    await f.detector.beginScan(); // commit pass
+    f.detector.endScan(); // the drain ends first
+    await expect(f.detector.checkSyncable(".editorconfig")).resolves.toBe(false);
+    f.detector.endScan(); // the commit pass ends
+    await expect(f.detector.checkSyncable(".editorconfig")).rejects.toThrow(/beginScan/);
+  });
+
   it("a fresh scan sees a rule added since the last one", async () => {
     // The matcher holds a parsed level by mtime for up to 500 ms, so
     // without invalidating the root node at scan start the set and `gi`

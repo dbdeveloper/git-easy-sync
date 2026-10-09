@@ -439,6 +439,8 @@ export default class ChangeDetector {
   // fixed for the whole pass (§3.3) — a mid-scan recompute could read a
   // .gitignore this very drain just pulled.
   private optIn: OptInSet | null = null;
+  // Operations with a scope open right now (beginScan/endScan pairs).
+  private scanDepth = 0;
   // The last findChanges' breakdown (null before the first one). The
   // in-progress one accumulates in `timing`; a single-path
   // findChangeForPath does not touch either.
@@ -476,6 +478,11 @@ export default class ChangeDetector {
   // findChanges/findChangeForPath call it themselves; the manager calls
   // it for the paths it owns (drain, bootstrap).
   async beginScan(): Promise<void> {
+    // COUNTED, before the await (owner's field report, 2026-10-09): a
+    // drain and a commit pass may run at the same time (R3b), each with
+    // its own scope on this ONE object. An operation ending must not drop
+    // the scope under another still scanning — the last one out does.
+    this.scanDepth++;
     // §5: drop the matcher's parse of the ROOT level first. The set is
     // read from that file directly (so it is always fresh), but `gi`
     // holds a level by mtime for up to 500 ms, and step 6 asks `gi`.
@@ -483,6 +490,8 @@ export default class ChangeDetector {
     // generations of the same file for the first half-second of an
     // operation the user started BECAUSE they just edited it.
     this.gi.invalidate("");
+    // readRootGitignore never throws (a failed read is "no file"), so the
+    // count cannot be left raised by a failing beginScan.
     this.optIn = await readRootGitignore({
       vault: this.vault,
       configDir: this.configDir,
@@ -497,7 +506,8 @@ export default class ChangeDetector {
   // reuse the PREVIOUS operation's scope, which is the stale-set state
   // TD7.5 exists to make loud. Always called from a `finally`.
   endScan(): void {
-    this.optIn = null;
+    this.scanDepth = Math.max(0, this.scanDepth - 1);
+    if (this.scanDepth === 0) this.optIn = null;
   }
 
   // Walk the vault, return everything that needs to flow remote-ward,
