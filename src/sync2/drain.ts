@@ -424,6 +424,10 @@ export interface DrainResult {
   // that vanished is something the user was looking at. Silence there
   // is the engine changing its mind behind their back.
   cancelledConflicts: string[];
+  // Conflict copies that are NEW this run — born or appended (one entry per
+  // copy, by base path). A replace is NOT new: it updates a copy that was
+  // there. For the log line after a Sync (owner, 2026-10-09).
+  newConflictCopies: string[];
   pushedCommits: string[]; // main-branch commit shas, in order
   // FINALIZE outcome: the merge commit that closed the conflict
   // branch this run, or null (no finalize / deferred / nothing to do).
@@ -485,6 +489,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   const conflictVerdicts: ConflictVerdict[] = [];
   const vaultStepErrors: Array<{ path: string; error: string }> = [];
   const cancelledConflicts: string[] = [];
+  const newConflictCopies: string[] = [];
   const pushedCommits: string[] = [];
   const vaultStepWrites: string[] = [];
   const vaultStepRemoves: string[] = [];
@@ -865,6 +870,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     conflictVerdicts,
     vaultStepErrors,
     cancelledConflicts,
+    newConflictCopies,
     pushedCommits,
     finalizedMergeSha,
     vaultStepWrites,
@@ -2200,6 +2206,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           conflictBase: current.conflictBase,
           siblings: [siblingInfoFrom(tracked.remote)],
         });
+        newConflictCopies.push(path);
         // Every conflict decision is in the log (owner, 2026-10-09 — a
         // field test could not tell from it why a copy stayed).
         deps.logger?.warn("Conflict: the server's version is saved as a conflict copy next to the file", {
@@ -2443,6 +2450,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           conflictBase: current.conflictBase,
           siblings: [...current.siblings, siblingInfoFrom(tracked.remote)],
         });
+        newConflictCopies.push(path);
       }
       conflictVerdicts.push({ path, site: "vault-step" });
       continue;
@@ -2578,6 +2586,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         conflictBase: siblingInfoFrom(tracked.remote),
         siblings: [siblingInfoFrom(tracked.remote)],
       });
+      newConflictCopies.push(path);
       deps.logger?.warn("Conflict: the server's version is saved as a conflict copy next to the file", {
         path,
         server: tracked.remote.sha?.slice(0, 7),

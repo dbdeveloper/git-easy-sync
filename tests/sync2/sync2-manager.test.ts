@@ -38,6 +38,7 @@ const okResult = (over?: Partial<DrainResult>): DrainResult => ({
   conflictVerdicts: [],
   vaultStepErrors: [],
   cancelledConflicts: [],
+  newConflictCopies: [],
   pushedCommits: [],
   finalizedMergeSha: null,
   vaultStepWrites: [],
@@ -1244,6 +1245,26 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
   // only when the conflict COUNT changed — a conflict copy REPLACED by a
   // newer server version keeps the count (1 → 1), so the panel kept the
   // old file name and a click opened a file that was gone.
+  // Owner, 2026-10-09: "Sync2 drain done" used to print `conflicts:` = the
+  // number of conflict DECISIONS this run — read as "conflicts", it misled.
+  // Now three real numbers: files in conflict (the diff badge's number),
+  // tracked conflict copies in all, and the copies that are NEW this run.
+  it("🔑 the drain-done log line: filesInConflict / trackedConflicts / newTrackedConflicts", async () => {
+    const lines: Array<{ m: string; d: unknown }> = [];
+    deps.logger = { info: (m: string, d?: unknown) => lines.push({ m, d }), warn: () => {}, error: () => {} };
+    manager = new Sync2Manager(deps);
+    const state = await deps.conflictStore.load();
+    const f = (p: string, mtime: number) => ({ path: p, size: 1, mtime, sha: `s${mtime}`, blob: null, mode: "" as const, deviceLabel: "X" });
+    state.entries.set("a.md", { conflictBase: f("a.md", 1), siblings: [f("a.md", 2), f("a.md", 3), f("a.md", 4)] });
+    state.entries.set("b.md", { conflictBase: f("b.md", 1), siblings: [f("b.md", 5)] });
+    await deps.conflictStore.save(state);
+    drainResult = okResult({ newConflictCopies: ["b.md"], conflictVerdicts: [{ path: "b.md", site: "vault-step" }] });
+    await manager.syncAll();
+    const done = lines.find((l) => l.m === "Sync2 drain done")!.d as Record<string, unknown>;
+    expect(done).toMatchObject({ filesInConflict: 2, trackedConflicts: 4, newTrackedConflicts: 1 });
+    expect("conflicts" in done).toBe(false);
+  });
+
   describe("the drain's message: conflicts touched", () => {
     it("🔑 any conflict verdict → the message (also when the count stays the same)", async () => {
       drainResult = okResult({ conflictVerdicts: [{ path: "a.md", site: "vault-step" }] });

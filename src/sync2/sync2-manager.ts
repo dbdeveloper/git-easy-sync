@@ -1248,11 +1248,29 @@ export class Sync2Manager {
   }
 
   private logDrainSummary(r: DrainResult): void {
+    // Conflicts as the user knows them (owner, 2026-10-09) — the old
+    // `conflicts:` here was the number of conflict DECISIONS this run and
+    // misled. filesInConflict = the diff badge's number (files kept from the
+    // server until resolved); trackedConflicts = all tracked copies;
+    // newTrackedConflicts = copies born or appended this run (a replace is
+    // not new). From the records the drain just saved — no disk reads.
+    let filesInConflict = 0;
+    let trackedConflicts = 0;
+    try {
+      for (const entry of this.deps.conflictStore.getCachedState().entries.values()) {
+        if (entry.siblings.length > 0) filesInConflict++;
+        trackedConflicts += entry.siblings.length;
+      }
+    } catch {
+      // A store that cannot be read is not the log line's problem.
+    }
     this.deps.logger.info("Sync2 drain done", {
       pushedCommits: r.pushedCommits.length,
       pulled: r.vaultStepWrites.length,
       removed: r.vaultStepRemoves.length,
-      conflicts: r.conflictVerdicts.length,
+      filesInConflict,
+      trackedConflicts,
+      newTrackedConflicts: r.newConflictCopies.length,
       layer2Corrections: r.layer2Corrections.length,
       finalizedMerge: r.finalizedMergeSha !== null,
       vaultStepErrors: r.vaultStepErrors,

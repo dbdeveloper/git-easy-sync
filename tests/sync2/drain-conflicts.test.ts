@@ -717,6 +717,42 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
       });
     });
 
+    // Owner, 2026-10-09: the log line after a Sync says how many conflict
+    // copies are NEW — born or appended this run. A REPLACE is not new (it
+    // updates a copy that was already there).
+    describe("newConflictCopies (the log's newTrackedConflicts)", () => {
+      it("🔑 a birth → 1", async () => {
+        baseCommit = await world.commitFiles({ [NOTE]: ver(6) });
+        baselines.set(NOTE, { baselineSha: await sha(ver(6)), mtime: 50, size: enc(ver(6)).byteLength });
+        vaultFiles.files.set(NOTE, { content: ver(7), mtime: 100 });
+        await world.commitFiles({ [NOTE]: ver(8) });
+        await stageBatch({ [NOTE]: ver(7) });
+        const r = await drainOnce(makeDeps());
+        expect(r.newConflictCopies).toEqual([NOTE]);
+      });
+      it("🔑 a replace → 0", async () => {
+        await birth();
+        baseCommit = world.head;
+        world.committedAt += 5000;
+        await world.commitFiles({ [NOTE]: ver(10) });
+        vaultFiles.files.set(NOTE, { content: ver(9), mtime: 200 });
+        await stageBatch({ [NOTE]: ver(9) });
+        const r = await drainOnce(makeDeps());
+        expect(r.newConflictCopies).toEqual([]);
+      });
+      it("🔑 an append (a real clash) → 1", async () => {
+        const sib1 = await birth();
+        fs.writeFileSync(path.join(dir, remoteSiblingName(sib1.mtime!)), ver(42));
+        baseCommit = world.head;
+        world.committedAt += 5000;
+        await world.commitFiles({ [NOTE]: ver(10) });
+        vaultFiles.files.set(NOTE, { content: ver(9), mtime: 200 });
+        await stageBatch({ [NOTE]: ver(9) });
+        const r = await drainOnce(makeDeps());
+        expect(r.newConflictCopies).toEqual([NOTE]);
+      });
+    });
+
     it("🔑 THREE rounds (8 → 10 → 12) still leave ONE sibling — the origin moves on with each fold", async () => {
       await birth();
       await nextRound(ver(10), ver(9));
