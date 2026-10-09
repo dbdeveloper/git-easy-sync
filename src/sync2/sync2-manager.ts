@@ -442,6 +442,9 @@ export class Sync2Manager {
   // apart both ran — the old guard (main.ts) looked only at the DRAIN, and a
   // Sync spends its first part in the commit pass.
   private syncBusy = false;
+  // Cancel SYNC while it is still in its commit part (owner, 2026-10-09):
+  // the commit finishes, the drain is not started, the Sync ends cancelled.
+  private cancelBeforeDrain = false;
 
   isSyncBusy(): boolean {
     return this.syncBusy || this.running;
@@ -453,7 +456,20 @@ export class Sync2Manager {
       return false;
     }
     this.syncBusy = true;
+    this.cancelBeforeDrain = false;
     return true;
+  }
+
+  // After a Sync's commit part: run its drain — unless the user cancelled
+  // the Sync meanwhile.
+  private async drainUnlessCancelled(): Promise<void> {
+    if (this.cancelBeforeDrain) {
+      this.cancelBeforeDrain = false;
+      this.lastDrainWasCancelled = true;
+      this.deps.logger.info("Sync2: sync cancelled after its commit part — drain not started");
+      return;
+    }
+    await this.drain();
   }
 
   async syncAll(): Promise<"done" | "busy"> {
@@ -480,8 +496,9 @@ export class Sync2Manager {
     let ok = false;
     this.deps.onSyncStarted?.();
     try {
+      this.lastDrainWasCancelled = false;
       await this.runCommitPass(null);
-      await this.drain();
+      await this.drainUnlessCancelled();
       ok = !this.lastDrainWasCancelled;
     } finally {
       this.deps.onSyncCompleted?.({
@@ -513,8 +530,9 @@ export class Sync2Manager {
     let ok = false;
     this.deps.onSyncStarted?.();
     try {
+      this.lastDrainWasCancelled = false;
       await this.commitFile(path);
-      await this.drain();
+      await this.drainUnlessCancelled();
       ok = !this.lastDrainWasCancelled;
     } finally {
       this.deps.onSyncCompleted?.({
@@ -609,7 +627,15 @@ export class Sync2Manager {
   // Takes effect at the next batch/file boundary; the cancelled exit
   // persists nothing (D.16 rule inside drainOnce).
   cancelDrain(): void {
-    if (!this.running) return;
+    if (!this.running) {
+      // A Sync still in its commit part: no drain to stop — make sure none
+      // starts (drainUnlessCancelled).
+      if (this.syncBusy) {
+        this.cancelBeforeDrain = true;
+        this.deps.logger.info("Sync2 cancel requested during the commit part");
+      }
+      return;
+    }
     this.abortRequested = true;
     this.emitDrainStatus({ state: "cancelling" });
     this.deps.logger.info("Sync2 cancelDrain requested");

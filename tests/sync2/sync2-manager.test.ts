@@ -288,6 +288,24 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       expect(manager.isSyncBusy()).toBe(false);
     });
 
+    // Owner, 2026-10-09: Cancel SYNC while the Sync is in its commit part —
+    // the commit finishes, the drain does NOT start, the Sync ends cancelled.
+    it("🔑 Cancel during the Sync's commit part: the commit finishes, NO drain, the Sync ends cancelled", async () => {
+      const release = gateCommit();
+      const p1 = manager.syncAll();
+      await until(() => detectorCalls === 1);
+      manager.cancelDrain();
+      release();
+      await p1;
+      expect(drainCalls).toBe(0);
+      expect(completed.at(-1)).toMatchObject({ ok: false, cancelled: true });
+      // ...and the NEXT Sync is not cancelled by the old request.
+      deps.detector.findChanges = async () => findChangesResult;
+      await manager.syncAll();
+      expect(drainCalls).toBe(1);
+      expect(completed.at(-1)).toMatchObject({ ok: true, cancelled: false });
+    });
+
     it("a standalone COMMIT during a Sync is not refused — it rings the bell of the commit inside", async () => {
       const release = gateCommit();
       const p1 = manager.syncAll();

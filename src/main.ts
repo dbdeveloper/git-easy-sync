@@ -1698,6 +1698,12 @@ export default class GitHubSyncPlugin extends Plugin {
         // notice must come DOWN — it has duration 0.
         if (!summary.ok) {
           if (!summary.cancelled) this.clearSyncNotice();
+          // Cancelled in the commit part: no drain ran, so the drain-idle
+          // handler — which normally says it — never fires.
+          else if (this.syncCancelRequested) {
+            this.syncCancelRequested = false;
+            this.settleDrainSection("Sync canceled");
+          }
           return;
         }
         this.settleSyncSummary({
@@ -1822,19 +1828,14 @@ export default class GitHubSyncPlugin extends Plugin {
     // a second Sync or drain while one runs (isSyncBusy, checked-and-set in
     // one step there). Here only the user's feedback is decided:
     //   background → skip quietly (a background run never opens a modal);
-    //   still in the COMMIT part (no drain yet) → a short notice — the
-    //     modal's [Cancel sync] stops a drain, and there is none yet;
-    //   drain running → the Cancel/Keep modal below, as before.
+    //   otherwise → the Cancel/Keep modal below. [Cancel sync] stops a
+    //     running drain; in the Sync's COMMIT part the commit finishes and
+    //     the drain is not started (owner, 2026-10-09).
     if (this.sync2Manager.isSyncBusy() && background) {
       this.logger.info("Background sync skipped: a sync is already running");
       return;
     }
-    if (this.sync2Manager.isSyncBusy() && !this.sync2Manager.isDrainRunning()) {
-      this.logger.info("Sync click ignored: a sync is already running (commit part)");
-      new Notice("A sync is already running", 2000);
-      return;
-    }
-    if (this.sync2Manager.getDrainStatus().state === "running") {
+    if (this.sync2Manager.isSyncBusy()) {
       const modal = new CancelSyncModal(this.app, () => {
         // No "cancellation requested" toast: the user just clicked a
         // button labelled [Cancel sync]. Echoing the click back is

@@ -2606,12 +2606,15 @@ Baseline-и пишуться **гуртом в епілозі**, не по фа�
 - Перевірка й встановлення — в `Sync2Manager` одним синхронним кроком (`claimSync`), без
   пауз між ними, інакше два кліки встигли б пройти обидва. `isSyncBusy()` = «йде Sync
   (будь-яка його частина) або drain».
-- Реакція — справа виклику: кнопка Sync — вікно «Cancel sync / Keep going», коли йде drain;
-  у commit-частині Sync (drain ще нема, [Cancel sync] не мав би що зупиняти) — коротке
-  повідомлення; фон (інтервал) і меню — тихий пропуск і рядок у лозі.
+- Реакція — справа виклику: кнопка Sync — вікно «Cancel sync / Keep going» (і в
+  commit-частині Sync, і під час drain); фон (інтервал) і меню — тихий пропуск і рядок у лозі.
+- **Cancel SYNC у його commit-частині** (власник, 2026-10-09: «commit вже має відпрацювати до
+  кінця, але drain не запуститись і SYNC припиняється»): `cancelDrain()` без drain, але з
+  Sync, що йде, ставить `cancelBeforeDrain`; після commit Sync НЕ запускає drain
+  (`drainUnlessCancelled`) і завершується як скасований (`ok:false, cancelled:true`). Оскільки
+  drain не стартував, «Sync canceled» показує вже обробник підсумку Sync (а не drain-idle).
 - **Окремий Commit** (кнопка, гаряча клавіша) — ПОЗА цим захистом: лише «дзвонить» у
   вкладений commit-прохід (R3a), на Sync і drain не впливає.
-- Відкрите: скасування Sync у його commit-частині (зараз — лише повідомлення).
 
 Тести: `sync2-manager.test.ts`, «one guard: a Sync and a standalone drain exclude each other».
 
