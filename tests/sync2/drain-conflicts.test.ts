@@ -1,3 +1,4 @@
+import type { FileInfo } from "../../src/sync2/diff3";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
@@ -679,7 +680,20 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
       const sib1 = await birth();
       const sibPath = path.join(dir, remoteSiblingName(sib1.mtime!));
       fs.writeFileSync(sibPath, "HEAD-EDITED\ngap\nsyncInterval 8\ntail\n");
+      // §II.11: the transaction's crash recovery checks the OLD file's
+      // integrity against what it is given. It must be the EDITED bytes'
+      // sha/size, or a crash mid-replace reads the user's intact, edited
+      // copy as torn and drops it from tracking.
+      const seenOld: FileInfo[] = [];
+      const orig = siblingTx.runReplaceTransaction.bind(siblingTx);
+      siblingTx.runReplaceTransaction = async (c, p, oldS, newS) => {
+        seenOld.push(oldS);
+        return orig(c, p, oldS, newS);
+      };
       const rec = await nextRound(ver(10), ver(9));
+      expect(seenOld[0].sha).toBe(await sha("HEAD-EDITED\ngap\nsyncInterval 8\ntail\n"));
+      expect(seenOld[0].size).toBe(enc("HEAD-EDITED\ngap\nsyncInterval 8\ntail\n").byteLength);
+      expect(seenOld[0].originSha).toBe(await sha(ver(8)));
       expect(rec.siblings).toHaveLength(1);
       const p = remoteSiblingName(rec.siblings[0].mtime!);
       expect(fs.readFileSync(path.join(dir, p), "utf8")).toBe("HEAD-EDITED\ngap\nsyncInterval 10\ntail\n");

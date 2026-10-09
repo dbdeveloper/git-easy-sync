@@ -2355,10 +2355,14 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         merged.mtime = tracked.remote.mtime;
         merged.deviceLabel = tracked.remote.deviceLabel;
         merged.originSha = tracked.remote.sha; // the next fold's ancestor
+        // The OLD sibling as it is ON DISK (sha/size of its bytes): the
+        // §II.11 recovery verifies its integrity against this, and a
+        // user-edited copy checked against the RECORDED sha would read as
+        // torn and fall out of tracking after a crash mid-replace.
         await deps.siblingTx.runReplaceTransaction(
           conflicts!,
           path,
-          previousSibling,
+          { ...prevWithBlob, blob: null, originSha: foldAncestor.sha },
           merged,
         );
         deps.logger?.info("Conflict copy updated to the newer server version (old copy replaced)", {
