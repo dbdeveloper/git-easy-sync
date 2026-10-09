@@ -87,6 +87,15 @@ describe.skipIf(!integrationEnabled())(
         await sync2AllAndAssertNoErrors(client);
         expect(trackedSiblingPathsFor(client, "shared.md")).toHaveLength(1);
 
+        // Since 2026-10-09 a newer remote FOLDS into an UNEDITED conflict
+        // copy (the fold's ancestor is the copy's origin, not our side) and
+        // REPLACES it. A second copy needs a REAL clash: the user edited the
+        // same line inside the first copy before theirs changes it again.
+        fs.writeFileSync(
+          path.join(client.vaultPath, trackedSiblingPathsFor(client, "shared.md")[0]),
+          "mine, edited in the copy\n",
+          "utf8",
+        );
         // Second conflict: theirs changes again on remote; ours
         // stays locked at v1 because the path is filtered out of
         // enqueue (hasPending).
