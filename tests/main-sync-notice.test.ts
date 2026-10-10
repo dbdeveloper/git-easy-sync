@@ -632,6 +632,24 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(p.syncNotice).not.toBeNull();
   });
 
+  // Owner, 2026-10-10: with the interval on and commit off, a conflict born
+  // in a background drain never reached the ribbon's number. Only sync()
+  // marked the counter after a drain; backgroundDrain() (interval / watchdog
+  // / startup with commit off) did not. The idle transition is the ONE
+  // point every drain passes — cancelled ones included.
+  it.each([
+    { label: "a background drain", setup: (p: NoticeHandle) => void (p.inFullSync = false) },
+    { label: "a full sync", setup: (p: NoticeHandle) => void (p.inFullSync = true) },
+    { label: "a cancelled drain", setup: (p: NoticeHandle) => void (p.syncCancelRequested = true) },
+  ])("$label reaching idle re-counts the conflicts (the ribbon's number)", ({ setup }) => {
+    const p = makePlugin();
+    const markDirty = vi.fn();
+    (p as unknown as { conflictCounter: { markDirty(): void } }).conflictCounter = { markDirty };
+    setup(p);
+    p.handleDrainIdle();
+    expect(markDirty).toHaveBeenCalledTimes(1);
+  });
+
   it("a cancel is reported from idle, because a background drain has no summary", () => {
     const p = makePlugin();
     p.syncCancelRequested = true;

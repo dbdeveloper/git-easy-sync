@@ -3087,6 +3087,12 @@ export default class GitHubSyncPlugin extends Plugin {
   }
 
   private handleDrainIdle(): void {
+    // Re-count the conflicts after EVERY drain (owner, 2026-10-10): only
+    // sync() used to, so a conflict born in a background drain (interval /
+    // watchdog / startup with commit off) never reached the ribbon's number.
+    // FIRST, before the early returns below — a cancelled drain may have
+    // created conflicts too.
+    this.conflictCounter?.markDirty();
     this.closeCancelSyncModal();
     // Every Sync re-reads every open History list (owner, 2026-10-08), so a
     // commit it just made or brought shows at once. Quiet — see refresh().
