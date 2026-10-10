@@ -13,6 +13,7 @@ import SiblingTx from "../../src/sync2/sibling-tx";
 import BatchWriter from "../../src/sync2/batch-writer";
 import HotMetadataStore from "../../src/sync2/hot-metadata";
 import FileBaselinesStore from "../../src/sync2/file-baselines";
+import { appendProgress, progressFilePath } from "../../src/sync2/vault-step-progress";
 import ChangeDetector from "../../src/sync2/change-detector";
 import GI from "../../src/gi";
 import { FileChange } from "../../src/sync2/types";
@@ -385,6 +386,59 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     };
     await manager.commitOnly();
     expect(order).toEqual(["enforce", "detect"]);
+  });
+
+  // §II.19 — the previous drain's progress log reaches the baselines
+  // BEFORE the commit pass looks at the vault; otherwise the files that
+  // drain already settled read as local additions (field: 345, then 7).
+  it("§II.19: a COMMIT pass replays the progress log into the baselines BEFORE detecting changes", async () => {
+    const SELF = `${CONFIG_DIR}/plugins/${PLUGIN_ID}`;
+    await appendProgress(vault.adapter as never, SELF, [{ path: "a.md", sha: "sa", size: 5 }]);
+    let seen: unknown = "not called";
+    deps.detector.findChanges = async () => {
+      seen = await baselinesRef.get("a.md");
+      return [];
+    };
+    await manager.commitOnly();
+    expect(seen).toEqual({ baselineSha: "sa", mtime: 0, size: 5 });
+    expect(await vault.adapter.exists(progressFilePath(SELF))).toBe(false);
+  });
+
+  it("§II.19: a commit pass does NOT replay while a drain runs (that drain is appending to the log)", async () => {
+    const SELF = `${CONFIG_DIR}/plugins/${PLUGIN_ID}`;
+    await appendProgress(vault.adapter as never, SELF, [{ path: "a.md", sha: "sa", size: 5 }]);
+    deps.detector.findChanges = async () => [];
+    (manager as unknown as { running: boolean }).running = true;
+    await manager.commitOnly();
+    (manager as unknown as { running: boolean }).running = false;
+    expect(await vault.adapter.exists(progressFilePath(SELF))).toBe(true);
+    expect(await baselinesRef.get("a.md")).toBeUndefined();
+  });
+
+  it("§II.19: a drain starting while a commit-pass replay is in flight WAITS for it (no append racing the delete)", async () => {
+    const SELF = `${CONFIG_DIR}/plugins/${PLUGIN_ID}`;
+    await appendProgress(vault.adapter as never, SELF, [{ path: "a.md", sha: "sa", size: 5 }]);
+    deps.detector.findChanges = async () => [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const origSetMany = baselinesRef.setMany.bind(baselinesRef);
+    baselinesRef.setMany = async (e) => {
+      await gate; // the replay is stuck mid-apply
+      return origSetMany(e);
+    };
+    let replayDoneWhenDrainStarted: boolean | null = null;
+    deps.drainFn = async () => {
+      replayDoneWhenDrainStarted = !(await vault.adapter.exists(progressFilePath(SELF)));
+      return okResult();
+    };
+    const commit = manager.commitOnly();
+    await new Promise((r) => setTimeout(r, 20)); // the replay is now waiting on the gate
+    const drain = manager.resumeQueue();
+    await new Promise((r) => setTimeout(r, 20));
+    release();
+    await commit;
+    await drain;
+    expect(replayDoneWhenDrainStarted).toBe(true);
   });
 
   it("§II.16 🔑: a new drain starts with a CLEARED progress snapshot — no stale counters from the last run", async () => {

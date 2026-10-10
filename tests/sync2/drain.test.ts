@@ -12,6 +12,7 @@ import {
   DrainClient,
   DrainProgress,
 } from "../../src/sync2/drain";
+import { progressFilePath, replayProgress } from "../../src/sync2/vault-step-progress";
 import ConflictStoreV2 from "../../src/sync2/conflict-store-v2";
 import SiblingTx from "../../src/sync2/sibling-tx";
 import { mergeBlobsWithMainThreadDiff3 } from "../../src/sync2/diff3";
@@ -185,6 +186,12 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       removed: false,
     });
   };
+
+  // §II.19 — what the next commit pass does first: the previous run's
+  // progress log goes into the baselines.
+  const SELF_DIR = `.obsidian/plugins/${PLUGIN_ID}`;
+  const replayLog = (): Promise<number> =>
+    replayProgress(vault.adapter as never, SELF_DIR, makeDeps().baselines);
 
   const makeDeps = (over?: Partial<DrainDeps>): DrainDeps => ({
     vault: vault as never,
@@ -2360,6 +2367,8 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     );
     expect(r1.status).toBe("cancelled");
     expect(r1.vaultStepWrites).toHaveLength(2);
+    expect(baselines.get(r1.vaultStepWrites[0])!.mtime).toBe(50); // nothing settled AT the exit…
+    await replayLog(); // …the next commit pass replays the progress log first
     for (const p of r1.vaultStepWrites) {
       const content = remoteEdits[p];
       expect(baselines.get(p)?.baselineSha).toBe(await sha(content)); // settled
@@ -2444,6 +2453,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(r1.status).toBe("cancelled");
     expect(r1.pushedCommits).toHaveLength(1);
     expect(batches[0].removed).toBe(true); // the queue no longer holds it
+    await replayLog();
     expect(baselines.get("local.md")?.baselineSha).toBe(await sha("LOCAL\n"));
     // A path the Vault-step had NOT reached is not settled.
     const notYet = Object.keys(files).find((p) => !r1.vaultStepWrites.includes(p))!;
@@ -2551,6 +2561,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     );
     expect(r1.status).toBe("network-error");
     expect(r1.pushedCommits).toHaveLength(1);
+    await replayLog();
     const written = r1.vaultStepWrites.filter((p) => p !== "local.md");
     expect(written.length).toBeGreaterThan(0);
     for (const p of written) {
@@ -2562,22 +2573,173 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     for (const p of notYet) expect(baselines.has(p)).toBe(false);
   });
 
-  // Structural pin for the eight rare abort sites no behaviour test
-  // reaches (conflict-copy fetch, merge, device label…): every `return`
-  // inside the Vault-step loop goes through abortVaultStep, so a new or
-  // edited exit cannot silently skip the settle.
-  it("every return inside the Vault-step goes through abortVaultStep (the settle runs on every exit)", () => {
-    const src = readFileSync(path.join(__dirname, "..", "..", "src", "sync2", "drain.ts"), "utf8");
-    const start = src.indexOf("// ── Vault-step (§II.3");
-    const end = src.indexOf("// ── EPILOGUE");
-    expect(start).toBeGreaterThan(0);
-    expect(end).toBeGreaterThan(start);
-    const returns = src
-      .slice(start, end)
-      .split("\n")
-      .filter((l) => !l.trim().startsWith("//") && /\breturn\b/.test(l));
-    expect(returns.length).toBeGreaterThanOrEqual(10);
-    for (const l of returns) expect(l).toMatch(/return abortVaultStep\(/);
+  // §II.19, the owner's main requirement: the mechanism must hold for an
+  // UNPLANNED stop (a dead battery), not only for Cancel. Nothing runs at
+  // a death, so the test throws out of the drain with no exit path at all
+  // — and at the WORST moment: right AFTER the 3rd file is written,
+  // BEFORE its progress line. Then the remote moves exactly that file.
+  it("POWER LOSS right after a write, before its progress line: earlier lines survive, and the resume of the unlogged file is still a clean pull", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 5; i++) files[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(files);
+    baseCommit = null;
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ "local.md": "LOCAL\n" });
+
+    const writtenOrder: string[] = [];
+    await expect(
+      drainOnce(
+        makeDeps({
+          vaultFiles: new Proxy(vaultFiles, {
+            get(t, prop, recv) {
+              if (prop === "write") {
+                return async (...args: unknown[]) => {
+                  await (t as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>).write(...args);
+                  writtenOrder.push(args[0] as string);
+                  if (writtenOrder.length === 3) throw new Error("POWER LOSS");
+                };
+              }
+              return Reflect.get(t, prop, recv);
+            },
+          }) as unknown as typeof vaultFiles,
+        }),
+      ),
+    ).rejects.toThrow("POWER LOSS");
+    expect(await vault.adapter.exists(progressFilePath(SELF_DIR))).toBe(true);
+
+    // What the next commit pass finds after replaying the log.
+    await replayLog();
+    const [w1, w2, unlogged] = writtenOrder;
+    expect(baselines.get(w1)?.baselineSha).toBe(await sha(files[w1]));
+    expect(baselines.get(w2)?.baselineSha).toBe(await sha(files[w2]));
+    expect(baselines.get("local.md")?.baselineSha).toBe(await sha("LOCAL\n")); // pushed
+    expect(baselines.has(unlogged)).toBe(false); // the one-line window
+    expect(vaultFiles.files.get(unlogged)!.content).toBe(files[unlogged]); // but it IS on disk
+
+    await world.commitFiles({ [unlogged]: "REMOTE AGAIN\n" });
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    expect(r2.conflictVerdicts).toEqual([]); // §IV.2 row 7a covers the window
+    expect(vaultFiles.files.get(unlogged)!.content).toBe("REMOTE AGAIN\n");
+    for (const p of Object.keys(files)) expect(baselines.has(p)).toBe(true);
+  });
+
+  // §II.19 ⚠️ AFTER, NEVER BEFORE. Power lost BEFORE the 3rd file's bytes
+  // land: its line must not exist. A line written ahead would set the
+  // baseline to the new version while the disk still holds the old one,
+  // and the next commit pass would push the OLD content over the new as
+  // a "local edit" — silent loss of the other device's change.
+  it("POWER LOSS before a write lands: that file keeps its OLD baseline (no line ahead of the bytes)", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 5; i++) files[`p${i}.md`] = `base ${i}\n`;
+    baseCommit = await world.commitFiles(files);
+    for (const [p, content] of Object.entries(files)) {
+      baselines.set(p, { baselineSha: await sha(content), mtime: 50, size: enc(content).byteLength });
+      vaultFiles.files.set(p, { content, mtime: 50 });
+    }
+    const remoteEdits: Record<string, string> = {};
+    for (let i = 0; i < 5; i++) remoteEdits[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(remoteEdits);
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ "local.md": "LOCAL\n" });
+
+    const attempted: string[] = [];
+    await expect(
+      drainOnce(
+        makeDeps({
+          vaultFiles: new Proxy(vaultFiles, {
+            get(t, prop, recv) {
+              if (prop === "write") {
+                return async (...args: unknown[]) => {
+                  attempted.push(args[0] as string);
+                  if (attempted.length === 3) throw new Error("POWER LOSS");
+                  await (t as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>).write(...args);
+                };
+              }
+              return Reflect.get(t, prop, recv);
+            },
+          }) as unknown as typeof vaultFiles,
+        }),
+      ),
+    ).rejects.toThrow("POWER LOSS");
+    await replayLog();
+    const notLanded = attempted[2];
+    expect(vaultFiles.files.get(notLanded)!.content).toBe(files[notLanded]); // old bytes on disk
+    expect(baselines.get(notLanded)!.baselineSha).toBe(await sha(files[notLanded])); // old base kept
+    expect(baselines.get(attempted[0])!.baselineSha).toBe(await sha(remoteEdits[attempted[0]]));
+  });
+
+  // §II.19 — the other two kinds of settled path in the Vault-step.
+  const cancelAfterNth = (method: "write" | "remove", n: number) => {
+    let count = 0;
+    return makeDeps({
+      cancelRequested: () => count >= n,
+      vaultFiles: new Proxy(vaultFiles, {
+        get(t, prop, recv) {
+          if (prop === method) {
+            return async (...args: unknown[]) => {
+              count++;
+              return (t as unknown as Record<string, (...a: unknown[]) => unknown>)[method](...args);
+            };
+          }
+          return Reflect.get(t, prop, recv);
+        },
+      }) as unknown as typeof vaultFiles,
+    });
+  };
+
+  it("progress log: an APPLIED remote deletion is logged — after replay its baseline is gone (no spare 'deleted' commit)", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `base ${i}\n`;
+    baseCommit = await world.commitFiles(files);
+    for (const [p, content] of Object.entries(files)) {
+      baselines.set(p, { baselineSha: await sha(content), mtime: 50, size: enc(content).byteLength });
+      vaultFiles.files.set(p, { content, mtime: 50 });
+    }
+    const dels: Record<string, null> = {};
+    for (let i = 0; i < 4; i++) dels[`p${i}.md`] = null;
+    await world.commitFiles(dels);
+
+    const r1 = await drainOnce(cancelAfterNth("remove", 2));
+    expect(r1.status).toBe("cancelled");
+    expect(r1.vaultStepRemoves).toHaveLength(2);
+    await replayLog();
+    for (const p of r1.vaultStepRemoves) expect(baselines.has(p)).toBe(false);
+    const notYet = Object.keys(files).filter((p) => !r1.vaultStepRemoves.includes(p));
+    for (const p of notYet) expect(baselines.get(p)!.baselineSha).toBe(await sha(files[p]));
+  });
+
+  it("progress log: a file the vault ALREADY held (identical to the remote, nothing written) is logged too", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(files);
+    baseCommit = null; // a new device whose vault was copied over: p0, p1 already there
+    vaultFiles.files.set("p0.md", { content: files["p0.md"], mtime: 10 });
+    vaultFiles.files.set("p1.md", { content: files["p1.md"], mtime: 10 });
+
+    const r1 = await drainOnce(cancelAfterNth("write", 1));
+    expect(r1.status).toBe("cancelled");
+    expect(r1.vaultStepWrites).not.toContain("p0.md");
+    await replayLog();
+    expect(baselines.get("p0.md")?.baselineSha).toBe(await sha(files["p0.md"]));
+    expect(baselines.get("p1.md")?.baselineSha).toBe(await sha(files["p1.md"]));
+  });
+
+  // §II.19 ⚠️ invariant: a completed drain leaves NO progress log behind —
+  // a stale line replayed later would roll a newer baseline back.
+  it("a COMPLETED drain leaves no progress log; a later baseline is never rolled back by an old line", async () => {
+    const files: Record<string, string> = { "a.md": "A1\n" };
+    await world.commitFiles(files);
+    baseCommit = null;
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ "local.md": "LOCAL\n" });
+    const r1 = await drainOnce(makeDeps());
+    expect(r1.status).toBe("ok");
+    expect(await vault.adapter.exists(progressFilePath(SELF_DIR))).toBe(false);
+    // A later writer moves a.md on; nothing may put A1 back.
+    baselines.set("a.md", { baselineSha: await sha("A2\n"), mtime: 9, size: 3 });
+    expect(await replayLog()).toBe(0);
+    expect(baselines.get("a.md")!.baselineSha).toBe(await sha("A2\n"));
   });
 
   // The field shape the two tests above missed: the phone's first sync

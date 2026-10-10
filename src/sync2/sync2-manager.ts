@@ -59,6 +59,7 @@ import { newBatchId } from "./timestamp-id";
 import { AuthError, NetworkError } from "../errors";
 import type { TrashHooks } from "./trash-hooks";
 import { normalizePath } from "obsidian";
+import { replayProgress } from "./vault-step-progress";
 
 // ── DrainStatus (unchanged shape — the Settings tab renders it) ─────
 
@@ -266,6 +267,9 @@ export class Sync2Manager {
   // Drain re-entrancy (H3 pin): concurrent syncAll/resumeQueue calls
   // collapse into the one running drain.
   private running = false;
+  // §II.19 — a commit-pass replay of the progress log in flight; the
+  // drain waits for it, so no drain appends while a replay deletes.
+  private progressReplay: Promise<void> | null = null;
   private abortRequested = false;
 
   // R3a — commit is a SINGLETON with a coalescing bell (SYNC2-FIX §6):
@@ -745,6 +749,37 @@ export class Sync2Manager {
     return total;
   }
 
+  // §II.19 — the previous drain's progress log goes into the baselines
+  // BEFORE the scan, or the files that drain already settled read as
+  // local additions (field 2026-10-10: 345 "added", then 7 pushed ones).
+  // Skipped while a drain runs: it is appending to this very file, and it
+  // replays the log itself at its own start.
+  private async replayProgressLog(): Promise<void> {
+    if (this.running) return;
+    const work = (async () => {
+      try {
+        const n = await replayProgress(
+          this.deps.vault.adapter,
+          `${this.deps.vault.configDir}/plugins/${this.deps.selfPluginId}`,
+          this.deps.baselines,
+        );
+        if (n > 0) {
+          this.deps.logger.info("progress log replayed into the baselines", { lines: n });
+        }
+      } catch (err) {
+        // Cost, never correctness (§IV.2 row 7a): a failed replay means
+        // one spare commit, not a reason to fail the commit pass.
+        this.deps.logger.warn("progress log replay failed", { err: `${err}` });
+      }
+    })();
+    this.progressReplay = work;
+    try {
+      await work;
+    } finally {
+      if (this.progressReplay === work) this.progressReplay = null;
+    }
+  }
+
   private async doOneCommitPass(target: string | null): Promise<number> {
     // COMMIT-PASS-PERF (2026-10-05): where the pass's time goes, one log
     // line per pass — see logCommitTiming.
@@ -758,6 +793,7 @@ export class Sync2Manager {
     };
     if (this.deps.invariants) await this.deps.invariants.enforce();
     lap("enforceMs");
+    await this.replayProgressLog();
     // Forbidden names are made safe on BOTH paths (owner, 2026-10-10): the
     // one-file path used to skip it, so "Commit/Sync active file" sent a
     // forbidden name to the server. The renamed path is what gets committed.
@@ -959,6 +995,9 @@ export class Sync2Manager {
       // should surface through the drain's own error path rather than
       // escaping the status machine.
       await this.deps.detector.beginScan();
+      // §II.19: a commit pass may be replaying the progress log right now;
+      // drainOnce replays (and then appends to) the same file itself.
+      if (this.progressReplay !== null) await this.progressReplay;
       const r = await (this.deps.drainFn ?? drainOnce)(this.buildDeps());
 
       // Vault-step outcome → UI signals (independent of status: the
