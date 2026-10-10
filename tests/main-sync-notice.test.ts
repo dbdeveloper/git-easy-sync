@@ -660,6 +660,23 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(p.syncProgressActive).toBe(false);
   });
 
+  // Owner's field report (2026-10-10, phone): a TAP on a notice hides it —
+  // that is Obsidian's behaviour — and the plugin went on updating the
+  // detached box: the progress AND the final "Sync done …" were never seen
+  // again (field log: inPage=false from the tap to the end of the sync).
+  // The box comes back with the next update (owner's choice 1a).
+  it("🔑 a box the user TAPPED away comes back with the next update", () => {
+    const p = makePlugin();
+    p.setDrainSection({ state: "live", text: "Pulling 1 of 9" });
+    const tapped = p.syncNotice as { noticeEl?: HTMLElement };
+    tapped.noticeEl!.remove(); // the tap
+    p.setDrainSection({ state: "live", text: "Pulling 2 of 9" });
+    const box = p.syncNotice as { noticeEl?: HTMLElement };
+    expect(box).not.toBe(tapped);
+    expect(box.noticeEl!.isConnected).toBe(true);
+    expect(recordedNotices.at(-1)!.message).toContain("Pulling 2 of 9");
+  });
+
   it("one box throughout: the Notice object is reused, not replaced", () => {
     const p = makePlugin();
     p.setCommitSection({ state: "live", text: "Committing…" });

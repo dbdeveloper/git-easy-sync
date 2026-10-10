@@ -2960,6 +2960,14 @@ export default class GitHubSyncPlugin extends Plugin {
       window.clearTimeout(this.syncNoticeHideTimer);
       this.syncNoticeHideTimer = null;
     }
+    // A TAP on a notice hides it (Obsidian), and the old box was then
+    // updated off-screen to the very end — the progress AND the final
+    // "Sync done …" were never seen (owner's field report, 2026-10-10,
+    // phone). A box that is no longer on the page is replaced: it comes
+    // back with the next update.
+    if (this.syncNotice !== null && this.syncNotice.noticeEl?.isConnected === false) {
+      this.syncNotice = null;
+    }
     if (this.syncNotice === null) {
       this.syncNotice = new Notice(text, 0);
       return;

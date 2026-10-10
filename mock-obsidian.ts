@@ -408,10 +408,19 @@ export function clearRecordedNotices(): void {
 }
 
 export class Notice {
+  // Obsidian's public noticeEl. Under happy-dom it is a real element on the
+  // page, so a test can take it off — what a TAP on a notice does in Obsidian
+  // (it hides the notice). Without a DOM it is absent.
+  noticeEl?: HTMLElement;
+
   constructor(message: string, timeout?: number) {
     recordedNotices.push({ message, timestamp: Date.now(), duration: timeout });
     if (process.env.MOCK_OBSIDIAN_NOTICE_LOG === "1") {
       console.log(`NOTICE: ${message}`);
+    }
+    if (typeof document !== "undefined") {
+      this.noticeEl = document.createElement("div");
+      document.body.appendChild(this.noticeEl);
     }
   }
 
@@ -420,7 +429,7 @@ export class Notice {
   }
 
   hide() {
-    // no-op
+    this.noticeEl?.remove();
   }
 }
 
