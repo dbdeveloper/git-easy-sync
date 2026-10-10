@@ -2356,6 +2356,83 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(hotUpdates).toEqual([]); // the anchor stays — the resume rediscovers
   });
 
+  // Field (2026-10-10, phone): the first pull was cancelled after it had
+  // written test.md (X); meanwhile another device pushed test.md = Y. The
+  // resumed drain made a CONFLICT — nothing was edited on the phone, so it
+  // must be a clean pull of Y.
+  it("S1 cancel (Vault-step) on a COLD START (new device) + the remote moves on → a CLEAN pull, no conflict", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(files);
+    baseCommit = null; // a new device: never synced, no baselines, empty vault
+
+    let writes = 0;
+    const r1 = await drainOnce(
+      makeDeps({
+        cancelRequested: () => writes >= 2,
+        vaultFiles: new Proxy(vaultFiles, {
+          get(t, prop, recv) {
+            if (prop === "write") {
+              return async (...args: unknown[]) => {
+                writes++;
+                return (t as unknown as Record<string, (...a: unknown[]) => unknown>).write(...args);
+              };
+            }
+            return Reflect.get(t, prop, recv);
+          },
+        }) as unknown as typeof vaultFiles,
+      }),
+    );
+    expect(r1.status).toBe("cancelled");
+    const written = r1.vaultStepWrites[0];
+    await world.commitFiles({ [written]: "REMOTE AGAIN\n" });
+
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    expect(r2.conflictVerdicts).toEqual([]);
+    expect(vaultFiles.files.get(written)!.content).toBe("REMOTE AGAIN\n");
+  });
+
+  it("S1 cancel (Vault-step) + the remote moves on before the resume → a CLEAN pull, no conflict", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `base ${i}\n`;
+    baseCommit = await world.commitFiles(files);
+    for (const [p, content] of Object.entries(files)) {
+      baselines.set(p, { baselineSha: await sha(content), mtime: 50, size: enc(content).byteLength });
+      vaultFiles.files.set(p, { content, mtime: 50 });
+    }
+    const remoteEdits: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) remoteEdits[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(remoteEdits);
+
+    let writes = 0;
+    const r1 = await drainOnce(
+      makeDeps({
+        cancelRequested: () => writes >= 2,
+        vaultFiles: new Proxy(vaultFiles, {
+          get(t, prop, recv) {
+            if (prop === "write") {
+              return async (...args: unknown[]) => {
+                writes++;
+                return (t as unknown as Record<string, (...a: unknown[]) => unknown>).write(...args);
+              };
+            }
+            return Reflect.get(t, prop, recv);
+          },
+        }) as unknown as typeof vaultFiles,
+      }),
+    );
+    expect(r1.status).toBe("cancelled");
+    const written = r1.vaultStepWrites[0];
+    // Another device changes the SAME already-pulled file again.
+    await world.commitFiles({ [written]: "REMOTE AGAIN\n" });
+
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    expect(r2.conflictVerdicts).toEqual([]);
+    expect(vaultFiles.files.get(written)!.content).toBe("REMOTE AGAIN\n");
+  });
+
   it("S1 cancel 🔑 (Vault-step): a pull-heavy drain stops mid-loop, keeps the journal, and the NEXT drain finishes the job", async () => {
     // The gap found 2026-09-26: the Vault-step had no cancel check, and
     // it is the phase where the user actually waits on a big pull —
