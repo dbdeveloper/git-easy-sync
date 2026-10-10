@@ -7,7 +7,9 @@ import { Vault } from "../../mock-obsidian";
 import { Sync2Manager, Sync2ManagerDeps } from "../../src/sync2/sync2-manager";
 import { DrainResult, DrainStatus as DrainOutcome } from "../../src/sync2/drain";
 import SyncStore, { PIN_OWNER_COMMIT } from "../../src/sync2/sync-store";
-import DrainJournal from "../../src/sync2/drain-journal";
+import DrainJournal, { emptyDrainState } from "../../src/sync2/drain-journal";
+import { DELETED } from "../../src/sync2/diff3";
+import { DELETED_SHA_HASH } from "../../src/sync2/discovery";
 import ConflictStoreV2 from "../../src/sync2/conflict-store-v2";
 import SiblingTx from "../../src/sync2/sibling-tx";
 import BatchWriter from "../../src/sync2/batch-writer";
@@ -657,6 +659,38 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
 
     expect(seen, "repo-A's progress lines may not seed repo-B's baselines").toEqual([]);
     expect(await vault.adapter.exists(progressFilePath(SELF))).toBe(false);
+  });
+
+  // Probed 2026-10-10 against the real engine: a drain on repo A died
+  // after A had deleted P.md (the deletion not yet applied); the user
+  // switched to repo B, where P.md does not exist. The surviving journal
+  // still carried "P.md: remote DELETED", no delta from B touched it, and
+  // the Vault-step DELETED the user's file. The journal belongs to repo A
+  // exactly as the baselines do.
+  it("🔴 a repo switch also drops the PREVIOUS repo's drain journal — its pending deletions never reach the vault", async () => {
+    await hotMetaRef.update({
+      remoteIdentity: { owner: "me", repo: "repo-A", branch: "main" },
+      lastSyncCommitSha: "commit-from-repo-A",
+    });
+    const journal = (deps as unknown as { journal: DrainJournal }).journal;
+    const state = emptyDrainState();
+    state.trackedFiles.set("P.md", {
+      base: { path: "P.md", sha: "sha-p", size: 1, mtime: 0, blob: null, mode: "", deviceLabel: null },
+      remote: { path: "P.md", sha: DELETED_SHA_HASH, size: null, mtime: null, blob: null, mode: DELETED, deviceLabel: null },
+      isManualConflict: false,
+    });
+    await journal.persist(state);
+    (deps as never as { remoteIdentity: () => unknown }).remoteIdentity =
+      () => ({ owner: "me", repo: "repo-B", branch: "main" });
+    let journalAtDrain: unknown = "drain not reached";
+    deps.drainFn = async () => {
+      journalAtDrain = await journal.load();
+      return okResult();
+    };
+
+    await manager.syncAll();
+
+    expect(journalAtDrain, "repo-A's journal may not drive a drain against repo-B").toBeNull();
   });
 
   it("🔑 the FIRST observation records the identity and wipes NOTHING", async () => {

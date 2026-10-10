@@ -422,6 +422,12 @@ export class Sync2Manager {
       this.deps.vault.adapter,
       `${this.deps.vault.configDir}/plugins/${this.deps.selfPluginId}`,
     );
+    // The drain journal is repo A's too (probed 2026-10-10 against the
+    // real engine): a run that died after A deleted P.md left
+    // "P.md: remote DELETED" in it; after the switch no delta from B
+    // touched P.md, and the Vault-step deleted the user's file. Its
+    // conflict-branch name is A's as well.
+    await this.deps.journal.clear();
     await this.deps.baselines.clear();
     await this.deps.hotMeta.update({
       lastSyncCommitSha: null,
