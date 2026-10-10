@@ -2393,6 +2393,184 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(vaultFiles.files.get(written)!.content).toBe("REMOTE AGAIN\n");
   });
 
+  // The field shape the two tests above missed: the phone's first sync
+  // ALSO had local additions (its own .obsidian files). With a local batch
+  // the drain persists its journal at the batch end — BEFORE the
+  // Vault-step — so the journal holds test.md as "no common record"
+  // (base null, a cold start). The resume restores that journal; the new
+  // remote version only refreshes the remote half, the stale base null
+  // survives, and the initial-download rule turns a file this device had
+  // just pulled into a manual conflict.
+  it("S1 cancel (Vault-step) on a COLD START with LOCAL additions + the remote moves on → a CLEAN pull, no conflict", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(files);
+    baseCommit = null; // a new device: never synced, no baselines
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ "local.md": "LOCAL\n" });
+
+    let writes = 0;
+    const r1 = await drainOnce(
+      makeDeps({
+        cancelRequested: () => writes >= 2,
+        vaultFiles: new Proxy(vaultFiles, {
+          get(t, prop, recv) {
+            if (prop === "write") {
+              return async (...args: unknown[]) => {
+                writes++;
+                return (t as unknown as Record<string, (...a: unknown[]) => unknown>).write(...args);
+              };
+            }
+            return Reflect.get(t, prop, recv);
+          },
+        }) as unknown as typeof vaultFiles,
+      }),
+    );
+    expect(r1.status).toBe("cancelled");
+    expect(await journal.load()).not.toBeNull(); // the field shape: a journal survives
+    const written = r1.vaultStepWrites.find((p) => p !== "local.md")!;
+    await world.commitFiles({ [written]: "REMOTE AGAIN\n" });
+
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    expect(r2.conflictVerdicts).toEqual([]);
+    expect(vaultFiles.files.get(written)!.content).toBe("REMOTE AGAIN\n");
+  });
+
+  it("S1 cancel (Vault-step) WARM with LOCAL additions + the remote moves on → a CLEAN pull, no conflict", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `base ${i}\n`;
+    baseCommit = await world.commitFiles(files);
+    for (const [p, content] of Object.entries(files)) {
+      baselines.set(p, { baselineSha: await sha(content), mtime: 50, size: enc(content).byteLength });
+      vaultFiles.files.set(p, { content, mtime: 50 });
+    }
+    const remoteEdits: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) remoteEdits[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(remoteEdits);
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ "local.md": "LOCAL\n" });
+
+    let writes = 0;
+    const r1 = await drainOnce(
+      makeDeps({
+        cancelRequested: () => writes >= 2,
+        vaultFiles: new Proxy(vaultFiles, {
+          get(t, prop, recv) {
+            if (prop === "write") {
+              return async (...args: unknown[]) => {
+                writes++;
+                return (t as unknown as Record<string, (...a: unknown[]) => unknown>).write(...args);
+              };
+            }
+            return Reflect.get(t, prop, recv);
+          },
+        }) as unknown as typeof vaultFiles,
+      }),
+    );
+    expect(r1.status).toBe("cancelled");
+    expect(await journal.load()).not.toBeNull();
+    const written = r1.vaultStepWrites.find((p) => p !== "local.md")!;
+    await world.commitFiles({ [written]: "REMOTE AGAIN\n" });
+
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    expect(r2.conflictVerdicts).toEqual([]);
+    expect(vaultFiles.files.get(written)!.content).toBe("REMOTE AGAIN\n");
+  });
+
+  // The same hole for a DELETION the cancelled Vault-step had already
+  // applied: the journal still says base = the old content, the vault no
+  // longer has the file, and the remote brings it back.
+  it("S1 cancel (Vault-step) WARM with LOCAL additions: an APPLIED remote deletion + the remote re-adds the file → a CLEAN pull", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `base ${i}\n`;
+    baseCommit = await world.commitFiles(files);
+    for (const [p, content] of Object.entries(files)) {
+      baselines.set(p, { baselineSha: await sha(content), mtime: 50, size: enc(content).byteLength });
+      vaultFiles.files.set(p, { content, mtime: 50 });
+    }
+    const dels: Record<string, null> = {};
+    for (let i = 0; i < 4; i++) dels[`p${i}.md`] = null;
+    await world.commitFiles(dels);
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ "local.md": "LOCAL\n" });
+
+    let removes = 0;
+    const r1 = await drainOnce(
+      makeDeps({
+        cancelRequested: () => removes >= 2,
+        vaultFiles: new Proxy(vaultFiles, {
+          get(t, prop, recv) {
+            if (prop === "remove") {
+              return async (...args: unknown[]) => {
+                removes++;
+                return (t as unknown as Record<string, (...a: unknown[]) => unknown>).remove(...args);
+              };
+            }
+            return Reflect.get(t, prop, recv);
+          },
+        }) as unknown as typeof vaultFiles,
+      }),
+    );
+    expect(r1.status).toBe("cancelled");
+    expect(await journal.load()).not.toBeNull();
+    const removed = r1.vaultStepRemoves[0];
+    expect(vaultFiles.files.has(removed)).toBe(false);
+    await world.commitFiles({ [removed]: "BACK AGAIN\n" });
+
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    expect(r2.conflictVerdicts).toEqual([]);
+    expect(vaultFiles.files.get(removed)!.content).toBe("BACK AGAIN\n");
+  });
+
+  // The vault decides, not the journal alone: a file the cancelled run
+  // had NOT reached yet still holds the OLD content, so its journal base
+  // is still true — taking the journal's remote as the base there would
+  // turn an untouched file into a three-way conflict.
+  it("S1 cancel (Vault-step) WARM with LOCAL additions: a file NOT yet pulled keeps its old base → a CLEAN pull of the newest version", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `base ${i}\n`;
+    baseCommit = await world.commitFiles(files);
+    for (const [p, content] of Object.entries(files)) {
+      baselines.set(p, { baselineSha: await sha(content), mtime: 50, size: enc(content).byteLength });
+      vaultFiles.files.set(p, { content, mtime: 50 });
+    }
+    const remoteEdits: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) remoteEdits[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(remoteEdits);
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ "local.md": "LOCAL\n" });
+
+    let writes = 0;
+    const r1 = await drainOnce(
+      makeDeps({
+        cancelRequested: () => writes >= 2,
+        vaultFiles: new Proxy(vaultFiles, {
+          get(t, prop, recv) {
+            if (prop === "write") {
+              return async (...args: unknown[]) => {
+                writes++;
+                return (t as unknown as Record<string, (...a: unknown[]) => unknown>).write(...args);
+              };
+            }
+            return Reflect.get(t, prop, recv);
+          },
+        }) as unknown as typeof vaultFiles,
+      }),
+    );
+    expect(r1.status).toBe("cancelled");
+    const notYet = Object.keys(files).find((p) => !r1.vaultStepWrites.includes(p))!;
+    expect(vaultFiles.files.get(notYet)!.content).toBe(files[notYet]); // still the old one
+    await world.commitFiles({ [notYet]: "REMOTE AGAIN\n" });
+
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    expect(r2.conflictVerdicts).toEqual([]);
+    expect(vaultFiles.files.get(notYet)!.content).toBe("REMOTE AGAIN\n");
+  });
+
   it("S1 cancel (Vault-step) + the remote moves on before the resume → a CLEAN pull, no conflict", async () => {
     const files: Record<string, string> = {};
     for (let i = 0; i < 4; i++) files[`p${i}.md`] = `base ${i}\n`;

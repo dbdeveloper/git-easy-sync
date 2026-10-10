@@ -526,6 +526,19 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     if (writes.length > 0) await deps.baselines.setMany(writes);
     if (removals.length > 0) await deps.baselines.removeMany(removals);
   };
+  // Does the vault hold exactly the remote version this journal record
+  // carries? (§IV.2 row 7a.) A deletion counts as held when the file is
+  // gone. One read per path, and only for a journal path whose remote
+  // moved again — the rare resume case, never an ordinary drain.
+  const vaultHoldsRemoteOf = async (tracked: TrackedFile): Promise<boolean> => {
+    const path = tracked.remote.path ?? tracked.base.path;
+    if (path === null) return false;
+    const live = await deps.vaultFiles.read(path);
+    if (tracked.remote.mode === DELETED || tracked.remote.sha === DELETED_SHA_HASH) {
+      return live === null;
+    }
+    return live !== null && live.sha === tracked.remote.sha;
+  };
   // Our own plugin's files put beside the live ones for the bootloader
   // to apply at the next start. NOT part of vaultStepWrites on
   // purpose: that list drives the plugin-reload signal, and there is
@@ -1165,6 +1178,23 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         const tracked = state.trackedFiles.get(file.path);
         if (tracked !== undefined) {
           if (tracked.remote.sha !== file.sha) {
+            // A journal from an interrupted run (cancel, network abort,
+            // crash — §IV.2 row 7a) holds the base it had BEFORE its
+            // Vault-step, while that step may already have written the
+            // remote version it carried. Replacing that remote with a
+            // newer one would compare the vault against a stale base:
+            // a file this device had just pulled turned into a conflict
+            // (owner's field report, 2026-10-10). The vault itself says
+            // what happened: it holds exactly the remote version the
+            // journal carried → that version IS the common ancestor.
+            if (
+              !tracked.isManualConflict &&
+              tracked.remote.sha !== null &&
+              tracked.base.sha !== tracked.remote.sha &&
+              (await vaultHoldsRemoteOf(tracked))
+            ) {
+              tracked.base = { ...tracked.remote, blob: null };
+            }
             tracked.remote.sha = file.sha;
             tracked.remote.size = file.size;
             tracked.remote.mtime = file.mtime;
