@@ -520,16 +520,18 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       w.size = old.size;
     }
   };
-  // A cancel inside the Vault-step skips the epilogue, so the paths whose
-  // outcome this run had ALREADY fixed had no baselines — and the next
-  // sync's commit pass (it runs BEFORE the resuming drain and knows no
-  // journal) reported them as local additions: 345 "added" files after a
-  // cancelled first pull on a phone, and the 7 local files that run had
-  // already PUSHED (owner's field reports, 2026-10-10). Such a path is in
-  // sync with the remote, so its baseline is written here — the
-  // epilogue's step 1, for it only. The anchor does NOT move: the resume
-  // still comes from rediscovering the remote changes.
-  const settleOnCancel = async (): Promise<void> => {
+  // An exit from the Vault-step (cancel, network abort — abortVaultStep)
+  // skips the epilogue, so the paths whose outcome this run had ALREADY
+  // fixed had no baselines — and the next sync's commit pass (it runs
+  // BEFORE the resuming drain and knows no journal) reported them as local
+  // additions: 345 "added" files after a cancelled first pull on a phone,
+  // and the 7 local files that run had already PUSHED (owner's field
+  // reports, 2026-10-10). Such a path is in sync with the remote, so its
+  // baseline is written here — the epilogue's step 1, for it only. The
+  // anchor does NOT move: the resume still comes from rediscovering the
+  // remote changes. A hard crash cannot settle; §IV.2 row 7a keeps the
+  // resume correct there, only slower.
+  const settleOnAbort = async (): Promise<void> => {
     const writes: Array<{ path: string; baselineSha: string; mtime: number; size: number }> = [];
     const removals: string[] = [];
     for (const [path, tracked] of state.trackedFiles) {
@@ -551,6 +553,14 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     await keepProvenStats(writes);
     if (writes.length > 0) await deps.baselines.setMany(writes);
     if (removals.length > 0) await deps.baselines.removeMany(removals);
+  };
+  // EVERY exit from the Vault-step short of the epilogue — cancel,
+  // network abort, token expiry — leaves the same state behind, so every
+  // one of them settles first (owner, 2026-10-10: the network abort
+  // re-committed and re-hashed exactly like the cancel did).
+  const abortVaultStep = async (r: DrainResult): Promise<DrainResult> => {
+    await settleOnAbort();
+    return r;
   };
   // Does the vault hold exactly the remote version this journal record
   // carries? (§IV.2 row 7a.) A deletion counts as held when the file is
@@ -2225,8 +2235,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     // ⚠️ BEFORE countPull: a path we are not going to process must not
     // be counted as processed.
     if (deps.cancelRequested?.()) {
-      await settleOnCancel();
-      return result("cancelled");
+      return abortVaultStep(result("cancelled"));
     }
     // §II.16 — count the remote change the moment this path is taken
     // up, BEFORE any of the skips below. A path already counted in the
@@ -2260,7 +2269,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // pull, no fresh birth) → nothing to reflect this run (C.11).
         if (tracked.remote.sha === null) continue;
         const blob = await ensureRemoteBlob(tracked);
-        if (blob.abort !== null) return blob.abort;
+        if (blob.abort !== null) return abortVaultStep(blob.abort);
         if (!blob.found) {
           // Confirmed NOT_FOUND with ZERO siblings → this was the only
           // tracked record for the path: cancel the mode explicitly
@@ -2392,7 +2401,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         }
       } catch (e) {
         if (e instanceof NetworkError || e instanceof AuthError) {
-          return statusFromError(e, result); // abort — journal stays (§II.6 п.8)
+          return abortVaultStep(statusFromError(e, result)); // abort — journal stays (§II.6 п.8)
         }
         // NOT_FOUND class with siblings ≠ [] → skip only, NO mode
         // cancellation — the other tracked siblings still stand (C.9).
@@ -2456,7 +2465,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             // skipped the fold while the epilogue still advanced the
             // baseline past the remote version that never reached the
             // sibling.
-            if (r.error !== null) return statusFromError(r.error, result);
+            if (r.error !== null) return abortVaultStep(statusFromError(r.error, result));
             merged.blob = r.result;
           }
           if (merged.blob === null) {
@@ -2514,7 +2523,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         // practice) → APPEND a new sibling; the old one stays tracked
         // (§II.6 п.6) — nothing destroyed, no transaction needed.
         const blob = await ensureRemoteBlob(tracked);
-        if (blob.abort !== null) return blob.abort;
+        if (blob.abort !== null) return abortVaultStep(blob.abort);
         if (!blob.found) {
           vaultStepErrors.push({
             path,
@@ -2608,7 +2617,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       if (e instanceof NetworkError || e instanceof AuthError) {
         // Finding #2 (owner): abort, never per-file skip — the journal
         // stays, the next drain repeats the WHOLE Vault-step.
-        return statusFromError(e, result);
+        return abortVaultStep(statusFromError(e, result));
       }
       // Confirmed-absent data (repo corruption class) — not a network
       // failure, retry won't help: record and move on (§12.5.D).
@@ -2627,7 +2636,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // that used to live here is gone with it: two copies of a
       // precondition is how only one of them stays correct (§II.13.1).
       const r = await resolvePluginCollision(path, local, tracked);
-      if ("abort" in r) return r.abort;
+      if ("abort" in r) return abortVaultStep(r.abort);
       verdict = { kind: "file", file: r.file };
     }
     if (verdict.kind === "manual-conflict") {
@@ -2638,7 +2647,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // (= R_m, the same content the first sibling holds) — the
       // correct diff3 ancestor for the NEXT drain's STEP2/STEP3.
       const blob = await ensureRemoteBlob(tracked);
-      if (blob.abort !== null) return blob.abort;
+      if (blob.abort !== null) return abortVaultStep(blob.abort);
       if (!blob.found) {
         // NOT_FOUND before the record exists → simply don't create it
         // (same effect as "no conflict this drain"), and the next
@@ -2663,7 +2672,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         const info = await deps.retry.run(() =>
           deps.client.getCommitInfoForPath(path, headHash!),
         );
-        if (info.error !== null) return statusFromError(info.error, result);
+        if (info.error !== null) return abortVaultStep(statusFromError(info.error, result));
         tracked.remote.deviceLabel = info.result?.deviceLabel ?? null;
         tracked.remote.mtime =
           info.result?.committedAtMs ?? tracked.remote.mtime;
@@ -2733,7 +2742,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         const r = await deps.retry.run(() =>
           deps.client.getBlobFromRepo(v.sha!),
         );
-        if (r.error !== null) return statusFromError(r.error, result);
+        if (r.error !== null) return abortVaultStep(statusFromError(r.error, result));
         bytes = r.result;
         if (bytes === null) {
           vaultStepErrors.push({

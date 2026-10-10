@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as path from "path";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { Vault } from "../../mock-obsidian";
 import SyncStore from "../../src/sync2/sync-store";
@@ -2516,6 +2516,68 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       expect(baselines.get(p)!.size).toBe(enc(files[p]).byteLength);
     }
     for (const p of pulledNow) expect(baselines.get(p)!.mtime).toBe(0);
+  });
+
+  // Owner, 2026-10-10: "підключи латку і для обриву мережі". A network
+  // abort mid Vault-step leaves the same state as a cancel there, so it
+  // settles the same paths: the pulled ones AND the already-pushed local
+  // one — otherwise the next commit pass re-commits them and re-hashes.
+  it("network abort mid Vault-step: the pulled files AND the pushed local file get their baselines, like a cancel", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(files);
+    baseCommit = null;
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ "local.md": "LOCAL\n" });
+
+    const client = world.makeClient();
+    const origBlob = client.getBlobFromRepo.bind(client);
+    let blobs = 0;
+    client.getBlobFromRepo = async (sha) => {
+      blobs += 1;
+      if (blobs === 3) throw new NetworkError("net down");
+      return origBlob(sha);
+    };
+    const r1 = await drainOnce(
+      makeDeps({
+        client,
+        retry: new NetworkRetry({
+          vault: vault as never,
+          selfPluginId: PLUGIN_ID,
+          maxAttempts: 1,
+          sleep: async () => {},
+        }),
+      }),
+    );
+    expect(r1.status).toBe("network-error");
+    expect(r1.pushedCommits).toHaveLength(1);
+    const written = r1.vaultStepWrites.filter((p) => p !== "local.md");
+    expect(written.length).toBeGreaterThan(0);
+    for (const p of written) {
+      expect(baselines.get(p)?.baselineSha).toBe(await sha(files[p]));
+    }
+    expect(baselines.get("local.md")?.baselineSha).toBe(await sha("LOCAL\n"));
+    const notYet = Object.keys(files).filter((p) => !written.includes(p));
+    expect(notYet.length).toBeGreaterThan(0);
+    for (const p of notYet) expect(baselines.has(p)).toBe(false);
+  });
+
+  // Structural pin for the eight rare abort sites no behaviour test
+  // reaches (conflict-copy fetch, merge, device label…): every `return`
+  // inside the Vault-step loop goes through abortVaultStep, so a new or
+  // edited exit cannot silently skip the settle.
+  it("every return inside the Vault-step goes through abortVaultStep (the settle runs on every exit)", () => {
+    const src = readFileSync(path.join(__dirname, "..", "..", "src", "sync2", "drain.ts"), "utf8");
+    const start = src.indexOf("// ── Vault-step (§II.3");
+    const end = src.indexOf("// ── EPILOGUE");
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const returns = src
+      .slice(start, end)
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("//") && /\breturn\b/.test(l));
+    expect(returns.length).toBeGreaterThanOrEqual(10);
+    for (const l of returns) expect(l).toMatch(/return abortVaultStep\(/);
   });
 
   // The field shape the two tests above missed: the phone's first sync
