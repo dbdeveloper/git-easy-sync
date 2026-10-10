@@ -149,6 +149,7 @@ const FALLBACK_HANDLERS: Record<WorkerRequest["op"], FallbackHandler> = {
     };
     return result;
   },
+  "sha1-engine": async () => "main-thread crypto.subtle (no worker)",
   "merge-text": async (req) => {
     const r = req as Extract<WorkerRequest, { op: "merge-text" }>;
     return fallbackMergeText(r.ours, r.base, r.theirs);
@@ -413,6 +414,14 @@ export default class WorkerClient {
       );
     }
     return result;
+  }
+
+  // Which SHA-1 hashes files ≥ SHA_WORKER_THRESHOLD: "wasm", the worker's
+  // silent "crypto.subtle" fallback, or — with no worker at all — the main
+  // thread's crypto.subtle. For the start-up log line only; never a
+  // decision (owner, 2026-10-11).
+  async sha1Engine(): Promise<string> {
+    return await this.dispatch<string>({ id: this.newRequestId(), op: "sha1-engine" });
   }
 
   // Three-way text merge via node-diff3. Routes to the CPU pool

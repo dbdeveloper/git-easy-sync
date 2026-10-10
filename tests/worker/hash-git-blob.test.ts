@@ -159,3 +159,22 @@ describe("cpu-worker SHA-1: WASM without the concat, crypto.subtle as fallback",
     client.terminate();
   });
 });
+
+// Owner, 2026-10-11 (manual checklist "WASM SHA-1 in the CPU worker"): the
+// worker falls back to crypto.subtle SILENTLY, so a field log could not say
+// which engine hashed the large files. The client can now ask, and the
+// plugin logs the answer once at start.
+describe("WorkerClient.sha1Engine — which SHA-1 hashes files ≥ 100 KB", () => {
+  it("the real cpu-worker answers 'wasm' when WebAssembly is available", async () => {
+    const client = makeRealCpuWorkerClient();
+    expect(client.isFallback).toBe(false);
+    expect(await client.sha1Engine()).toBe("wasm");
+    client.terminate();
+  });
+
+  it("with no worker at all (fallback mode) it says so — main thread, crypto.subtle", async () => {
+    const client = new WorkerClient();
+    expect(client.isFallback).toBe(true);
+    expect(await client.sha1Engine()).toBe("main-thread crypto.subtle (no worker)");
+  });
+});

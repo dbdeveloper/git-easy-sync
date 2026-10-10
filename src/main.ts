@@ -1210,6 +1210,13 @@ export default class GitHubSyncPlugin extends Plugin {
     // network worker handles every GitHub HTTP call. Same shared
     // workerClient is passed into Sync2Manager + PushQueue below.
     this.workerClient = new WorkerClient();
+    // Which SHA-1 hashes the large files on THIS device — the worker falls
+    // back to crypto.subtle silently, and only the log can tell (owner,
+    // 2026-10-11, manual checklist "WASM SHA-1 in the CPU worker").
+    void this.workerClient
+      .sha1Engine()
+      .then((engine) => this.logger.info("SHA-1 engine for files ≥ 100 KB", { engine }))
+      .catch((err) => this.logger.warn("SHA-1 engine check failed", { err: `${err}` }));
     const client = new GithubClient(
       this.settings,
       this.logger,

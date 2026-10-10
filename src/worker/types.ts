@@ -29,6 +29,10 @@ export type WorkerRequest =
   // of the file (COMMIT-PASS-PERF, 2026-10-04). The sender's buffer is
   // detached the moment it is posted.
   | { id: string; op: "hash-git-blob"; bytes: ArrayBuffer }
+  // Which SHA-1 the worker hashes large files with: "wasm" (hash-wasm)
+  // or "crypto.subtle" (its silent fallback). Asked once at start, for
+  // the log (owner, 2026-10-11).
+  | { id: string; op: "sha1-engine" }
   // Run node-diff3 three-way merge on three text strings. Used by
   // reconcile when ours/base/theirs all differ on a text file.
   // Result mirrors `MergeOutcome` from three-way-merge.ts.
@@ -100,6 +104,7 @@ export function workerKindForOp(op: WorkerRequest["op"]): WorkerKind {
     case "decode-base64":
     case "compute-git-blob-sha":
     case "hash-git-blob":
+    case "sha1-engine":
     case "merge-text":
       return "cpu";
     case "http-request":

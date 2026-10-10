@@ -167,6 +167,11 @@ w.addEventListener("message", async (e) => {
         );
         return;
       }
+      case "sha1-engine": {
+        const h = await loadWasmSha1();
+        w.postMessage({ id: msg.id, ok: true, result: h !== null ? "wasm" : "crypto.subtle" });
+        return;
+      }
       case "merge-text": {
         const out = mergeText(msg.ours, msg.base, msg.theirs);
         w.postMessage({ id: msg.id, ok: true, result: out });
