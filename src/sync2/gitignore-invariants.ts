@@ -178,7 +178,8 @@ function configDirFinalBody(opts: { syncConfigDir: boolean }): string {
 # Per-device state - never propagate between machines.
 workspace.json
 workspace-mobile.json
-community-plugins.json`;
+community-plugins.json
+core-plugins.json`;
 }
 
 // BODY of our `final` section inside a THIRD-PARTY plugin's .gitignore.

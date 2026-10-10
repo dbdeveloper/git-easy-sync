@@ -837,6 +837,32 @@ describe("section CONTENT: two strengths in the root file (DOT-FILES §3.1)", ()
 // emptied file — never got it, and the plugin's own log went to GitHub.
 // In the top section it is always there, and the user can still opt
 // logs back in below it (`!*.log` / `!/git-easy-sync.log`).
+// Owner, 2026-10-10: core-plugins.json is PER DEVICE. Obsidian keeps the
+// core-plugin state in memory, does not re-read the file while running (no
+// "reload" for core plugins, unlike community plugins) and rewrites it from
+// memory on the next toggle — a pulled change was silently undone and sent
+// back (field: ~/Obsidian-test turned "Sync" off, ~/obsidian-test2 turned it
+// back on). Phones also have a different core-plugin set. Each machine sets
+// its own; the rule is in the FINAL section, so it cannot be overridden.
+describe("core-plugins.json is per device", () => {
+  let f: ReturnType<typeof fixture>;
+  beforeEach(() => {
+    f = fixture();
+  });
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  it("🔑 the configDir final section lists it, and the matcher ignores it", async () => {
+    await f.inv.enforce();
+    const c = fs.readFileSync(cdGitignore(f.root), "utf8");
+    expect(c.slice(c.indexOf(F_BEGIN))).toContain("\ncore-plugins.json\n");
+    const gi = new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR));
+    expect(gi.ignored(`${CONFIG_DIR}/core-plugins.json`)).toBe(true);
+    expect(gi.ignored(`${CONFIG_DIR}/app.json`)).toBe(false); // the rest still syncs
+  });
+});
+
 describe("*.log in the root file's top (overridable) section", () => {
   let f: ReturnType<typeof fixture>;
   beforeEach(() => {
