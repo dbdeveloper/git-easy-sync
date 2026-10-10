@@ -677,6 +677,18 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(recordedNotices.at(-1)!.message).toContain("Pulling 2 of 9");
   });
 
+  // Owner, 2026-10-10: the "Git Easy Sync — sync in progress" window
+  // (Cancel / Keep going) stayed on screen after the sync had finished —
+  // asking about a sync that no longer existed. It closes when the sync ends.
+  it("🔑 the sync ending closes an open \"sync in progress\" window", () => {
+    const p = makePlugin() as NoticeHandle & { cancelSyncModal: { close(): void } | null };
+    let closed = 0;
+    p.cancelSyncModal = { close: () => closed++ };
+    p.handleDrainIdle();
+    expect(closed).toBe(1);
+    expect(p.cancelSyncModal).toBeNull();
+  });
+
   it("one box throughout: the Notice object is reused, not replaced", () => {
     const p = makePlugin();
     p.setCommitSection({ state: "live", text: "Committing…" });

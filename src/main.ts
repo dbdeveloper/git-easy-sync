@@ -1706,6 +1706,7 @@ export default class GitHubSyncPlugin extends Plugin {
       },
       onSyncCompleted: (summary) => {
         this.inFullSync = false;
+        this.closeCancelSyncModal();
         // A cancel is announced by the drain-idle handler (it covers
         // background drains too, which never produce a summary); an
         // error already has its own notice. Either way the shared
@@ -1872,6 +1873,7 @@ export default class GitHubSyncPlugin extends Plugin {
       return;
     }
     if (this.sync2Manager.isSyncBusy()) {
+      this.cancelSyncModal?.close();
       const modal = new CancelSyncModal(this.app, () => {
         // No "cancellation requested" toast: the user just clicked a
         // button labelled [Cancel sync]. Echoing the click back is
@@ -1881,6 +1883,7 @@ export default class GitHubSyncPlugin extends Plugin {
         this.sync2Manager.cancelDrain();
       });
       modal.open();
+      this.cancelSyncModal = modal;
       return;
     }
     if (
@@ -3049,7 +3052,20 @@ export default class GitHubSyncPlugin extends Plugin {
   // replaced the settle below with a box-wide clear left all twelve
   // notice tests green, because every one of them drove
   // `settleDrainSection` directly and none drove the wiring.
+  // The open "Git Easy Sync — sync in progress" window (owner, 2026-10-10):
+  // it closes itself when the sync ends, instead of asking about a sync
+  // that no longer exists. Closed on the two events every sync end passes
+  // through: the drain going idle, and the Sync summary (a Sync whose
+  // commit failed or was cancelled never starts a drain).
+  private cancelSyncModal: { close(): void } | null = null;
+
+  private closeCancelSyncModal(): void {
+    this.cancelSyncModal?.close();
+    this.cancelSyncModal = null;
+  }
+
   private handleDrainIdle(): void {
+    this.closeCancelSyncModal();
     // Every Sync re-reads every open History list (owner, 2026-10-08), so a
     // commit it just made or brought shows at once. Quiet — see refresh().
     for (const leaf of this.app?.workspace?.getLeavesOfType(DIFF2_HISTORY_VIEW_TYPE) ?? []) {
