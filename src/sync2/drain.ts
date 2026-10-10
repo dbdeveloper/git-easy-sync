@@ -56,6 +56,7 @@
 
 import { arrayBufferToBase64, type Vault } from "obsidian";
 import { isOwnPluginRecoverableFile } from "./plugin-update-bootloader";
+import { MAX_SYNC_FILE_BYTES } from "./change-detector";
 import { pluginRootOf, readPluginVersion } from "./plugin-js";
 import { compareSemver } from "./semver";
 import { requireApiVersion } from "obsidian";
@@ -3129,6 +3130,20 @@ async function loadLocalFromBatch(
     mode: entry.sha === null ? DELETED : "",
   };
   if (local.mode === DELETED) return local;
+
+  // Over GitHub's limit (queued before the commit-side gate existed, or by
+  // an older build): never loaded, never sent — skipped like an
+  // unrecoverable entry, so the REST of its batch still ships (owner,
+  // 2026-10-11: one 204 MB video failed every drain, and nothing else went
+  // out). The commit side no longer re-emits it.
+  if ((entry.size ?? 0) > MAX_SYNC_FILE_BYTES) {
+    deps.logger?.warn("drain: batch entry over GitHub's size limit — skipped", {
+      path: entry.path,
+      size: entry.size,
+      limit: MAX_SYNC_FILE_BYTES,
+    });
+    return null;
+  }
 
   local.blob = await deps.syncStore.getBlobFromSyncStore(
     entry.sha!,

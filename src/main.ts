@@ -63,7 +63,7 @@ import GI, { whitelistedGitignoreDirs } from "./gi";
 import HotMetadataStore from "./sync2/hot-metadata";
 import FileBaselinesStore from "./sync2/file-baselines";
 import { AtomicWriteRecovery, atomicWriteFile } from "./sync2/atomic-write";
-import ChangeDetector, { type ScanPlan } from "./sync2/change-detector";
+import ChangeDetector, { MAX_SYNC_FILE_BYTES, type ScanPlan } from "./sync2/change-detector";
 import GitignoreInvariants from "./sync2/gitignore-invariants";
 import GitignoreSeedStore from "./sync2/gitignore-seeds";
 import { pluginUpdatedText, readPluginVersion } from "./sync2/plugin-js";
@@ -1338,6 +1338,7 @@ export default class GitHubSyncPlugin extends Plugin {
       this.logger.warn("recoverStaleCommitClaims failed", { err: `${err}` });
     }
     const detector = new ChangeDetector({
+      onTooLarge: (path, size) => this.reportTooLarge(path, size),
       vault: this.app.vault,
       hotMeta,
       baselines,
@@ -3098,6 +3099,29 @@ export default class GitHubSyncPlugin extends Plugin {
     }
     modal.close();
     this.cancelSyncModal = null;
+  }
+
+  // A file over GitHub's 100 MB API limit is left out of every commit
+  // (change-detector MAX_SYNC_FILE_BYTES). Tell the user ONCE per file per
+  // session — the interval sync runs every minute, and a toast per pass
+  // would be spam (owner, 2026-10-11). Lazily created: the set is session
+  // state, not a setting.
+  private tooLargeReported?: Set<string>;
+  private reportTooLarge(path: string, size: number): void {
+    this.tooLargeReported ??= new Set();
+    if (this.tooLargeReported.has(path)) return;
+    this.tooLargeReported.add(path);
+    const mb = (n: number): number => Math.round(n / (1024 * 1024));
+    this.logger.warn("file over GitHub's size limit — not synced", {
+      path,
+      size,
+      limit: MAX_SYNC_FILE_BYTES,
+    });
+    new Notice(
+      `"${path}" is too large for GitHub (${mb(size)} MB, the limit is ` +
+        `${mb(MAX_SYNC_FILE_BYTES)} MB). It stays in your vault but is not synced.`,
+      15000,
+    );
   }
 
   private handleDrainIdle(): void {

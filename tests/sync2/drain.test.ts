@@ -13,6 +13,7 @@ import {
   DrainProgress,
 } from "../../src/sync2/drain";
 import { progressFilePath, replayProgress } from "../../src/sync2/vault-step-progress";
+import { MAX_SYNC_FILE_BYTES } from "../../src/sync2/change-detector";
 import ConflictStoreV2 from "../../src/sync2/conflict-store-v2";
 import SiblingTx from "../../src/sync2/sibling-tx";
 import { mergeBlobsWithMainThreadDiff3 } from "../../src/sync2/diff3";
@@ -2866,6 +2867,23 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     await stageBatch({ "a.md": "something else\n", "img.png": "PNG-LOCAL" });
     const r = await drainOnce(makeDeps());
     expect([...new Set(r.conflictVerdicts.map((v) => v.path))].sort()).toEqual(["a.md", "img.png"]);
+  });
+
+  // Owner, 2026-10-11: a 204 MB video committed on the phone sat in the
+  // queue, and every drain threw on it ("Invalid array length" in the
+  // base64 encode) — the rest of its batch never shipped. A batch entry
+  // over GitHub's limit (queued before the commit-side gate existed) is
+  // skipped with a warning; the rest of the batch goes out.
+  it("a queued entry over GitHub's size limit is skipped — the rest of its batch is pushed, the drain does not fail", async () => {
+    await setupAligned();
+    await stageBatch({ "video.mp4": "pretend-huge", "note.md": "N\n" });
+    const entry = batches[batches.length - 1].claimed.meta.entries.find((e) => e.path === "video.mp4")!;
+    entry.size = MAX_SYNC_FILE_BYTES + 1;
+
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    expect(dec(world.headFiles().get("note.md")!.bytes)).toBe("N\n");
+    expect(world.headFiles().has("video.mp4")).toBe(false);
   });
 
   // §II.19 ⚠️ invariant: a completed drain leaves NO progress log behind —

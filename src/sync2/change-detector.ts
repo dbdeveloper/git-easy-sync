@@ -213,6 +213,13 @@ const CONFLICT_SIBLING_PATTERN =
 // (The trailing-extension group stays optional — files without a
 // dotted extension produce no .ext segment, see buildSiblingPath.)
 
+// GitHub's ceiling for a file through the API (the Git blobs endpoints:
+// "up to 100 megabytes"); bigger files need Git LFS, which this plugin does
+// not speak. A file over it is never committed — decided by its SIZE, before
+// any read (owner, 2026-10-11: a 204 MB video on the phone broke every Sync,
+// and a 204 MB re-read each pass cost 32 s).
+export const MAX_SYNC_FILE_BYTES = 100 * 1024 * 1024;
+
 export interface ChangeDetectorDeps {
   vault: Vault;
   // Watermark source (hot pair): getLastCommitMtime.
@@ -286,6 +293,9 @@ export interface ChangeDetectorDeps {
   // the writer records, and a carried sha is trusted as-is. Absent →
   // off: raw bytes, as before.
   autoCanonicalize?: () => boolean;
+  // A syncable file over MAX_SYNC_FILE_BYTES, left out of this pass —
+  // the caller tells the user. Optional: absent = silently left out.
+  onTooLarge?: (path: string, size: number) => void;
   // COMMIT-PASS-PERF 3a: per-candidate read and SHA-1 times, and the
   // dot-space enumeration — what step 3's forecast learns from
   // (commit-stats.ts). Optional: cosmetic, never part of a decision here.
@@ -431,6 +441,7 @@ export default class ChangeDetector {
   ) => Promise<{ sha: string; bytes: ArrayBuffer }>;
   private readonly syncStore: ChangeDetectorDeps["syncStore"];
   private readonly autoCanonicalize: () => boolean;
+  private readonly onTooLarge: ((path: string, size: number) => void) | undefined;
   private readonly stats: ChangeDetectorDeps["stats"];
   // The opt-in set for the CURRENT operation (DOT-FILES §5). Null until
   // beginScan() runs, and deliberately not lazily filled: "not computed
@@ -466,6 +477,7 @@ export default class ChangeDetector {
       (async (bytes) => ({ sha: await calculateGitBlobSHA(bytes), bytes }));
     this.syncStore = deps.syncStore;
     this.autoCanonicalize = deps.autoCanonicalize ?? (() => false);
+    this.onTooLarge = deps.onTooLarge;
     this.stats = deps.stats;
   }
 
@@ -659,6 +671,14 @@ export default class ChangeDetector {
         continue;
       }
       seenSyncable.add(file.path);
+
+      // Over GitHub's limit: left out BEFORE any read. Stays "seen", so a
+      // file that was synced and then grew past the limit is not reported
+      // as deleted either — the repo keeps its last pushed version.
+      if (file.stat.size > MAX_SYNC_FILE_BYTES) {
+        this.onTooLarge?.(file.path, file.stat.size);
+        continue;
+      }
 
       const snap = await this.baselines.get(file.path);
       if (!snap) {
@@ -920,6 +940,11 @@ export default class ChangeDetector {
         path,
         previousRemoteSha: snap.baselineSha,
       };
+    }
+
+    if (stat.size > MAX_SYNC_FILE_BYTES) {
+      this.onTooLarge?.(path, stat.size);
+      return null;
     }
 
     if (!snap) {

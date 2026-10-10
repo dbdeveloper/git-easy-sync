@@ -16,6 +16,7 @@ import FileBaselinesStore from "../../src/sync2/file-baselines";
 import ChangeDetector, {
   isUnhonouredGitignore,
   isSyncable,
+  MAX_SYNC_FILE_BYTES,
 } from "../../src/sync2/change-detector";
 import { Vault } from "../../mock-obsidian";
 import { calculateGitBlobSHA } from "../../src/utils";
@@ -2021,5 +2022,66 @@ describe("unconditional rules — independent of every .gitignore", () => {
 
   it("rule 3: nothing in a SUBFOLDER of ours either (not only .runtime/)", async () => {
     expect(await ask(`${CD}/plugins/${ME}/backup/main.js`)).toBe(false);
+  });
+});
+
+
+// Owner, 2026-10-11: a 204 MB video added on the phone was committed, then
+// every Sync failed (Obsidian's base64 encoder threw "Invalid array length")
+// and nothing else reached the server. GitHub does not take files of that
+// size through the API at all (100 MB), and this plugin has no LFS. Such a
+// file is now left OUT of the commit — decided by its size alone, BEFORE it
+// is read or hashed (a 204 MB re-read each pass cost 32 s on the phone).
+// The sparse file below has the real size and occupies no disk.
+describe("a file over GitHub's size limit", () => {
+  function bigSparse(root: string, rel: string, size: number): void {
+    const abs = path.join(root, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.closeSync(fs.openSync(abs, "w"));
+    fs.truncateSync(abs, size);
+  }
+  function detectorWith(f: ReturnType<typeof fixture>, tooLarge: Array<[string, number]>): ChangeDetector {
+    return new ChangeDetector({
+      vault: f.vault as unknown as import("obsidian").Vault,
+      hotMeta: f.hot,
+      baselines: f.store,
+      gi: f.gi,
+      configDir: CONFIG_DIR,
+      selfPluginId: SELF_PLUGIN_ID,
+      vaultRoot: f.root,
+      syncConfigDir: () => true,
+      onTooLarge: (p, size) => tooLarge.push([p, size]),
+    });
+  }
+
+  it("is the GitHub API's 100 MB", () => {
+    expect(MAX_SYNC_FILE_BYTES).toBe(100 * 1024 * 1024);
+  });
+
+  it("full pass: never emitted, never read, reported once; a normal file beside it still commits", async () => {
+    const f = fixture();
+    bigSparse(f.root, "video.mp4", MAX_SYNC_FILE_BYTES + 1);
+    writeFile(f.root, "note.md", "hello\n");
+    const tooLarge: Array<[string, number]> = [];
+    const changes = await detectorWith(f, tooLarge).findChanges();
+    expect(changes.map((c) => c.path)).toEqual(["note.md"]);
+    expect(tooLarge).toEqual([["video.mp4", MAX_SYNC_FILE_BYTES + 1]]);
+  });
+
+  it("exactly at the limit is still synced", async () => {
+    const f = fixture();
+    bigSparse(f.root, "edge.bin", MAX_SYNC_FILE_BYTES);
+    const tooLarge: Array<[string, number]> = [];
+    const changes = await detectorWith(f, tooLarge).findChanges();
+    expect(changes.map((c) => c.path)).toEqual(["edge.bin"]);
+    expect(tooLarge).toEqual([]);
+  });
+
+  it("one-file path (Commit active file): null, reported", async () => {
+    const f = fixture();
+    bigSparse(f.root, "video.mp4", MAX_SYNC_FILE_BYTES + 1);
+    const tooLarge: Array<[string, number]> = [];
+    expect(await detectorWith(f, tooLarge).findChangeForPath("video.mp4")).toBeNull();
+    expect(tooLarge).toEqual([["video.mp4", MAX_SYNC_FILE_BYTES + 1]]);
   });
 });
