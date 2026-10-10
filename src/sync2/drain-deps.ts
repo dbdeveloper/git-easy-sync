@@ -29,6 +29,7 @@
 // injected (author.date would change what the mtime invariant's
 // committedAt means).
 
+import type { CancelSignal } from "../cancel-signal";
 import { type Vault } from "obsidian";
 import { NotFoundError, ConflictError } from "../errors";
 import type { NewTreeRequestItem } from "../github/client";
@@ -457,6 +458,8 @@ export interface BuildDrainDepsArgs {
   gitAuthor?: () => { name: string; email: string } | null;
   // S1: cooperative cancel (manager's abort flag).
   cancelRequested?: () => boolean;
+  // The drain's retries (NetworkRetry) stop on "Cancel sync".
+  cancelSignal?: CancelSignal;
   trashHooks?: TrashHooks | null;
   // Pull-side canonicalize toggle (autoCanonicalizeTextFiles) — the
   // third of text-normalize.ts's three must-agree sites.
@@ -497,6 +500,7 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
     retry: new NetworkRetry({
       vault: args.vault,
       selfPluginId: args.selfPluginId,
+      cancelSignal: args.cancelSignal,
     }),
     claimBatch: () => claimer.getBatch(),
     removeBatchDir: (dir) => args.vault.adapter.rmdir(dir, true),

@@ -3,6 +3,8 @@
 // AGPL-3.0 — see LICENSE.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { CancelSignal } from "../../src/cancel-signal";
+import { CancelledError } from "../../src/errors";
 import WorkerClient, {
   computeCpuPoolSize,
 } from "../../src/worker/worker-client";
@@ -679,5 +681,68 @@ describe("WorkerClient.httpRequest", () => {
     } finally {
       globalThis.fetch = origFetch;
     }
+  });
+});
+
+// Owner, 2026-10-11: "Cancel sync" could not stop a 127 MB upload — the
+// request in flight had no way to be interrupted, so cancel waited for it
+// (47 s, six times over). With a CancelSignal the in-flight request is
+// aborted at once, and no new request starts until the next sync resets it.
+describe("WorkerClient + CancelSignal — a request in flight stops at once", () => {
+  it("fallback mode (main-thread fetch): cancel aborts the fetch and rejects with CancelledError", async () => {
+    const signal = new CancelSignal();
+    const client = new WorkerClient({ workerCtor: undefined as unknown as typeof Worker, cancelSignal: signal });
+    expect(client.isFallback).toBe(true);
+    const origFetch = globalThis.fetch;
+    let aborted = false;
+    globalThis.fetch = ((_u: string, init?: RequestInit) =>
+      new Promise((_res, rej) => {
+        init?.signal?.addEventListener("abort", () => {
+          aborted = true;
+          rej(new DOMException("aborted", "AbortError"));
+        });
+      })) as typeof fetch;
+    try {
+      const t0 = Date.now();
+      const p = client.httpRequest({ url: "https://api.github.com/x", method: "POST", body: "big" });
+      setTimeout(() => signal.cancel(), 20);
+      await expect(p).rejects.toBeInstanceOf(CancelledError);
+      expect(aborted).toBe(true);
+      expect(Date.now() - t0).toBeLessThan(1000);
+      // While cancelled, a new request does not even start…
+      await expect(client.httpRequest({ url: "https://api.github.com/y" })).rejects.toBeInstanceOf(CancelledError);
+      // …and the next sync (reset) can make requests again.
+      signal.reset();
+      globalThis.fetch = (async () => new Response("{}", { status: 200 })) as typeof fetch;
+      expect((await client.httpRequest({ url: "https://api.github.com/z" })).status).toBe(200);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it("worker mode: cancel posts an http-abort for the request in flight and rejects at once", async () => {
+    const signal = new CancelSignal();
+    FakeWorker.instances = [];
+    FakeWorker.replyMode = "drop"; // the upload never answers on its own
+    const posted: WorkerRequest[] = [];
+    class RecordingWorker extends FakeWorker {
+      postMessage(msg: WorkerRequest): void {
+        posted.push(msg);
+        super.postMessage(msg);
+      }
+    }
+    const client = new WorkerClient({
+      hardwareConcurrency: 4,
+      cpuWorkerSource: FAKE_CPU,
+      networkWorkerSource: FAKE_NETWORK,
+      workerCtor: RecordingWorker as unknown as typeof Worker,
+      cancelSignal: signal,
+    });
+    const p = client.httpRequest({ url: "https://api.github.com/x", method: "POST", body: "big" });
+    const sent = posted.find((m) => m.op === "http-request")!;
+    signal.cancel();
+    await expect(p).rejects.toBeInstanceOf(CancelledError);
+    expect(posted.some((m) => m.op === "http-abort" && (m as { target: string }).target === sent.id)).toBe(true);
+    client.terminate();
   });
 });

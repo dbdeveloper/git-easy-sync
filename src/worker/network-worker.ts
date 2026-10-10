@@ -37,8 +37,12 @@ const w = self as unknown as {
 // inside a Web Worker to call api.github.com cross-origin with
 // Authorization Bearer headers — round-trip ~800 ms including
 // worker construction overhead. That validated the migration.
+// One AbortController per request in flight, so "http-abort" can stop it.
+const inFlight = new Map<string, AbortController>();
+
 async function executeHttpRequest(
   msg: Extract<WorkerRequest, { op: "http-request" }>,
+  signal?: AbortSignal,
 ): Promise<{
   status: number;
   text: string;
@@ -48,6 +52,7 @@ async function executeHttpRequest(
   const init: RequestInit = {
     method: msg.method ?? "GET",
     headers: msg.headers,
+    signal,
   };
   if (msg.body !== undefined) {
     init.body = msg.body;
@@ -84,8 +89,19 @@ w.addEventListener("message", async (e) => {
         return;
       }
       case "http-request": {
-        const result = await executeHttpRequest(msg);
-        w.postMessage({ id: msg.id, ok: true, result });
+        const ctrl = new AbortController();
+        inFlight.set(msg.id, ctrl);
+        try {
+          const result = await executeHttpRequest(msg, ctrl.signal);
+          w.postMessage({ id: msg.id, ok: true, result });
+        } finally {
+          inFlight.delete(msg.id);
+        }
+        return;
+      }
+      case "http-abort": {
+        // The client has already rejected the request; no reply needed.
+        inFlight.get(msg.target)?.abort();
         return;
       }
     }

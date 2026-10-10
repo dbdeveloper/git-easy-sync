@@ -21,8 +21,9 @@
 // rule as sync-store's verifiedShas: the clear-once state must die
 // with the run that earned it.
 
+import type { CancelSignal } from "../cancel-signal";
 import { normalizePath, type Vault } from "obsidian";
-import { NetworkError } from "../errors";
+import { CancelledError, NetworkError } from "../errors";
 
 export const NETWORK_ERROR_MARK_NAME = ".sync_network_error";
 
@@ -51,6 +52,9 @@ export interface NetworkRetryDeps {
   // Injectable so tests don't sleep real seconds.
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  // "Cancel sync" (owner, 2026-10-11): no attempt once cancelled, a pause
+  // in progress ends at once, and run() returns a CancelledError.
+  cancelSignal?: CancelSignal;
 }
 
 export type RetryOutcome<T> =
@@ -64,6 +68,7 @@ export default class NetworkRetry {
   private readonly baseDelayMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
+  private readonly cancelSignal: CancelSignal | undefined;
   // Clear-once-per-run latch (see header).
   private clearedThisRun = false;
 
@@ -75,6 +80,7 @@ export default class NetworkRetry {
     this.sleep =
       deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.now = deps.now ?? (() => Date.now());
+    this.cancelSignal = deps.cancelSignal;
   }
 
   // op may throw NetworkError (retried), or anything else (returned
@@ -82,6 +88,9 @@ export default class NetworkRetry {
   async run<T>(op: () => Promise<T>): Promise<RetryOutcome<T>> {
     let attempt = 0;
     for (;;) {
+      if (this.cancelSignal?.isCancelled) {
+        return { result: null, error: new CancelledError() };
+      }
       try {
         const result = await op();
         await this.markNetworkRecoveredIfNeeded();
@@ -95,7 +104,8 @@ export default class NetworkRetry {
           await this.writeNetworkErrorMark(e);
           return { result: null, error: e };
         }
-        await this.sleep(this.baseDelayMs * 2 ** (attempt - 1));
+        const ms = this.baseDelayMs * 2 ** (attempt - 1);
+        await (this.cancelSignal ? this.cancelSignal.sleep(ms) : this.sleep(ms));
       }
     }
   }

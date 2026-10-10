@@ -9,7 +9,7 @@ import {
   isRetriableStatus,
   isWriteRetriableStatus,
   isRefUpdateRetriableStatus,
-  retryUntil,
+  retryUntil as retryUntilBase,
 } from "src/utils";
 // URL-encoding for GitHub Contents-API paths lives in the
 // cross-platform contracts module (SYNC2 §3).
@@ -69,7 +69,7 @@ export type BlobFile = {
 // base GithubAPIError for codes outside the mapped set. Existing
 // catch sites that duck-type on `err.status` keep working
 // unchanged; new catch sites use `err instanceof NotFoundError` etc.
-import { makeGithubAPIError } from "src/errors";
+import { BlobTooLargeError, makeGithubAPIError } from "src/errors";
 import type WorkerClient from "src/worker/worker-client";
 
 // Case-insensitive response-header lookup. The two transports
@@ -120,6 +120,11 @@ export function httpLogLevel(status: number, headers?: Record<string, string>): 
   return "warn";
 }
 
+// GitHub's 422 for a blob over its ceiling (measured 40 MiB, 2026-10-11).
+function isBlobTooLarge(res: { status: number; text?: string }): boolean {
+  return res.status === 422 && /too large/i.test(res.text ?? "");
+}
+
 export default class GithubClient {
   // Optional Worker orchestra controller. When provided, every
   // HTTP request below routes through the network worker (Stage 6:
@@ -132,6 +137,27 @@ export default class GithubClient {
     private logger: Logger,
     private workerClient?: WorkerClient,
   ) {}
+
+  // Every retry loop of this client honours "Cancel sync" (owner,
+  // 2026-10-11): no attempt starts once cancelled, and a backoff pause ends
+  // at once. The signal rides on the WorkerClient, which also aborts the
+  // request in flight.
+  private retryUntil<T>(
+    fn: () => Promise<T>,
+    condition: (result: T) => boolean,
+    maxRetries = 5,
+    initialDelay = 1000,
+    backoffFactor = 2,
+  ): Promise<T> {
+    return retryUntilBase(
+      fn,
+      condition,
+      maxRetries,
+      initialDelay,
+      backoffFactor,
+      this.workerClient?.cancelSignalRef,
+    );
+  }
 
   headers() {
     return {
@@ -250,7 +276,7 @@ export default class GithubClient {
     retry = false,
     maxRetries = 5,
   } = {}): Promise<RepoContent> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -324,7 +350,7 @@ export default class GithubClient {
     retry?: boolean;
     maxRetries?: number;
   }) {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -391,7 +417,7 @@ export default class GithubClient {
   }): Promise<string> {
     const parentsArr =
       parents !== undefined ? parents : parent !== undefined ? [parent] : [];
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -468,7 +494,7 @@ export default class GithubClient {
     retry?: boolean;
     maxRetries?: number;
   }): Promise<{ sha: string; committedAt: number }> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -542,7 +568,7 @@ export default class GithubClient {
     retry?: boolean;
     maxRetries?: number;
   }): Promise<string | null> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -712,7 +738,7 @@ export default class GithubClient {
     // UNKNOWN_DEVICE_LABEL sentinel.
     message: string;
   }> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -797,7 +823,7 @@ export default class GithubClient {
     // (see getBranchHeadSha). At a fixed SHA (the engine's
     // getCommitInfoForPath) the answer never changes: it stays cacheable.
     if (!/^[0-9a-f]{40}$/i.test(branch)) query += `&ts=${Date.now()}-${++cacheBusterSeq}`;
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -875,7 +901,7 @@ export default class GithubClient {
     retry?: boolean;
     maxRetries?: number;
   }): Promise<{ content: string; sha: string } | null> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -990,7 +1016,7 @@ export default class GithubClient {
     files: Array<{ path: string; sha: string; size: number | null }>;
     truncated: boolean;
   }> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -1087,7 +1113,7 @@ export default class GithubClient {
     maxRetries?: number;
   }): Promise<{ sha: string; size: number; blob: ArrayBuffer | null } | null> {
     const url = `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/contents/${encodePathForGithub(filePath)}?ref=${ref}`;
-    const headResponse = await retryUntil(
+    const headResponse = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -1131,7 +1157,7 @@ export default class GithubClient {
       "getContentsMetadataAtRef: ETag not a blob-SHA — falling back to GET",
       { path: filePath, etag: rawEtag },
     );
-    const getResponse = await retryUntil(
+    const getResponse = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -1203,7 +1229,7 @@ export default class GithubClient {
       previous_filename?: string;
     }>;
   }> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -1259,7 +1285,7 @@ export default class GithubClient {
     retry?: boolean;
     maxRetries?: number;
   }): Promise<void> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -1307,7 +1333,7 @@ export default class GithubClient {
     retry?: boolean;
     maxRetries?: number;
   }): Promise<void> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -1351,7 +1377,7 @@ export default class GithubClient {
     retry?: boolean;
     maxRetries?: number;
   }): Promise<void> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -1391,7 +1417,7 @@ export default class GithubClient {
     retry?: boolean;
     maxRetries?: number;
   }): Promise<Array<{ ref: string; sha: string }>> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -1432,7 +1458,7 @@ export default class GithubClient {
    * @returns The SHA of the branch head
    */
   async getBranchHeadSha({ retry = false, maxRetries = 5 } = {}) {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -1510,7 +1536,7 @@ export default class GithubClient {
     retry?: boolean;
     maxRetries?: number;
   }) {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -1565,7 +1591,7 @@ export default class GithubClient {
     retry?: boolean;
     maxRetries?: number;
   }): Promise<CreatedBlob> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -1578,10 +1604,16 @@ export default class GithubClient {
           `blob (${encoding})`,
         );
       },
-      (res) => !isWriteRetriableStatus(res.status),
+      // "Too large" is final — retrying re-uploaded the same 127 MB six
+      // times (field 2026-10-11).
+      (res) => !isWriteRetriableStatus(res.status) || isBlobTooLarge(res),
       retry ? maxRetries : 0,
     );
 
+    if (isBlobTooLarge(response)) {
+      this.logger.warn("GitHub refused the blob: too large", { status: response.status });
+      throw new BlobTooLargeError("GitHub refused the blob: input too large", response.text);
+    }
     if (response.status < 200 || response.status >= 400) {
       this.logger.error("Failed to create blob", response);
       throw makeGithubAPIError(
@@ -1611,7 +1643,7 @@ export default class GithubClient {
     retry?: boolean;
     maxRetries?: number;
   }): Promise<BlobFile> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {
@@ -1669,7 +1701,7 @@ export default class GithubClient {
     retry?: boolean;
     maxRetries?: number;
   }): Promise<{ blobSha: string; treeSha: string; commitSha: string }> {
-    const response = await retryUntil(
+    const response = await this.retryUntil(
       async () => {
         return this.timed(
           {

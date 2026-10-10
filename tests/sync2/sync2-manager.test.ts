@@ -9,6 +9,7 @@ import { DrainResult, DrainStatus as DrainOutcome } from "../../src/sync2/drain"
 import SyncStore, { PIN_OWNER_COMMIT } from "../../src/sync2/sync-store";
 import DrainJournal, { emptyDrainState } from "../../src/sync2/drain-journal";
 import { DELETED } from "../../src/sync2/diff3";
+import { CancelSignal } from "../../src/cancel-signal";
 import { DELETED_SHA_HASH } from "../../src/sync2/discovery";
 import ConflictStoreV2 from "../../src/sync2/conflict-store-v2";
 import SiblingTx from "../../src/sync2/sibling-tx";
@@ -734,6 +735,29 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     };
     await manager.commitOnly();
     expect(seen).toEqual([]);
+  });
+
+  // Owner, 2026-10-11: "Cancel sync" must reach the retry loops and the
+  // request in flight, through ONE signal. The manager fires it on cancel and
+  // re-arms it at the start of every drain.
+  it("cancelDrain fires the shared cancel signal; the next drain starts with it re-armed", async () => {
+    const signal = new CancelSignal();
+    signal.cancel(); // left over from an earlier cancelled sync
+    (deps as unknown as { cancelSignal: CancelSignal }).cancelSignal = signal;
+    let armedAtStart: boolean | null = null;
+    deps.drainFn = async () => {
+      armedAtStart = !signal.isCancelled;
+      await signal.sleep(10_000); // "a retry pause" — must end on cancel
+      return okResult({ status: signal.isCancelled ? "cancelled" : "ok" });
+    };
+    const t0 = Date.now();
+    const p = manager.resumeQueue();
+    await new Promise((r) => setTimeout(r, 30));
+    manager.cancelDrain();
+    await p;
+    expect(armedAtStart).toBe(true);
+    expect(signal.isCancelled).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(2000);
   });
 
   it("🔑 the FIRST observation records the identity and wipes NOTHING", async () => {

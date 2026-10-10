@@ -58,7 +58,10 @@ export type WorkerRequest =
       // Body for POST/PUT/PATCH. Strings only — JSON.stringify on the
       // main side so the wire-format stays a flat string.
       body?: string;
-    };
+    }
+  // "Cancel sync" (owner, 2026-10-11): abort the http-request whose id is
+  // `target` — a 127 MB upload must not run out its 47 s after cancel.
+  | { id: string; op: "http-abort"; target: string };
 
 export type WorkerResponse =
   | { id: string; ok: true; result: unknown }
@@ -108,6 +111,7 @@ export function workerKindForOp(op: WorkerRequest["op"]): WorkerKind {
     case "merge-text":
       return "cpu";
     case "http-request":
+    case "http-abort":
       return "network";
   }
 }

@@ -35,6 +35,7 @@
 // - the 300 ms commit→drain delay — commit↔drain is the R3b
 //   writer↔claimer Peterson protocol.
 
+import type { CancelSignal } from "../cancel-signal";
 import { type Vault } from "obsidian";
 import { drainOnce, DrainResult, DrainProgress } from "./drain";
 import {
@@ -92,6 +93,10 @@ export interface Sync2Logger {
 }
 
 export interface Sync2ManagerDeps {
+  // ONE cancel signal shared with the WorkerClient (requests in flight) and
+  // the retry loops (owner, 2026-10-11). cancelDrain() fires it; every
+  // drain re-arms it. Optional for test compositions.
+  cancelSignal?: CancelSignal;
   vault: Vault;
   selfPluginId: string;
   configDir: string;
@@ -659,6 +664,9 @@ export class Sync2Manager {
       return;
     }
     this.abortRequested = true;
+    // Retry pauses end and the request in flight is aborted AT ONCE — not
+    // after six 47-s upload attempts (field 2026-10-11).
+    this.deps.cancelSignal?.cancel();
     this.emitDrainStatus({ state: "cancelling" });
     this.deps.logger.info("Sync2 cancelDrain requested");
   }
@@ -964,6 +972,7 @@ export class Sync2Manager {
     if (this.running) return; // H3: collapse into the in-flight drain
     this.running = true;
     this.abortRequested = false;
+    this.deps.cancelSignal?.reset();
     this.lastDrainWasCancelled = false;
     // DOT-FILES §3.1.2 / owner 2026-09-20: the managed .gitignore
     // files return to canonical before EVERY operation, not just
@@ -1154,6 +1163,7 @@ export class Sync2Manager {
       gitAuthor: this.deps.gitAuthor,
       autoCanonicalize: this.deps.autoCanonicalize,
       cancelRequested: () => this.abortRequested,
+      cancelSignal: this.deps.cancelSignal,
       trashHooks: this.deps.trashHooks,
       gitignoreSeeds: this.deps.gitignoreSeeds,
       deletedBinReferencedShas: this.deps.deletedBin

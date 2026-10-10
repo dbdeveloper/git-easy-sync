@@ -2029,7 +2029,7 @@ describe("unconditional rules — independent of every .gitignore", () => {
 // Owner, 2026-10-11: a 204 MB video added on the phone was committed, then
 // every Sync failed (Obsidian's base64 encoder threw "Invalid array length")
 // and nothing else reached the server. GitHub does not take files of that
-// size through the API at all (100 MB), and this plugin has no LFS. Such a
+// size through the API at all (measured ceiling: 40 MiB), and this plugin has no LFS. Such a
 // file is now left OUT of the commit — decided by its size alone, BEFORE it
 // is read or hashed (a 204 MB re-read each pass cost 32 s on the phone).
 // The sparse file below has the real size and occupies no disk.
@@ -2054,8 +2054,9 @@ describe("a file over GitHub's size limit", () => {
     });
   }
 
-  it("is the GitHub API's 100 MB", () => {
-    expect(MAX_SYNC_FILE_BYTES).toBe(100 * 1024 * 1024);
+  it("is 40 MB — just under the measured GitHub API ceiling (40 MiB → 422)", () => {
+    expect(MAX_SYNC_FILE_BYTES).toBe(40_000_000);
+    expect(MAX_SYNC_FILE_BYTES).toBeLessThan(40 * 1024 * 1024);
   });
 
   it("full pass: never emitted, never read, reported once; a normal file beside it still commits", async () => {

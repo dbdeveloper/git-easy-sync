@@ -64,6 +64,7 @@ import HotMetadataStore from "./sync2/hot-metadata";
 import FileBaselinesStore from "./sync2/file-baselines";
 import { AtomicWriteRecovery, atomicWriteFile } from "./sync2/atomic-write";
 import ChangeDetector, { MAX_SYNC_FILE_BYTES, type ScanPlan } from "./sync2/change-detector";
+import { CancelSignal } from "./cancel-signal";
 import GitignoreInvariants from "./sync2/gitignore-invariants";
 import GitignoreSeedStore from "./sync2/gitignore-seeds";
 import { pluginUpdatedText, readPluginVersion } from "./sync2/plugin-js";
@@ -440,6 +441,7 @@ export default class GitHubSyncPlugin extends Plugin {
   // inputs run inline on the main thread; only large ones round-trip
   // to the worker pool.
   workerClient!: WorkerClient;
+  private syncCancel?: CancelSignal;
   // Exposed for the settings tab's "Push plugins data.json" toggle,
   // which reads/writes the allow line directly via this owner.
   invariants!: GitignoreInvariants;
@@ -1209,7 +1211,10 @@ export default class GitHubSyncPlugin extends Plugin {
     // Stage 6: construct WorkerClient BEFORE GithubClient so the
     // network worker handles every GitHub HTTP call. Same shared
     // workerClient is passed into Sync2Manager + PushQueue below.
-    this.workerClient = new WorkerClient();
+    // ONE cancel signal per plugin: "Cancel sync" aborts requests in flight
+    // and ends retry pauses (owner, 2026-10-11).
+    this.syncCancel = new CancelSignal();
+    this.workerClient = new WorkerClient({ cancelSignal: this.syncCancel });
     // Which SHA-1 hashes the large files on THIS device — the worker falls
     // back to crypto.subtle silently, and only the log can tell (owner,
     // 2026-10-11, manual checklist "WASM SHA-1 in the CPU worker").
@@ -1595,6 +1600,7 @@ export default class GitHubSyncPlugin extends Plugin {
     void this.reconcileConflictsV2();
 
     this.sync2Manager = new Sync2Manager({
+      cancelSignal: this.syncCancel,
       // COMMIT-PASS-PERF 3a: summarised into the timing line, flushed
       // after every commit pass.
       commitStats,
@@ -3111,7 +3117,7 @@ export default class GitHubSyncPlugin extends Plugin {
     this.tooLargeReported ??= new Set();
     if (this.tooLargeReported.has(path)) return;
     this.tooLargeReported.add(path);
-    const mb = (n: number): number => Math.round(n / (1024 * 1024));
+    const mb = (n: number): number => Math.round(n / 1_000_000); // decimal, as file managers show
     this.logger.warn("file over GitHub's size limit — not synced", {
       path,
       size,

@@ -2,6 +2,8 @@
 // Vladyslav Kozlovskyy <dbdevelop@gmail.com>, 2026.
 // AGPL-3.0 — see LICENSE.
 
+import type { CancelSignal } from "../cancel-signal";
+import { CancelledError } from "../errors";
 import type {
   WorkerRequest,
   WorkerResponse,
@@ -71,7 +73,7 @@ interface PooledWorker {
 // Stub fallback handlers used when Worker construction fails. Each
 // op type that the orchestra handles needs an entry; Stage 3 only
 // has ping/echo so the table is small. Stage 4 onwards extends.
-type FallbackHandler = (req: WorkerRequest) => Promise<unknown>;
+type FallbackHandler = (req: WorkerRequest, signal?: AbortSignal) => Promise<unknown>;
 
 // Main-thread fallback for `decode-base64`. Strips whitespace then
 // uses `atob` (available in browser + Node main thread). Mirrors
@@ -154,7 +156,9 @@ const FALLBACK_HANDLERS: Record<WorkerRequest["op"], FallbackHandler> = {
     const r = req as Extract<WorkerRequest, { op: "merge-text" }>;
     return fallbackMergeText(r.ours, r.base, r.theirs);
   },
-  "http-request": async (req) => {
+  // Aborting is the client's business (abortHttp); nothing to do here.
+  "http-abort": async () => null,
+  "http-request": async (req, signal) => {
     const r = req as Extract<WorkerRequest, { op: "http-request" }>;
     // Main-thread fallback for the network op. Uses native fetch
     // — same API the worker uses. Test environments mock
@@ -165,6 +169,7 @@ const FALLBACK_HANDLERS: Record<WorkerRequest["op"], FallbackHandler> = {
     const init: RequestInit = {
       method: r.method ?? "GET",
       headers: r.headers,
+      signal,
     };
     if (r.body !== undefined) {
       init.body = r.body;
@@ -212,6 +217,9 @@ export default class WorkerClient {
   // (Worker construction threw at startup). Cached so we don't
   // re-try and re-throw every dispatch.
   private fallbackMode = false;
+  private readonly cancelSignal: CancelSignal | undefined;
+  // Fallback mode's in-flight http requests, so a cancel can abort them.
+  private readonly fallbackAborts = new Map<string, AbortController>();
 
   // Constructor opts let tests inject mock worker sources and a
   // mock Worker constructor without involving the real Web Worker
@@ -224,7 +232,10 @@ export default class WorkerClient {
     // Allow test to supply a Worker-shaped mock. When omitted the
     // global `Worker` constructor is used.
     workerCtor?: new (url: string) => Worker;
+    // "Cancel sync": aborts requests in flight, refuses new ones until reset.
+    cancelSignal?: CancelSignal;
   }) {
+    this.cancelSignal = opts?.cancelSignal;
     const poolSize = computeCpuPoolSize(
       opts?.hardwareConcurrency ?? globalThis.navigator?.hardwareConcurrency,
     );
@@ -267,6 +278,11 @@ export default class WorkerClient {
     }
   }
 
+  // The sync's cancel signal, for the GitHub client's retry loops.
+  get cancelSignalRef(): CancelSignal | undefined {
+    return this.cancelSignal;
+  }
+
   // True if any Worker construction failed and we're routing every
   // op to a main-thread fallback. Tests + diagnostics check this.
   get isFallback(): boolean {
@@ -291,7 +307,12 @@ export default class WorkerClient {
   ): Promise<T> {
     if (this.fallbackMode) {
       const handler = FALLBACK_HANDLERS[op.op];
-      return handler(op) as Promise<T>;
+      if (op.op !== "http-request") return handler(op) as Promise<T>;
+      const ctrl = new AbortController();
+      this.fallbackAborts.set(op.id, ctrl);
+      return (handler(op, ctrl.signal) as Promise<T>).finally(() =>
+        this.fallbackAborts.delete(op.id),
+      );
     }
     return new Promise<T>((resolve, reject) => {
       const id = op.id;
@@ -459,14 +480,55 @@ export default class WorkerClient {
     headers?: Record<string, string>;
     body?: string;
   }): Promise<HttpRequestResult> {
-    return await this.dispatch<HttpRequestResult>({
+    const sig = this.cancelSignal;
+    sig?.throwIfCancelled();
+    const op: WorkerRequest = {
       id: this.newRequestId(),
       op: "http-request",
       url: args.url,
       method: args.method,
       headers: args.headers,
       body: args.body,
+    };
+    if (!sig) return await this.dispatch<HttpRequestResult>(op);
+    // "Cancel sync" (owner, 2026-10-11): the request in flight stops AT
+    // ONCE — a 127 MB upload no longer runs out its 47 s after cancel.
+    return await new Promise<HttpRequestResult>((resolve, reject) => {
+      let settled = false;
+      const off = sig.onCancel(() => {
+        if (settled) return;
+        settled = true;
+        off();
+        this.abortHttp(op.id);
+        reject(new CancelledError());
+      });
+      this.dispatch<HttpRequestResult>(op).then(
+        (v) => {
+          if (settled) return;
+          settled = true;
+          off();
+          resolve(v);
+        },
+        (e) => {
+          if (settled) return;
+          settled = true;
+          off();
+          reject(e);
+        },
+      );
     });
+  }
+
+  // Stop one http request in flight: the network worker aborts its fetch
+  // (fallback mode: our own AbortController). Its late reply, if any, is
+  // dropped — the pending entry is gone.
+  private abortHttp(id: string): void {
+    if (this.fallbackMode) {
+      this.fallbackAborts.get(id)?.abort();
+      return;
+    }
+    this.pending.delete(id);
+    this.networkWorker?.postMessage({ id: this.newRequestId(), op: "http-abort", target: id });
   }
 
   // Terminate every worker and reject every pending request.

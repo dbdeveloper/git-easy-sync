@@ -213,12 +213,16 @@ const CONFLICT_SIBLING_PATTERN =
 // (The trailing-extension group stays optional — files without a
 // dotted extension produce no .ext segment, see buildSiblingPath.)
 
-// GitHub's ceiling for a file through the API (the Git blobs endpoints:
-// "up to 100 megabytes"); bigger files need Git LFS, which this plugin does
-// not speak. A file over it is never committed — decided by its SIZE, before
-// any read (owner, 2026-10-11: a 204 MB video on the phone broke every Sync,
-// and a 204 MB re-read each pass cost 32 s).
-export const MAX_SYNC_FILE_BYTES = 100 * 1024 * 1024;
+// GitHub's ceiling for a file through the REST API; bigger files need Git
+// LFS, which this plugin does not speak. A file over it is never committed —
+// decided by its SIZE, before any read (owner, 2026-10-11: a 204 MB video on
+// the phone broke every Sync, and a 204 MB re-read each pass cost 32 s).
+//
+// ⚠️ MEASURED, not the documented "100 MB" (2026-10-11, POST /git/blobs
+// with random bytes, base64): 39.96 MiB → 201, exactly 40 MiB → 422 "Sorry,
+// your input was too large to process" (a 95 MiB file from the phone got the
+// same 422, six times over). 40 000 000 bytes keeps a margin below that.
+export const MAX_SYNC_FILE_BYTES = 40_000_000;
 
 export interface ChangeDetectorDeps {
   vault: Vault;

@@ -2,6 +2,8 @@
 // Modified by Claude Code under the attentive guidance of Vladyslav Kozlovskyy <dbdevelop@gmail.com>, 2026.
 // AGPL-3.0 — see LICENSE.
 
+import { CancelSignal } from "./cancel-signal";
+import { CancelledError } from "./errors";
 import { base64ToArrayBuffer } from "obsidian";
 
 // Dump everything reachable about a caught value into a plain object.
@@ -303,27 +305,35 @@ export async function retryUntil<T>(
   maxRetries: number = 5,
   initialDelay: number = 1000,
   backoffFactor: number = 2,
+  // "Cancel sync" (owner, 2026-10-11): no attempt starts once cancelled,
+  // and a pause in progress ends at once.
+  cancelSignal?: CancelSignal,
 ): Promise<T> {
   let retries = 0;
   let delay = initialDelay;
+  const pause = async (): Promise<void> => {
+    if (cancelSignal) await cancelSignal.sleep(delay);
+    else await new Promise((resolve) => setTimeout(resolve, delay));
+    delay *= backoffFactor;
+  };
 
   while (true) {
+    cancelSignal?.throwIfCancelled();
     let result: T;
     try {
       result = await fn();
     } catch (err) {
+      if (err instanceof CancelledError) throw err; // never retried
       if (retries < maxRetries && isRetriableError(err)) {
         retries++;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        delay *= backoffFactor;
+        await pause();
         continue;
       }
       throw err;
     }
     if (condition(result) || retries >= maxRetries) return result;
     retries++;
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    delay *= backoffFactor;
+    await pause();
   }
 }
 

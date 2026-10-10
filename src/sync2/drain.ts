@@ -83,7 +83,7 @@ import {
   readSiblingFileFromVault,
   saveConflictSiblingFile,
 } from "./conflict-siblings";
-import { NetworkError, AuthError, ValidationError, BaseFileNotInRepoError } from "../errors";
+import { NetworkError, AuthError, ValidationError, BaseFileNotInRepoError, BlobTooLargeError, CancelledError } from "../errors";
 import NetworkRetry from "./retry-network";
 import SyncStore from "./sync-store";
 import {
@@ -1962,6 +1962,15 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             deps.logger,
           );
         } catch (e) {
+          if (e instanceof BlobTooLargeError) {
+            // GitHub refused this blob for its size — final. Skip THIS entry
+            // and push the rest; a ValidationError would restart the batch
+            // and re-upload it in a loop (field 2026-10-11, 127 MB × 6 × n).
+            deps.logger?.warn("drain: GitHub refused a file as too large — skipped", {
+              path: entry.path,
+            });
+            continue;
+          }
           if (e instanceof ValidationError) {
             // Q.14: a stale uploadedBlobs record 422-ed a mid-batch
             // flush — clear the cache and restart the batch; blobs
@@ -3251,6 +3260,11 @@ function statusFromError(
   }
   if (error instanceof NetworkError) {
     return result("network-error");
+  }
+  // "Cancel sync" reached a retry loop or a request in flight
+  // (CancelSignal): the ordinary cancelled exit, not an exception.
+  if (error instanceof CancelledError) {
+    return result("cancelled");
   }
   throw error; // domain errors and bugs propagate loudly
 }

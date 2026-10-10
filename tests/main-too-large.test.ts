@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 //
-// Owner, 2026-10-11: a file over GitHub's 100 MB API limit is left out of the
+// Owner, 2026-10-11: a file over GitHub's API limit (measured: 40 MiB) is left out of the
 // commit (change-detector MAX_SYNC_FILE_BYTES). The user must be told — but
 // with the interval sync running every minute, a toast per pass would be
 // spam. Once per file per session: the log line and one pop-up.
@@ -28,8 +28,8 @@ describe("a file too large for GitHub is reported once per session", () => {
     expect(recordedNotices).toHaveLength(1);
     const text = String(recordedNotices[0].message);
     expect(text).toContain("PXL_20261009_080926016.TS.mp4");
-    expect(text).toContain("204 MB");
-    expect(text).toContain("100 MB");
+    expect(text).toContain("214 MB");
+    expect(text).toContain("40 MB");
   });
 
   it("another file still gets its own report", () => {

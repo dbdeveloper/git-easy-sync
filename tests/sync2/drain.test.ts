@@ -14,6 +14,7 @@ import {
 } from "../../src/sync2/drain";
 import { progressFilePath, replayProgress } from "../../src/sync2/vault-step-progress";
 import { MAX_SYNC_FILE_BYTES } from "../../src/sync2/change-detector";
+import { BlobTooLargeError, CancelledError } from "../../src/errors";
 import ConflictStoreV2 from "../../src/sync2/conflict-store-v2";
 import SiblingTx from "../../src/sync2/sibling-tx";
 import { mergeBlobsWithMainThreadDiff3 } from "../../src/sync2/diff3";
@@ -2884,6 +2885,41 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(r.status).toBe("ok");
     expect(dec(world.headFiles().get("note.md")!.bytes)).toBe("N\n");
     expect(world.headFiles().has("video.mp4")).toBe(false);
+  });
+
+  // Field, 2026-10-11: GitHub's 422 "input was too large" on a blob was read
+  // as a ValidationError ("head moved") and restarted the batch — the same
+  // 127 MB upload over and over. A BlobTooLargeError skips that one entry;
+  // the rest of the batch is pushed.
+  it("a BlobTooLargeError from createBlob skips that entry — the rest is pushed, no restart loop", async () => {
+    await setupAligned();
+    await stageBatch({ "big.bin": "pretend-too-large", "note.md": "N\n" });
+    const client = world.makeClient();
+    const orig = client.createBlob.bind(client);
+    let calls = 0;
+    client.createBlob = async (args) => {
+      calls++;
+      if (calls === 1) throw new BlobTooLargeError("too large");
+      return orig(args);
+    };
+    const r = await drainOnce(makeDeps({ client }));
+    expect(r.status).toBe("ok");
+    expect(calls).toBe(1); // no re-upload of the refused blob
+    expect(dec(world.headFiles().get("note.md")!.bytes)).toBe("N\n");
+    expect(world.headFiles().has("big.bin")).toBe(false);
+  });
+
+  // "Cancel sync" reaching a request in flight surfaces as CancelledError;
+  // the drain ends with its ordinary "cancelled" status, not an exception.
+  it("a CancelledError from the client mid-push ends the drain as 'cancelled'", async () => {
+    await setupAligned();
+    await stageBatch({ "big.bin": "x", "note.md": "N\n" });
+    const client = world.makeClient();
+    client.createBlob = async () => {
+      throw new CancelledError();
+    };
+    const r = await drainOnce(makeDeps({ client }));
+    expect(r.status).toBe("cancelled");
   });
 
   // §II.19 ⚠️ invariant: a completed drain leaves NO progress log behind —

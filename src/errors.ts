@@ -75,6 +75,16 @@ export class NetworkError extends SyncError {
   }
 }
 
+// The user pressed "Cancel sync" (CancelSignal). Never retried; the drain
+// maps it to its ordinary "cancelled" status (owner, 2026-10-11: cancel
+// must leave EVERY loop of sync/drain, retries and requests in flight
+// included).
+export class CancelledError extends SyncError {
+  constructor(message = "Sync cancelled") {
+    super(message);
+  }
+}
+
 // ── GitHub HTTP responses ─────────────────────────────────────────
 
 // Generic HTTP-error envelope from GitHub. Carries `status` and the
@@ -123,6 +133,17 @@ export class ConflictError extends GithubAPIError {
 // already drops the stale-deletion 422 sub-case at push time, so a
 // 422 that escapes the validator is most likely a genuine malformed
 // request that retry can't fix.
+// GitHub's 422 "Sorry, your input was too large to process" on a blob —
+// final, never retried (a 95 MiB upload was retried six times, ~47 s each,
+// field 2026-10-11). Deliberately NOT a ValidationError: the drain reads that
+// as "head moved" and restarts the batch, which re-uploaded the same blob in
+// a loop. Measured ceiling: 40 MiB (change-detector MAX_SYNC_FILE_BYTES).
+export class BlobTooLargeError extends GithubAPIError {
+  constructor(message: string, body?: unknown) {
+    super(message, 422, body);
+  }
+}
+
 export class ValidationError extends GithubAPIError {
   constructor(message: string, body?: unknown, opts?: { cause?: unknown }) {
     super(message, 422, body, opts);
