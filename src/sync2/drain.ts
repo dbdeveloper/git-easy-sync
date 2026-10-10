@@ -513,7 +513,11 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     for (const w of writes) {
       const old = existing.get(w.path);
       if (old === undefined || old.baselineSha !== w.baselineSha) continue;
-      w.mtime = old.mtime; // same sha → same size, nothing else to keep
+      w.mtime = old.mtime;
+      // The PROVEN size: the transfer's own may be the honest-0 fallback
+      // (no size from discovery, no blob loaded for a file the vault
+      // already held), and {proven mtime, 0} would never short-circuit.
+      w.size = old.size;
     }
   };
   // A cancel inside the Vault-step skips the epilogue, so the paths whose

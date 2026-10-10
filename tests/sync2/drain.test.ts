@@ -2465,6 +2465,12 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
     await stageBatch({ "local.md": "LOCAL\n" });
 
+    // Discovery without sizes (the compare path gives none): the proven
+    // size must survive, not the transfer's honest-0 fallback.
+    discoveryOverride = async (base, head) => {
+      const r = await honestDiscovery(base, head);
+      return { ...r, changes: r.changes.map((c) => ({ ...c, size: null })) };
+    };
     let writes = 0;
     const r1 = await drainOnce(
       makeDeps({
@@ -2495,9 +2501,20 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     // file this run writes — that is exactly the D.15 window.
     baselines.set(pulledNow[0], { baselineSha: await sha("older\n"), mtime: 55, size: 6 });
 
-    const r2 = await drainOnce(makeDeps());
+    // …and no store stat either (a swept or never-staged blob).
+    const noSizeStore = new Proxy(syncStore, {
+      get(t, prop, recv) {
+        if (prop === "sizeOf") return async () => null;
+        const v = Reflect.get(t, prop, recv);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+    const r2 = await drainOnce(makeDeps({ syncStore: noSizeStore }));
     expect(r2.status).toBe("ok");
-    for (const p of proven) expect(baselines.get(p)!.mtime).toBe(77);
+    for (const p of proven) {
+      expect(baselines.get(p)!.mtime).toBe(77);
+      expect(baselines.get(p)!.size).toBe(enc(files[p]).byteLength);
+    }
     for (const p of pulledNow) expect(baselines.get(p)!.mtime).toBe(0);
   });
 
