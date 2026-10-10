@@ -693,6 +693,49 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(journalAtDrain, "repo-A's journal may not drive a drain against repo-B").toBeNull();
   });
 
+  // Found 2026-10-10 while closing the journal hole above: only syncAll
+  // checked the identity. A standalone drain (startup pulse, watchdog, the
+  // interval with commit off) and a standalone commit went straight to
+  // repo B with repo A's journal, anchor and baselines.
+  const switchToRepoB = async (): Promise<DrainJournal> => {
+    await hotMetaRef.update({
+      remoteIdentity: { owner: "me", repo: "repo-A", branch: "main" },
+      lastSyncCommitSha: "commit-from-repo-A",
+    });
+    await baselinesRef.setMany([{ path: "a.md", baselineSha: "sha-a", mtime: 0, size: 1 }]);
+    const journal = (deps as unknown as { journal: DrainJournal }).journal;
+    await journal.persist(emptyDrainState());
+    (deps as never as { remoteIdentity: () => unknown }).remoteIdentity =
+      () => ({ owner: "me", repo: "repo-B", branch: "main" });
+    return journal;
+  };
+
+  it("🔴 a STANDALONE drain (startup pulse / watchdog / commit-off interval) checks the identity first", async () => {
+    const journal = await switchToRepoB();
+    let seen: unknown = "drain not reached";
+    deps.drainFn = async () => {
+      seen = {
+        journal: await journal.load(),
+        baselines: await baselinesRef.allPaths(),
+        anchor: hotMetaRef.getLastSyncCommitSha(),
+      };
+      return okResult();
+    };
+    await manager.resumeQueue();
+    expect(seen).toEqual({ journal: null, baselines: [], anchor: null });
+  });
+
+  it("🔴 a STANDALONE commit checks the identity first (no batch is built on repo A's baselines)", async () => {
+    await switchToRepoB();
+    let seen: unknown = "detector not reached";
+    deps.detector.findChanges = async () => {
+      seen = await baselinesRef.allPaths();
+      return [];
+    };
+    await manager.commitOnly();
+    expect(seen).toEqual([]);
+  });
+
   it("🔑 the FIRST observation records the identity and wipes NOTHING", async () => {
     // ⚠️ The branch that makes this safe to ship. Every install that
     // upgrades from a build without `remoteIdentity` arrives here with

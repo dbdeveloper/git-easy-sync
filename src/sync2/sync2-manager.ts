@@ -805,6 +805,11 @@ export class Sync2Manager {
       ph[name] = round1(t - mark);
       mark = t;
     };
+    // Same for EVERY commit pass (Commit, commit-file, Sync): a batch
+    // built on repo A's baselines would describe repo B wrongly. BEFORE
+    // the replay below, which must never feed repo A's lines to B.
+    await this.reconcileRemoteIdentity();
+    lap("identityMs");
     if (this.deps.invariants) await this.deps.invariants.enforce();
     lap("enforceMs");
     await this.replayProgressLog();
@@ -1009,6 +1014,12 @@ export class Sync2Manager {
       // should surface through the drain's own error path rather than
       // escaping the status machine.
       await this.deps.detector.beginScan();
+      // EVERY drain checks which repo it is about to talk to — not only
+      // syncAll (2026-10-10): the startup pulse, the watchdog and the
+      // commit-off interval reach the engine through here alone, and
+      // with a switched repo they ran repo A's journal, anchor and
+      // baselines against repo B. A no-op when the identity is unchanged.
+      await this.reconcileRemoteIdentity();
       // §II.19: a commit pass may be replaying the progress log right now;
       // drainOnce replays (and then appends to) the same file itself.
       if (this.progressReplay !== null) await this.progressReplay;

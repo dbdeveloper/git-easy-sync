@@ -2723,6 +2723,11 @@ Baseline-и пишуться **гуртом в епілозі**, не по фа�
    не чіпає — і Vault-step ВИДАЛЯЄ файл користувача. Журнал (і його conflict-branch name) належить репо A так само,
    як baseline-и: тепер стирається разом з ними (`reconcileRemoteIdentity`, тест «🔴 a repo switch also drops the
    PREVIOUS repo's drain journal»).
+   **⚠️ І ЗВІРКА РЕПО НА КОЖНОМУ ВХОДІ (того ж дня).** `reconcileRemoteIdentity` викликав лише `syncAll`. Окремий
+   drain (стартовий pulse, watchdog, інтервал при вимкненому комміті — усі через `resumeQueue`), «Sync active file»
+   і окремий Commit ішли до репо B зі станом репо A (журнал, якір, baseline-и). Тепер звірка — у двох спільних
+   точках: початок кожного `drain()` і початок кожного commit-проходу (ДО злиття журналу прогресу). Незмінна
+   ідентичність — no-op. Тести «🔴 a STANDALONE drain / commit checks the identity first».
 
 ## III. Приблизна реалізація алгоритму
 
