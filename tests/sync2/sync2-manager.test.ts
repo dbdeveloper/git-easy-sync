@@ -1,3 +1,4 @@
+import WorkerClient from "../../src/worker/worker-client";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
@@ -147,6 +148,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       return findChangesResult;
     };
     const realWriter = new BatchWriter({
+      workerClient: new WorkerClient(),
       vault: vault as never,
       selfPluginId: PLUGIN_ID,
       syncStore,
@@ -1060,6 +1062,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
 
     const setup = async (drainClaimedTail: boolean): Promise<string> => {
       const writer = new BatchWriter({
+        workerClient: new WorkerClient(),
         vault: vault as never,
         selfPluginId: PLUGIN_ID,
         syncStore: deps.syncStore,

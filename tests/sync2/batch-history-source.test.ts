@@ -1,3 +1,4 @@
+import WorkerClient from "../../src/worker/worker-client";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
@@ -29,6 +30,7 @@ describe("BatchHistorySource", () => {
 
   const writer = (): BatchWriter =>
     new BatchWriter({
+      workerClient: new WorkerClient(),
       vault: vault as never,
       selfPluginId: PLUGIN_ID,
       syncStore,

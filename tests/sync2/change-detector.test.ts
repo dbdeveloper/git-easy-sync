@@ -1,3 +1,4 @@
+import WorkerClient from "../../src/worker/worker-client";
 import {
   describe,
   it,
@@ -1693,6 +1694,7 @@ describe("COMMIT-PASS-PERF Крок 2 — one read per changed file, end to end"
       autoCanonicalize: () => canonicalize,
     });
     const writer = new BatchWriter({
+      workerClient: new WorkerClient(),
       vault: counting,
       selfPluginId: SELF_PLUGIN_ID,
       syncStore,

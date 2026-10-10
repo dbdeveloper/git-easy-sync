@@ -1,3 +1,4 @@
+import WorkerClient from "../../src/worker/worker-client";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
@@ -39,6 +40,7 @@ describe("sync_store sweep vs a concurrent commit / delete (COMMIT-PASS-PERF §6
     bin = new DeletedStore({ vault: vault as never, selfPluginId: PLUGIN_ID, syncStore });
     await bin.load();
     writer = new BatchWriter({
+      workerClient: new WorkerClient(),
       vault: vault as never,
       selfPluginId: PLUGIN_ID,
       syncStore,
@@ -159,6 +161,7 @@ describe("sync_store sweep vs a concurrent commit / delete (COMMIT-PASS-PERF §6
       store,
       bin: new DeletedStore({ vault: v, selfPluginId: PLUGIN_ID, syncStore: store }),
       writer: new BatchWriter({
+        workerClient: new WorkerClient(),
         vault: v,
         selfPluginId: PLUGIN_ID,
         syncStore: store,

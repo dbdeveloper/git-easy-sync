@@ -8,6 +8,7 @@
 // the branch's current tree before the first syncAll, so the manager
 // starts from a sane baseline.
 
+import WorkerClient from "../../../../src/worker/worker-client";
 import { mkdtempSync, rmSync } from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -164,6 +165,7 @@ export async function createSync2Client(
   const syncStore = new SyncStore({ vault, selfPluginId: SELF_PLUGIN_ID });
   const journal = new DrainJournal({ vault, selfPluginId: SELF_PLUGIN_ID });
   const batchWriter = new BatchWriter({
+    workerClient: new WorkerClient(),
     vault,
     selfPluginId: SELF_PLUGIN_ID,
     syncStore,

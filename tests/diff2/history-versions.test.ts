@@ -1,3 +1,4 @@
+import WorkerClient from "../../src/worker/worker-client";
 import { describe, it, expect, beforeEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
@@ -196,6 +197,7 @@ describe("enumeratePushQueueVersions", () => {
       selfPluginId: SELF_PLUGIN_ID,
     });
     writer = new BatchWriter({
+      workerClient: new WorkerClient(),
       vault: vault as unknown as import("obsidian").Vault,
       selfPluginId: SELF_PLUGIN_ID,
       syncStore,

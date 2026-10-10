@@ -1310,6 +1310,8 @@ export default class GitHubSyncPlugin extends Plugin {
       selfPluginId: manifest.id,
     });
     const batchWriter = new BatchWriter({
+      // The ONE pool — terminated in onunload (see BatchWriterDeps).
+      workerClient: this.workerClient,
       vault: this.app.vault,
       selfPluginId: manifest.id,
       syncStore,

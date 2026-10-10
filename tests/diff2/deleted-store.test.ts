@@ -1,3 +1,4 @@
+import WorkerClient from "../../src/worker/worker-client";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
@@ -212,6 +213,7 @@ describe("DeletedStore (§5.2.1)", () => {
     ).toBe(false);
 
     const writer = new BatchWriter({
+      workerClient: new WorkerClient(),
       vault: vault as never,
       selfPluginId: PLUGIN_ID,
       syncStore,

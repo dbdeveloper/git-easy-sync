@@ -51,7 +51,7 @@
 //   mtimes, handing .obsidian/ tie-breaks to remote).
 
 import { normalizePath, type Vault } from "obsidian";
-import WorkerClient from "../worker/worker-client";
+import type WorkerClient from "../worker/worker-client";
 import SyncStore, { PIN_OWNER_COMMIT } from "./sync-store";
 import { canonicalizeBytes, shouldCanonicalize } from "./text-normalize";
 import { newBatchId, parseTimestampId } from "./timestamp-id";
@@ -88,9 +88,12 @@ export interface BatchWriterDeps {
   // Same contract as PushQueue: when the toggle is off, text files
   // are stored byte-exact — no CRLF/BOM rewrite. Default on.
   autoCanonicalize?: () => boolean;
-  // Shared worker orchestra; when omitted a fallback-mode client
-  // hashes inline on the main thread (tests).
-  workerClient?: WorkerClient;
+  // The plugin's ONE worker orchestra (main.ts owns and terminates it).
+  // REQUIRED (owner, 2026-10-11): an omitted client used to be replaced by
+  // `new WorkerClient()` — assumed to be the main-thread fallback, as in
+  // tests, but in Obsidian it started a second pool of 5 REAL workers that
+  // nobody terminated; every plugin reload leaked 5 more.
+  workerClient: WorkerClient;
   // Clock override for deterministic batch ids in tests.
   now?: () => Date;
   // HISTORY-DELETED §5.2.1 — the Deleted bin's hand-off seam. A
@@ -122,7 +125,7 @@ export default class BatchWriter {
     this.syncStore = deps.syncStore;
     this.logger = deps.logger;
     this.autoCanonicalize = deps.autoCanonicalize ?? (() => true);
-    this.workerClient = deps.workerClient ?? new WorkerClient();
+    this.workerClient = deps.workerClient;
     this.now = deps.now ?? (() => new Date());
     this.deletedBin = deps.deletedBin;
     this.queueRoot = normalizePath(

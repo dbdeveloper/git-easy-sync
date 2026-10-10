@@ -1,3 +1,4 @@
+import WorkerClient from "../../src/worker/worker-client";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
@@ -50,6 +51,7 @@ describe("BatchWriter (Phase 2 group B)", () => {
     };
   }): BatchWriter =>
     new BatchWriter({
+      workerClient: new WorkerClient(),
       vault: (opts?.vault ?? vault) as never,
       selfPluginId: PLUGIN_ID,
       syncStore: opts?.syncStore ?? syncStore,
