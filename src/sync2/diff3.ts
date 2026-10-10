@@ -263,6 +263,13 @@ export async function _diff3(
     // consulted (3.b.*.c/d) — deliberately NO 4.6.b asymmetry here.
     if (local.mode === DELETED) return { kind: "file", file: remote };
     if (remote.mode === DELETED) return { kind: "file", file: local };
+    // 3.b.1.e with NO record to compare against (base=null — both sides
+    // created the file on their own, e.g. a NEW device's default config on
+    // its first Sync) → the REPOSITORY wins (owner, 2026-10-10). The
+    // newer-mtime rule handed it to the freshly created local defaults: a
+    // new phone vault overwrote the repo's .obsidian/core-plugins.json.
+    // A new device adopts the vault's settings; it does not impose its own.
+    if (base.sha === null) return { kind: "file", file: remote };
     // 3.b.*.e — THE ONLY place in the whole algorithm where mtimes
     // are compared ("зроблено СВІДОМО"). Fallback semantics (owner):
     // ambiguity → remote wins. local.mtime==0 (legacy batch, stat
@@ -522,6 +529,8 @@ export function needsObsidianMtimeTiebreak(
   if (localUnmovedRemoteLive(base, local, remote)) return false; // 3.b.1.b
   // delete-vs-edit (3.b.*.c/d) — the LIVE side wins, no mtime involved.
   if (local.mode === DELETED || remote.mode === DELETED) return false;
+  // base=null → the repository wins, no mtime involved (owner, 2026-10-10).
+  if (base.sha === null) return false;
   return true; // 3.b.*.e
 }
 

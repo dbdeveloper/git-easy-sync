@@ -495,11 +495,18 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
     expect(r2).toEqual({ kind: "file", file: local });
   });
 
-  it("A1.5/A1.6: .obsidian, base=null, both real and different → newer mtime wins, NO conflict (3.b.1.e — contrast to A.7)", async () => {
-    const newer = side(OB, "L", { mtime: 2000 });
-    const older = side(OB, "R", { mtime: 1000 });
-    const r1 = await _diff3(makeDeps(), t(emptyFileInfo(), older), newer, HEAD);
-    expect(r1).toEqual({ kind: "file", file: newer });
+  // Owner, 2026-10-10 (field: a NEW phone vault's default
+  // .obsidian/core-plugins.json overwrote the repo's on the first Sync,
+  // because the freshly created file was "newer"). With NO record to
+  // compare against (base=null — both sides created the file on their
+  // own), the REPOSITORY wins: a new device adopts the vault's settings
+  // instead of imposing its defaults. With a common base, "newer wins"
+  // stays (3.b.2.e, A1.13/A1.14).
+  it("A1.5/A1.6: .obsidian, base=null, both real and different → the REMOTE wins whatever the mtimes, NO conflict (3.b.1.e)", async () => {
+    const localNewer = side(OB, "L", { mtime: 2000 });
+    const remoteOlder = side(OB, "R", { mtime: 1000 });
+    const r1 = await _diff3(makeDeps(), t(emptyFileInfo(), remoteOlder), localNewer, HEAD);
+    expect(r1).toEqual({ kind: "file", file: remoteOlder });
 
     const r2 = await _diff3(
       makeDeps(),
@@ -509,6 +516,12 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
     );
     expect(r2.kind).toBe("file");
     expect((r2 as { file: FileInfo }).file.mtime).toBe(3000);
+  });
+
+  it("A1.5b: base=null needs NO remote mtime — no network fill is asked for", () => {
+    expect(
+      needsObsidianMtimeTiebreak(t(emptyFileInfo(), side(OB, "R", { mtime: null })), side(OB, "L", { mtime: 2000 })),
+    ).toBe(false);
   });
 
   it("A1.7/A1.8: .obsidian, base=A, one side unchanged → the changed side wins (3.b.2.a/b)", async () => {

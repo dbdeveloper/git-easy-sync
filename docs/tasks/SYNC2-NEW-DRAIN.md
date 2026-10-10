@@ -2718,6 +2718,11 @@ def _diff3(tracked: FileInfo, local: FileInfo, head_hash: string):  # return (Fi
            # 3.b.1.d/3.b.2.d
            if remote.mode == DELETED:
               return (local, null)   
+           # 3.b.1.e, base=null (обидва створили файл незалежно — напр. стандартні налаштування
+           # НОВОГО пристрою на першому Sync): перемагає РЕПОЗИТОРІЙ, mtime не порівнюється
+           # (власник, 2026-10-10; поле: новий vault на телефоні перезаписав core-plugins.json).
+           if base.sha == null:
+              return (remote, null)
            # 3.b.1.e/3.b.2.e — ЄДИНЕ місце в усьому алгоритмі, де mtime порівнюються між собою
            # (§II.1 п.3.b, "зроблено СВІДОМО"). ⚠️ Щоб це правило працювало, `local.mtime` мусить
            # бути ЗАПОВНЕНИЙ — див. §III головний цикл, "ДЖЕРЕЛО `local.mtime`"
@@ -5941,9 +5946,11 @@ seeding) + рідший integration-рівень (реальний GitHub, пі�
    (3.b.1.c)
 4. Дзеркально до 3: `remote=deleted`, local — реальний вміст → local перемагає (3.b.1.d)
 5. `.obsidian/app.json`, `base=null`, `local≠remote`, обидві сторони — реальний вміст (жодна не
-   `deleted`), `local.mtime > remote.mtime` → local перемагає, БЕЗ MANUAL_CONFLICT (3.b.1.e) —
-   контрастний тест до A.7 (та сама форма вхідних даних поза `.obsidian/` дає справжню колізію)
-6. Дзеркально до 5: `remote.mtime > local.mtime` → remote перемагає (3.b.1.e)
+   `deleted`) → **remote перемагає НЕЗАЛЕЖНО від mtime**, БЕЗ MANUAL_CONFLICT (3.b.1.e; змінено
+   2026-10-10 власником — раніше перемагав новіший mtime, і новий пристрій нав'язував репозиторію
+   свої стандартні налаштування) — контрастний тест до A.7
+6. Те саме при `remote.mtime > local.mtime` → remote (3.b.1.e); mtime при base=null не потрібен
+   (`needsObsidianMtimeTiebreak` → false, мережевого запиту немає)
 7. `.obsidian/hotkeys.json`, `base=A`, `remote` не змінився (`remote=null` або `remote==base`),
    `local≠base` → local перемагає (3.b.2.a)
 8. `.obsidian/hotkeys.json`, `base=A`, `local` не змінився (`local=null` або `local==base`),
