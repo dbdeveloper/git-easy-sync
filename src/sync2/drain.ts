@@ -493,25 +493,23 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   const pushedCommits: string[] = [];
   const vaultStepWrites: string[] = [];
   const vaultStepRemoves: string[] = [];
-  // Paths the Vault-step has FINISHED with a plain pull (written, or the
-  // remote deletion applied): the vault now holds the remote version. A
-  // cancel settles their baselines (see settleOnCancel) — owner's field
-  // report, 2026-10-10.
-  const vaultStepSettled: string[] = [];
-  // A cancel inside the Vault-step skips the epilogue, so the files it has
-  // ALREADY pulled had no baselines — and the next sync's commit pass (it
-  // runs BEFORE the resuming drain and knows no journal) reported them as
-  // local additions: 345 "added" files after a cancelled first pull on a
-  // phone. Those files ARE in sync with the remote, so their baselines are
-  // written here — the epilogue's step 1, for them only. The anchor does
-  // NOT move: the resume still comes from rediscovering the remote changes,
-  // and a settled file then reads as base == local == remote, a no-op.
+  // A cancel inside the Vault-step skips the epilogue, so the paths whose
+  // outcome this run had ALREADY fixed had no baselines — and the next
+  // sync's commit pass (it runs BEFORE the resuming drain and knows no
+  // journal) reported them as local additions: 345 "added" files after a
+  // cancelled first pull on a phone, and the 7 local files that run had
+  // already PUSHED (owner's field reports, 2026-10-10). Such a path is in
+  // sync with the remote, so its baseline is written here — the
+  // epilogue's step 1, for it only. The anchor does NOT move: the resume
+  // still comes from rediscovering the remote changes.
   const settleOnCancel = async (): Promise<void> => {
     const writes: Array<{ path: string; baselineSha: string; mtime: number; size: number }> = [];
     const removals: string[] = [];
-    for (const path of vaultStepSettled) {
-      const tracked = state.trackedFiles.get(path);
-      if (!tracked || tracked.remote.sha === null) continue;
+    for (const [path, tracked] of state.trackedFiles) {
+      // base == remote: pulled (written / deletion applied), pushed, or
+      // equal to the remote from the start. A conflict is not settled.
+      if (tracked.remote.sha === null || tracked.isManualConflict) continue;
+      if (tracked.base.sha !== tracked.remote.sha) continue;
       if (tracked.remote.mode === DELETED || tracked.remote.sha === DELETED_SHA_HASH) {
         removals.push(path);
         continue;
@@ -2698,7 +2696,6 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         vaultStepRemoves.push(path);
       }
       tracked.base = tracked.remote;
-      vaultStepSettled.push(path);
       continue;
     }
     let bytes = v.blob;
@@ -2799,7 +2796,6 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     // would defeat the change detector's stat short-circuit forever).
     if (tracked.remote.size === null) tracked.remote.size = bytes.byteLength;
     tracked.base = tracked.remote;
-    vaultStepSettled.push(path);
   }
 
   // ── EPILOGUE (§III steps 1-4; step 5 = the sync_store sweep).

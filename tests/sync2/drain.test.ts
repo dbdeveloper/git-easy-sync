@@ -2393,6 +2393,47 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(vaultFiles.files.get(written)!.content).toBe("REMOTE AGAIN\n");
   });
 
+  // Field (2026-10-10, phone): after a cancelled first sync the next commit
+  // pass re-committed the 7 local files the cancelled run had ALREADY
+  // pushed. Their batch was consumed and removed at the batch end, and
+  // their baselines were never written (only the epilogue writes them),
+  // so the commit pass took them for new additions. A path whose outcome
+  // the run already fixed (base == remote: pushed, equal to the remote,
+  // or pulled) gets its baseline at the cancel, like the pulled ones.
+  it("S1 cancel (Vault-step): a local file the run ALREADY PUSHED gets its baseline too", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(files);
+    baseCommit = null;
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ "local.md": "LOCAL\n" });
+
+    let writes = 0;
+    const r1 = await drainOnce(
+      makeDeps({
+        cancelRequested: () => writes >= 2,
+        vaultFiles: new Proxy(vaultFiles, {
+          get(t, prop, recv) {
+            if (prop === "write") {
+              return async (...args: unknown[]) => {
+                writes++;
+                return (t as unknown as Record<string, (...a: unknown[]) => unknown>).write(...args);
+              };
+            }
+            return Reflect.get(t, prop, recv);
+          },
+        }) as unknown as typeof vaultFiles,
+      }),
+    );
+    expect(r1.status).toBe("cancelled");
+    expect(r1.pushedCommits).toHaveLength(1);
+    expect(batches[0].removed).toBe(true); // the queue no longer holds it
+    expect(baselines.get("local.md")?.baselineSha).toBe(await sha("LOCAL\n"));
+    // A path the Vault-step had NOT reached is not settled.
+    const notYet = Object.keys(files).find((p) => !r1.vaultStepWrites.includes(p))!;
+    expect(baselines.has(notYet)).toBe(false);
+  });
+
   // The field shape the two tests above missed: the phone's first sync
   // ALSO had local additions (its own .obsidian files). With a local batch
   // the drain persists its journal at the batch end — BEFORE the
