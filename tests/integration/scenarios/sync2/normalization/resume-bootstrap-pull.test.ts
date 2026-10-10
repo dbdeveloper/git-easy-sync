@@ -27,16 +27,20 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 
-// Resume of bootstrap-from-remote. Sync2's `bootstrapFromRemote`
-// iterates remote tree entries and downloads each blob in turn. If
-// the network drops mid-loop (or the user kills Obsidian), the
-// already-downloaded files persist on disk and in the snapshot store,
-// but lastSyncCommitSha stays null because it's only set after the
-// loop completes — so the next syncAll re-enters bootstrap. The
-// resume-skip clause in `bootstrapFromRemote` keys off the existing
-// snapshot entry: if the local file's recorded remoteSha matches the
-// blob SHA the tree announces and the file actually exists on disk,
-// we skip the getBlob call entirely.
+// Resume of an interrupted FIRST pull (cold start: no anchor, no
+// baselines). ⚠️ Rewritten 2026-10-10: this used to describe
+// `bootstrapFromRemote` and a "snapshot store", both deleted at THE
+// SWITCH. The drain now pulls the cold tree in its Vault-step; a drop
+// mid-loop leaves the already-written files on disk and the anchor
+// (lastSyncCommitSha) still null — it is set only by the epilogue — so
+// the next syncAll cold-starts again. Why it does NOT re-download what
+// already landed (both verified in drain.ts):
+//   1. the progress log (SYNC2-NEW-DRAIN §II.19): every written file got
+//      a line, replayed into the baselines first, so cold discovery
+//      (full tree vs baselines) does not even list those paths;
+//   2. independently, a file whose vault content already equals the
+//      remote sha is settled without a blob fetch ("the live vault
+//      already holds exactly this content").
 //
 // This test also serves as the deep-nesting smoke test for sync2:
 // seeded paths include depths 1, 2, 3, and 4 — a real-world Obsidian
@@ -63,7 +67,7 @@ const isGetBlob = (url: string, method: string): boolean =>
   method === "GET" && /\/git\/blobs\/[0-9a-f]+/.test(url);
 
 describe.skipIf(!integrationEnabled())(
-  "sync2 resume — bootstrap-from-remote skips already-downloaded files",
+  "sync2 resume — an interrupted first pull skips already-downloaded files",
   () => {
     let client: Sync2TestClient | undefined;
     let branch: string;
@@ -88,12 +92,13 @@ describe.skipIf(!integrationEnabled())(
     });
 
     it(
-      "kill during bootstrap getBlob loop, then resume → all depths land, no re-download",
+      "kill during the first pull's getBlob loop, then resume → all depths land, no re-download",
       async () => {
         // Seed five syncable files at varying depths, mixing text and
-        // binary. Path depth is the headline coverage here — sync2's
-        // bootstrap calls ensureParentDir to create intermediate
-        // folders, and no other integration test exercises >1 level.
+        // binary. Path depth is the headline coverage here — the drain's
+        // vault writes call ensureParentDir (vault-file-reader.ts) to
+        // create intermediate folders, and no other integration test
+        // exercises >1 level.
         await writeRemoteFile(
           branch,
           "root.md",
@@ -151,7 +156,7 @@ describe.skipIf(!integrationEnabled())(
         );
 
         // Some files exist on disk; lastSyncCommitSha must still be
-        // null because the bootstrap loop never reached its tail.
+        // null because the drain never reached its epilogue.
         expect(client.hotMeta.getLastSyncCommitSha()).toBeNull();
         const filesAfterCrash = listAllUnder(client.vaultPath).filter(
           (p) => !p.startsWith(".obsidian/"),
@@ -167,13 +172,13 @@ describe.skipIf(!integrationEnabled())(
         await sync2AllAndAssertNoErrors(client);
 
         // Resume MUST be strictly cheaper than a from-scratch
-        // bootstrap. Without the skip clause the second pass would
+        // first pull. Without the two rules above the second pass would
         // call getBlob for every syncable file in the tree
         // (counter.count === totalSyncable). We assert two things:
         //   1. The second pass downloaded fewer than total — proof
         //      the skip kicked in at all.
-        //   2. It downloaded at least 1 — proof bootstrap actually
-        //      ran (didn't silently skip everything).
+        //   2. It downloaded at least 1 — proof the resumed pull
+        //      actually ran (didn't silently skip everything).
         // We don't pin counter.count to an exact value: the precise
         // number of files landed before the crash varies a bit by
         // GitHub timing (a slow getBlob can shift which call the
@@ -209,8 +214,8 @@ describe.skipIf(!integrationEnabled())(
         );
         expect(localPng.equals(pngBytes)).toBe(true);
 
-        // Snapshot now points at a real head — third call would route
-        // through Case 3 fast-path, not bootstrap again.
+        // The anchor now points at a real head — the next sync is an
+        // incremental one (base…head delta), not another cold start.
         expect(client.hotMeta.getLastSyncCommitSha()).not.toBeNull();
       },
       210_000,
@@ -220,8 +225,8 @@ describe.skipIf(!integrationEnabled())(
 
 // Local helper: depth-first walk of a vault dir on disk, returning
 // vault-relative paths of every file. Used to count what landed
-// before the crash without depending on the snapshot store (which
-// the crash might have left in an awkward state).
+// before the crash without depending on the baselines (which the
+// crash might have left half-written).
 function listAllUnder(root: string): string[] {
   const out: string[] = [];
   const walk = (dir: string, prefix: string): void => {

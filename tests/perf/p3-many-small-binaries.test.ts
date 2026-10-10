@@ -15,20 +15,21 @@ import {
 import { deterministicBytes, timed } from "./perf-helpers";
 
 // P3 — 50 small (~1 KB) deterministic binaries uploaded in one
-// sync. Stresses the createBlob parallelism in TreeBuilder. All 50
-// createBlob calls fire concurrently (Promise.allSettled); if some
-// future change serializes the loop, the wall-clock cost would
-// roughly multiply by 50 and this baseline would scream.
+// sync. Measures the per-request overhead of the createBlob path in the
+// tree accumulator. ⚠️ Updated 2026-10-10: this used to describe 50
+// CONCURRENT uploads (Promise.allSettled in the old TreeBuilder); the
+// uploads are SEQUENTIAL by design now (owner: network and memory are
+// not elastic on a phone), so this baseline is ~50 × one round trip.
 //
 // Each binary is ~1 KB of deterministic noise — small enough that
 // network bandwidth isn't the bottleneck (we're measuring per-
-// request overhead and parallelism), large enough to be a distinct
+// request overhead), large enough to be a distinct
 // blob (no SHA collisions across the 50).
 //
 // Output:
 //   PERF_BASELINE {"name":"P3-50bin","ms":...,"files":50,"bytesEach":1024}
 describe.skipIf(!integrationEnabled())(
-  "P3 — 50 small binaries upload baseline (parallelism stress)",
+  "P3 — 50 small binaries upload baseline (per-request overhead)",
   () => {
     let client: Sync2TestClient | undefined;
     let branch: string;

@@ -36,10 +36,11 @@ import {
 //
 // Setup: trigger a conflict on a path. After registration, the
 // user keeps editing the same file locally. The next sync's
-// findChanges sees the edit and (post-7c) enqueueOrMerge no longer
-// filters in-conflict paths; processBatch's partition step routes
-// the edit to the per-device conflict branch as a new commit on
-// top of the previous "ours snapshot". Other devices stay
+// findChanges sees the edit and queues it like any other; the drain's
+// STEP2 (SYNC2-NEW-DRAIN §II.6 — "while in conflict, every local edit
+// goes to the CONFLICT branch, never to main") pushes it to the
+// per-device conflict branch as a new commit on top of the previous
+// "ours snapshot". Other devices stay
 // shielded — main never sees these edits until resolution. After
 // the user deletes the sibling, the next sync pushes the
 // accumulated ours to main.

@@ -28,19 +28,21 @@ import {
 // (here: a different branch on the same int-test repo) must re-adopt
 // cleanly, without leaking content from the previous one.
 //
-// ⚠️ THE MECHANISM NAMED HERE IS GONE (corrected 2026-10-03). This
-// comment used to credit `reconcileRemoteIdentity`, a snapshot/queue
-// wipe, and `bootstrapFromRemote` — all three were deleted at THE
-// SWITCH, and sync2-manager.ts lists each as deliberately absent. The
-// test kept passing because it asserts the OUTCOME, which is exactly
-// how a stale explanation survives: nothing fails when the reason is
-// wrong, only when the result is.
+// ⚠️ MECHANISM HISTORY — re-checked 2026-10-10 against the code. This
+// comment once credited `reconcileRemoteIdentity`, a snapshot/queue wipe
+// and `bootstrapFromRemote`; all three were deleted at THE SWITCH, and
+// the comment was then corrected to the force-push-class explanation.
+// `reconcileRemoteIdentity` was RESTORED the same day (2026-10-03,
+// sync2-manager.ts) and since 2026-10-10 runs at the start of EVERY
+// drain and commit pass, not only syncAll. `bootstrapFromRemote` stays
+// gone.
 //
-// What actually handles it now: a repo switch reads as the FORCE-PUSH
-// class (§6.4) — the stale anchor is no longer an ancestor, `compare`
-// answers 404, discovery falls back to a full-tree diff against the
-// cold baselines, and per-path rules decide. A conflict storm there is
-// recorded as a feature rather than a defect.
+// What handles it now: the recorded identity (owner, repo, branch) no
+// longer matches settings → the progress log, the drain journal, the
+// baselines, the anchor, the conflict-branch name, the queue and the
+// conflict records are wiped; the next drain is a COLD START — no
+// anchor, discovery diffs the full tree against the (empty) baselines,
+// and per-path rules decide.
 
 describe.skipIf(!integrationEnabled())(
   "sync2 I6 — repo/branch switch auto-detects and re-adopts",
@@ -98,9 +100,10 @@ describe.skipIf(!integrationEnabled())(
         // user edits the field in the settings tab.
         client.settings.githubBranch = branchB;
 
-        // Next syncAll: reconcileRemoteIdentity sees branch changed,
-        // wipes snapshot + push-queue, then bootstrapFromRemote runs
-        // against branchB and pulls B's content into the same vault.
+        // Next syncAll: reconcileRemoteIdentity sees the branch changed
+        // and wipes repo-A state (see the header); the drain then
+        // cold-starts against branchB and pulls B's content into the
+        // same vault.
         await sync2AllAndAssertNoErrors(client);
 
         expect(

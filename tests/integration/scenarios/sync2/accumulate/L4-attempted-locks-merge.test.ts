@@ -22,9 +22,10 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 
-// L4 — the attempted-marker rule: once processBatch has touched a
-// batch even once (even just to fail), it's frozen against further
-// mergeIntoLatestPending calls. With consolidateCommits=ON, a
+// L4 — the attempted-marker rule: once the drain has touched a batch
+// even once (even just to fail — it carries `.attempted`), it is frozen
+// against consolidation (BatchWriter.consolidateIntoTail backs off on
+// that marker). With consolidateCommits=ON, a
 // failed batch does NOT absorb subsequent sync clicks — they get
 // fresh batches. Result: multiple commits in queue, each is its own
 // batch, FIFO drained when the network returns.
@@ -99,7 +100,7 @@ describe.skipIf(!integrationEnabled())(
         expect(b1.files).toEqual(["alpha.md"]);
 
         // Lift the fault and click Sync again with NEW changes. Under
-        // attempted-marker rules, mergeIntoLatestPending skips B1 →
+        // attempted-marker rules, consolidateIntoTail skips B1 →
         // B2 is a fresh separate batch even though accumulate=ON.
         installRequestFaultInjector(null);
         await client.vault.adapter.write("beta.md", "beta v1\n");

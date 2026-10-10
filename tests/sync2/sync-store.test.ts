@@ -310,7 +310,8 @@ describe("SyncStore (§VIII F)", () => {
 
 // Byte-transport fast path (MASTER-PLAN §2.2 п.5): when the adapter
 // exposes getResourcePath, bytes travel via WebView fetch — the
-// pattern field-proven in PushQueue.readFile because the plain
+// pattern field-proven in the old PushQueue.readFile (deleted at THE
+// SWITCH) because the plain
 // readBinary bridge blocked mobile sync on files >1 MB. Validation
 // (hash-on-load) is transport-independent.
 describe("SyncStore fast-path transport", () => {

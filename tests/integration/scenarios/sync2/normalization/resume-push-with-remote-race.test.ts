@@ -83,11 +83,11 @@ describe.skipIf(!integrationEnabled())(
         );
 
         client = await createSync2Client({ branch });
-        // Prime: bootstrapFromRemote pulls notes.md (canonical bytes,
-        // no normalisation rewrite) + enforce writes invariant
-        // gitignores + push merges them onto the branch. After this
-        // lastSyncCommitSha = C0 and notes.md at C0 carries the
-        // baseline content.
+        // Prime: the first sync cold-starts — the drain pulls notes.md
+        // (remote bytes as-is: canonicalization exists only on the
+        // commit side), enforce() writes the invariant .gitignore files
+        // and the drain pushes them. After this lastSyncCommitSha = C0
+        // and notes.md at C0 carries the baseline content.
         await sync2AllAndAssertNoErrors(client);
 
         // Stage one text file edit (insertion in the middle) plus a

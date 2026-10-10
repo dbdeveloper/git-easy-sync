@@ -29,8 +29,10 @@ import {
 // but on the push side: when `createBlob` fails mid-batch (network
 // drop, kill, etc.), the SHAs of the binaries that DID make it
 // through must persist somewhere durable so the retry can skip them.
-// PushQueue stores them in the batch's .meta.json (uploadedBlobs
-// map); TreeBuilder consults the map before each createBlob.
+// Each createBlob success is recorded at once in `uploaded-blobs.json`
+// inside the batch dir (UploadedBlobs, tree-accumulator.ts); the tree
+// accumulator consults it before every upload. Large text takes the
+// same route since 2026-10-10 — see resume-push-big-text.test.ts.
 //
 // Why this matters: GitHub deduplicates blobs by content SHA, so
 // repeat uploads don't grow storage — but the bytes ARE re-sent over
@@ -112,7 +114,7 @@ describe.skipIf(!integrationEnabled())(
         await sync2AllAndAssertNoErrors(client);
 
         // binaries at varying depths. PNG extension to keep
-        // `hasTextExtension` returning false → tree-builder routes
+        // `hasTextExtension` returning false → the tree accumulator routes
         // them through createBlob.
         const paths = [
           "attachments/a.png",
