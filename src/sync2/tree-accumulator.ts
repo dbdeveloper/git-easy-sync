@@ -35,9 +35,9 @@
 // re-upload, never a per-file "does the server have this sha" query
 // (asking costs exactly the round-trips this module exists to avoid).
 
-import { arrayBufferToBase64, normalizePath, type Vault } from "obsidian";
+import { normalizePath, type Vault } from "obsidian";
 import { NewTreeRequestItem } from "../github/client";
-import { hasTextExtension } from "../utils";
+import { encodeBase64, hasTextExtension } from "../utils";
 import { utf8RoundTrip } from "./text-normalize";
 import { DELETED } from "./diff3";
 
@@ -233,7 +233,7 @@ export async function addFileToTree(
   }
   if (blob === null) {
     blob = await client.createBlob({
-      content: arrayBufferToBase64(f.blob),
+      content: encodeBase64(f.blob),
       encoding: "base64",
       retry: true,
     });

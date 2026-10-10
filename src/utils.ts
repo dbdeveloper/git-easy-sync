@@ -331,3 +331,33 @@ export async function retryUntil<T>(
 // 2026-10-02. Both were callers' helpers from before THE SWITCH —
 // base64 decoding moved into the worker path, and the one UI that
 // copied text was replaced. Neither had a caller or a test.
+
+// ── base64 for uploads (owner, 2026-10-11) ──────────────────────────
+// NOT Obsidian's arrayBufferToBase64: it pushes one string PER BYTE into an
+// array and joins it. Measured on a Pixel 6 Pro: 100 MB took 1.7 s through a
+// 100-million-element array, and above 128 MiB V8 refuses the array
+// ("RangeError: Invalid array length") — the crash a 204 MB video caused.
+//
+// The engine's own Uint8Array.prototype.toBase64 where it exists (100 MB in
+// 0.06 s on that phone, byte-identical), else btoa over chunks that are a
+// multiple of 3 bytes — so no chunk but the last carries padding, and the
+// joined string is exactly the one-shot encoding (0.7 s per 100 MB, no
+// ceiling).
+export const BASE64_CHUNK_BYTES = 3 * 16384;
+
+export function encodeBase64Chunked(data: ArrayBuffer | Uint8Array): string {
+  const u = data instanceof Uint8Array ? data : new Uint8Array(data);
+  const parts: string[] = [];
+  for (let i = 0; i < u.length; i += BASE64_CHUNK_BYTES) {
+    const chunk = u.subarray(i, Math.min(i + BASE64_CHUNK_BYTES, u.length));
+    parts.push(btoa(String.fromCharCode.apply(null, chunk as unknown as number[])));
+  }
+  return parts.join("");
+}
+
+export function encodeBase64(data: ArrayBuffer | Uint8Array): string {
+  const u = data instanceof Uint8Array ? data : new Uint8Array(data);
+  const native = (u as unknown as { toBase64?: () => string }).toBase64;
+  if (typeof native === "function") return native.call(u);
+  return encodeBase64Chunked(u);
+}

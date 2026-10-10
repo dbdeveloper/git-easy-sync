@@ -54,7 +54,8 @@
 // other eight sites stay quiet. What remains of Phase 6 here is the
 // §VIII D/K crash matrix.
 
-import { arrayBufferToBase64, type Vault } from "obsidian";
+import { type Vault } from "obsidian";
+import { encodeBase64 } from "../utils";
 import { isOwnPluginRecoverableFile } from "./plugin-update-bootloader";
 import { MAX_SYNC_FILE_BYTES } from "./change-detector";
 import { pluginRootOf, readPluginVersion } from "./plugin-js";
@@ -1402,7 +1403,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           const r = await deps.retry.run(() =>
             deps.client.seedBareRepoWithFile({
               path: seedEntry.path,
-              contentBase64: arrayBufferToBase64(bytes),
+              contentBase64: encodeBase64(bytes),
               message: deps.seedMessage
                 ? deps.seedMessage(deps.now())
                 : deps.commitMessage(claimed.meta.createdAt),
@@ -1611,7 +1612,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       }
       const r = await deps.retry.run(() =>
         deps.client.createBlob({
-          content: arrayBufferToBase64(local.blob!),
+          content: encodeBase64(local.blob!),
           encoding: "base64",
           retry: true,
         }),
