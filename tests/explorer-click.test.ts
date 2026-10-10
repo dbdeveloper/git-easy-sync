@@ -66,3 +66,21 @@ describe("explorerClickTarget", () => {
     ).toBeNull();
   });
 });
+
+// Field diagnostic (2026-10-10): the handler saw only ONE tab per area. Obsidian's
+// iterateLeaves STOPS as soon as the callback returns something truthy, and
+// `(l) => leaves.push(l)` returns the new length. allLeaves must collect them all.
+describe("allLeaves", () => {
+  it("🔑 collects EVERY leaf from an iterator that stops on a truthy return (as Obsidian's does)", async () => {
+    const { allLeaves } = await import("../src/explorer-click");
+    const areas = [["a", "b", "c"], ["explorer"], ["backlinks", "outline"]];
+    const workspace = {
+      iterateAllLeaves(cb: (l: string) => unknown) {
+        for (const area of areas) {
+          for (const l of area) if (cb(l)) break;
+        }
+      },
+    };
+    expect(allLeaves(workspace)).toEqual(["a", "b", "c", "explorer", "backlinks", "outline"]);
+  });
+});

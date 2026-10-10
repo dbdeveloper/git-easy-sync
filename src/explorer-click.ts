@@ -26,3 +26,17 @@ export function explorerClickTarget(c: {
   });
   return best;
 }
+
+// Every leaf of the workspace. ⚠️ Obsidian's iterateLeaves STOPS as soon as
+// the callback returns something truthy — `(l) => leaves.push(l)` returns the
+// new length, so it collected ONE tab per area (field diagnostic,
+// 2026-10-10). The callback here returns nothing.
+export function allLeaves<L>(workspace: {
+  iterateAllLeaves(cb: (leaf: L) => unknown): void;
+}): L[] {
+  const out: L[] = [];
+  workspace.iterateAllLeaves((leaf) => {
+    out.push(leaf);
+  });
+  return out;
+}

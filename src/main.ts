@@ -49,7 +49,7 @@ import type { GitignoreEditorDeps } from "./gitignore-editor/gitignore-editor-pa
 import { bringLeafToFront } from "./bring-to-front";
 import { enforceIfRootGitignore } from "./gitignore-editor/after-history-write";
 import { forgetReplacedConflictCopy } from "./diff2/forget-replaced-copy";
-import { explorerClickTarget } from "./explorer-click";
+import { allLeaves, explorerClickTarget } from "./explorer-click";
 import { GitignoreDecisionModal } from "./sync2/views/gitignore-modal";
 import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
 import {
@@ -2370,13 +2370,8 @@ export default class GitHubSyncPlugin extends Plugin {
       GITIGNORE_EDITOR_VIEW_TYPE,
     ];
     const active = workspace.getMostRecentLeaf();
-    const leaves: WorkspaceLeaf[] = [];
-    workspace.iterateAllLeaves((l) => leaves.push(l));
-    const i = explorerClickTarget({
-      activeIsOurs: active !== null && OURS.includes(active.view.getViewType()),
-      modifier: e.ctrlKey || e.metaKey || e.shiftKey || e.altKey,
-      clicked,
-      leaves: leaves.map((l) => {
+    const leaves = allLeaves<WorkspaceLeaf>(workspace);
+    const described = leaves.map((l) => {
         // From the SERIALIZED state, so a deferred (not yet loaded) tab counts too.
         const file = (l.getViewState()?.state as { file?: unknown } | undefined)?.file;
         const root = l.getRoot();
@@ -2386,8 +2381,10 @@ export default class GitHubSyncPlugin extends Plugin {
           // Backlinks / Outline / Tags follow a file too — never a target.
           sidebar: root === workspace.leftSplit || root === workspace.rightSplit,
         };
-      }),
-    });
+      });
+    const activeIsOurs = active !== null && OURS.includes(active.view.getViewType());
+    const modifier = e.ctrlKey || e.metaKey || e.shiftKey || e.altKey;
+    const i = explorerClickTarget({ activeIsOurs, modifier, clicked, leaves: described });
     if (i === null) return;
     e.preventDefault();
     e.stopImmediatePropagation();
