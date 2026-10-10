@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { explorerClickTarget } from "../src/explorer-click";
 
-const leaf = (file: string | null, activeTime: number) => ({ file, activeTime });
+const leaf = (file: string | null, activeTime: number, sidebar = false) => ({ file, activeTime, sidebar });
 
 describe("explorerClickTarget", () => {
   it("🔑 our tab active + the file open elsewhere → that tab (the most recently used one)", () => {
@@ -23,6 +23,29 @@ describe("explorerClickTarget", () => {
         leaves: [leaf("notes/b.md", 5), leaf("notes/a.md", 3), leaf("notes/a.md", 9)],
       }),
     ).toBe(2);
+  });
+
+  // Owner's field report (same day): the first version picked the RIGHT
+  // SIDEBAR — Backlinks / Outline / Tags keep the file they follow in their
+  // state, so "a tab with this file" matched a sidebar view and opened the
+  // sidebar. Sidebars never count.
+  it("🔑 a SIDEBAR view that follows the file (Backlinks…) is never chosen", () => {
+    expect(
+      explorerClickTarget({
+        activeIsOurs: true,
+        modifier: false,
+        clicked: "notes/a.md",
+        leaves: [leaf("notes/a.md", 3), leaf("notes/a.md", 99, true)],
+      }),
+    ).toBe(0);
+    expect(
+      explorerClickTarget({
+        activeIsOurs: true,
+        modifier: false,
+        clicked: "notes/a.md",
+        leaves: [leaf("notes/a.md", 99, true)],
+      }),
+    ).toBeNull();
   });
 
   it("an ordinary tab is active → leave the click to Obsidian", () => {

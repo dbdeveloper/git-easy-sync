@@ -2379,9 +2379,12 @@ export default class GitHubSyncPlugin extends Plugin {
       leaves: leaves.map((l) => {
         // From the SERIALIZED state, so a deferred (not yet loaded) tab counts too.
         const file = (l.getViewState()?.state as { file?: unknown } | undefined)?.file;
+        const root = l.getRoot();
         return {
           file: typeof file === "string" ? file : null,
           activeTime: (l as unknown as { activeTime?: number }).activeTime ?? 0,
+          // Backlinks / Outline / Tags follow a file too — never a target.
+          sidebar: root === workspace.leftSplit || root === workspace.rightSplit,
         };
       }),
     });
