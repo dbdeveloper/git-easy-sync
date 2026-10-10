@@ -2604,6 +2604,60 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(vaultFiles.files.get(written)!.content).toBe("REMOTE AGAIN\n");
   });
 
+  // The owner's question (2026-10-10): "and a battery death mid-sync?"
+  // A crash leaves on disk what a cancel leaves MINUS the cancel's settle,
+  // so the settled baselines are rolled back here. The next commit pass
+  // then re-stages, with no baselines, every file the dead run had
+  // written plus its already-pushed local file — the field shape — and
+  // the remote moves on one of the written files before the resume.
+  it("CRASH mid Vault-step (no settle) on a COLD START with LOCAL additions + the remote moves on → a CLEAN pull, the newest version is not overwritten", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(files);
+    baseCommit = null;
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ "local.md": "LOCAL\n" });
+    const before = new Map(baselines);
+
+    let writes = 0;
+    const r1 = await drainOnce(
+      makeDeps({
+        cancelRequested: () => writes >= 2,
+        vaultFiles: new Proxy(vaultFiles, {
+          get(t, prop, recv) {
+            if (prop === "write") {
+              return async (...args: unknown[]) => {
+                writes++;
+                return (t as unknown as Record<string, (...a: unknown[]) => unknown>).write(...args);
+              };
+            }
+            return Reflect.get(t, prop, recv);
+          },
+        }) as unknown as typeof vaultFiles,
+      }),
+    );
+    expect(r1.status).toBe("cancelled");
+    expect(await journal.load()).not.toBeNull();
+    // 💥 the crash: nothing the settle wrote survives.
+    baselines.clear();
+    for (const [k, v] of before) baselines.set(k, v);
+
+    const written = r1.vaultStepWrites.filter((p) => p !== "local.md");
+    // The next commit pass, with no baselines: everything on disk is "added".
+    const restage: Record<string, string> = { "local.md": "LOCAL\n" };
+    for (const p of written) restage[p] = files[p];
+    await stageBatch(restage, 100, 1);
+
+    const moved = written[0];
+    await world.commitFiles({ [moved]: "REMOTE AGAIN\n" });
+
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    expect(r2.conflictVerdicts).toEqual([]);
+    expect(vaultFiles.files.get(moved)!.content).toBe("REMOTE AGAIN\n");
+    expect(dec(world.headFiles().get(moved)!.bytes)).toBe("REMOTE AGAIN\n");
+  });
+
   // The same hole for a DELETION the cancelled Vault-step had already
   // applied: the journal still says base = the old content, the vault no
   // longer has the file, and the remote brings it back.
