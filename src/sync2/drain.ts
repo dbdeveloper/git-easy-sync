@@ -513,11 +513,19 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   // files are not taken for local additions. `progressLogged` keeps one
   // line per (path, sha) per run.
   const progressLogged = new Map<string, string>();
+  let progressDirKnown = false;
+  // What the log costs per run — field measurement (the owner rejects
+  // unmeasured performance claims): logged once, at the epilogue.
+  const progressStats = { lines: 0, ms: 0 };
   const noteProgress = async (paths: Iterable<string>): Promise<void> => {
     const records: ProgressRecord[] = [];
     for (const path of paths) {
       const tracked = state.trackedFiles.get(path);
       if (tracked === undefined || tracked.isManualConflict) continue;
+      // Our own loadable files have another baseline writer that runs at
+      // onload, BEFORE any replay (the applied self-update) — a line here
+      // could roll it back. At most three spare commits after a crash.
+      if (isOwnPluginRecoverableFile(path, configDir, deps.selfPluginId)) continue;
       const sha = tracked.remote.sha;
       if (sha === null || tracked.base.sha !== sha) continue;
       if (progressLogged.get(path) === sha) continue;
@@ -532,7 +540,16 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       }
       progressLogged.set(path, sha);
     }
-    await appendProgress(deps.vault.adapter, selfPluginDir, records);
+    if (records.length === 0) return;
+    const t0 = performance.now();
+    progressDirKnown = await appendProgress(
+      deps.vault.adapter,
+      selfPluginDir,
+      records,
+      progressDirKnown,
+    );
+    progressStats.lines += records.length;
+    progressStats.ms += performance.now() - t0;
   };
   // Does the vault hold exactly the remote version this journal record
   // carries? (§IV.2 row 7a.) A deletion counts as held when the file is
@@ -2901,6 +2918,12 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     // §II.19 ⚠️ every baseline is written now; a progress line left
     // behind could later roll one of them back. Gone right after step 1.
     await clearProgress(deps.vault.adapter, selfPluginDir);
+    if (progressStats.lines > 0) {
+      deps.logger?.info("progress log cost", {
+        lines: progressStats.lines,
+        ms: Math.round(progressStats.ms),
+      });
+    }
   }
 
   // Step 2 — one more reconcile pass (the Vault-step may have created

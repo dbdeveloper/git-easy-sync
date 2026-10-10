@@ -85,18 +85,23 @@ async function ensureRuntimeDir(
 
 // Best-effort: a lost line costs one spare commit, never correctness, so
 // a failing append must not fail the drain that is mid-work.
+// `dirKnown`: the caller has already seen `.runtime/` exist this run —
+// one `exists` round trip less per pulled file on a phone.
 export async function appendProgress(
   adapter: DataAdapter,
   pluginDir: string,
   records: ProgressRecord[],
-): Promise<void> {
-  if (records.length === 0) return;
+  dirKnown = false,
+): Promise<boolean> {
+  if (records.length === 0) return dirKnown;
   const payload = records.map((r) => `${JSON.stringify(r)}\n`).join("");
   try {
-    await ensureRuntimeDir(adapter, pluginDir);
+    if (!dirKnown) await ensureRuntimeDir(adapter, pluginDir);
     await adapter.append(progressFilePath(pluginDir), payload);
+    return true;
   } catch {
     // see above
+    return false;
   }
 }
 

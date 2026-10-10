@@ -633,6 +633,32 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     });
   });
 
+  // §II.19 — the same class through the progress log: a drain against
+  // repo A died and left its lines; the user switches to repo B; the next
+  // commit pass would replay A's lines into B's freshly wiped baselines.
+  it("🔴 a repo switch also drops the PREVIOUS repo's progress log — its lines never reach the new baselines", async () => {
+    const SELF = `${CONFIG_DIR}/plugins/${PLUGIN_ID}`;
+    await hotMetaRef.update({
+      remoteIdentity: { owner: "me", repo: "repo-A", branch: "main" },
+      lastSyncCommitSha: "commit-from-repo-A",
+    });
+    await appendProgress(vault.adapter as never, SELF, [
+      { path: "a.md", sha: "sha-a-from-repo-A", size: 1 },
+    ]);
+    (deps as never as { remoteIdentity: () => unknown }).remoteIdentity =
+      () => ({ owner: "me", repo: "repo-B", branch: "main" });
+    let seen: string[] | null = null;
+    deps.detector.findChanges = async () => {
+      seen = await baselinesRef.allPaths();
+      return [];
+    };
+
+    await manager.syncAll();
+
+    expect(seen, "repo-A's progress lines may not seed repo-B's baselines").toEqual([]);
+    expect(await vault.adapter.exists(progressFilePath(SELF))).toBe(false);
+  });
+
   it("🔑 the FIRST observation records the identity and wipes NOTHING", async () => {
     // ⚠️ The branch that makes this safe to ship. Every install that
     // upgrades from a build without `remoteIdentity` arrives here with

@@ -59,7 +59,7 @@ import { newBatchId } from "./timestamp-id";
 import { AuthError, NetworkError } from "../errors";
 import type { TrashHooks } from "./trash-hooks";
 import { normalizePath } from "obsidian";
-import { replayProgress } from "./vault-step-progress";
+import { clearProgress, replayProgress } from "./vault-step-progress";
 
 // ── DrainStatus (unchanged shape — the Settings tab renders it) ─────
 
@@ -414,6 +414,14 @@ export class Sync2Manager {
     // crash in the middle: with the baselines already gone but the
     // identity not yet updated, the next sync detects the same mismatch
     // and repeats the wipe. Idempotent by construction.
+    //
+    // §II.19: repo A's progress log goes FIRST — the commit pass replays
+    // it before scanning, and its lines would seed repo B's empty
+    // baselines with repo A's shas (the repo-substitution class).
+    await clearProgress(
+      this.deps.vault.adapter,
+      `${this.deps.vault.configDir}/plugins/${this.deps.selfPluginId}`,
+    );
     await this.deps.baselines.clear();
     await this.deps.hotMeta.update({
       lastSyncCommitSha: null,

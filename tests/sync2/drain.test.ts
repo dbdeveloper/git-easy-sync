@@ -2725,6 +2725,35 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(baselines.get("p1.md")?.baselineSha).toBe(await sha(files["p1.md"]));
   });
 
+  // §II.19 p.5: our own loadable files are NOT logged. Their baselines have
+  // another writer that runs at onload, BEFORE any replay — the applied
+  // self-update — and an older line replayed after it would roll that
+  // baseline back. Cost: at most three spare commits after a crash.
+  it("progress log: our OWN plugin's loadable files are never logged (their baselines belong to the self-update writer)", async () => {
+    await world.commitFiles({ "a.md": "A\n" });
+    baseCommit = null;
+    const own = `.obsidian/plugins/${PLUGIN_ID}/main.js`;
+    vaultFiles.files.set(own, { content: "BUILD\n", mtime: 100 });
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ [own]: "BUILD\n", "local.md": "LOCAL\n" });
+    const client = world.makeClient();
+    const origPush = client.pushCommitFromTree.bind(client);
+    let pushed = false;
+    client.pushCommitFromTree = async (args) => {
+      const r = await origPush(args);
+      pushed = true;
+      return r;
+    };
+    // Stop after the batch end (push confirmed, lines written), before the
+    // epilogue would delete the log.
+    const r1 = await drainOnce(makeDeps({ client, cancelRequested: () => pushed }));
+    expect(r1.status).toBe("cancelled");
+    expect(r1.pushedPaths).toContain(own);
+    const raw = await vault.adapter.read(progressFilePath(SELF_DIR));
+    expect(raw).toContain('"local.md"');
+    expect(raw).not.toContain("main.js");
+  });
+
   // §II.19 ⚠️ invariant: a completed drain leaves NO progress log behind —
   // a stale line replayed later would roll a newer baseline back.
   it("a COMPLETED drain leaves no progress log; a later baseline is never rolled back by an old line", async () => {
