@@ -264,6 +264,11 @@ export interface DrainDeps {
     get(
       path: string,
     ): Promise<{ baselineSha: string; mtime: number; size: number } | undefined>;
+    // Group read (one bucket open per bucket) — what the baseline
+    // transfer uses to keep a proven stat (keepProvenStats).
+    getMany(
+      paths: string[],
+    ): Promise<Map<string, { baselineSha: string; mtime: number; size: number }>>;
     setMany(
       entries: Array<{
         path: string;
@@ -493,6 +498,24 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   const pushedCommits: string[] = [];
   const vaultStepWrites: string[] = [];
   const vaultStepRemoves: string[] = [];
+  // mtime 0 is for a file this run WROTE (D.15: a live stat taken after the
+  // write could swallow an edit made in between). A baseline that ALREADY
+  // carries the very sha being transferred describes a file whose content
+  // the change detector proved at that {mtime,size}; any later edit moves
+  // the mtime off it, so keeping the pair cannot hide one. Overwriting it
+  // with 0 only bought a full re-hash of every journal path on the next
+  // commit pass (owner's field report, 2026-10-10: 471 files, 18 s).
+  const keepProvenStats = async (
+    writes: Array<{ path: string; baselineSha: string; mtime: number; size: number }>,
+  ): Promise<void> => {
+    if (writes.length === 0) return;
+    const existing = await deps.baselines.getMany(writes.map((w) => w.path));
+    for (const w of writes) {
+      const old = existing.get(w.path);
+      if (old === undefined || old.baselineSha !== w.baselineSha) continue;
+      w.mtime = old.mtime; // same sha → same size, nothing else to keep
+    }
+  };
   // A cancel inside the Vault-step skips the epilogue, so the paths whose
   // outcome this run had ALREADY fixed had no baselines — and the next
   // sync's commit pass (it runs BEFORE the resuming drain and knows no
@@ -521,6 +544,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // mtime 0, as in the epilogue (D.14/D.15).
       writes.push({ path, baselineSha: tracked.remote.sha, mtime: 0, size: size ?? 0 });
     }
+    await keepProvenStats(writes);
     if (writes.length > 0) await deps.baselines.setMany(writes);
     if (removals.length > 0) await deps.baselines.removeMany(removals);
   };
@@ -2868,6 +2892,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         size: size ?? 0,
       });
     }
+    await keepProvenStats(writes);
     if (writes.length > 0) await deps.baselines.setMany(writes);
     if (removals.length > 0) await deps.baselines.removeMany(removals);
   }

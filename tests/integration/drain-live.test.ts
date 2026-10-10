@@ -303,6 +303,14 @@ describe.skipIf(!integrationEnabled())(
           },
           baselines: {
             get: async (p) => baselines.get(p),
+            getMany: async (paths: string[]) => {
+              const out = new Map();
+              for (const p of paths) {
+                const b = await baselines.get(p);
+                if (b !== undefined) out.set(p, b);
+              }
+              return out;
+            },
             // §5.4 — a hold rescues a folder\'s baselines. No fixture
             // here holds anything, so empty is the honest answer.
             listUnder: async () => [],
@@ -514,6 +522,14 @@ describe.skipIf(!integrationEnabled())(
           },
           baselines: {
             get: async (p) => baselines.get(p),
+            getMany: async (paths: string[]) => {
+              const out = new Map();
+              for (const p of paths) {
+                const b = await baselines.get(p);
+                if (b !== undefined) out.set(p, b);
+              }
+              return out;
+            },
             // §5.4 — a hold rescues a folder\'s baselines. No fixture
             // here holds anything, so empty is the honest answer.
             listUnder: async () => [],

@@ -208,6 +208,14 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     },
     baselines: {
       get: async (p) => baselines.get(p),
+      getMany: async (paths: string[]) => {
+        const out = new Map();
+        for (const p of paths) {
+          const b = await baselines.get(p);
+          if (b !== undefined) out.set(p, b);
+        }
+        return out;
+      },
       // §5.4 — REAL, over the same map: a hold has to rescue the
       // folder's baselines, and a stub returning [] would make the
       // rescue look like it worked while rescuing nothing.
@@ -1671,6 +1679,14 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
           vaultFiles: vf,
           baselines: {
             get: async (p) => bl.get(p),
+            getMany: async (paths: string[]) => {
+              const out = new Map();
+              for (const p of paths) {
+                const b = await bl.get(p);
+                if (b !== undefined) out.set(p, b);
+              }
+              return out;
+            },
             listUnder: async (prefix: string) =>
               [...bl]
                 .filter(([p]) => p.startsWith(prefix))
@@ -2432,6 +2448,57 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     // A path the Vault-step had NOT reached is not settled.
     const notYet = Object.keys(files).find((p) => !r1.vaultStepWrites.includes(p))!;
     expect(baselines.has(notYet)).toBe(false);
+  });
+
+  // Field (2026-10-10, phone): after the resumed first sync, the NEXT
+  // commit pass re-read and re-hashed all 471 files. The commit pass that
+  // ran just before the resume had proven most of them and recorded their
+  // real {mtime,size}; the resumed epilogue then rewrote EVERY journal path
+  // with mtime 0, content unchanged. mtime 0 exists for a file the drain
+  // WRITES (D.15); a baseline that already carries this very sha keeps the
+  // stat that proved it — any later edit moves the mtime off it.
+  it("epilogue: a baseline that already holds the same sha KEEPS its proven mtime/size; a pulled file still gets 0", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(files);
+    baseCommit = null;
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ "local.md": "LOCAL\n" });
+
+    let writes = 0;
+    const r1 = await drainOnce(
+      makeDeps({
+        cancelRequested: () => writes >= 2,
+        vaultFiles: new Proxy(vaultFiles, {
+          get(t, prop, recv) {
+            if (prop === "write") {
+              return async (...args: unknown[]) => {
+                writes++;
+                return (t as unknown as Record<string, (...a: unknown[]) => unknown>).write(...args);
+              };
+            }
+            return Reflect.get(t, prop, recv);
+          },
+        }) as unknown as typeof vaultFiles,
+      }),
+    );
+    expect(r1.status).toBe("cancelled");
+    // The commit pass before the resume proves the written files and
+    // records their real stat (what the change detector does on a match).
+    const proven = r1.vaultStepWrites.filter((p) => p !== "local.md");
+    for (const p of proven) {
+      baselines.set(p, { baselineSha: await sha(files[p]), mtime: 77, size: enc(files[p]).byteLength });
+    }
+
+    const pulledNow = Object.keys(files).filter((p) => !proven.includes(p));
+    // A stale baseline of a DIFFERENT sha must not lend its stat to the
+    // file this run writes — that is exactly the D.15 window.
+    baselines.set(pulledNow[0], { baselineSha: await sha("older\n"), mtime: 55, size: 6 });
+
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    for (const p of proven) expect(baselines.get(p)!.mtime).toBe(77);
+    for (const p of pulledNow) expect(baselines.get(p)!.mtime).toBe(0);
   });
 
   // The field shape the two tests above missed: the phone's first sync

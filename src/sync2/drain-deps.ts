@@ -439,7 +439,9 @@ export interface BuildDrainDepsArgs {
     ): Promise<void>;
     removeMany(paths: string[]): Promise<void>;
     allPaths(): Promise<string[]>;
-    getMany(paths: string[]): Promise<Map<string, { baselineSha: string }>>;
+    getMany(
+      paths: string[],
+    ): Promise<Map<string, { baselineSha: string; mtime: number; size: number }>>;
   };
   tokenExpired(): Promise<boolean>;
   isSyncable(path: string): boolean;
@@ -502,6 +504,7 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
       collectQueueReferencedShas(args.vault, args.selfPluginId),
     baselines: {
       get: (p) => args.baselines.get(p),
+      getMany: (paths) => args.baselines.getMany(paths),
       setMany: (entries) => args.baselines.setMany(entries),
       removeMany: (paths) => args.baselines.removeMany(paths),
       listUnder: async (prefix: string) => {
@@ -518,10 +521,11 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
           size: number;
         }> = [];
         for (const path of under) {
-          // `get`, not `getMany`: the group read answers with the sha
-          // ALONE, and a hold has to restore `{mtime, size}` too — a
-          // baseline missing those permanently defeats the change
-          // detector's stat short-circuit for that path.
+          // A hold has to restore `{mtime, size}` too — a baseline
+          // missing those permanently defeats the change detector's stat
+          // short-circuit for that path. (Per-path `get` dates from when
+          // this composition typed `getMany` as sha-only; the store's
+          // group read carries the full entry, and the drain now uses it.)
           const b = await args.baselines.get(path);
           if (b === undefined) continue;
           out.push({
