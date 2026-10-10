@@ -16,12 +16,13 @@ import {
   integrationEnabled,
   uniqueBranchName,
   writeRemoteFile,
-  getBranchCommitMessages,
+  readRemoteFile,
 } from "../../../helpers";
 import {
   createSync2Client,
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
+  conflictEntryCount,
 } from "../helpers";
 
 // B7 — regression guard for the "interrupted adoption + canonicalize ON
@@ -31,24 +32,22 @@ import {
 // to main as if they were the user's edits — an N-file commit on first
 // setup that nobody asked for.
 //
-// ⚠️ RE-CHECKED 2026-10-10 against the current engine (traced with the
-// log on). The old narrative here — `bootstrapFromRemote` skipping
+// ⚠️ CONTRACT CHANGED 2026-10-10 (owner's decision, SYNC2-NEW-DRAIN
+// §II.20). The old narrative here — `bootstrapFromRemote` skipping
 // recordSync, then a canonicalize-aware resume hint — describes code
-// deleted at THE SWITCH. What happens now, for this pre-staged vault
-// (canonical bytes on disk, no baselines, no anchor; remote has the
-// CRLF / BOM originals):
-//   - the commit pass reports the three files as "added" (no baseline);
-//   - the drain's cold start meets "both sides present, different, no
-//     common base" for with-crlf.md and with-bom.md → a MANUAL CONFLICT
-//     each (MASTER-PLAN §6.4, owner decision (A)): the vault keeps the
-//     canonical bytes, the server's version lands as a conflict copy,
-//     the local version goes to the CONFLICT branch — never to main;
-//   - plain.md is identical on both sides → settled, no push.
-// So the guarded outcome still holds — nothing is pushed to MAIN as
-// user content — and that is what this test pins. It does NOT pin the
-// two conflicts. Whether a difference that canonicalization erases
-// (CRLF vs LF, a BOM) should count as "different" under §6.4 is an
-// open question for the owner (2026-10-10).
+// deleted at THE SWITCH. Traced with the log on, the new engine at first
+// resolved this vault (canonical bytes on disk, no baselines, no anchor;
+// the repo holds the CRLF / BOM originals) with TWO manual conflicts:
+// "both sides present, different, no common base" (§6.4 (A)) — although
+// the two sides differ only by what the user's own canonicalization
+// erases. Now "different" means different AFTER that canonicalization:
+// the repo version is the common ancestor (this device's pull would have
+// made the local bytes from it), and the ordinary rules push the
+// canonical version — the same one normalization commit any pull of a
+// non-canonical file leads to with the setting on.
+//
+// Contract: ZERO conflicts; the canonical bytes end up on BOTH sides
+// (vault and main); plain.md, identical everywhere, is untouched.
 //
 // Simulated kill: no real interrupt — the vault is pre-staged to the
 // on-disk state an interrupted first sync leaves (canonical bytes, no
@@ -77,11 +76,12 @@ describe.skipIf(!integrationEnabled())(
     });
 
     it(
-      "vault pre-staged with canonical bytes of CRLF remote → first sync pushes nothing back to main as user content",
+      "vault pre-staged with canonical bytes of CRLF remote → no conflicts, canonical bytes on both sides",
       async () => {
         // Remote files carry CRLF + BOM — non-canonical encodings that
-        // canonicalization (commit side, when the user enables it)
-        // rewrites; the vault below holds the rewritten bytes.
+        // canonicalization rewrites (when the user enables it, on BOTH
+        // the pull and the commit side); the vault below holds the
+        // rewritten bytes.
         const crlfText = "line one\r\nline two\r\nline three\r\n";
         const bomText = "﻿unicode header\r\nbody\r\n";
         await writeRemoteFile(
@@ -103,12 +103,6 @@ describe.skipIf(!integrationEnabled())(
           "[seed] canonical file",
         );
 
-        // Capture the seed commit count BEFORE the client runs anything.
-        // The fix means adoption produces at most ONE follow-up commit
-        // (sync2's invariant gitignores landing for the first time).
-        // Without the fix, we'd see a second commit pushing the three
-        // canonicalized files back as if they were user edits.
-        const seedCommits = await getBranchCommitMessages(branch);
 
         // Spin up a fresh client with autoCanonicalize explicitly ON
         // — this is the regression's prerequisite. Off, no rewrite,
@@ -164,28 +158,18 @@ describe.skipIf(!integrationEnabled())(
         expect(await client.baselines.get("Folder/with-bom.md")).toBeDefined();
         expect(await client.baselines.get("Folder/plain.md")).toBeDefined();
 
-        // Assertion 3 — THE KEY CHECK: the commit history on the
-        // branch did not gain a "Sync at ..." convergence commit
-        // pushing canonicalized versions back as user content.
-        // Before the fix, the user would see a 3-file commit here
-        // (one per non-canonical file). After the fix, at most one
-        // commit appears, and only when sync2's invariant gitignores
-        // are landing for the first time — never one that pushes
-        // user-facing markdown files back.
-        const finalCommits = await getBranchCommitMessages(branch);
-        const newCommits = finalCommits.length - seedCommits.length;
-        // 0 or 1 is fine (the optional invariants commit), but each
-        // new commit must not mention any of the three test files.
-        const newCommitMessages = finalCommits.slice(0, newCommits);
-        for (const msg of newCommitMessages) {
-          // Sync commit messages don't include file paths by default,
-          // but as defense-in-depth we'd still want to make sure the
-          // commit count is bounded and reasonable.
-          expect(msg).not.toMatch(/with-crlf|with-bom|plain/i);
-        }
-        // Hard cap: we expect at most ONE extra commit (the invariant
-        // gitignores), never three or more.
-        expect(newCommits).toBeLessThanOrEqual(1);
+        // Assertion 3 — THE KEY CHECK (§II.20): no conflict, and main
+        // now carries the canonical bytes — the one normalization commit.
+        expect(conflictEntryCount(client)).toBe(0);
+        expect(await readRemoteFile(branch, "with-crlf.md")).toBe(
+          "line one\nline two\nline three\n",
+        );
+        expect(await readRemoteFile(branch, "Folder/with-bom.md")).toBe(
+          "unicode header\nbody\n",
+        );
+        expect(await readRemoteFile(branch, "Folder/plain.md")).toBe(
+          "already canonical\n",
+        );
       },
       120_000,
     );

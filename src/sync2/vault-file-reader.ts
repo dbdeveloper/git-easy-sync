@@ -82,6 +82,16 @@ export function makeVaultFileReader(
     };
   };
 
+  // §II.20 — the drain asks what a pull WOULD write, so it can compare
+  // the vault with the repo the way the user sees them (with "Auto-
+  // canonicalize text files" on, CRLF and LF are the same file). `write`
+  // below goes through the very same two functions.
+  const canonicalizesOnWrite = (path: string): boolean =>
+    deps.autoCanonicalize?.() === true &&
+    shouldCanonicalize(normalizePath(path), deps.vault.configDir);
+  const canonicalize = (path: string, bytes: ArrayBuffer): ArrayBuffer =>
+    canonicalizeBytes(bytes, canonicalizesOnWrite(path)).bytes;
+
   return {
     // ⚠️ OUR OWN plugin's loadable files are STAGED, never written.
     //
@@ -150,6 +160,9 @@ export function makeVaultFileReader(
       };
     },
 
+    canonicalizesOnWrite,
+    canonicalize,
+
     async write(path, bytes) {
       const normalized = normalizePath(path);
       await ensureParentDir(deps.vault, normalized);
@@ -159,11 +172,7 @@ export function makeVaultFileReader(
       // never through a lossy decode). One function for both sides is
       // what keeps them agreeing; a file normalized on one side and
       // passed raw on the other would re-sync forever.
-      const { bytes: out } = canonicalizeBytes(
-        bytes,
-        deps.autoCanonicalize?.() === true &&
-          shouldCanonicalize(normalized, deps.vault.configDir),
-      );
+      const out = canonicalize(normalized, bytes);
       await atomicWriteFile(deps.vault, normalized, out);
     },
 

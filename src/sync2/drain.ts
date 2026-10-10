@@ -234,6 +234,11 @@ export interface VaultFileReader {
     sha: string;
     blob: ArrayBuffer;
   } | null>;
+  // §II.20 — what a pull write does to these bytes (the user's "Auto-
+  // canonicalize text files"): whether it rewrites this path, and the
+  // bytes it would land. Optional: absent = writes land as given.
+  canonicalizesOnWrite?(path: string): boolean;
+  canonicalize?(path: string, bytes: ArrayBuffer): ArrayBuffer;
   // Vault-step apply: write merged/remote bytes, or delete the path.
   write(path: string, bytes: ArrayBuffer): Promise<void>;
   remove(path: string): Promise<void>;
@@ -551,18 +556,52 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     progressStats.lines += records.length;
     progressStats.ms += performance.now() - t0;
   };
+  // §II.20 — "same content under the user's canonicalization" (owner,
+  // 2026-10-10). Does `localSha` hold what a PULL of `remoteSha` writes?
+  // The exact sha, or — when the vault's writer canonicalizes this path
+  // ("Auto-canonicalize text files") — the canonical form of the remote
+  // bytes. Without this, every sha comparison of "what is on disk" with
+  // "what is in the repo" sees a CRLF-vs-LF difference the user does not.
+  // Bytes from sync_store first, network second (saved back); a network
+  // failure aborts, as everywhere in the drain.
+  const samePulledForm = async (
+    path: string,
+    remoteSha: string,
+    localSha: string,
+  ): Promise<{ abort: DrainResult | null; same: boolean }> => {
+    if (localSha === remoteSha) return { abort: null, same: true };
+    const vf = deps.vaultFiles;
+    if (vf.canonicalizesOnWrite?.(path) !== true || vf.canonicalize === undefined) {
+      return { abort: null, same: false };
+    }
+    let bytes = await deps.syncStore.getBlobFromSyncStore(remoteSha, verifiedShas);
+    if (bytes === null) {
+      const r = await deps.retry.run(() => deps.client.getBlobFromRepo(remoteSha));
+      if (r.error !== null) return { abort: statusFromError(r.error, result), same: false };
+      bytes = r.result;
+      if (bytes === null) return { abort: null, same: false };
+      await deps.syncStore.saveBlobToSyncStore(remoteSha, bytes);
+    }
+    const pulled = vf.canonicalize(path, bytes);
+    return { abort: null, same: (await deps.computeSha(pulled)) === localSha };
+  };
   // Does the vault hold exactly the remote version this journal record
   // carries? (§IV.2 row 7a.) A deletion counts as held when the file is
   // gone. One read per path, and only for a journal path whose remote
-  // moved again — the rare resume case, never an ordinary drain.
-  const vaultHoldsRemoteOf = async (tracked: TrackedFile): Promise<boolean> => {
+  // moved again — the rare resume case, never an ordinary drain. "Exactly"
+  // means as a pull writes it (§II.20): the canonical form, when the user
+  // canonicalizes.
+  const vaultHoldsRemoteOf = async (
+    tracked: TrackedFile,
+  ): Promise<{ abort: DrainResult | null; same: boolean }> => {
     const path = tracked.remote.path ?? tracked.base.path;
-    if (path === null) return false;
+    if (path === null) return { abort: null, same: false };
     const live = await deps.vaultFiles.read(path);
     if (tracked.remote.mode === DELETED || tracked.remote.sha === DELETED_SHA_HASH) {
-      return live === null;
+      return { abort: null, same: live === null };
     }
-    return live !== null && live.sha === tracked.remote.sha;
+    if (live === null) return { abort: null, same: false };
+    return samePulledForm(path, tracked.remote.sha!, live.sha);
   };
   // Our own plugin's files put beside the live ones for the bootloader
   // to apply at the next start. NOT part of vaultStepWrites on
@@ -1225,10 +1264,11 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
             if (
               !tracked.isManualConflict &&
               tracked.remote.sha !== null &&
-              tracked.base.sha !== tracked.remote.sha &&
-              (await vaultHoldsRemoteOf(tracked))
+              tracked.base.sha !== tracked.remote.sha
             ) {
-              tracked.base = { ...tracked.remote, blob: null };
+              const held = await vaultHoldsRemoteOf(tracked);
+              if (held.abort !== null) return held.abort;
+              if (held.same) tracked.base = { ...tracked.remote, blob: null };
             }
             tracked.remote.sha = file.sha;
             tracked.remote.size = file.size;
@@ -1807,6 +1847,26 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // The precondition is imported, never re-derived: two hand-copied
       // copies of it drifting apart is how only the plugin-core seam
       // got this fill in the first place.
+      // §II.20 — NO common record, but the queued local version is exactly
+      // what a pull of the remote writes (the user canonicalizes, the repo
+      // holds CRLF / a BOM): then the remote IS the common ancestor — this
+      // device's own pull would have made `local` from it. Supply that
+      // base and let the ordinary rules decide (local changed → the
+      // canonical version is pushed: the same normalization commit an
+      // ordinary pull of a non-canonical file leads to). Never applied
+      // when a real base exists — §6.4 (A) stands for real differences.
+      if (
+        tracked.base.sha === null &&
+        tracked.remote.sha !== null &&
+        tracked.remote.mode !== DELETED &&
+        tracked.remote.sha !== DELETED_SHA_HASH &&
+        local.sha !== null &&
+        local.sha !== tracked.remote.sha
+      ) {
+        const s2 = await samePulledForm(entry.path, tracked.remote.sha, local.sha);
+        if (s2.abort !== null) return s2.abort;
+        if (s2.same) tracked.base = { ...tracked.remote, blob: null };
+      }
       if (needsObsidianMtimeTiebreak(tracked, local)) {
         const abort = await fillRemoteMtime(entry.path, tracked);
         if (abort !== null) return abort;
@@ -2614,6 +2674,28 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           };
 
     applySeedAncestor(deps, tracked, local.sha, path);
+
+    // §II.20 — the vault already holds what a pull of the remote writes
+    // (its canonical form, when the user canonicalizes): local == remote
+    // as the user sees them, so nothing is left to decide, whatever the
+    // base — the rule "local == remote → that content" holds for any
+    // base. Settled without a write; a raw-vs-canonical difference is
+    // then the next commit pass's ordinary normalization, not a conflict.
+    if (
+      vaultEntry !== null &&
+      tracked.remote.sha !== null &&
+      tracked.remote.mode !== DELETED &&
+      tracked.remote.sha !== DELETED_SHA_HASH &&
+      vaultEntry.sha !== tracked.remote.sha
+    ) {
+      const s3 = await samePulledForm(path, tracked.remote.sha, vaultEntry.sha);
+      if (s3.abort !== null) return s3.abort;
+      if (s3.same) {
+        tracked.base = tracked.remote;
+        await noteProgress([path]);
+        continue;
+      }
+    }
 
     let verdict: Diff3Result;
     try {

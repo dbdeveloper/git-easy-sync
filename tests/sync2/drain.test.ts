@@ -2754,6 +2754,120 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(raw).not.toContain("main.js");
   });
 
+  // ── §II.20 — "same content under the user's canonicalization" ──────
+  // With "Auto-canonicalize text files" ON, a pull writes CANONICAL bytes
+  // (LF / no BOM) while the repo and the base keep the raw version. Every
+  // comparison of "what is on disk" with "what is in the repo" by sha
+  // alone then sees a difference the user does not: owner, 2026-10-10.
+  const CRLF = (i: number) => `line ${i} one\r\nline ${i} two\r\n`;
+  const LF = (i: number) => `line ${i} one\nline ${i} two\n`;
+  const cancelAfterWrites = (n: number) => {
+    let count = 0;
+    return makeDeps({
+      cancelRequested: () => count >= n,
+      vaultFiles: new Proxy(vaultFiles, {
+        get(t, prop, recv) {
+          if (prop === "write") {
+            return async (...args: unknown[]) => {
+              count++;
+              return (t as unknown as Record<string, (...a: unknown[]) => unknown>).write(...args);
+            };
+          }
+          const v = Reflect.get(t, prop, recv);
+          return typeof v === "function" ? v.bind(t) : v;
+        },
+      }) as unknown as typeof vaultFiles,
+    });
+  };
+
+  it("§II.20 canonicalize ON: a cancelled first pull resumes from its journal with NO conflicts (the vault holds the canonical form)", async () => {
+    vaultFiles.canonicalizeOn = true;
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = CRLF(i);
+    await world.commitFiles(files);
+    baseCommit = null;
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ "local.md": "LOCAL\n" });
+
+    const r1 = await drainOnce(cancelAfterWrites(2));
+    expect(r1.status).toBe("cancelled");
+    expect(vaultFiles.files.get(r1.vaultStepWrites[0])!.content).not.toContain("\r"); // landed canonical
+
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    expect(r2.conflictVerdicts).toEqual([]);
+    for (let i = 0; i < 4; i++) expect(vaultFiles.files.get(`p${i}.md`)!.content).toBe(LF(i));
+  });
+
+  it("§II.20 canonicalize ON: the remote moves an ALREADY-pulled file during the interruption → a clean pull (row 7a sees the canonical form)", async () => {
+    vaultFiles.canonicalizeOn = true;
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = CRLF(i);
+    await world.commitFiles(files);
+    baseCommit = null;
+    vaultFiles.files.set("local.md", { content: "LOCAL\n", mtime: 100 });
+    await stageBatch({ "local.md": "LOCAL\n" });
+
+    const r1 = await drainOnce(cancelAfterWrites(2));
+    expect(r1.status).toBe("cancelled");
+    const written = r1.vaultStepWrites.find((p) => p !== "local.md")!;
+    await world.commitFiles({ [written]: "REMOTE AGAIN\r\n" });
+
+    const r2 = await drainOnce(makeDeps());
+    expect(r2.status).toBe("ok");
+    expect(r2.conflictVerdicts).toEqual([]);
+    expect(vaultFiles.files.get(written)!.content).toBe("REMOTE AGAIN\n");
+  });
+
+  it("§II.20 canonicalize ON, B7 shape: vault holds the canonical form, queued as 'added', no base → NO conflict; ONE normalization commit puts the canonical bytes on main", async () => {
+    vaultFiles.canonicalizeOn = true;
+    await world.commitFiles({ "a.md": CRLF(1), "b.md": "\uFEFF" + LF(2) });
+    baseCommit = null;
+    vaultFiles.files.set("a.md", { content: LF(1), mtime: 100 });
+    vaultFiles.files.set("b.md", { content: LF(2), mtime: 100 });
+    await stageBatch({ "a.md": LF(1), "b.md": LF(2) });
+
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    expect(r.conflictVerdicts).toEqual([]);
+    expect(dec(world.headFiles().get("a.md")!.bytes)).toBe(LF(1));
+    expect(dec(world.headFiles().get("b.md")!.bytes)).toBe(LF(2));
+    expect(vaultFiles.files.get("a.md")!.content).toBe(LF(1));
+  });
+
+  it("§II.20 canonicalize ON, nothing queued (commit off): vault holds the canonical form, no base → NO conflict, nothing rewritten", async () => {
+    vaultFiles.canonicalizeOn = true;
+    await world.commitFiles({ "a.md": CRLF(1) });
+    baseCommit = null;
+    vaultFiles.files.set("a.md", { content: LF(1), mtime: 100 });
+
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+    expect(r.conflictVerdicts).toEqual([]);
+    expect(r.vaultStepWrites).not.toContain("a.md");
+    expect(baselines.get("a.md")!.baselineSha).toBe(await sha(CRLF(1))); // base = the raw repo version
+  });
+
+  it("§II.20 negative: canonicalize OFF — the same B7 shape still conflicts (§6.4 (A))", async () => {
+    await world.commitFiles({ "a.md": CRLF(1) });
+    baseCommit = null;
+    vaultFiles.files.set("a.md", { content: LF(1), mtime: 100 });
+    await stageBatch({ "a.md": LF(1) });
+    const r = await drainOnce(makeDeps());
+    expect([...new Set(r.conflictVerdicts.map((v) => v.path))]).toEqual(["a.md"]);
+  });
+
+  it("§II.20 negative: canonicalize ON but GENUINELY different content (or a binary) — still a conflict", async () => {
+    vaultFiles.canonicalizeOn = true;
+    await world.commitFiles({ "a.md": CRLF(1), "img.png": "PNG-REMOTE" });
+    baseCommit = null;
+    vaultFiles.files.set("a.md", { content: "something else\n", mtime: 100 });
+    vaultFiles.files.set("img.png", { content: "PNG-LOCAL", mtime: 100 });
+    await stageBatch({ "a.md": "something else\n", "img.png": "PNG-LOCAL" });
+    const r = await drainOnce(makeDeps());
+    expect([...new Set(r.conflictVerdicts.map((v) => v.path))].sort()).toEqual(["a.md", "img.png"]);
+  });
+
   // §II.19 ⚠️ invariant: a completed drain leaves NO progress log behind —
   // a stale line replayed later would roll a newer baseline back.
   it("a COMPLETED drain leaves no progress log; a later baseline is never rolled back by an old line", async () => {

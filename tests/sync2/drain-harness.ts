@@ -4,6 +4,7 @@
 // branches; two independent eyes (truth vs discoveryAnswer) are the
 // callers' business — the world only serves truth.
 
+import { canonicalizeBytes, shouldCanonicalize } from "../../src/sync2/text-normalize";
 import { calculateGitBlobSHA } from "../../src/utils";
 import { DrainClient } from "../../src/sync2/drain";
 import { ValidationError } from "../../src/errors";
@@ -301,9 +302,22 @@ export class FakeVaultFiles {
     };
   }
 
+  // The user's "Auto-canonicalize text files" (§II.20): when on, a pull
+  // write lands CANONICAL bytes — through the real canonicalizeBytes, the
+  // same transform the production reader uses.
+  canonicalizeOn = false;
+
+  canonicalizesOnWrite(p: string): boolean {
+    return this.canonicalizeOn && shouldCanonicalize(p, ".obsidian");
+  }
+
+  canonicalize(p: string, bytes: ArrayBuffer): ArrayBuffer {
+    return canonicalizeBytes(bytes, this.canonicalizesOnWrite(p)).bytes;
+  }
+
   async write(p: string, bytes: ArrayBuffer): Promise<void> {
     this.writes.push(p);
-    this.files.set(p, { content: dec(bytes), mtime: 999_999 });
+    this.files.set(p, { content: dec(this.canonicalize(p, bytes)), mtime: 999_999 });
   }
 
   async remove(p: string): Promise<void> {
