@@ -3610,7 +3610,12 @@ export default class GitHubSyncPlugin extends Plugin {
     if (this.diffRibbonIcon) return;
     this.diffRibbonIcon = this.addRibbonIcon(
       "git-merge", // distinct from the sync icon's refresh-cw
-      diffTooltip(this.conflictCounter?.getValue() ?? 0),
+      // ⚠️ A STABLE title (owner, 2026-10-10): Obsidian remembers a ribbon
+      // item's place under "<plugin id>:<title>". With the conflict count
+      // in the title, every reload with a different count registered a
+      // "new" item with no saved place, and the icon jumped to the top of
+      // the ribbon. The count lives in the tooltip only (set just below).
+      diffTooltip(0),
       () => void this.activateDiffEditView(),
     );
     // Seed badge + tooltip on creation (correct on a cold onload AND when the
