@@ -493,6 +493,39 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   const pushedCommits: string[] = [];
   const vaultStepWrites: string[] = [];
   const vaultStepRemoves: string[] = [];
+  // Paths the Vault-step has FINISHED with a plain pull (written, or the
+  // remote deletion applied): the vault now holds the remote version. A
+  // cancel settles their baselines (see settleOnCancel) — owner's field
+  // report, 2026-10-10.
+  const vaultStepSettled: string[] = [];
+  // A cancel inside the Vault-step skips the epilogue, so the files it has
+  // ALREADY pulled had no baselines — and the next sync's commit pass (it
+  // runs BEFORE the resuming drain and knows no journal) reported them as
+  // local additions: 345 "added" files after a cancelled first pull on a
+  // phone. Those files ARE in sync with the remote, so their baselines are
+  // written here — the epilogue's step 1, for them only. The anchor does
+  // NOT move: the resume still comes from rediscovering the remote changes,
+  // and a settled file then reads as base == local == remote, a no-op.
+  const settleOnCancel = async (): Promise<void> => {
+    const writes: Array<{ path: string; baselineSha: string; mtime: number; size: number }> = [];
+    const removals: string[] = [];
+    for (const path of vaultStepSettled) {
+      const tracked = state.trackedFiles.get(path);
+      if (!tracked || tracked.remote.sha === null) continue;
+      if (tracked.remote.mode === DELETED || tracked.remote.sha === DELETED_SHA_HASH) {
+        removals.push(path);
+        continue;
+      }
+      const size =
+        tracked.remote.size ??
+        tracked.remote.blob?.byteLength ??
+        (await deps.syncStore.sizeOf(tracked.remote.sha));
+      // mtime 0, as in the epilogue (D.14/D.15).
+      writes.push({ path, baselineSha: tracked.remote.sha, mtime: 0, size: size ?? 0 });
+    }
+    if (writes.length > 0) await deps.baselines.setMany(writes);
+    if (removals.length > 0) await deps.baselines.removeMany(removals);
+  };
   // Our own plugin's files put beside the live ones for the bootloader
   // to apply at the next start. NOT part of vaultStepWrites on
   // purpose: that list drives the plugin-reload signal, and there is
@@ -2135,7 +2168,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     //
     // ⚠️ BEFORE countPull: a path we are not going to process must not
     // be counted as processed.
-    if (deps.cancelRequested?.()) return result("cancelled");
+    if (deps.cancelRequested?.()) {
+      await settleOnCancel();
+      return result("cancelled");
+    }
     // §II.16 — count the remote change the moment this path is taken
     // up, BEFORE any of the skips below. A path already counted in the
     // batch loop is guarded by the set, so this is the second half of
@@ -2632,6 +2668,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         vaultStepRemoves.push(path);
       }
       tracked.base = tracked.remote;
+      vaultStepSettled.push(path);
       continue;
     }
     let bytes = v.blob;
@@ -2732,6 +2769,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     // would defeat the change detector's stat short-circuit forever).
     if (tracked.remote.size === null) tracked.remote.size = bytes.byteLength;
     tracked.base = tracked.remote;
+    vaultStepSettled.push(path);
   }
 
   // ── EPILOGUE (§III steps 1-4; step 5 = the sync_store sweep).

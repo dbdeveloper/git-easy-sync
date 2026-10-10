@@ -2305,6 +2305,57 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(dec(world.headFiles().get("note.md")!.bytes)).toBe("C1\n");
   });
 
+  // Owner's field report (2026-10-10, a phone's first pull, cancelled mid
+  // Vault-step): the NEXT sync's commit pass found 345 "added" files — the
+  // ones the cancelled drain had already written. Their baselines are only
+  // written by the epilogue, which a cancel skips, so to the commit pass
+  // (which runs BEFORE the resuming drain and knows no journal) they looked
+  // like local additions. A file the Vault-step has already written IS in
+  // sync with the remote: its baseline is settled at the cancel. The anchor
+  // still does NOT move — the resume still comes from rediscovery.
+  it("S1 cancel (Vault-step): the files ALREADY written get their baselines; the rest keep the old ones; no anchor", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) files[`p${i}.md`] = `base ${i}\n`;
+    baseCommit = await world.commitFiles(files);
+    for (const [p, content] of Object.entries(files)) {
+      baselines.set(p, { baselineSha: await sha(content), mtime: 50, size: enc(content).byteLength });
+      vaultFiles.files.set(p, { content, mtime: 50 });
+    }
+    const remoteEdits: Record<string, string> = {};
+    for (let i = 0; i < 4; i++) remoteEdits[`p${i}.md`] = `REMOTE ${i}\n`;
+    await world.commitFiles(remoteEdits);
+
+    let writes = 0;
+    const r1 = await drainOnce(
+      makeDeps({
+        cancelRequested: () => writes >= 2, // cancel after the 2nd written file
+        vaultFiles: new Proxy(vaultFiles, {
+          get(t, prop, recv) {
+            if (prop === "write") {
+              return async (...args: unknown[]) => {
+                writes++;
+                return (t as unknown as Record<string, (...a: unknown[]) => unknown>).write(...args);
+              };
+            }
+            return Reflect.get(t, prop, recv);
+          },
+        }) as unknown as typeof vaultFiles,
+      }),
+    );
+    expect(r1.status).toBe("cancelled");
+    expect(r1.vaultStepWrites).toHaveLength(2);
+    for (const p of r1.vaultStepWrites) {
+      const content = remoteEdits[p];
+      expect(baselines.get(p)?.baselineSha).toBe(await sha(content)); // settled
+    }
+    for (let i = 0; i < 4; i++) {
+      const p = `p${i}.md`;
+      if (r1.vaultStepWrites.includes(p)) continue;
+      expect(baselines.get(p)?.baselineSha).toBe(await sha(files[p])); // untouched
+    }
+    expect(hotUpdates).toEqual([]); // the anchor stays — the resume rediscovers
+  });
+
   it("S1 cancel 🔑 (Vault-step): a pull-heavy drain stops mid-loop, keeps the journal, and the NEXT drain finishes the job", async () => {
     // The gap found 2026-09-26: the Vault-step had no cancel check, and
     // it is the phase where the user actually waits on a big pull —
