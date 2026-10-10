@@ -224,6 +224,10 @@ const SYNC_SUMMARY_WITH_COUNTS_MS = 2000;
 const SYNC_SUMMARY_WITH_PLUGINS_MS = 2500;
 const SELF_RELOAD_DELAY_MS = SYNC_SUMMARY_WITH_PLUGINS_MS + 250;
 
+// The "sync in progress" window shows at least this long before the sync's
+// end may close it — shorter would read as a blink (owner, 2026-10-10).
+const CANCEL_MODAL_MIN_SHOW_MS = 1500;
+
 // §35 — the automatic "Sync skipped: token expired" toast. Longer than
 // BRIEF_NOTICE_MS: it carries actionable words the user must actually read,
 // and (unlike a "Sync done" flash) it's a problem they need to notice.
@@ -1884,6 +1888,7 @@ export default class GitHubSyncPlugin extends Plugin {
       });
       modal.open();
       this.cancelSyncModal = modal;
+      this.cancelSyncModalOpenedAt = Date.now();
       return;
     }
     if (
@@ -3058,9 +3063,26 @@ export default class GitHubSyncPlugin extends Plugin {
   // through: the drain going idle, and the Sync summary (a Sync whose
   // commit failed or was cancelled never starts a drain).
   private cancelSyncModal: { close(): void } | null = null;
+  private cancelSyncModalOpenedAt = 0;
 
+  // …but never sooner than CANCEL_MODAL_MIN_SHOW_MS after it opened (owner,
+  // 2026-10-10): a window that appeared half a second before the sync ended
+  // would only BLINK, which reads as a glitch. It stays long enough to read
+  // its title, then closes — a moment after "Sync done" is fine.
   private closeCancelSyncModal(): void {
-    this.cancelSyncModal?.close();
+    const modal = this.cancelSyncModal;
+    if (!modal) return;
+    const left = (this.cancelSyncModalOpenedAt ?? 0) + CANCEL_MODAL_MIN_SHOW_MS - Date.now();
+    if (left > 0) {
+      window.setTimeout(() => {
+        // Not if a NEWER window replaced it meanwhile — that one has its own life.
+        if (this.cancelSyncModal !== modal) return;
+        modal.close();
+        this.cancelSyncModal = null;
+      }, left);
+      return;
+    }
+    modal.close();
     this.cancelSyncModal = null;
   }
 

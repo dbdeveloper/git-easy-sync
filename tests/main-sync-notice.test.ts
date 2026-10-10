@@ -681,12 +681,41 @@ describe("sync notice lifecycle (§II.16)", () => {
   // (Cancel / Keep going) stayed on screen after the sync had finished —
   // asking about a sync that no longer existed. It closes when the sync ends.
   it("🔑 the sync ending closes an open \"sync in progress\" window", () => {
-    const p = makePlugin() as NoticeHandle & { cancelSyncModal: { close(): void } | null };
+    const p = makePlugin() as NoticeHandle & {
+      cancelSyncModal: { close(): void } | null;
+      cancelSyncModalOpenedAt: number;
+    };
     let closed = 0;
     p.cancelSyncModal = { close: () => closed++ };
+    p.cancelSyncModalOpenedAt = Date.now() - 5000; // open long enough
     p.handleDrainIdle();
     expect(closed).toBe(1);
     expect(p.cancelSyncModal).toBeNull();
+  });
+
+  // Owner, 2026-10-10: a window that appeared half a second before the sync
+  // ended would only BLINK — read as a glitch. It stays at least 1.5 s
+  // from its opening, then closes.
+  it("🔑 a window opened just before the end stays until 1.5 s after it opened", () => {
+    vi.useFakeTimers();
+    try {
+      const p = makePlugin() as NoticeHandle & {
+        cancelSyncModal: { close(): void } | null;
+        cancelSyncModalOpenedAt: number;
+      };
+      let closed = 0;
+      p.cancelSyncModal = { close: () => closed++ };
+      p.cancelSyncModalOpenedAt = Date.now() - 500; // opened 0.5 s ago
+      p.handleDrainIdle();
+      expect(closed).toBe(0); // not yet
+      vi.advanceTimersByTime(999);
+      expect(closed).toBe(0);
+      vi.advanceTimersByTime(1);
+      expect(closed).toBe(1); // 1.5 s after it opened
+      expect(p.cancelSyncModal).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("one box throughout: the Notice object is reused, not replaced", () => {
