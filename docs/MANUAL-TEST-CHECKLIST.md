@@ -90,6 +90,10 @@ Use it, and note which runs you did.
 
 - [ ] 🖥️📱 Two devices edit the same file → a conflict sibling `*.conflict-from-<device>-<timestamp>.*` is created.
 - [ ] 🖥️ The conflict counter (🔀) in the status bar updates as siblings appear and clear.
+- [ ] 🖥️ **File tree click while our tab is active (new 2026-10-10).** Open a note in a tab, then make
+      the Diff Panel (or a History / conflict editor / log viewer tab) active and click that note in
+      the file tree: the tab that already shows it comes to the front. A note open nowhere opens as
+      usual; Ctrl/Cmd+click still opens a new tab; with an ordinary tab active nothing changes.
 - [ ] 🖥️ **Files in conflict, everywhere (new 2026-10-09).** One file with TWO conflict copies: the
       diff badge says 1, its tooltip "(1 file in conflict)", the pre-sync window "1 file…", "Sync
       done … 1 in conflict". In the Diff Panel that file's name is RED (light AND dark theme) and

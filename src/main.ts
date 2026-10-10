@@ -49,6 +49,7 @@ import type { GitignoreEditorDeps } from "./gitignore-editor/gitignore-editor-pa
 import { bringLeafToFront } from "./bring-to-front";
 import { enforceIfRootGitignore } from "./gitignore-editor/after-history-write";
 import { forgetReplacedConflictCopy } from "./diff2/forget-replaced-copy";
+import { explorerClickTarget } from "./explorer-click";
 import { GitignoreDecisionModal } from "./sync2/views/gitignore-modal";
 import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
 import {
@@ -812,6 +813,18 @@ export default class GitHubSyncPlugin extends Plugin {
       this.registerView(
         GITIGNORE_EDITOR_VIEW_TYPE,
         (leaf) => new GitignoreEditorView(leaf, this.gitignoreEditorDeps()),
+      );
+      // A click in the file tree while one of OUR tabs is active (owner,
+      // 2026-10-10): our views are not navigable, so Obsidian re-opened the
+      // file into a visible tab that already showed it — nothing happened.
+      // When the file is already open somewhere, focus that tab instead.
+      // Capture phase, so this runs before Obsidian's own handler; every
+      // other case is left to Obsidian (explorerClickTarget).
+      this.registerDomEvent(
+        document,
+        "click",
+        (e: MouseEvent) => this.onFileTreeClick(e),
+        { capture: true },
       );
       // 7a.2 — the per-file diff2-history list view.
       this.registerView(
@@ -2342,6 +2355,41 @@ export default class GitHubSyncPlugin extends Plugin {
         err: `${err}`,
       });
     }
+  }
+
+  private onFileTreeClick(e: MouseEvent): void {
+    const title = (e.target as HTMLElement | null)?.closest?.(".nav-file-title");
+    const clicked = title?.getAttribute("data-path");
+    if (!clicked) return;
+    const { workspace } = this.app;
+    const OURS = [
+      DIFF2_PANEL_VIEW_TYPE,
+      DIFF2_EDITOR_VIEW_TYPE,
+      DIFF2_HISTORY_VIEW_TYPE,
+      LOG_VIEWER_VIEW_TYPE,
+      GITIGNORE_EDITOR_VIEW_TYPE,
+    ];
+    const active = workspace.getMostRecentLeaf();
+    const leaves: WorkspaceLeaf[] = [];
+    workspace.iterateAllLeaves((l) => leaves.push(l));
+    const i = explorerClickTarget({
+      activeIsOurs: active !== null && OURS.includes(active.view.getViewType()),
+      modifier: e.ctrlKey || e.metaKey || e.shiftKey || e.altKey,
+      clicked,
+      leaves: leaves.map((l) => {
+        // From the SERIALIZED state, so a deferred (not yet loaded) tab counts too.
+        const file = (l.getViewState()?.state as { file?: unknown } | undefined)?.file;
+        return {
+          file: typeof file === "string" ? file : null,
+          activeTime: (l as unknown as { activeTime?: number }).activeTime ?? 0,
+        };
+      }),
+    });
+    if (i === null) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    void workspace.revealLeaf(leaves[i]);
+    workspace.setActiveLeaf(leaves[i], { focus: true });
   }
 
   // Settings → .gitignore → [Open] (docs/tasks/GITIGNORE-EDITOR.md). An
