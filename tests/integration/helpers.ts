@@ -3,6 +3,7 @@ import {
   type FakeResponse,
   type RequestFaultInjector,
 } from "../../mock-obsidian";
+import { CONFLICT_BRANCH_PREFIX } from "../../src/sync2/conflict-branch";
 
 // ----------------------------------------------------------------------------
 // Env access — two distinct setups by design:
@@ -163,9 +164,12 @@ export async function deleteBranchIfExists(
 }
 
 /**
- * List existing test branches with our prefix. Lets cleanup pick up
- * branches left behind by crashed previous runs. Returns [] on a
- * bare repo (no branches exist yet).
+ * List the branches a test run leaves behind: our own `<prefix>-*`
+ * branches, and the CONFLICT branches the engine under test mints
+ * (CONFLICT_BRANCH_PREFIX — tests never delete those; 715 had piled up
+ * by 2026-10-10). No test needs either beyond its own run. Lets cleanup
+ * pick up what crashed previous runs left. Returns [] on a bare repo
+ * (no branches exist yet).
  */
 export async function listTestBranches(
   env: RepoEnv = requireEnv(),
@@ -186,7 +190,11 @@ export async function listTestBranches(
     }
     const names = (res.json as Array<{ name: string }>).map((b) => b.name);
     if (names.length === 0) break;
-    out.push(...names.filter((n) => n.startsWith(`${branchPrefix}-`)));
+    out.push(
+      ...names.filter(
+        (n) => n.startsWith(`${branchPrefix}-`) || n.startsWith(CONFLICT_BRANCH_PREFIX),
+      ),
+    );
     if (names.length < 100) break;
     page += 1;
   }
