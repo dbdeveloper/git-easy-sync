@@ -427,21 +427,28 @@ describe("§8.1.5a the .gitignore gate is a MODAL and blocks unconditionally", (
     expect(activateSpy).not.toHaveBeenCalled();
   });
 
-  it("…and the TRACKED gate is quiet on background too", async () => {
-    // Same defect one layer down: §24's modal fronted every path,
-    // background included.
+  // Owner, 2026-10-10: with "Sync starts with commit" on and the interval at
+  // one minute, ONE open conflict stopped every automatic sync ("sync
+  // skipped: tracked conflicts (background)" each tick), so nothing else
+  // reached the server. The design never allowed that: "Sync all … on a
+  // file with pending conflicts proceeds normally … no refuse-to-sync guard
+  // (it would contradict PSEUDO-MERGE-MODE §7 and break §8 Scenario B)"
+  // (DIFF2_IMPLEMENTATION_PLAN §24). The modal only ASKS a user; a
+  // background tick has nobody to ask, and it takes the "Sync anyway"
+  // road — edits of the conflicted file go to the conflict branch, the
+  // rest to main — exactly what the commit-off background drain already
+  // did. 4fba115 left this as an open question; the owner answered it.
+  it("…and the TRACKED gate lets a background tick THROUGH, quietly (as 'Sync anyway')", async () => {
     writeFile(fx.root, "note.md", "ours");
     await createTracked(fx, "note.md", "Phone");
     const { plugin } = makeGate(fx.vault, fx.store);
 
-    expect(await plugin.confirmPendingConflictsBeforeSync("auto")).toBe(false);
+    expect(await plugin.confirmPendingConflictsBeforeSync("auto")).toBe(true);
     expect(modal.constructed).toBe(0);
   });
 
-  it("the OUTCOME is unchanged — background was already being skipped", async () => {
-    // Removing a dialog must not quietly start letting syncs through:
-    // the modal's default decision was "cancel", so a background tick
-    // with conflicts was refused before this change too.
+  it("a USER's [Cancel] in the tracked-conflict modal still stops the sync", async () => {
+    // The user path keeps its question: the modal's answer decides.
     writeFile(fx.root, "note.md", "ours");
     await createTracked(fx, "note.md", "Phone");
     const { plugin } = makeGate(fx.vault, fx.store);

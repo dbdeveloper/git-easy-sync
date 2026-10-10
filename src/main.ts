@@ -2649,10 +2649,17 @@ export default class GitHubSyncPlugin extends Plugin {
     );
     if (!summary) return true;
     if (origin === "auto") {
-      this.logger.info("sync skipped: tracked conflicts (background)", {
+      // Nobody to ask on a background tick → the "Sync anyway" road (owner,
+      // 2026-10-10). Refusing here stopped ALL automatic sync while one
+      // conflict stayed open, which the design forbids: syncing during a
+      // conflict is the pseudo-merge model itself (PSEUDO-MERGE-MODE §7,
+      // §8 Scenario B) — edits of a conflicted file go to the conflict
+      // branch, everything else to main. Only the .gitignore gate above
+      // still stops a background tick.
+      this.logger.info("background sync proceeds with tracked conflicts", {
         paths: summary.trackedPaths,
       });
-      return false;
+      return true;
     }
     const decision = await new PreSyncConflictModal(
       this.app,

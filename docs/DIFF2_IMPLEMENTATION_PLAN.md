@@ -572,6 +572,11 @@ Diff2 widget **повторює** цю поведінку:
       from GitHub sync. Synthetic conflict — local conflict only." — щоб користувач поступово
       навчився розрізняти типи. Лічильники badge/status-bar/menu не зачеплено (TODO #7 і далі
       рахує tracked+synthetic).
+- **⚠️ ФОНОВИЙ запуск (інтервал / watchdog / старт) з tracked-конфліктами — ПРОХОДИТЬ мовчки, як [Sync anyway]
+  (власник, 2026-10-10).** Модалки на фоні нема (4fba115), але до цього фоновий тік відповідав за неї «Cancel» —
+  і один відкритий конфлікт зупиняв УВЕСЬ автоматичний синк (`sync skipped: tracked conflicts (background)` щохвилини,
+  жодна зміна не йшла на сервер). Власник: «в автоматичному режимі … синк має йти мовчки (повідомляти про конфлікти
+  хіба в іконці diff (число) та у спливаючому повідомленні)». Блокує фоновий тік лише `.gitignore`-конфлікт (§8.1.5).
 - Жодного "refuse-to-sync" guard-у не додаємо. Це б суперечило PSEUDO-MERGE-MODE §7 і ламало §8 Scenario B (six branch commits during long
   resolution session — кожен з них окремий [Sync] click).
 - Sibling-файли вже у `.gitignore` через `gitignore-invariants.ts`, отже на GitHub вони ніколи не потрапляють незалежно
