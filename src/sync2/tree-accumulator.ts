@@ -1,10 +1,11 @@
 // Tree accumulator — the MAIN-branch push side of the new drain
 // (NEW-DRAIN §II.15, Phase 4 step 2). Turns a batch's resolved
 // FileInfos into ONE commit through a CHAIN of createTree calls:
-// inline `content` for provably-text files (GitHub makes the blob
-// itself — the difference between ~2 requests per batch and 20 002
-// requests on a 20k cold start against a 5000/hour limit),
-// `createBlob`+base64 for everything else, `base_tree` chaining so
+// inline `content` for provably-text files below the flush threshold
+// (GitHub makes the blob itself — the difference between ~2 requests per
+// batch and 20 002 requests on a 20k cold start against a 5000/hour
+// limit), `createBlob` for everything else — utf-8 for provably-text
+// files at or above the threshold, base64 for the rest, `base_tree` chaining so
 // "free the memory" and "make the commit" stay independent actions.
 //
 // 🔒 Scope boundary (§II.15): MAIN pushes only. The conflict branch
@@ -20,7 +21,9 @@
 // + a baseline the disk can never match → eternal churn); failing the
 // gate demotes the file to createBlob, which carries bytes verbatim.
 //
-// uploadedBlobs — resume-at-k for binaries: every createBlob success
+// uploadedBlobs — resume-at-k for EVERY uploaded blob (binaries, and
+// since 2026-10-10 large text — owner: a crash must not send a 2 MB
+// note again): every createBlob success
 // is persisted IMMEDIATELY (a crash at picture 317 of 500 resumes at
 // 318, not 1). Lives in its own DATA file `uploaded-blobs.json`
 // inside the batch dir — deliberately NOT a field of meta.json: the
@@ -160,6 +163,7 @@ export async function addFileToTree(
   client: TreeAccumulatorClient,
   uploadedBlobs: UploadedBlobs,
   f: TreeFile,
+  logger?: { warn(msg: string, data?: unknown): void },
 ): Promise<void> {
   if (f.mode === DELETED) {
     // ⚠️ NO BASE TREE ⇒ NO DELETION (gate audit 2026-08-31). A
@@ -182,7 +186,12 @@ export async function addFileToTree(
     );
   }
   const inlineText = inlineOk(f.path, f.blob);
-  if (inlineText !== null) {
+  // A text file that would need a request of its own anyway (≥ the flush
+  // threshold) takes the UPLOAD route instead (owner, 2026-10-10): the
+  // resume cache belongs to that route, so after a crash a 2 MB note is
+  // not sent again. Same request count in a mixed batch, at most +1 for a
+  // batch holding only it (the final tree then carries just a sha).
+  if (inlineText !== null && f.blob.byteLength < MAX_INLINE_BYTES) {
     acc.entries.push({
       path: f.path,
       mode: "100644",
@@ -204,11 +213,31 @@ export async function addFileToTree(
     });
     return;
   }
-  const blob = await client.createBlob({
-    content: arrayBufferToBase64(f.blob),
-    encoding: "base64",
-    retry: true,
-  });
+  let blob: { sha: string } | null = null;
+  if (inlineText !== null) {
+    // utf-8, not base64: the same bytes on the wire as inline, no third
+    // more. Safe only because inlineOk PROVED the round trip.
+    blob = await client.createBlob({ content: inlineText, encoding: "utf-8", retry: true });
+    if (blob.sha !== f.sha) {
+      // GitHub stored other bytes than ours. Recording that sha would
+      // break resume silently and leave the tree pointing at content the
+      // baseline can never match (the eternal-churn class of the cp1251
+      // note above). base64 carries the bytes verbatim.
+      logger?.warn("utf-8 blob upload changed the content — re-uploading as base64", {
+        path: f.path,
+        expected: f.sha,
+        got: blob.sha,
+      });
+      blob = null;
+    }
+  }
+  if (blob === null) {
+    blob = await client.createBlob({
+      content: arrayBufferToBase64(f.blob),
+      encoding: "base64",
+      retry: true,
+    });
+  }
   await uploadedBlobs.record(f.path, blob.sha);
   acc.entries.push({
     path: f.path,

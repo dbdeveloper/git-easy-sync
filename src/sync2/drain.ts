@@ -1892,12 +1892,13 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           }
         }
         try {
-          await addFileToTree(acc, deps.client, uploadedBlobs, {
-            path: entry.path,
-            sha: D.sha,
-            blob: D.blob,
-            mode: D.mode,
-          });
+          await addFileToTree(
+            acc,
+            deps.client,
+            uploadedBlobs,
+            { path: entry.path, sha: D.sha, blob: D.blob, mode: D.mode },
+            deps.logger,
+          );
         } catch (e) {
           if (e instanceof ValidationError) {
             // Q.14: a stale uploadedBlobs record 422-ed a mid-batch

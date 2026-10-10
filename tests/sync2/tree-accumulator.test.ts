@@ -57,7 +57,8 @@ describe("tree accumulator (§VIII Q)", () => {
   let vault: Vault;
   let batchDir: string;
   let treeCalls: Array<{ entries: NewTreeRequestItem[]; baseTree?: string }>;
-  let blobCalls: string[]; // base64 payloads
+  let blobCalls: string[]; // payloads (base64 or utf-8, see blobEncodings)
+  let blobEncodings: string[];
   let treeSeq: number;
   let treeReturns: ((entries: NewTreeRequestItem[]) => string) | null;
 
@@ -68,11 +69,13 @@ describe("tree accumulator (§VIII Q)", () => {
       treeSeq += 1;
       return `tree-${treeSeq}`;
     },
-    createBlob: async ({ content }) => {
+    createBlob: async ({ content, encoding }) => {
       blobCalls.push(content);
+      blobEncodings.push(encoding ?? "base64");
       // Content-addressed like the real API: the returned sha is the
       // git blob sha of the decoded bytes.
-      const bytes = Buffer.from(content, "base64");
+      const bytes =
+        encoding === "utf-8" ? Buffer.from(content, "utf8") : Buffer.from(content, "base64");
       return {
         sha: await calculateGitBlobSHA(
           bytes.buffer.slice(
@@ -93,6 +96,7 @@ describe("tree accumulator (§VIII Q)", () => {
     batchDir = ".obsidian/plugins/git-easy-sync/.runtime/push-queue/1234";
     treeCalls = [];
     blobCalls = [];
+    blobEncodings = [];
     treeSeq = 0;
     treeReturns = null;
   });
@@ -226,8 +230,12 @@ describe("tree accumulator (§VIII Q)", () => {
   it("Q.8 🔑 final-flush regression: the tail below the threshold reaches the commit — the LAST createTree carries it", async () => {
     const acc = newTreeAccumulator("parent-tree");
     const blobs = await loadBlobs();
-    const big = "x".repeat(MAX_INLINE_BYTES); // trips the threshold alone
-    await addFileToTree(acc, client, blobs, textFile("big.md", big));
+    // Two inline files cross the threshold together (one file at or
+    // above it now takes the upload route instead — see the large-text
+    // tests below).
+    const big = "x".repeat(Math.ceil(MAX_INLINE_BYTES * 0.6));
+    await addFileToTree(acc, client, blobs, textFile("big-1.md", big));
+    await addFileToTree(acc, client, blobs, textFile("big-2.md", big));
     await addFileToTree(acc, client, blobs, textFile("tail.md", "small tail\n"));
     // Without the final flush the tail would silently never become a
     // tree (class I1): at this point only the auto-flush has run.
@@ -391,15 +399,78 @@ describe("tree accumulator (§VIII Q)", () => {
     expect(blobCalls).toHaveLength(0);
   });
 
-  it("one file above the threshold flushes by itself (bytes counted, not entries)", async () => {
+  // ── large text: the UPLOAD route, for resume (owner, 2026-10-10) ──
+  // A text file that would need a request of its own anyway (≥ the flush
+  // threshold) is uploaded as a blob instead of being sent inside a tree:
+  // the resume cache belongs to the upload route, so after a crash it is
+  // not sent again. Uploaded as utf-8 — the same bytes on the wire as
+  // inline, no base64 third.
+  const bigText = async (p: string, seed: string): Promise<TreeFile> => {
+    const content = seed.repeat(Math.ceil((MAX_INLINE_BYTES + 1) / seed.length));
+    const blob = enc(content);
+    return { path: p, sha: await calculateGitBlobSHA(blob), blob, mode: "" };
+  };
+
+  it("text ≥ the threshold → ONE utf-8 createBlob, recorded for resume, referenced by sha (no solo tree flush)", async () => {
     const acc = newTreeAccumulator("parent-tree");
-    await addFileToTree(
-      acc,
-      client,
-      await loadBlobs(),
-      textFile("huge.md", "z".repeat(MAX_INLINE_BYTES + 1)),
-    );
-    expect(treeCalls).toHaveLength(1); // auto-flushed alone
-    expect(acc.entries).toHaveLength(0);
+    const f = await bigText("huge.md", "Привіт, світе! 🌍\r\n");
+    const blobs = await loadBlobs();
+    await addFileToTree(acc, client, blobs, f);
+    expect(blobEncodings).toEqual(["utf-8"]);
+    expect(treeCalls).toHaveLength(0);
+    expect(acc.entries).toEqual([{ path: "huge.md", mode: "100644", type: "blob", sha: f.sha }]);
+    expect((await loadBlobs()).matches("huge.md", f.sha!)).toBe(true); // persisted
+  });
+
+  it("text below the threshold stays INLINE (no createBlob)", async () => {
+    const acc = newTreeAccumulator("parent-tree");
+    await addFileToTree(acc, client, await loadBlobs(), textFile("small.md", "Привіт\n"));
+    expect(blobCalls).toHaveLength(0);
+    expect(acc.entries[0]).toMatchObject({ path: "small.md", content: "Привіт\n" });
+  });
+
+  it("crash after the 1st of two big texts → the resume does NOT upload it again", async () => {
+    const files = [await bigText("a.md", "Ладософія — ч.1\n"), await bigText("b.md", "Ладовіра — ч.2\n")];
+    let uploads = 0;
+    const crashing: TreeAccumulatorClient = {
+      ...client,
+      createBlob: async (args) => {
+        uploads += 1;
+        if (uploads === 2) throw new Error("power loss");
+        return client.createBlob(args);
+      },
+    };
+    await expect(
+      (async () => {
+        const acc = newTreeAccumulator("parent-tree");
+        const blobs = await loadBlobs();
+        for (const f of files) await addFileToTree(acc, crashing, blobs, f);
+      })(),
+    ).rejects.toThrow("power loss");
+    blobCalls = [];
+    const acc2 = newTreeAccumulator("parent-tree");
+    const blobs2 = await loadBlobs();
+    for (const f of files) await addFileToTree(acc2, client, blobs2, f);
+    expect(blobCalls).toHaveLength(1); // only b.md
+    expect(acc2.entries.map((e) => e.sha)).toEqual(files.map((f) => f.sha));
+  });
+
+  it("🔴 utf-8 upload answered with a DIFFERENT sha → not recorded, WARN logged, re-uploaded as base64 (bytes verbatim)", async () => {
+    const acc = newTreeAccumulator("parent-tree");
+    const f = await bigText("huge.md", "Ї ґ є\n");
+    const errors: Array<[string, unknown]> = [];
+    const lying: TreeAccumulatorClient = {
+      ...client,
+      createBlob: async (args) =>
+        args.encoding === "utf-8" ? (blobEncodings.push("utf-8"), { sha: "not-our-bytes" }) : client.createBlob(args),
+    };
+    const blobs = await loadBlobs();
+    await addFileToTree(acc, lying, blobs, f, {
+      warn: (msg: string, data?: unknown) => errors.push([msg, data]),
+    });
+    expect(blobEncodings).toEqual(["utf-8", "base64"]);
+    expect(errors).toHaveLength(1);
+    expect(acc.entries).toEqual([{ path: "huge.md", mode: "100644", type: "blob", sha: f.sha }]);
+    expect((await loadBlobs()).get("huge.md")).toBe(f.sha); // never the foreign sha
   });
 });
