@@ -42,8 +42,7 @@ ARCHITECTURE, SYNC2 §5/§8.4, BUILDLOG, чекліст, `.claude/rules/testing.
 4. *(за рішенням власника)* порядкова звірка §III NEW-DRAIN із кодом (§IX.4).
 5. Академічний перепис `docs/SYNC2.md` — свідомо останнім.
 
-Прибрати на телефоні: `big-95MiB.bin` і `cancel-test-35MiB.bin` у `/sdcard/Download`,
-`big-95MiB.bin` у vault (ігнорується через `*.bin`).
+Тестові файли на телефоні (`big-95MiB.bin`, `cancel-test-35MiB.bin`) прибрано 2026-10-11.
 
 ---
 
