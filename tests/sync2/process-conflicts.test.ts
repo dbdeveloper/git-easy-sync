@@ -321,6 +321,62 @@ describe("process_conflicts (§VIII I)", () => {
     });
   });
 
+  // Owner, 2026-10-11: a copy that disappears must say WHY in the log — the
+  // field question "my copy vanished at sync" could only be answered by
+  // asking the user what they had done to it.
+  describe("every removed copy is logged with its reason", () => {
+    const logged = () => {
+      const lines: Array<{ message: string; data: Record<string, unknown> }> = [];
+      const logger = {
+        info: (message: string, data?: unknown) =>
+          lines.push({ message, data: (data ?? {}) as Record<string, unknown> }),
+      };
+      return { lines, deps: { ...deps(), logger } };
+    };
+
+    it("identical to the file → 'identical to the file', naming the copy", async () => {
+      putFile("note.md", "same\n");
+      const state = emptyConflictsState();
+      entry(state, "note.md", [await tracked("note.md", "same\n", 2000)]);
+      const { lines, deps: d } = logged();
+
+      await processConflicts(d, state);
+
+      const line = lines.find((l) => /identical to the file/i.test(l.message));
+      expect(line?.data).toMatchObject({ path: "note.md", copy: copyPath("note.md", 2000) });
+    });
+
+    it("identical to another copy → 'identical to another copy', naming the one kept", async () => {
+      putFile("note.md", "base\n");
+      const state = emptyConflictsState();
+      const older = await tracked("note.md", "agreed\n", 2000);
+      const newer = await tracked("note.md", "agreed\n", 5000, "laptop");
+      entry(state, "note.md", [older, newer]);
+      const { lines, deps: d } = logged();
+
+      await processConflicts(d, state);
+
+      const line = lines.find((l) => /identical to another copy/i.test(l.message));
+      expect(line?.data).toMatchObject({
+        path: "note.md",
+        copy: copyPath("note.md", 2000),
+        kept: copyPath("note.md", 5000, "laptop"),
+      });
+    });
+
+    it("gone from disk (deleted or renamed by the user) → 'no longer on disk'", async () => {
+      putFile("note.md", "base\n");
+      const state = emptyConflictsState();
+      entry(state, "note.md", [await tracked("note.md", "theirs\n", 2000, "phone", false)]);
+      const { lines, deps: d } = logged();
+
+      await processConflicts(d, state);
+
+      const line = lines.find((l) => /no longer on disk/i.test(l.message));
+      expect(line?.data).toMatchObject({ path: "note.md", copy: copyPath("note.md", 2000) });
+    });
+  });
+
   describe("2.2 dedup decides by the copies' CURRENT content", () => {
     it("🔑 two tracked copies edited to the same content → the newer (by timeLabel) survives", async () => {
       putFile("note.md", "base\n");
