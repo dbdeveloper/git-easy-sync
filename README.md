@@ -87,13 +87,14 @@ mid-range Android devices without OOM crashes.
   was committed, live progress if it runs longer than two seconds, then
   the result. A sync that finishes quickly shows no progress bar, only
   the outcome.
-- **Resume on crash.** Four layers of resume cover adoption pull,
-  incremental pull, push blob upload, and the find-changes → queue
-  bridge. A push interrupted mid-flight (Obsidian closed, phone
-  backgrounded, network drop) finishes on the next trigger without
-  duplicating commits. The conflict-resolution layer adds a
-  matching guarantee for its own multi-step writes — see
-  [CHANGELOG](./CHANGELOG.md).
+- **Resume after anything.** A sync stopped mid-way — by Cancel, a
+  dropped network, Obsidian being killed, a phone going flat — picks
+  up on the next sync where it stopped: no duplicated commits, no
+  false conflicts, and files whose upload already finished are not
+  sent again. The plugin records its progress on disk as each file
+  lands, so nothing depends on getting a chance to clean up.
+  Field-tested by killing Obsidian mid-sync on desktop and on
+  Android.
 - **Privacy-conservative defaults.** Plugin `data.json` files
   (which routinely store API tokens) and per-device configs
   (`workspace.json`, `workspace-mobile.json`, `community-plugins.json`,

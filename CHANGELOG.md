@@ -44,7 +44,7 @@ that cannot break Obsidian, and GitHub's real file-size limit.
 - **Expect one `.gitignore` commit after every upgrade.** The
   first line of each managed block now carries the version of the
   plugin that wrote it (`# ===== git-easy-sync invariants
-  v2.0.2-beta - DO NOT EDIT =====`), so the first sync after an
+  v<version> - DO NOT EDIT =====`), so the first sync after an
   upgrade rewrites those files. That is what lets an older device
   leave alone the rules a newer one wrote — it is not a defect.
 - **Root dot-files other than `.gitignore` stop syncing.** Earlier
