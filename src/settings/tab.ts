@@ -17,7 +17,7 @@ import { logFileNameFor } from "src/logger";
 import { formatSyncMessage } from "src/sync2/commit-message";
 import { renderTokenHelpBox } from "src/sync2/views/token-help";
 import { pluginsDataJsonToggleState } from "src/settings/toggle-rules";
-import { autoMergeSizeBytesFromInput } from "src/settings/auto-merge-size";
+import { autoMergeSizeKbFromInput, DEFAULT_AUTO_MERGE_KB } from "src/settings/auto-merge-size";
 import { cleanLogsDescription } from "src/settings/log-size";
 import { deconflictDeviceLabel } from "src/sync2/conflict-siblings";
 import { tokenExpiredMessage } from "src/token-expired-flag";
@@ -859,20 +859,19 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
               "choose the largest size to auto-merge when possible; a bigger file " +
               "changed on both sides becomes a conflict for you to resolve. Set 0 " +
               "for full manual control: every conflict is then left to you. " +
-              "Default about 1 MB; above ~2 MB a merge may hang noticeably.",
+              "Default 1024 KB (1 MB); above ~2 MB a merge may hang noticeably.",
           )
           .addText((text) => {
-              const current = Math.round(
-                  (this.plugin.settings.maxAutoMergeSizeBytes ?? 1_000_000) / 1024,
-              );
+              const current =
+                  this.plugin.settings.maxAutoMergedFileSizeKb ?? DEFAULT_AUTO_MERGE_KB;
               text
                   .setPlaceholder("0")
                   .setValue(String(current))
                   .onChange(async (value) => {
                       // An emptied field or a negative number is stored as 0;
                       // the next open shows it (auto-merge-size.ts).
-                      this.plugin.settings.maxAutoMergeSizeBytes =
-                          autoMergeSizeBytesFromInput(value ?? "");
+                      this.plugin.settings.maxAutoMergedFileSizeKb =
+                          autoMergeSizeKbFromInput(value ?? "");
                       await this.plugin.saveSettings();
                   });
           });

@@ -47,6 +47,7 @@ import {
   DEFAULT_SETTINGS,
 } from "../../../../src/settings/settings";
 import { requireEnv, RepoEnv } from "../../helpers";
+import { autoMergeLimitBytes } from "../../../../src/settings/auto-merge-size";
 import manifest from "../../../../manifest.json";
 
 const SELF_PLUGIN_ID = manifest.id;
@@ -310,7 +311,7 @@ export async function createSync2Client(
     // `settings.deviceLabel` between syncs and the next push picks
     // up the new value.
     deviceLabel: () => settings.deviceLabel ?? "sync2-int-test",
-    maxAutoMergeFileSize: () => settings.maxAutoMergeSizeBytes ?? 1_000_000,
+    maxAutoMergeFileSize: () => autoMergeLimitBytes(settings),
     accumulateOfflineSyncs: () => opts.consolidateCommits ?? false,
     autoCanonicalize: () => opts.autoCanonicalize ?? true,
     tokenExpired: async () => false,

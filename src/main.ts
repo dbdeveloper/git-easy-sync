@@ -26,6 +26,7 @@ import {
 import { GitHubSyncSettings, DEFAULT_SETTINGS } from "./settings/settings";
 import GitHubSyncSettingsTab from "./settings/tab";
 import { pluginsDataJsonToggleState } from "./settings/toggle-rules";
+import { autoMergeLimitBytes } from "./settings/auto-merge-size";
 import {
   deconflictDeviceLabel,
   MIGRATION_DEVICE_LABEL,
@@ -1649,8 +1650,7 @@ export default class GitHubSyncPlugin extends Plugin {
       // whether the user had filled in an optional Settings field. See
       // git-identity.ts for the measurements behind this.
       gitAuthor: () => resolveGitIdentity(this.settings),
-      maxAutoMergeFileSize: () =>
-        this.settings.maxAutoMergeSizeBytes ?? 1_000_000,
+      maxAutoMergeFileSize: () => autoMergeLimitBytes(this.settings),
       accumulateOfflineSyncs: () => this.settings.consolidateCommits ?? false,
       autoCanonicalize: () =>
         this.settings.autoCanonicalizeTextFiles ?? false,

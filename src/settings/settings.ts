@@ -168,10 +168,11 @@ export interface GitHubSyncSettings {
   // needs auto-merge above 1 MB AND you've measured the wall-clock
   // on the slowest device.
   //
-  // Stored in bytes (not KB / MB) so the wire format never has a
-  // decimal-point ambiguity (e.g., "1.5" vs "1500000"). Settings UI
-  // surfaces the input in KB for readability and converts.
-  maxAutoMergeSizeBytes?: number;
+  // Stored in whole KB, exactly as the field shows it (owner,
+  // 2026-10-11). 0 = auto-merge OFF for every file. The byte-valued
+  // `maxAutoMergeSizeBytes` of older builds is ignored, not migrated
+  // (settings/auto-merge-size.ts).
+  maxAutoMergedFileSizeKb?: number;
 
   // Per-device. See the note below for why it is per-device and how it
   // reaches the matcher. Default OFF: a plugin's data.json may hold API
@@ -228,5 +229,5 @@ export const DEFAULT_SETTINGS: GitHubSyncSettings = {
   // the safe behavior and lets users who actually want canonical
   // text on disk turn it on knowingly.
   autoCanonicalizeTextFiles: false,
-  maxAutoMergeSizeBytes: 1_000_000,
+  maxAutoMergedFileSizeKb: 1024,
 };
