@@ -137,10 +137,11 @@ src/
 │                                    #  createBlob answers "too large" with ONE attempt → BlobTooLargeError
 ├── settings/
 │   ├── settings.ts                  # GitHubSyncSettings + DEFAULT_SETTINGS (syncStartsWithCommit,
-│   │                                #  showCommitRibbonButton, consolidateCommits, maxAutoMergeSizeBytes)
+│   │                                #  showCommitRibbonButton, consolidateCommits, maxAutoMergedFileSizeKb)
 │   ├── log-size.ts                  # "Clean logs" description: the live log size, "1.2 MB (1 234 567 bytes)"
-│   ├── auto-merge-size.ts           # "Max size of auto-merged files": KB text → bytes; 0 = auto-merge OFF,
-│                                    #  and an emptied / negative / non-numeric field is 0 too
+│   ├── auto-merge-size.ts           # "Max size of auto-merged files": field text → KB (0 = auto-merge OFF;
+│                                    #  emptied / negative / non-numeric → 0) and KB → the engine's byte limit.
+│                                    #  Old key maxAutoMergeSizeBytes ignored
 │   ├── toggle-rules.ts              # "Sync plugins data.json" is SUBORDINATE to "Sync configs":
 │   │                                #  parent OFF forces it off + greys it, ON only makes it
 │   │                                #  reachable. Pure, because tab.ts has no render harness.

@@ -1900,12 +1900,15 @@ algorithm. Decided once at construction, cached on `isFallback`.
 The size guard (§8.6) remains the safety net for the
 fallback-mode CPU operations.
 
-### 8.6 Size guard (`maxAutoMergeSizeBytes`)
+### 8.6 Size guard (`maxAutoMergedFileSizeKb`, formerly `maxAutoMergeSizeBytes`)
 
 Defense in depth even with Worker offload. Above the configured
-limit (default 1 MB, exposed in Settings → Performance), the
-engine skips `attemptAutoMerge` entirely and just uploads the
-local bytes. Two reasons for the guard:
+limit (default 1024 KB, Settings → Conflict resolution → *Max size of
+auto-merged files*), the engine skips the merge. *(Corrected
+2026-10-11: since THE SWITCH a skipped merge is a MANUAL CONFLICT
+(NEW-DRAIN §II.1 rule 7), not "ours wins" — the text below about
+uploading the local bytes describes the pre-SWITCH engine. 0 turns
+auto-merge off for every file.)* Two reasons for the guard:
 
 1. **node-diff3 wall-clock**: even off the main thread, 5 MB of
    text takes ~26 s on Node, much more on a phone. The user is

@@ -243,7 +243,10 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   field or a negative number is stored as 0. The setting moved to
   its own *Conflict resolution* group as *Max size of auto-merged
   files*, and its description no longer claims that a large file is
-  simply uploaded — it becomes a conflict.
+  simply uploaded — it becomes a conflict. It is stored in KB, as
+  shown, under a new key (`maxAutoMergedFileSizeKb`, default 1024);
+  a value saved by an earlier version is not carried over, so a
+  changed limit has to be entered again.
 - **Errors**: every error you are shown is also written to the log,
   and a failed HTTP request is logged at the level its status
   deserves.

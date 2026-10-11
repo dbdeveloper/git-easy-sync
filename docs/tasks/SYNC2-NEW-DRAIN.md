@@ -257,8 +257,11 @@ b. Якщо файли знаходяться в `.obsidian/`, тобто нал
        ⚠️ **UI (власник, 2026-10-11):** у Settings це поле «Max size of auto-merged files (KB)» у власній групі
        «Conflict resolution» (раніше «Maximum auto-merge file size» у групі «Performance»). Поле вважало 0
        помилкою і мовчки записувало 1 МБ — тож 0 нічого не вимикав (польовий тест `~/Obsidian-test`). Тепер
-       `autoMergeSizeBytesFromInput` (`src/settings/auto-merge-size.ts`): 0 → 0; порожнє поле, від'ємне число чи
-       не-число → теж 0 (при наступному відкритті Settings поле показує записаний 0).
+       `autoMergeSizeKbFromInput` (`src/settings/auto-merge-size.ts`): 0 → 0; порожнє поле, від'ємне число чи
+       не-число → теж 0 (при наступному відкритті Settings поле показує записаний 0). Ключ у data.json —
+       `maxAutoMergedFileSizeKb`, у КБ, як у полі; за замовчуванням 1024 (= 1 МБ), відсутній ключ — як і всі
+       інші — бере значення за замовчуванням. Старий `maxAutoMergeSizeBytes` (байти) не читається й не
+       переноситься (власник: користувач поки один, без міграційного коду).
 
        **Уточнення:** на момент перевірки правила 7 жодна зі сторін НЕ може бути DELETED — усі DELETED-комбінації вже
        повернулись раніше: у правилах 3-6: `remote=DELETED` при `local≠base` ловить 6.a, при `local==base` ловить 3
