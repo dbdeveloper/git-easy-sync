@@ -846,6 +846,26 @@ describe("ChangeDetector", () => {
       const out = await det.findChanges();
       expect(out.find((c) => c.path === "a.md")).toBeUndefined();
     });
+
+    // Field, 2026-10-11: the same churn for a delete-vs-modify conflict —
+    // the base was deleted locally, the branch records that deletion
+    // (conflictBase.sha null), the baseline is main's version, so every
+    // pass reported "deleted" again.
+    it("🔑 base DELETED and the branch records the deletion → NOT reported again", async () => {
+      await f.store.set("a.md", { baselineSha: "MAIN-SHA", mtime: 1, size: 1 });
+      await f.hot.update({ lastCommitMtime: WM });
+      const det = detectorWithConflictBase((p) => (p === "a.md" ? null : undefined));
+      const out = await det.findChanges();
+      expect(out.find((c) => c.path === "a.md")).toBeUndefined();
+    });
+
+    it("base deleted but the branch still holds our version → the deletion IS reported", async () => {
+      await f.store.set("a.md", { baselineSha: "MAIN-SHA", mtime: 1, size: 1 });
+      await f.hot.update({ lastCommitMtime: WM });
+      const det = detectorWithConflictBase((p) => (p === "a.md" ? "BRANCH-SHA" : undefined));
+      const out = await det.findChanges();
+      expect(out.find((c) => c.path === "a.md")?.kind).toBe("deleted");
+    });
   });
 });
 

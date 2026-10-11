@@ -761,6 +761,12 @@ export default class ChangeDetector {
           removals.push(path);
           continue;
         }
+        // A conflicted base whose CONFLICT BRANCH already records the
+        // deletion (conflictBase.sha null) is not a new change: the
+        // baseline is main's version while the conflict is open (STEP2),
+        // so without this every pass reported the same deletion again
+        // (owner, 2026-10-11).
+        if (this.conflictBaseSha?.(path) === null) continue;
         deletions.push({
           kind: "deleted",
           path,

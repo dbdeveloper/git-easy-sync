@@ -145,7 +145,57 @@ describe("ConflictStoreV2", () => {
 
   // ── cached view (Phase 5.5 step 3a — the diff2 port's sync surface) ──
 
+  // The copy's identity and its content cache survive conflicts.json
+  // (owner, 2026-10-11): without timeLabel the copy cannot be found; without
+  // mtime/size the next pass re-reads every copy; without originSha the next
+  // fold has no ancestor.
+  it("a copy's timeLabel, originSha and content cache {sha,size,mtime} round-trip through the file", async () => {
+    const state = emptyConflictsState();
+    state.entries.set("n.md", {
+      conflictBase: { ...emptyFileInfo(), path: "n.md", sha: "cb" },
+      siblings: [
+        {
+          ...emptyFileInfo(),
+          path: "n.md",
+          deviceLabel: "phone",
+          timeLabel: 1_791_750_353_000,
+          originSha: "origin",
+          sha: "edited-content",
+          size: 42,
+          mtime: 1_791_760_000_123,
+        },
+      ],
+    });
+    await store.save(state);
+    const fresh = new ConflictStoreV2({ vault: vault as never, selfPluginId: PLUGIN_ID });
+    const s0 = (await fresh.load()).entries.get("n.md")!.siblings[0];
+    expect(s0).toMatchObject({
+      timeLabel: 1_791_750_353_000,
+      originSha: "origin",
+      sha: "edited-content",
+      size: 42,
+      mtime: 1_791_760_000_123,
+      deviceLabel: "phone",
+    });
+  });
+
   describe("cached view", () => {
+    // The commit pass's "unchanged?" reference for a conflicted base
+    // (owner, 2026-10-11): what sits on the CONFLICT BRANCH, not main.
+    // undefined = not in conflict (compare as usual); null = the branch
+    // records a DELETION; a sha = the branch's version.
+    it("conflictBaseShaFor: the branch's version, null for a recorded deletion, undefined when not in conflict", async () => {
+      const state = sample();
+      state.entries.set("gone.md", {
+        conflictBase: { ...emptyFileInfo(), path: "gone.md", sha: null },
+        siblings: [],
+      });
+      await store.save(state);
+      expect(store.conflictBaseShaFor("clash.md")).toBe("cb-sha");
+      expect(store.conflictBaseShaFor("gone.md")).toBeNull();
+      expect(store.conflictBaseShaFor("calm.md")).toBeUndefined();
+    });
+
     it("load() populates the cache: hasBase / hasSiblingPath / getBySiblingPath answer synchronously", async () => {
       await store.save(sample());
       const fresh = new ConflictStoreV2({

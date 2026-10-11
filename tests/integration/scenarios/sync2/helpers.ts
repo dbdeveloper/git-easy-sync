@@ -190,6 +190,7 @@ export async function createSync2Client(
   // Detector's queue-dedup reads the manager's per-pass index —
   // same lazy-thunk wiring as production main.ts.
   let managerRef: Sync2Manager | null = null;
+  let conflictStoreRef: ConflictStoreV2 | undefined;
   const detector = new ChangeDetector({
     vault,
     hotMeta,
@@ -208,6 +209,9 @@ export async function createSync2Client(
     // stores proven blobs, with the SAME toggle getter as the writer.
     syncStore,
     autoCanonicalize: () => opts.autoCanonicalize ?? true,
+    // Production composition: a conflicted base is compared with its
+    // CONFLICT BRANCH version. Lazy — the store is built further down.
+    conflictBaseSha: (p: string) => conflictStoreRef?.conflictBaseShaFor(p),
   });
   // DOT-FILES §8.0 — the fixture MUST carry the same composition the
   // product has. An earlier shape of this fix was optional here, the
@@ -262,6 +266,7 @@ export async function createSync2Client(
     selfPluginId: SELF_PLUGIN_ID,
   });
   await conflictStoreV2.load();
+  conflictStoreRef = conflictStoreV2;
   const siblingTx = new SiblingTx({
     vault,
     selfPluginId: SELF_PLUGIN_ID,

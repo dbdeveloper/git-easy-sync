@@ -1401,11 +1401,13 @@ export default class GitHubSyncPlugin extends Plugin {
         peekLatestPathSha: async (p: string) =>
           (await this.sync2Manager?.peekLatestPathSha(p)) ?? null,
       },
-      // (TODO §26's conflictBaseSha resolver died with the old
-      // engine: in the new drain, conflict bases are routed to the
-      // conflict branch by the DRAIN's shouldPushToConflictBranch
-      // dedup, not filtered at commit time — an extra enqueue is the
-      // accepted §6.3 churn.)
+      // A conflicted base is "unchanged" when it equals its CONFLICT
+      // BRANCH version, not main's (owner, 2026-10-11; the old engine's
+      // TODO §26). The wiring was dropped at THE SWITCH as "accepted
+      // §6.3 churn" — but that ruling was about a deferred drain; here
+      // it meant one no-op commit on EVERY tick while a conflict stayed
+      // open. Lazy: the store is constructed further down in onload.
+      conflictBaseSha: (p: string) => this.conflictStoreV2?.conflictBaseShaFor(p),
     });
     // DOT-FILES §8.0 — which managed .gitignore files are, right now,
     // exactly what we seeded. The drain uses them as fake ancestors so
