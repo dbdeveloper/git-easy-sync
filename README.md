@@ -685,8 +685,8 @@ time looking for them:
 - **"Sync with GitHub (custom message)…" command** and
   **"Sync current file with GitHub (custom message)…" command** —
   **removed**. Same reason as above: hardcoded messages mean
-  there's nothing left to customise per-click. Two commands remain:
-  `Sync with GitHub` and `Sync current file with GitHub`.
+  there's nothing left to customise per-click. (Today's commands are
+  listed under [Commands and integrations](#commands-and-integrations).)
 - **Pending-conflicts list in the settings tab** — **removed**.
   Visibility for unresolved conflicts now lives in three places:
   the status bar `N ⁇` indicator, the side-ribbon badge, and the
@@ -756,7 +756,7 @@ Your root `.gitignore` gets two managed sections, and the
 difference between them is deliberate:
 
 ```gitignore
-# ===== git-easy-sync invariants - DO NOT EDIT =====
+# ===== git-easy-sync invariants v2.0.2-beta - DO NOT EDIT =====
 .*                       ← hide dot-space
 .*/
 !/.gitignore
@@ -765,8 +765,8 @@ difference between them is deliberate:
 
 ...your rules go here, and they OVERRIDE the block above...
 
-# ===== git-easy-sync final - DO NOT EDIT =====
-!.obsidian/              ← these cannot be overridden
+# ===== git-easy-sync final v2.0.2-beta - DO NOT EDIT =====
+!/.obsidian/             ← these cannot be overridden
 *.conflict-from-*
 *.ges-tmp*
 *.ges-bak*
@@ -774,7 +774,8 @@ difference between them is deliberate:
 ```
 
 *(Abridged — the real blocks carry explanatory comments between these
-lines. The rules themselves are exactly as shown.)*
+lines. The rules themselves are exactly as shown. `v2.0.2-beta` stands for
+the version of the plugin that wrote the block.)*
 
 The **top** block is a default you are invited to change — your
 rules sit below it and win. The **bottom** block is not: it holds
@@ -847,7 +848,7 @@ sides on its own. The strategy depends on the file type:
 | File type | Auto-merge strategy | Surfaces as a conflict only when… |
 |---|---|---|
 | Text (`.md`, `.txt`, …) | Three-way merge against the last-synced base. | Edits overlap on the same line. |
-| Text above *Maximum auto-merge file size* (default 1 MB) | None — merging is skipped. | The two sides differ. |
+| Text above *Maximum auto-merge file size* (default 1 MB) | None — merging is skipped. | Both sides changed it (a change on one side still syncs normally). |
 | Plugin bundle (`<plugin>/main.js`, `<plugin>/manifest.json`) | Higher version from `manifest.json` wins; when the versions cannot decide, the newer edit wins. | Never. |
 | Other files under `.obsidian/` | The side that changed wins; if both changed, the newer edit wins — and the repository's version when there is no common history (a new device's first sync). | Never. |
 | Binary (`.png`, `.pdf`, attachments) | None — binary always surfaces. | Both sides changed it (no silent overwrites of edited images). |
@@ -961,9 +962,9 @@ your normal-mode commands via the `obsidian-vimrc-support` plugin.
 Example (`.obsidian.vimrc`):
 
 ```vim
-" Sync current file with one keystroke
-exmap syncFile obcommand git-easy-sync:sync-current-file
-nmap <leader>gs :syncFile<CR>
+" Sync the vault with one keystroke
+exmap syncVault obcommand git-easy-sync:sync
+nmap <leader>gs :syncVault<CR>
 ```
 
 <!-- SCREENSHOT: vim-mode binding in action -->
