@@ -37,7 +37,7 @@ ARCHITECTURE, SYNC2 §5/§8.4, BUILDLOG, чекліст, `.claude/rules/testing.
    версій Obsidian).
 2. Опис налаштування «Maximum auto-merge file size» у Settings каже «just uploads your local
    bytes», а код (`diff3.ts`, п.4.7) робить з такого файлу КОНФЛІКТ — текст у UI треба виправити
-   (знайдено під час звірки README, код не чіпав).
+   (знайдено під час звірки README, код не чіпав; TODO п.57).
 3. Окреме дослідження: великі медіафайли / Git LFS (TODO п.56).
 4. *(за рішенням власника)* порядкова звірка §III NEW-DRAIN із кодом (§IX.4).
 5. Академічний перепис `docs/SYNC2.md` — свідомо останнім.
