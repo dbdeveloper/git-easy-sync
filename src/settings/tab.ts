@@ -17,6 +17,7 @@ import { logFileNameFor } from "src/logger";
 import { formatSyncMessage } from "src/sync2/commit-message";
 import { renderTokenHelpBox } from "src/sync2/views/token-help";
 import { pluginsDataJsonToggleState } from "src/settings/toggle-rules";
+import { autoMergeSizeBytesFromInput } from "src/settings/auto-merge-size";
 import { cleanLogsDescription } from "src/settings/log-size";
 import { deconflictDeviceLabel } from "src/sync2/conflict-siblings";
 import { tokenExpiredMessage } from "src/token-expired-flag";
@@ -843,37 +844,35 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
               });
       }
 
-      // ── Performance ─────────────────────────────────────────────────
-      new Setting(containerEl).setName("Performance").setHeading();
+      // ── Conflict resolution ────────────────────────────────────────
+      // Its own group, replacing "Performance" (owner, 2026-10-11): since
+      // 0 means "every conflict is mine", this field decides which
+      // conflicts the plugin resolves by itself — not how fast it runs,
+      // and not how the diff editor looks.
+      new Setting(containerEl).setName("Conflict resolution").setHeading();
 
       new Setting(containerEl)
-          .setName("Maximum auto-merge file size (KB)")
+          .setName("Max size of auto-merged files (KB)")
           .setDesc(
-              "Skip the 3-way text auto-merge for files larger than this. " +
-              "Above the threshold the engine just uploads your local " +
-              "bytes (no automated merge) — useful to sidestep multi-MB " +
-              "merge slowdowns. Default 1024 KB (1 MB). Increasing past " +
-              "~2 MB may cause noticeable hangs even with worker offload.",
+              "When the same file changed on both sides, the plugin tries to merge " +
+              "the two versions by itself. That merge is expensive on big files, so " +
+              "choose the largest size to auto-merge when possible; a bigger file " +
+              "changed on both sides becomes a conflict for you to resolve. Set 0 " +
+              "for full manual control: every conflict is then left to you. " +
+              "Default about 1 MB; above ~2 MB a merge may hang noticeably.",
           )
           .addText((text) => {
               const current = Math.round(
                   (this.plugin.settings.maxAutoMergeSizeBytes ?? 1_000_000) / 1024,
               );
               text
-                  .setPlaceholder("1024")
+                  .setPlaceholder("0")
                   .setValue(String(current))
                   .onChange(async (value) => {
-                      const kb = Number((value ?? "").trim());
-                      if (!Number.isFinite(kb) || kb <= 0) {
-                          // Invalid input — fall back to default. Don't surface
-                          // a modal; the placeholder + description tell the user
-                          // what's expected.
-                          this.plugin.settings.maxAutoMergeSizeBytes = 1_000_000;
-                      } else {
-                          this.plugin.settings.maxAutoMergeSizeBytes = Math.round(
-                              kb * 1024,
-                          );
-                      }
+                      // An emptied field or a negative number is stored as 0;
+                      // the next open shows it (auto-merge-size.ts).
+                      this.plugin.settings.maxAutoMergeSizeBytes =
+                          autoMergeSizeBytesFromInput(value ?? "");
                       await this.plugin.saveSettings();
                   });
           });
