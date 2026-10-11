@@ -86,6 +86,23 @@ export interface DiffDetailHost {
 }
 
 export class DiffDetailController {
+  // A failed mount whose conflict copy is no longer on disk is not an error: the
+  // conflict was resolved under the tab (field, 2026-10-11 — a reload restored the
+  // tab while the onload reconcile deleted a copy that matched its base; the view's
+  // own exists-check had passed ms earlier). Close the tab silently, as that check
+  // would have. A History/Deleted entry has no copy (its "sibling" IS the file, and
+  // its own missing-file case closes WITH a notice) — it never takes this path.
+  private async copyIsGone(entry: ConflictEntry): Promise<boolean> {
+    if (entry.historyVersionSha !== undefined || entry.siblingPath === entry.basePath) return false;
+    if (await this.deps.vault.adapter.exists(entry.siblingPath)) return false;
+    this.deps.logger?.info("diff2: the conflict copy is gone (resolved) — closing its editor", {
+      base: entry.basePath,
+      siblingPath: entry.siblingPath,
+    });
+    this.host.onLeaveDetail();
+    return true;
+  }
+
   // §2.2.15 toolbar — the live handle (update on every owner change) + per-session
   // Auto-focus state + the last conflict count (to detect a resolve = count
   // decrease → focus first).
@@ -703,6 +720,7 @@ export class DiffDetailController {
         // already focused).
         this.owner?.focus();
       } catch (err) {
+        if (await this.copyIsGone(entry)) return;
         this.deps.logger?.error("diff2: could not start the edit session", { base: entry.basePath, err: String(err) });
         body.createEl("p", {
           cls: "diff2-detail-error",
@@ -711,6 +729,7 @@ export class DiffDetailController {
         return;
       }
     } catch (err) {
+      if (await this.copyIsGone(entry)) return;
       this.deps.logger?.error("diff2: failed to load the diff", { base: entry.basePath, err: String(err) });
       body.createEl("p", {
         cls: "diff2-detail-error",

@@ -158,6 +158,24 @@ describe("DiffDetailController host seam (S2)", () => {
     ctl.dispose();
   });
 
+  // Field, 2026-10-11 (owner, ~/Obsidian-test): a plugin reload restored an editor tab
+  // while the onload conflict reconcile — fire-and-forget — deleted its copy, which by
+  // then matched the base. The view's own "copy exists?" check passed a few ms earlier;
+  // the session start then hit ENOENT and the tab showed "Failed to start the edit
+  // session". A copy that is gone means the conflict was resolved: close, silently.
+  it("the copy vanished before the session read it → the tab closes silently, no error body", async () => {
+    const { siblingPath, entry } = await writeInputs("a\nSAME\nc\n", "a\nSAME\nc\n");
+    await fx.vault.adapter.remove(siblingPath); // the reconcile won the race
+    const host = recordingHost();
+    const ctl = new DiffDetailController({} as unknown as App, deps(), host);
+
+    await ctl.mount(container, entry);
+
+    expect(host.leaveCount).toBe(1);
+    expect(container.querySelector(".diff2-detail-error")).toBeNull();
+    ctl.dispose();
+  });
+
   it("fresh mount → edit → exit() commits: onCommitExit fires, base written, dir wiped", async () => {
     const base = "a\nMINE\nc\n";
     const sibling = "a\nTHEIRS\nc\n";
