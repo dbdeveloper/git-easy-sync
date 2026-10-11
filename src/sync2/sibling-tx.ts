@@ -92,7 +92,7 @@ export default class SiblingTx {
   // a size mismatch fails WITHOUT reading or hashing (C.22).
   async verifySiblingFileIntegrity(f: FileInfo): Promise<boolean> {
     const siblingPath = normalizePath(
-      buildSiblingFilePath(f.path ?? "", f.mtime ?? 0, f.deviceLabel),
+      buildSiblingFilePath(f.path ?? "", f.timeLabel ?? 0, f.deviceLabel),
     );
     const stat = await this.vault.adapter.stat(siblingPath);
     if (!stat) return false;
@@ -151,7 +151,7 @@ export default class SiblingTx {
 
   private async removeSiblingFileIfExists(f: FileInfo): Promise<void> {
     const p = normalizePath(
-      buildSiblingFilePath(f.path ?? "", f.mtime ?? 0, f.deviceLabel),
+      buildSiblingFilePath(f.path ?? "", f.timeLabel ?? 0, f.deviceLabel),
     );
     if (await this.vault.adapter.exists(p)) {
       await this.vault.adapter.remove(p);
@@ -190,7 +190,7 @@ export default class SiblingTx {
     // 2 — the new sibling file (atomicWrite inside).
     await saveConflictSiblingFile(this.vault, {
       path,
-      mtime: newSibling.mtime ?? 0,
+      timeLabel: newSibling.timeLabel ?? 0,
       deviceLabel: newSibling.deviceLabel,
       blob: newSibling.blob,
     });
@@ -208,12 +208,12 @@ export default class SiblingTx {
     // wrote.
     const oldName = buildSiblingFilePath(
       oldNoBlob.path ?? "",
-      oldNoBlob.mtime ?? 0,
+      oldNoBlob.timeLabel ?? 0,
       oldNoBlob.deviceLabel,
     );
     const newName = buildSiblingFilePath(
       newNoBlob.path ?? "",
-      newNoBlob.mtime ?? 0,
+      newNoBlob.timeLabel ?? 0,
       newNoBlob.deviceLabel,
     );
     if (oldName !== newName) {

@@ -236,7 +236,7 @@ describe("diff2 port real composition (drainOnce → conflicts.json → findAllC
     const state = conflictStore.getCachedState();
     expect(state.entries.has(NOTE)).toBe(true);
     const sib = state.entries.get(NOTE)!.siblings.at(-1)!;
-    const sibName = buildSiblingFilePath(NOTE, sib.mtime ?? 0, sib.deviceLabel);
+    const sibName = buildSiblingFilePath(NOTE, sib.timeLabel ?? 0, sib.deviceLabel);
     expect(fs.existsSync(path.join(dir, sibName))).toBe(true);
 
     // An unregistered look-alike next to it (the user copied the pair

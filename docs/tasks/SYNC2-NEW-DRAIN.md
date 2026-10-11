@@ -1372,7 +1372,7 @@ FINALIZE лишається заблокованим (`len(conflicts) != 0`).
 mark = {
     guid,                # унікальний токен цієї конкретної спроби (не mtime!)
     path,                 # шлях base-файлу (P)
-    oldSibling,           # ПОВНИЙ FileInfo {path, sha, size, mtime, device_label} — потрібен
+    oldSibling,           # ПОВНИЙ FileInfo {path, sha, size, time_label, device_label} — потрібен
                           # цілком, не лише ім'я: якщо новий sibling-файл виявиться битим
                           # (перевірка 2 провалилась) — єдина умова відкату за sibling-driven
                           # контрактом — відкат відновлює САМЕ цей об'єкт
@@ -1447,7 +1447,7 @@ if mark is not null:
             # закомміченої транзакції), інакше вона брехатиме назавжди (транзакція НЕ закомітилась):
             conflicts.lastSiblingTxGuid = null
             saveConflictsToStore(conflicts)
-        removeFromVaultIfExists(buildSiblingFilePath(mark.newSibling.path, mark.newSibling.mtime,
+        removeFromVaultIfExists(buildSiblingFilePath(mark.newSibling.path, mark.newSibling.time_label,
             mark.newSibling.device_label))     # безумовно НАШ артефакт транзакції — нікому іншому
                                                 # взятись нема звідки, прибираємо завжди
         # mark.oldSibling НЕ займаємо: якщо він ще на диску, він більше не tracked цим (уже
@@ -1464,7 +1464,7 @@ if mark is not null:
             conflicts.lastSiblingTxGuid = mark.guid
             saveConflictsToStore(conflicts)    # крок 3 (реконструкція old+мітка→new; НЕ потребує
                                                 # tmp-байтів — sweep міг їх уже відкинути, це нормально)
-        removeFromVaultIfExists(buildSiblingFilePath(mark.oldSibling.path, mark.oldSibling.mtime,
+        removeFromVaultIfExists(buildSiblingFilePath(mark.oldSibling.path, mark.oldSibling.time_label,
             mark.oldSibling.device_label))     # крок 4, 404-tolerant — no-op, якщо вже виконано
     else:
         # НАЗАД — відкат до перед-транзакційного стану (`current` тут ГАРАНТОВАНО not null —
@@ -1496,7 +1496,7 @@ if mark is not null:
                                                 # стає чесною: "guid останньої УСПІШНО закомміченої
                                                 # транзакції", а не "останньої спроби"
             saveConflictsToStore(conflicts)    # реверс кроку 3
-        removeFromVaultIfExists(buildSiblingFilePath(mark.newSibling.path, mark.newSibling.mtime,
+        removeFromVaultIfExists(buildSiblingFilePath(mark.newSibling.path, mark.newSibling.time_label,
             mark.newSibling.device_label))     # прибрати биту/часткову спробу
         # Старий sibling-ФАЙЛ тут нічим не займаємо (не видаляємо й не переписуємо) — якщо він
         # цілий, журнал живий і наступний Vault-step сам домержить fold; якщо ні — запис уже
@@ -3217,7 +3217,12 @@ def getCommitInfoForPath(path, atSha):   # ⚠️ ПЕРЕЙМЕНОВАНО з 
             null)
 
 
-def buildSiblingFilePath(basePath, mtime, device_label):
+def buildSiblingFilePath(basePath, time_label, device_label):
+    # ⚠️ 2026-10-11 (власник): поле копії, з якого будується ім'я, — `time_label` (у коді
+    # `timeLabel`), а НЕ `mtime`. Раніше воно звалось `mtime`, хоча це мітка часу з ІМЕНІ
+    # (дата останнього злитого серверного коміту, §II.6 п.5), а не час зміни файлу; у
+    # синтетичної копії те саме слово означало справжній `stat.mtime`. Тепер `mtime` копії —
+    # завжди час зміни її файлу на диску.
     # Чиста функція — ЄДИНЕ джерело істини для імені sibling-файлу на диску. Викликається і при
     # записі (`saveConflictSiblingFile`), і при читанні (`readSiblingFileFromVault`), і при
     # скануванні (`findConflictSiblingFilesInVault`) — тому зміна формату в одному місці
@@ -3253,13 +3258,13 @@ def saveConflictSiblingFile(fileInfo):
     # fileInfo.path — ШЛЯХ BASE-ФАЙЛУ (P), НЕ sibling-файлу (власник, 2026-08-25: "в sibling.path
     # писав би саме path до base.file" — підтверджено; усі виклики нижче в §III передають сюди
     # FileInfo з `.path == P`, включно з `merged_sibling`, що успадковує `.path` від `tracked`
-    # через _diff3()). fileInfo.mtime / fileInfo.device_label — те, що йде в ім'я (§II.6 п.5:
-    # mtime ЗАВЖДИ tracked.remote.mtime; device_label — той самий принцип, вище). fileInfo.blob —
+    # через _diff3()). fileInfo.time_label / fileInfo.device_label — те, що йде в ім'я (§II.6 п.5:
+    # time_label ЗАВЖДИ tracked.remote.mtime; device_label — той самий принцип, вище). fileInfo.blob —
     # байти вмісту.
-    siblingPath = buildSiblingFilePath(fileInfo.path, fileInfo.mtime, fileInfo.device_label)
+    siblingPath = buildSiblingFilePath(fileInfo.path, fileInfo.time_label, fileInfo.device_label)
     atomicWrite(siblingPath, fileInfo.blob)
     # Повертане значення викликачі ІГНОРУЮТЬ — сирий fileInfo (`.path == P`) іде в `siblings`-
-    # список без змін (§III, усюди); фактичне ім'я на диску похідне (path+mtime+device_label),
+    # список без змін (§III, усюди); фактичне ім'я на диску похідне (path+time_label+device_label),
     # рушій ніколи не тримає його окремим полем структури.
 
 
@@ -3267,8 +3272,8 @@ def readSiblingFileFromVault(fileInfo):
     # ⚠️ ВИПРАВЛЕНО ЗАРАЗОМ виклик у STEP3 (§III, `previous_sibling.blob = ...`): раніше передавав
     # лише `.path` (== P, вироджено — усі елементи `siblings` мають ОДНАКОВИЙ `.path`, §III
     # `process_conflicts()` "TRACKED vs SYNTHETIC") — функція не могла б визначити, ЯКИЙ саме
-    # sibling читати без mtime+device_label. Потрібен ВЕСЬ FileInfo, не сам path.
-    siblingPath = buildSiblingFilePath(fileInfo.path, fileInfo.mtime, fileInfo.device_label)
+    # sibling читати без time_label+device_label. Потрібен ВЕСЬ FileInfo, не сам path.
+    siblingPath = buildSiblingFilePath(fileInfo.path, fileInfo.time_label, fileInfo.device_label)
     if not vaultFileExists(siblingPath):
         return null   # той самий клас, що LOCAL_FILE_IS_NOT_FOUND_ERROR нижче за течією —
                        # викликач (STEP3) сам вирішує, що робити
@@ -3281,7 +3286,7 @@ def findConflictSiblingFilesInVault(path, siblings):
     trackedOnDisk = []
     expectedPaths = Set()
     for s in siblings:
-        siblingPath = buildSiblingFilePath(path, s.mtime, s.device_label)
+        siblingPath = buildSiblingFilePath(path, s.time_label, s.device_label)
         expectedPaths.add(siblingPath)
         if vaultFileExists(siblingPath):
             trackedOnDisk.add(s)  # blob НЕ читаємо тут — лише перевіряємо присутність; SHA-звірка
@@ -3311,7 +3316,7 @@ SIBLING_TX_MARK_PATH = ".runtime/sibling-tx-mark.json"  # один слот — 
                                                           # (§VI.2: per-file обробка послідовна)
 
 def writeSiblingTransactionMark(guid, path, oldSibling, newSibling):
-    # oldSibling/newSibling — ПОВНІ FileInfo {path, sha, size, mtime, device_label}, не самі
+    # oldSibling/newSibling — ПОВНІ FileInfo {path, sha, size, time_label, device_label}, не самі
     # імена: відновлення (нижче) або верифікує newSibling за SHA, або відкочує durable-запис на
     # oldSibling цілком — для обох потрібен весь об'єкт, не рядок.
     atomicWrite(SIBLING_TX_MARK_PATH, {guid: guid, path: path, oldSibling: oldSibling, newSibling: newSibling})
@@ -3332,7 +3337,7 @@ def verifySiblingFileIntegrity(fileInfo):
     # §II.9-стиль triple-check (`getBlobFromSyncStore`), застосований до Vault замість
     # `sync_store/` — БЕЗ мережевого fallback-у (sibling-контент з мережі невідновний, §II.6) і
     # БЕЗ verified_shas-кешу (виконується щонайбільше раз на крах, не десятки разів за drain):
-    siblingPath = buildSiblingFilePath(fileInfo.path, fileInfo.mtime, fileInfo.device_label)
+    siblingPath = buildSiblingFilePath(fileInfo.path, fileInfo.time_label, fileInfo.device_label)
     stat = statVaultFile(siblingPath)
     if not stat.exists:
         return false
@@ -3378,7 +3383,7 @@ def recoverSiblingTransactionIfNeeded():
             # закомміченої транзакції), інакше вона брехатиме назавжди (транзакція НЕ закомітилась):
             conflicts.lastSiblingTxGuid = null
             saveConflictsToStore(conflicts)
-        removeFromVaultIfExists(buildSiblingFilePath(mark.newSibling.path, mark.newSibling.mtime,
+        removeFromVaultIfExists(buildSiblingFilePath(mark.newSibling.path, mark.newSibling.time_label,
             mark.newSibling.device_label))     # безумовно НАШ артефакт транзакції — нікому іншому
                                                 # взятись нема звідки, прибираємо завжди
         # mark.oldSibling НЕ займаємо: якщо він ще на диску, він більше не tracked цим (уже
@@ -3395,7 +3400,7 @@ def recoverSiblingTransactionIfNeeded():
                 siblings: replaceLast(current.siblings, mark.newSibling)})
             conflicts.lastSiblingTxGuid = mark.guid
             saveConflictsToStore(conflicts)   # довершує крок 3 (реконструкція old+мітка→new)
-        removeFromVaultIfExists(buildSiblingFilePath(mark.oldSibling.path, mark.oldSibling.mtime,
+        removeFromVaultIfExists(buildSiblingFilePath(mark.oldSibling.path, mark.oldSibling.time_label,
             mark.oldSibling.device_label))    # крок 4, 404-tolerant — no-op, якщо вже виконано
     else:
         # НАЗАД — відкат до перед-транзакційного стану (`current` тут ГАРАНТОВАНО not null):
@@ -3433,7 +3438,7 @@ def recoverSiblingTransactionIfNeeded():
                                                   # семантика чесна: "guid останньої УСПІШНО
                                                   # закомміченої транзакції"
             saveConflictsToStore(conflicts)      # реверс кроку 3
-        removeFromVaultIfExists(buildSiblingFilePath(mark.newSibling.path, mark.newSibling.mtime,
+        removeFromVaultIfExists(buildSiblingFilePath(mark.newSibling.path, mark.newSibling.time_label,
             mark.newSibling.device_label))  # прибираємо незалежно від того, чи він взагалі
                                              # з'явився, і чи битий — однаково не довіряємо
         # Старий sibling-ФАЙЛ тут нічим не займаємо (не видаляємо й не переписуємо). Якщо він цілий
@@ -3706,7 +3711,7 @@ def restoreTrackedFilesFromDiskOrCreateNewOne(conflicts):
                            # збігу.
             sha: last_sibling.sha,
             size: last_sibling.size,
-            mtime: last_sibling.mtime,
+            time_label: last_sibling.time_label,
             mode: last_sibling.mode,
             device_label: last_sibling.device_label,   # ⚠️ ДОДАНО (2026-08-25) — без цього
                            # `buildSiblingFilePath` у STEP3 отримав би null device_label для

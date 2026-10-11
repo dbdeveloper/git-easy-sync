@@ -72,7 +72,14 @@ export interface SiblingFileInfo {
   // Path of the BASE file (P) — see header for the synthetic
   // exception.
   path: string;
-  mtime: number;
+  // The timestamp in the copy's FILE NAME (…conflict-from-<deviceLabel>-
+  // <timeLabel>…). With deviceLabel it is the copy's identity: the path is
+  // built from the pair. NOT the file's modification time — that is
+  // `mtime` (owner, 2026-10-11: one word must mean one thing).
+  timeLabel: number;
+  // The file's modification time on disk (stat). Set for synthetic copies
+  // by the scan.
+  mtime?: number | null;
   deviceLabel?: string | null;
   blob?: ArrayBuffer | null;
   sha?: string | null;
@@ -106,8 +113,8 @@ export function extensionOf(vaultPath: string): string {
 // "YYYY-MM-DDTHH-MM-SSZ" — the PSEUDO-MERGE-MODE.md timestamp shape
 // (ISO with colons/dot made filesystem-safe, milliseconds dropped).
 // Byte-identical to what v1's buildSiblingPath produces.
-export function formatTimestampForFilename(mtime: number): string {
-  return new Date(mtime)
+export function formatTimestampForFilename(timeLabel: number): string {
+  return new Date(timeLabel)
     .toISOString()
     .replace(/[:.]/g, "-")
     .replace(/-\d{3}Z$/, "Z");
@@ -116,7 +123,7 @@ export function formatTimestampForFilename(mtime: number): string {
 // Pure — the single source of truth for the sibling's disk name.
 export function buildSiblingFilePath(
   basePath: string,
-  mtime: number,
+  timeLabel: number,
   deviceLabel?: string | null,
 ): string {
   const { dir, stem, ext } = splitPath(basePath);
@@ -139,7 +146,7 @@ export function buildSiblingFilePath(
   const safeLabel = sanitizeFilename(deviceLabel ?? UNKNOWN_DEVICE_LABEL)
     .replace(/\(/g, "[")
     .replace(/\)/g, "]");
-  const ts = formatTimestampForFilename(mtime);
+  const ts = formatTimestampForFilename(timeLabel);
   return `${dir}${stem}.conflict-from-${safeLabel}-${ts}${ext}`;
 }
 
@@ -158,8 +165,15 @@ function siblingNameRegex(basePath: string): RegExp {
   // the same anchor the change-detector's CONFLICT_SIBLING_PATTERN
   // uses, so scan and gitignore agree on what a sibling is.
   return new RegExp(
-    `^${esc(dir)}${esc(stem)}\\.conflict-from-.+-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}Z${esc(ext)}$`,
+    `^${esc(dir)}${esc(stem)}\\.conflict-from-.+-(\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}Z)${esc(ext)}$`,
   );
+}
+
+// The inverse of formatTimestampForFilename: "2026-10-11T20-25-53Z" → ms.
+// The name carries whole seconds, so this is the timeLabel to the second.
+function timeLabelFromStamp(stamp: string): number {
+  const [date, time] = stamp.split("T");
+  return Date.parse(`${date}T${time.replace(/-/g, ":")}`);
 }
 
 // Write the sibling's bytes at the derived name. Callers IGNORE the
@@ -177,7 +191,7 @@ export async function saveConflictSiblingFile(
   }
   const siblingPath = buildSiblingFilePath(
     fileInfo.path,
-    fileInfo.mtime,
+    fileInfo.timeLabel,
     fileInfo.deviceLabel,
   );
   // AtomicWrite — the same crash protocol as every vault write
@@ -185,16 +199,16 @@ export async function saveConflictSiblingFile(
   await atomicWriteFile(vault, normalizePath(siblingPath), fileInfo.blob);
 }
 
-// Read ONE specific sibling — needs the whole (path, mtime,
+// Read ONE specific sibling — needs the whole (path, timeLabel,
 // deviceLabel) triple, not just the path: every element of a
-// `siblings` list shares the same `.path` (== P), only mtime+label
+// `siblings` list shares the same `.path` (== P), only timeLabel+label
 // distinguish them (the STEP3 fix recorded in the spec).
 export async function readSiblingFileFromVault(
   vault: Vault,
   fileInfo: SiblingFileInfo,
 ): Promise<ArrayBuffer | null> {
   const siblingPath = normalizePath(
-    buildSiblingFilePath(fileInfo.path, fileInfo.mtime, fileInfo.deviceLabel),
+    buildSiblingFilePath(fileInfo.path, fileInfo.timeLabel, fileInfo.deviceLabel),
   );
   if (!(await vault.adapter.exists(siblingPath))) {
     // Same class as LOCAL_FILE_IS_NOT_FOUND downstream — the caller
@@ -227,7 +241,7 @@ export async function findConflictSiblingFilesInVault(
   const expectedPaths = new Set<string>();
   for (const s of siblings) {
     const siblingPath = normalizePath(
-      buildSiblingFilePath(basePath, s.mtime, s.deviceLabel),
+      buildSiblingFilePath(basePath, s.timeLabel, s.deviceLabel),
     );
     expectedPaths.add(siblingPath);
     if (await vault.adapter.exists(siblingPath)) {
@@ -248,13 +262,15 @@ export async function findConflictSiblingFilesInVault(
   }
   for (const candidate of listing.files) {
     const candidatePath = normalizePath(candidate);
-    if (!regex.test(candidatePath)) continue;
+    const match = regex.exec(candidatePath);
+    if (match === null) continue;
     if (expectedPaths.has(candidatePath)) continue;
     const stat = await vault.adapter.stat(candidatePath);
     if (!stat) continue; // vanished mid-scan — skip-class
     const bytes = await vault.adapter.readBinary(candidatePath);
     synthetic.push({
       path: candidatePath,
+      timeLabel: timeLabelFromStamp(match[1]),
       sha: await calculateGitBlobSHA(bytes),
       size: stat.size,
       mtime: stat.mtime,

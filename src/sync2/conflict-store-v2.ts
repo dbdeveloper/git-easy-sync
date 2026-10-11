@@ -93,7 +93,7 @@ export default class ConflictStoreV2 {
     for (const [basePath, entry] of state.entries) {
       for (const sibling of entry.siblings) {
         this.siblingPathIndex.set(
-          buildSiblingFilePath(basePath, sibling.mtime ?? 0, sibling.deviceLabel),
+          buildSiblingFilePath(basePath, sibling.timeLabel ?? 0, sibling.deviceLabel),
           { basePath, sibling },
         );
       }

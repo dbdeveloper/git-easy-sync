@@ -52,13 +52,13 @@ describe("SiblingTx (§II.11 / §VIII C.14-22)", () => {
   const siblingAbs = (f: FileInfo): string =>
     path.join(
       dir,
-      buildSiblingFilePath(f.path ?? "", f.mtime ?? 0, f.deviceLabel),
+      buildSiblingFilePath(f.path ?? "", f.timeLabel ?? 0, f.deviceLabel),
     );
 
   // A sibling FileInfo whose derived file holds `content` on disk.
   const sibling = async (
     content: string,
-    mtime: number,
+    timeLabel: number,
     label = "phone",
     onDisk = true,
   ): Promise<FileInfo> => {
@@ -67,12 +67,12 @@ describe("SiblingTx (§II.11 / §VIII C.14-22)", () => {
       path: BASE,
       sha: await sha(content),
       size: enc(content).byteLength,
-      mtime,
+      timeLabel,
       deviceLabel: label,
       mode: "",
     };
     if (onDisk) {
-      putFile(buildSiblingFilePath(BASE, mtime, label), content);
+      putFile(buildSiblingFilePath(BASE, timeLabel, label), content);
     }
     return f;
   };
@@ -282,7 +282,7 @@ describe("SiblingTx (§II.11 / §VIII C.14-22)", () => {
         path: base,
         sha: await sha("old\n"),
         size: enc("old\n").byteLength,
-        mtime: 1000,
+        timeLabel: 1000,
         deviceLabel: "phone",
       };
       if (oldOnDiskCorrupt) {
@@ -290,7 +290,7 @@ describe("SiblingTx (§II.11 / §VIII C.14-22)", () => {
         // accept it and feed garbage into the next _diff3.
         putFile(buildSiblingFilePath(base, 1000, "phone"), "CORRUPT OLD");
       }
-      const newSib: FileInfo = { ...oldSib, sha: await sha("new\n"), mtime: 2000 };
+      const newSib: FileInfo = { ...oldSib, sha: await sha("new\n"), timeLabel: 2000 };
       const committed = emptyConflictsState();
       committed.entries.set(base, {
         conflictBase: { ...emptyFileInfo(), path: base, sha: "cb" },
@@ -398,7 +398,7 @@ describe("SiblingTx (§II.11 / §VIII C.14-22)", () => {
     expect(shaCalls).toBe(1);
     // Missing file: false, no hash.
     expect(
-      await tx.verifySiblingFileIntegrity({ ...f, mtime: 9999 }),
+      await tx.verifySiblingFileIntegrity({ ...f, timeLabel: 9999 }),
     ).toBe(false);
     expect(shaCalls).toBe(1);
   });

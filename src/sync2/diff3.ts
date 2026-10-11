@@ -59,6 +59,11 @@ export interface FileInfo {
   // remote descends on main from exactly this version. Absent in records
   // written before the field existed — then the sibling's own sha stands in.
   originSha?: string | null;
+  // CONFLICT SIBLINGS ONLY: the timestamp in the copy's FILE NAME. With
+  // deviceLabel it is the copy's identity — the path is built from the
+  // pair. Not a modification time (owner, 2026-10-11: `mtime` means the
+  // file's modification time everywhere).
+  timeLabel?: number | null;
 }
 
 export function emptyFileInfo(): FileInfo {

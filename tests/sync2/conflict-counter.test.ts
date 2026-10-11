@@ -91,7 +91,7 @@ async function track(
   entry.siblings.push({
     ...emptyFileInfo(),
     path: basePath,
-    mtime: whenMs,
+    timeLabel: whenMs,
     deviceLabel: "Phone",
     sha: `theirs-${whenMs}`,
   });

@@ -67,6 +67,7 @@ export function fileInfoToJson(f: FileInfo): Record<string, unknown> {
     mode: f.mode,
     deviceLabel: f.deviceLabel,
     ...(f.originSha ? { originSha: f.originSha } : {}),
+    ...(typeof f.timeLabel === "number" ? { timeLabel: f.timeLabel } : {}),
   };
 }
 
@@ -81,6 +82,7 @@ export function fileInfoFromJson(raw: unknown): FileInfo {
   if (r.mode === "" || r.mode === DELETED) out.mode = r.mode;
   if (typeof r.deviceLabel === "string") out.deviceLabel = r.deviceLabel;
   if (typeof r.originSha === "string") out.originSha = r.originSha;
+  if (typeof r.timeLabel === "number") out.timeLabel = r.timeLabel;
   return out;
 }
 

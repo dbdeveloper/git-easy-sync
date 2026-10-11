@@ -195,7 +195,7 @@ async function createTracked(
   entry.siblings.push({
     ...emptyFileInfo(),
     path: vaultPath,
-    mtime: whenMs,
+    timeLabel: whenMs,
     deviceLabel: device,
     sha: `theirs-${vaultPath}-${device}`,
   });

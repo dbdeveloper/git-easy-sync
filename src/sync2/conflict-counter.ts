@@ -206,7 +206,7 @@ export class ConflictCounter {
       for (const sibling of entry.siblings) {
         const name = buildSiblingFilePath(
           basePath,
-          sibling.mtime ?? 0,
+          sibling.timeLabel ?? 0,
           sibling.deviceLabel,
         );
         // A tracked sibling whose file is gone is resolved-pending-prune

@@ -46,9 +46,9 @@ describe("ConflictStoreV2", () => {
       },
       siblings: [
         // Distinct SECONDS — the filename timestamp drops milliseconds,
-        // so sub-second mtimes would collide into one derived name.
-        { ...emptyFileInfo(), path: "clash.md", sha: "sib-1", mtime: 200_000 },
-        { ...emptyFileInfo(), path: "clash.md", sha: "sib-2", mtime: 300_000 },
+        // so sub-second timeLabels would collide into one derived name.
+        { ...emptyFileInfo(), path: "clash.md", sha: "sib-1", timeLabel: 200_000 },
+        { ...emptyFileInfo(), path: "clash.md", sha: "sib-2", timeLabel: 300_000 },
       ],
     });
     return state;
@@ -168,7 +168,7 @@ describe("ConflictStoreV2", () => {
             ...emptyFileInfo(),
             path: "new.md",
             sha: "ns",
-            mtime: 500,
+            timeLabel: 500,
             deviceLabel: "tab",
           },
         ],

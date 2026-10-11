@@ -141,7 +141,7 @@ export async function trackedEntries(
   const out: ConflictEntry[] = [];
   for (const [basePath, entry] of conflictStore.getCachedState().entries) {
     for (const sibling of entry.siblings) {
-      const mtime = sibling.mtime ?? 0;
+      const mtime = sibling.timeLabel ?? 0;
       const siblingPath = buildSiblingFilePath(
         basePath,
         mtime,
@@ -451,7 +451,7 @@ export async function findGitignoreDisputes(
     for (const sibling of entry.siblings) {
       const siblingPath = buildSiblingFilePath(
         basePath,
-        sibling.mtime ?? 0,
+        sibling.timeLabel ?? 0,
         sibling.deviceLabel,
       );
       if (!(await vault.adapter.exists(siblingPath))) continue;

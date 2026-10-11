@@ -45,7 +45,7 @@ describe("process_conflicts (§VIII I)", () => {
   const tracked = async (
     basePath: string,
     content: string,
-    mtime: number,
+    timeLabel: number,
     label = "phone",
     onDisk = true,
   ): Promise<FileInfo> => {
@@ -54,12 +54,12 @@ describe("process_conflicts (§VIII I)", () => {
       path: basePath,
       sha: await sha(content),
       size: content.length,
-      mtime,
+      timeLabel,
       deviceLabel: label,
       mode: "",
     };
     if (onDisk) {
-      putFile(buildSiblingFilePath(basePath, mtime, label), content);
+      putFile(buildSiblingFilePath(basePath, timeLabel, label), content);
     }
     return f;
   };
@@ -81,10 +81,10 @@ describe("process_conflicts (§VIII I)", () => {
 
   const siblingExists = (
     basePath: string,
-    mtime: number,
+    timeLabel: number,
     label = "phone",
   ): boolean =>
-    fs.existsSync(path.join(dir, buildSiblingFilePath(basePath, mtime, label)));
+    fs.existsSync(path.join(dir, buildSiblingFilePath(basePath, timeLabel, label)));
 
   beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), "proc-conf-test-"));
@@ -273,7 +273,7 @@ describe("process_conflicts (§VIII I)", () => {
       ...emptyFileInfo(),
       path: "old/place.md",
       sha: "sha-x",
-      mtime: 100,
+      timeLabel: 100,
       deviceLabel: "phone",
     };
     entry(state, "old/place.md", [t]);

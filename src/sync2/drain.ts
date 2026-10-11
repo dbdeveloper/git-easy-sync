@@ -2375,7 +2375,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         }
         await saveConflictSiblingFile(deps.vault, {
           path,
-          mtime: tracked.remote.mtime ?? 0, // remote commit date (§VII.5)
+          timeLabel: tracked.remote.mtime ?? 0, // remote commit date (§VII.5)
           deviceLabel: tracked.remote.deviceLabel,
           blob: tracked.remote.blob,
         });
@@ -2400,7 +2400,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       if (tracked.remote.sha === null) continue; // idle lingering (C.11)
       const prevBlob = await readSiblingFileFromVault(deps.vault, {
         path,
-        mtime: previousSibling.mtime ?? 0,
+        timeLabel: previousSibling.timeLabel ?? 0,
         deviceLabel: previousSibling.deviceLabel,
       });
       if (prevBlob === null) {
@@ -2562,8 +2562,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         }
         // Owner rule (§II.6 п.5): the sibling's name carries the date
         // and author of the LAST remote commit folded in — _diff3
-        // always returns mtime=null for a fresh merge.
-        merged.mtime = tracked.remote.mtime;
+        // always returns mtime=null for a fresh merge. The date is the
+        // copy's NAME (timeLabel); its file's mtime is unknown until measured.
+        merged.timeLabel = tracked.remote.mtime;
+        merged.mtime = null;
         merged.deviceLabel = tracked.remote.deviceLabel;
         merged.originSha = tracked.remote.sha; // the next fold's ancestor
         // The OLD sibling as it is ON DISK (sha/size of its bytes): the
@@ -2583,7 +2585,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         });
         const oldSiblingPath = buildSiblingFilePath(
           path,
-          previousSibling.mtime ?? 0,
+          previousSibling.timeLabel ?? 0,
           previousSibling.deviceLabel,
         );
         try {
@@ -2614,7 +2616,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         }
         await saveConflictSiblingFile(deps.vault, {
           path,
-          mtime: tracked.remote.mtime ?? 0,
+          timeLabel: tracked.remote.mtime ?? 0,
           deviceLabel: tracked.remote.deviceLabel,
           blob: tracked.remote.blob,
         });
@@ -2777,7 +2779,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       }
       await saveConflictSiblingFile(deps.vault, {
         path,
-        mtime: tracked.remote.mtime ?? 0,
+        timeLabel: tracked.remote.mtime ?? 0,
         deviceLabel: tracked.remote.deviceLabel,
         blob: tracked.remote.blob,
       });
@@ -3193,6 +3195,11 @@ function siblingInfoFrom(info: FileInfo): FileInfo {
     size: info.size ?? info.blob?.byteLength ?? null,
     blob: null,
     originSha: info.sha,
+    // The copy's name carries the remote commit date (§VII.5) — its
+    // identity. `mtime` is not carried over: a sibling's mtime is its
+    // FILE's modification time, which the remote's date is not.
+    timeLabel: info.mtime,
+    mtime: null,
   };
 }
 

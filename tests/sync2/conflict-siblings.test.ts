@@ -104,7 +104,7 @@ describe("sibling IO helpers", () => {
   it("save → read round-trip via the same FileInfo triple; the disk name is derived, never stored", async () => {
     const info = {
       path: "Notes/idea.md", // BASE path — §III contract
-      mtime: TS,
+      timeLabel: TS,
       deviceLabel: "Phone",
       blob: enc("theirs content\n"),
     };
@@ -127,22 +127,22 @@ describe("sibling IO helpers", () => {
     expect(
       await readSiblingFileFromVault(vault as never, {
         path: "Notes/idea.md",
-        mtime: TS,
+        timeLabel: TS,
         deviceLabel: "Ghost",
       }),
     ).toBeNull();
   });
 
-  it("two siblings of one base differ only by mtime/label — the whole triple selects which to read", async () => {
+  it("two siblings of one base differ only by timeLabel/deviceLabel — the whole triple selects which to read", async () => {
     const a = {
       path: "Notes/idea.md",
-      mtime: TS,
+      timeLabel: TS,
       deviceLabel: "Phone",
       blob: enc("A"),
     };
     const b = {
       path: "Notes/idea.md",
-      mtime: TS + 60_000,
+      timeLabel: TS + 60_000,
       deviceLabel: "Laptop",
       blob: enc("B"),
     };
@@ -158,13 +158,13 @@ describe("sibling IO helpers", () => {
       fs.writeFileSync(path.join(dir, base), "base\n");
       const tracked = {
         path: base,
-        mtime: TS,
+        timeLabel: TS,
         deviceLabel: "Phone",
         blob: enc("tracked sibling"),
       };
       const trackedGone = {
         path: base,
-        mtime: TS + 1000,
+        timeLabel: TS + 1000,
         deviceLabel: "Tablet",
       };
       await saveConflictSiblingFile(vault as never, tracked);
@@ -187,7 +187,9 @@ describe("sibling IO helpers", () => {
       expect(synthetic[0].path).toBe(synthName); // disk path — the exception
       expect(typeof synthetic[0].sha).toBe("string");
       expect(synthetic[0].size).toBe("synthetic content".length);
-      expect(typeof synthetic[0].mtime).toBe("number");
+      expect(typeof synthetic[0].mtime).toBe("number"); // the file's own mtime;
+      // timeLabel = the timestamp in its NAME, parsed back to ms.
+      expect(synthetic[0].timeLabel).toBe(Date.UTC(2026, 4, 9, 10, 0, 0));
     });
 
     it("does not claim unrelated files, other bases' siblings, or wrong extensions", async () => {
