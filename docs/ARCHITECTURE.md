@@ -114,13 +114,25 @@ src/
 │                                    #  what eyeballing a running sync cannot check
 ├── utils.ts                         # hasTextExtension, retry helpers, calculateGitBlobSHA,
 │                                    #  isRetriableStatus / isWriteRetriableStatus / isRetriableError,
-│                                    #  describeError (typed-error extractor used by safeStringify)
-├── errors.ts                        # SyncError class hierarchy: NetworkError, GithubAPIError +
-│                                    #  4 status subclasses, PlatformError, StaleStateError, makeGithubAPIError
-│                                    #  dispatcher. SYNC2 §5.
+│                                    #  describeError (typed-error extractor used by safeStringify),
+│                                    #  retryUntil (stops on the CancelSignal), encodeBase64 — native
+│                                    #  Uint8Array.toBase64 or chunked btoa; Obsidian's arrayBufferToBase64
+│                                    #  builds one string per byte and dies above 128 MiB
+├── cancel-signal.ts                 # CancelSignal: ONE per plugin load (main.ts), fired by cancelDrain,
+│                                    #  reset at every drain start. Listened to by retryUntil, NetworkRetry
+│                                    #  and WorkerClient.httpRequest (aborts the request in flight)
+├── explorer-click.ts                # File-tree click while one of OUR tabs is active: focus the main-area
+│                                    #  tab that already shows the file (sidebars excluded)
+├── errors.ts                        # SyncError class hierarchy: NetworkError, CancelledError (→ drain
+│                                    #  status "cancelled"), GithubAPIError + 6 status subclasses
+│                                    #  (BlobTooLargeError = GitHub's 422 "too large": final, deliberately
+│                                    #  NOT a ValidationError, whose 422 restarts the batch), PlatformError,
+│                                    #  StaleStateError, the drain's own CompareWrongFiles/…NotInRepo errors,
+│                                    #  makeGithubAPIError dispatcher. SYNC2 §5.
 ├── github/client.ts                 # Thin requestUrl wrapper, retryUntil; throws via makeGithubAPIError;
 │                                    #  getContentsAtRef does Blobs-API fallback for >1MB files (SYNC2 §7.6);
-│                                    #  every HTTP call routes through WorkerClient.httpRequest when one is wired
+│                                    #  every HTTP call routes through WorkerClient.httpRequest when one is wired;
+│                                    #  createBlob answers "too large" with ONE attempt → BlobTooLargeError
 ├── settings/
 │   ├── settings.ts                  # GitHubSyncSettings + DEFAULT_SETTINGS (syncStartsWithCommit,
 │   │                                #  showCommitRibbonButton, consolidateCommits, maxAutoMergeSizeBytes)
@@ -135,9 +147,14 @@ src/
 │                                    #  obsidian.asar) — driving one toggle from another needs a guard.
 ├── worker/                          # Web Worker orchestra (SYNC2 §8). esbuild emits each entry
 │   ├── types.ts                     #  point as an IIFE, inlines as string via `define`, runtime wraps in Blob URL.
-│   ├── cpu-worker.ts                # CPU pool: decode-base64, compute-git-blob-sha, merge-text (bundles node-diff3)
-│   ├── network-worker.ts            # Single dedicated thread; native fetch executor for every GitHub HTTP call
-│   └── worker-client.ts             # Main-thread controller; pool dispatch, request-id multiplex, terminate, fallback
+│   ├── cpu-worker.ts                # CPU pool: decode-base64, compute-git-blob-sha (WASM SHA-1; `sha1-engine`
+│   │                                #  reports which one runs), merge-text (bundles node-diff3)
+│   ├── network-worker.ts            # Single dedicated thread; native fetch executor for every GitHub HTTP call;
+│   │                                #  one AbortController per request in flight, `http-abort` cancels it
+│   └── worker-client.ts             # Main-thread controller; pool dispatch, request-id multiplex, terminate,
+│                                    #  fallback. ⚠️ ONE instance, owned by main.ts and handed to everyone
+│                                    #  (BatchWriter's own `new WorkerClient()` leaked 5 workers per reload).
+│                                    #  Carries the CancelSignal: a cancel aborts httpRequest in flight
 └── sync2/
     │  ⚠️ THE ENGINE WAS REPLACED WHOLESALE at Phase 5.5 THE SWITCH
     │  (2026-08-31, +1317/−15861): the manager's own drain, push-queue,
@@ -150,8 +167,12 @@ src/
     ├── sync2-manager.ts             # THIN SHELL (~650 lines): syncAll/syncFile/commitOnly/
     │                                #  commitFile/resumeQueue, the R3a commit singleton with its
     │                                #  coalescing bell (SYNC2-FIX §6), the H3 drain-collapse flag,
-    │                                #  DrainStatus channel, cancelDrain, MainHeadGuard (§7.10),
-    │                                #  zero-byte restore guard, drain-result → UI mapping
+    │                                #  DrainStatus channel, cancelDrain (fires the CancelSignal) +
+    │                                #  wasLastDrainCancelled, MainHeadGuard (§7.10), zero-byte restore
+    │                                #  guard, drain-result → UI mapping. Every drain AND every commit
+    │                                #  pass first checks the repo identity (a switch drops the journal
+    │                                #  and the progress log); the commit pass then replays the
+    │                                #  progress log (drainOnce replays it at its own start)
     ├── drain.ts                     # THE ENGINE: drainOnce() — rolling base, batch loop, Layer 2,
     │                                #  STEP1/2/3 conflicts, FINALIZE, Vault-step, the epilogue
     │                                #  (baselines/hot anchor/journal.clear), §12.5 sweep at both
@@ -160,15 +181,22 @@ src/
     │                                #  DrainClient; 404/409 → bare-repo null; every method forces
     │                                #  retry), MainHeadGuard, buildDrainDeps
     ├── drain-journal.ts             # §V ping-pong tracked-files-{a,b}.json (crash story of one drain)
+    ├── vault-step-progress.ts       # NEW-DRAIN §II.19: .runtime/vault-step-progress.jsonl — one line per
+    │                                #  file the Vault-step finished (written / deleted / already held),
+    │                                #  replayed into the baselines at the next start, cleared after the
+    │                                #  epilogue. What makes a cancel, a kill and a dead battery resume alike
     ├── diff3.ts                     # _diff3: §II.1 rules 2-4 + rule 7 size gate; verdicts
     │                                #  file / manual-conflict / plugin-dispatch
     ├── discovery.ts                 # §II.12 Layer 1: compare-first + full-tree fallback,
     │                                #  DELETED_SHA_HASH, getCommitInfoForPath
     ├── tree-accumulator.ts          # §II.15: inline content behind a round-trip PROOF, base_tree
-    │                                #  chaining, UploadedBlobs resume, deletion-entry guard
+    │                                #  chaining, UploadedBlobs resume, deletion-entry guard; text
+    │                                #  ≥ 1 MB goes through createBlob (utf-8, SHA-guarded) so the
+    │                                #  resume covers it too
     ├── sync-store.ts                # .runtime/sync_store/{sha} content-addressed blobs;
     │                                #  hash-on-load, sizeOf (stat-only), §12.5 sweep
-    ├── batch-writer.ts              # §12.4 batch birth: meta.json BEFORE blobs, .attempted-commit
+    ├── batch-writer.ts              # §12.4 batch birth: meta.json BEFORE blobs, .attempted-commit;
+    │                                #  `workerClient` is a REQUIRED dep (no hidden default pool)
     ├── get-batch.ts                 # R3b Peterson claim protocol + crash repair + stale-claim sweep
     ├── batch-metafile.ts            # meta.json codec; sha:null IS the deletion sentinel
     ├── queue-sha-index.ts           # findChanges dedup reference over the queue (DELETED sentinel)
@@ -180,14 +208,18 @@ src/
     ├── sibling-tx.ts                # §II.11 crash-safe sibling replace (mark transaction)
     ├── conflict-siblings.ts         # buildSiblingFilePath / scan / extensionOf (the ONE naming truth)
     ├── vault-file-reader.ts         # The drain's live vault surface: stat/readBinary/atomicWriteFile
-    │                                #  (+ pull-side canonicalize) / bin-capturing remove
+    │                                #  (+ pull-side canonicalize, and the same canonicalize the drain's
+    │                                #  samePulledForm compares with — §II.20) / bin-capturing remove
     ├── retry-network.ts             # §II.10 bounded backoff + the .sync_network_error mark
     ├── reset.ts                     # RESET-PLUGIN core: drain guard → marker → rmdir .runtime
     ├── hot-metadata.ts              # 2-slot ping-pong metadata-{a,b}.json (monotonic seq)
     ├── file-baselines.ts            # 64 FNV-1a cold buckets + MRU; group ops are the PRIMARY API
-    ├── interval-scheduler.ts        # Periodic tick + onload startup (testable in isolation)
+    ├── interval-scheduler.ts        # Periodic tick + onload startup (testable in isolation);
+    │                                #  fullSync(reason) — "interval" makes the too-large notice quiet
     ├── change-detector.ts           # Vault walk + findChanges + the queue-dedup bridge;
     │                                #  isSyncable (D6/D7) + the Pass-2 belt. SYNC2 §13.
+    │                                #  MAX_SYNC_FILE_BYTES = 40 000 000 (GitHub's MEASURED blob ceiling,
+    │                                #  NEW-DRAIN §II.21), gated AFTER isSyncable → onTooLarge
     ├── dot-space.ts                 # The opt-in set: `!`-rule classification (§4.2),
     │                                #  readRootGitignore, walkDotDir. Shared by the change
     │                                #  scan and diff2's conflicts panel. SYNC2 §13.3
