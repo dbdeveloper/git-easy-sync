@@ -228,6 +228,9 @@ const SELF_RELOAD_DELAY_MS = SYNC_SUMMARY_WITH_PLUGINS_MS + 250;
 // The "sync in progress" window shows at least this long before the sync's
 // end may close it — shorter would read as a blink (owner, 2026-10-10).
 const CANCEL_MODAL_MIN_SHOW_MS = 1500;
+// The "too large for the repo" pop-up, shown on every commit pass per file
+// (owner, 2026-10-11: at least 5 s on screen).
+const TOO_LARGE_NOTICE_MS = 8000;
 
 // §35 — the automatic "Sync skipped: token expired" toast. Longer than
 // BRIEF_NOTICE_MS: it carries actionable words the user must actually read,
@@ -3114,26 +3117,30 @@ export default class GitHubSyncPlugin extends Plugin {
     this.cancelSyncModal = null;
   }
 
-  // A file over GitHub's 100 MB API limit is left out of every commit
-  // (change-detector MAX_SYNC_FILE_BYTES). Tell the user ONCE per file per
-  // session — the interval sync runs every minute, and a toast per pass
-  // would be spam (owner, 2026-10-11). Lazily created: the set is session
-  // state, not a setting.
-  private tooLargeReported?: Set<string>;
+  // A file over GitHub's API limit (MAX_SYNC_FILE_BYTES, measured 40 MiB) is
+  // left out of every commit. Owner, 2026-10-11: NAG until the user acts —
+  // on EVERY commit pass, EACH such file gets its own pop-up (≥ 5 s) telling
+  // them to add it to .gitignore. It stops by itself once the file is no
+  // longer a candidate (deleted, moved into an ignored folder, or matched by
+  // a .gitignore rule): the detector checks .gitignore BEFORE the size. The
+  // log WARN stays once per file per session — a one-minute interval would
+  // otherwise fill the log with the same line.
+  private tooLargeLogged?: Set<string>;
   private reportTooLarge(path: string, size: number): void {
-    this.tooLargeReported ??= new Set();
-    if (this.tooLargeReported.has(path)) return;
-    this.tooLargeReported.add(path);
     const mb = (n: number): number => Math.round(n / 1_000_000); // decimal, as file managers show
-    this.logger.warn("file over GitHub's size limit — not synced", {
-      path,
-      size,
-      limit: MAX_SYNC_FILE_BYTES,
-    });
+    this.tooLargeLogged ??= new Set();
+    if (!this.tooLargeLogged.has(path)) {
+      this.tooLargeLogged.add(path);
+      this.logger.warn("file over GitHub's size limit — not synced", {
+        path,
+        size,
+        limit: MAX_SYNC_FILE_BYTES,
+      });
+    }
     new Notice(
-      `"${path}" is too large for GitHub (${mb(size)} MB, the limit is ` +
-        `${mb(MAX_SYNC_FILE_BYTES)} MB). It stays in your vault but is not synced.`,
-      15000,
+      `File "${path}" is too large for the repo (${mb(size)} MB, max ` +
+        `${mb(MAX_SYNC_FILE_BYTES)} MB). Add it to .gitignore (Settings).`,
+      TOO_LARGE_NOTICE_MS,
     );
   }
 

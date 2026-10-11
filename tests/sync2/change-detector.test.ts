@@ -2080,6 +2080,24 @@ describe("a file over GitHub's size limit", () => {
     expect(tooLarge).toEqual([]);
   });
 
+  // Owner, 2026-10-11: the nag must stop the moment the user acts. The
+  // size check sits AFTER the .gitignore check, so each of these is simply
+  // not a candidate any more — no report, no pop-up.
+  it.each([
+    { label: "moved into a dot-folder", rel: ".media/video.mp4", gitignore: null },
+    { label: "moved into an ignored folder", rel: "big/video.mp4", gitignore: "big/\n" },
+    { label: "its extension added to .gitignore", rel: "video.mp4", gitignore: "*.mp4\n" },
+    { label: "its name added to .gitignore", rel: "video.mp4", gitignore: "video.mp4\n" },
+  ])("the user acted — $label — so it is no longer reported", async ({ rel, gitignore }) => {
+    const f = fixture();
+    if (gitignore !== null) writeFile(f.root, ".gitignore", gitignore);
+    bigSparse(f.root, rel, MAX_SYNC_FILE_BYTES + 1);
+    const tooLarge: Array<[string, number]> = [];
+    const changes = await detectorWith(f, tooLarge).findChanges();
+    expect(tooLarge).toEqual([]);
+    expect(changes.map((c) => c.path)).not.toContain(rel);
+  });
+
   it("one-file path (Commit active file): null, reported", async () => {
     const f = fixture();
     bigSparse(f.root, "video.mp4", MAX_SYNC_FILE_BYTES + 1);
