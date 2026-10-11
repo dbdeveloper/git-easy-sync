@@ -7,8 +7,10 @@ see `.claude/rules/` (they load automatically by path).
 
 ## Layers at a glance
 
-- **`src/sync2/`** — the sync engine: change detection, batching, push pipeline,
-  crash-recovery, conflict store/classifier, atomic writes. Canonical spec: `SYNC2.md`.
+- **`src/sync2/`** — the sync engine: change detection, batching, the drain (`drainOnce`:
+  pull and push in one pass, conflicts, crash-recovery via journal + progress log), the
+  conflict store, atomic writes. Canonical spec: `tasks/SYNC2-NEW-DRAIN.md` (routing map:
+  `tasks/SYNC2-MASTER-PLAN.md`); `SYNC2.md` for everything the SWITCH did not replace.
 - **`src/diff2/`** — the conflict-resolution UI on top of pseudo-merge mode. Purely
   additive; depends on `sync2`, never the reverse.
 - **`src/worker/`** — the Web Worker orchestra (CPU pool + one dedicated network worker);
