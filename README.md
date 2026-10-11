@@ -599,12 +599,16 @@ completed is not sent again.
   conflicts, off for history and deleted by default; also switchable
   per document.
 
-### Performance
+### Conflict resolution settings
 
-- **Maximum auto-merge file size (KB)** — the three-way text
-  auto-merge is skipped above this size: a file changed on both sides
-  becomes a conflict for you to resolve instead. Default 1024 KB;
-  well above ~2 MB a merge can hang noticeably.
+- **Max size of auto-merged files (KB)** — when the same text file
+  changed on both sides, the plugin first tries to merge the two
+  versions itself. That merge is expensive on big files, so it is
+  tried only up to this size; a bigger file changed on both sides
+  becomes a conflict for you to resolve. **Set 0 for full manual
+  control**: no file is merged automatically, and every conflict is
+  left to you. An emptied field or a negative number is stored as 0.
+  Default about 1 MB; well above ~2 MB a merge can hang noticeably.
 
 ### `.gitignore`
 
@@ -849,7 +853,7 @@ sides on its own. The strategy depends on the file type:
 | File type | Auto-merge strategy | Surfaces as a conflict only when… |
 |---|---|---|
 | Text (`.md`, `.txt`, …) | Three-way merge against the last-synced base. | Edits overlap on the same line. |
-| Text above *Maximum auto-merge file size* (default 1 MB) | None — merging is skipped. | Both sides changed it (a change on one side still syncs normally). |
+| Text above *Max size of auto-merged files* (default about 1 MB; 0 = every file) | None — merging is skipped. | Both sides changed it (a change on one side still syncs normally). |
 | Plugin bundle (`<plugin>/main.js`, `<plugin>/manifest.json`) | Higher version from `manifest.json` wins; when the versions cannot decide, the newer edit wins. | Never. |
 | Other files under `.obsidian/` | The side that changed wins; if both changed, the newer edit wins — and the repository's version when there is no common history (a new device's first sync). | Never. |
 | Binary (`.png`, `.pdf`, attachments) | None — binary always surfaces. | Both sides changed it (no silent overwrites of edited images). |

@@ -236,6 +236,14 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   `Syncing with GitHub`; a nearly empty vault no longer blinks
   `Checking all files…`; the summary's "sent" counts what really
   changed on the server.
+- **Setting "Maximum auto-merge file size" to 0 did nothing.** The
+  field took 0 for a typo and quietly stored the 1 MB default, so
+  conflicts kept merging automatically. 0 now means what it was
+  meant to: no automatic merge, every conflict is yours. An emptied
+  field or a negative number is stored as 0. The setting moved to
+  its own *Conflict resolution* group as *Max size of auto-merged
+  files*, and its description no longer claims that a large file is
+  simply uploaded — it becomes a conflict.
 - **Errors**: every error you are shown is also written to the log,
   and a failed HTTP request is logged at the level its status
   deserves.

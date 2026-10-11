@@ -710,7 +710,9 @@
     квоти LFS на безкоштовному плані, і чи це взагалі задача цього плагіна. Власник: «наш плагін не розрахований
     на передачу відео».
 
-57. Текст налаштування «Maximum auto-merge file size (KB)» у Settings (`src/settings/tab.ts`) каже «Above the
+57. ✅ DONE (2026-10-11): разом із польовим дефектом «0 нічого не вимикає» — поле перейменовано на «Max size of
+    auto-merged files», група «Conflict resolution», новий опис; 0 / порожнє / від'ємне → 0. Було:
+    Текст налаштування «Maximum auto-merge file size (KB)» у Settings (`src/settings/tab.ts`) каже «Above the
     threshold the engine just uploads your local bytes (no automated merge)». Код робить інакше: файл, змінений з
     обох боків і більший за поріг, стає КОНФЛІКТОМ (`diff3.ts`, п.4.7 «the size gate»). Знайдено 2026-10-11 під
     час звірки README (README вже каже правду); виправити текст в UI.

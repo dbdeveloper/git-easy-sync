@@ -139,12 +139,14 @@ src/
 │   ├── settings.ts                  # GitHubSyncSettings + DEFAULT_SETTINGS (syncStartsWithCommit,
 │   │                                #  showCommitRibbonButton, consolidateCommits, maxAutoMergeSizeBytes)
 │   ├── log-size.ts                  # "Clean logs" description: the live log size, "1.2 MB (1 234 567 bytes)"
+│   ├── auto-merge-size.ts           # "Max size of auto-merged files": KB text → bytes; 0 = auto-merge OFF,
+│                                    #  and an emptied / negative / non-numeric field is 0 too
 │   ├── toggle-rules.ts              # "Sync plugins data.json" is SUBORDINATE to "Sync configs":
 │   │                                #  parent OFF forces it off + greys it, ON only makes it
 │   │                                #  reachable. Pure, because tab.ts has no render harness.
 │   └── tab.ts                       # Settings UI (trim onChange, Reset modal, GitHub sync status section,
 │                                    #  + the `.gitignore` section: [Check now] and the root-file editor).
-│                                    #  Performance group with max-auto-merge KB input).
+│                                    #  Conflict resolution group: "Max size of auto-merged files").
 │                                    #  ⚠️ ToggleComponent.setValue FIRES onChange (verified vs
 │                                    #  obsidian.asar) — driving one toggle from another needs a guard.
 ├── worker/                          # Web Worker orchestra (SYNC2 §8). esbuild emits each entry
