@@ -9,6 +9,7 @@
 // starts from a sane baseline.
 
 import WorkerClient from "../../../../src/worker/worker-client";
+import type { CancelSignal } from "../../../../src/cancel-signal";
 import { mkdtempSync, rmSync } from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -80,6 +81,11 @@ export interface Sync2ClientOpts {
   // first adoption — tests that exercise that surprise (interrupted
   // adoption resume) should pass `autoCanonicalize: true` explicitly.
   autoCanonicalize?: boolean;
+  // When set, the client takes the PRODUCTION HTTP path: a WorkerClient
+  // carrying this signal (main-thread fetch with an AbortController under
+  // Node), the same signal on the manager. Lets a test cancel a request
+  // IN FLIGHT. Fault injectors (mock requestUrl) do not see these requests.
+  cancelSignal?: CancelSignal;
 }
 
 export interface Sync2TestClient {
@@ -150,7 +156,10 @@ export async function createSync2Client(
   };
 
   const logger = new Logger(vault, SELF_PLUGIN_ID, opts.enableLogging ?? false);
-  const client = new GithubClient(settings, logger);
+  const worker = opts.cancelSignal
+    ? new WorkerClient({ cancelSignal: opts.cancelSignal })
+    : undefined;
+  const client = new GithubClient(settings, logger, worker);
 
   const hotMeta = new HotMetadataStore({
     vault,
@@ -165,7 +174,7 @@ export async function createSync2Client(
   const syncStore = new SyncStore({ vault, selfPluginId: SELF_PLUGIN_ID });
   const journal = new DrainJournal({ vault, selfPluginId: SELF_PLUGIN_ID });
   const batchWriter = new BatchWriter({
-    workerClient: new WorkerClient(),
+    workerClient: worker ?? new WorkerClient(),
     vault,
     selfPluginId: SELF_PLUGIN_ID,
     syncStore,
@@ -271,6 +280,7 @@ export async function createSync2Client(
   conflictWatcher.start();
 
   const manager = new Sync2Manager({
+    cancelSignal: opts.cancelSignal,
     vault,
     selfPluginId: SELF_PLUGIN_ID,
     configDir: CONFIG_DIR,
