@@ -1866,7 +1866,10 @@ export default class GitHubSyncPlugin extends Plugin {
   // opts.background (§35) — the interval scheduler's fullSync passes true so a
   // token-expired short-circuit stays silent (Notice, no modal). The ribbon +
   // menu callers omit it → "user" origin → recovery modal.
-  async sync(forceCommit = false, opts: { background?: boolean } = {}): Promise<void> {
+  async sync(
+    forceCommit = false,
+    opts: { background?: boolean; quietTooLarge?: boolean } = {},
+  ): Promise<void> {
     const background = opts.background ?? false;
     if (!this.isConfigured()) {
       this.logger?.warn("Sync plugin not configured — command ignored");
@@ -1917,6 +1920,10 @@ export default class GitHubSyncPlugin extends Plugin {
     ) {
       return;
     }
+    // The periodic sync skips files too large for the repo SILENTLY (owner,
+    // 2026-10-11); a manual or startup sync shows the pop-up. Held for this
+    // run only — dropped in the finally below, a throw included.
+    this.tooLargeQuiet = opts.quietTooLarge ?? false;
     try {
       // Learn the git identity BEFORE the first push, so the very first
       // commit carries a real address rather than the derived no-reply
@@ -1966,6 +1973,8 @@ export default class GitHubSyncPlugin extends Plugin {
       } else {
         new Notice(`Error syncing. ${err}`);
       }
+    } finally {
+      this.tooLargeQuiet = false;
     }
     // Drain may have mutated ConflictStore (Phase A SHA-match
     // cleanup, Phase B path-close drops) without firing the vault
@@ -3126,6 +3135,8 @@ export default class GitHubSyncPlugin extends Plugin {
   // log WARN stays once per file per session — a one-minute interval would
   // otherwise fill the log with the same line.
   private tooLargeLogged?: Set<string>;
+  // Up only while the PERIODIC sync runs (sync's quietTooLarge).
+  private tooLargeQuiet = false;
   private reportTooLarge(path: string, size: number): void {
     const mb = (n: number): number => Math.round(n / 1_000_000); // decimal, as file managers show
     this.tooLargeLogged ??= new Set();
@@ -3137,6 +3148,7 @@ export default class GitHubSyncPlugin extends Plugin {
         limit: MAX_SYNC_FILE_BYTES,
       });
     }
+    if (this.tooLargeQuiet) return; // the periodic sync: silently
     new Notice(
       `File "${path}" is too large for the repo (${mb(size)} MB, max ` +
         `${mb(MAX_SYNC_FILE_BYTES)} MB). Add it to .gitignore (Settings).`,
@@ -4101,7 +4113,10 @@ export default class GitHubSyncPlugin extends Plugin {
       drain: () => this.backgroundDrain(),
       // §35 — interval/startup full-sync is automatic: a token-expired
       // short-circuit stays silent (a brief Notice, not the recovery modal).
-      fullSync: () => this.sync(false, { background: true }),
+      // The periodic sync skips too-large files silently; the startup sync
+      // reports them like a manual one (owner, 2026-10-11).
+      fullSync: (reason) =>
+        this.sync(false, { background: true, quietTooLarge: reason === "interval" }),
       logError: (label, err) => {
         void this.logger.error(label, err);
       },

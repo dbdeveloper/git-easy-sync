@@ -39,7 +39,10 @@ export interface IntervalSchedulerDeps {
   // tear down the interval.
   hasPendingBatches: () => Promise<boolean>;
   drain: () => Promise<void>;
-  fullSync: () => Promise<void>;
+  // Why it runs (owner, 2026-10-11): the periodic sync skips files too
+  // large for the repo SILENTLY; the startup sync shows the pop-up like a
+  // manual one.
+  fullSync: (reason: "interval" | "startup") => Promise<void>;
 
   logError: (label: string, err: string) => void;
 
@@ -115,7 +118,7 @@ export class IntervalScheduler {
   private async fullCycle(label: "Interval" | "Startup"): Promise<void> {
     if (this.deps.syncStartsWithCommit()) {
       try {
-        await this.deps.fullSync();
+        await this.deps.fullSync(label === "Interval" ? "interval" : "startup");
       } catch (err) {
         this.deps.logError(`${label} sync failed`, `${err}`);
       }

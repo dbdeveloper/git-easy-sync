@@ -350,3 +350,23 @@ describe("IntervalScheduler — timer integration", () => {
     expect(ops.calls).toEqual(["fullSync", "fullSync", "fullSync"]);
   });
 });
+
+// Owner, 2026-10-11: the "too large for the repo" pop-up shows for a manual
+// Commit/Sync and for the sync at plugin start, but the PERIODIC sync must
+// skip big files SILENTLY. Both automatic paths reach the same fullSync, so
+// the scheduler now says which one it is.
+describe("IntervalScheduler — fullSync says why it runs", () => {
+  it("a periodic tick calls fullSync('interval'); the startup pulse calls fullSync('startup')", async () => {
+    const reasons: string[] = [];
+    const ops = makeOps();
+    const timer = fakeTimer();
+    const deps = makeDeps(ops, timer, { intervalEnabled: true, autoCommit: true });
+    deps.fullSync = async (reason?: string) => {
+      reasons.push(String(reason));
+    };
+    const s = new IntervalScheduler(deps);
+    await s.tick();
+    await s.runStartup();
+    expect(reasons).toEqual(["interval", "startup"]);
+  });
+});

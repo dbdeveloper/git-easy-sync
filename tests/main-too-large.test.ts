@@ -64,3 +64,49 @@ describe("a file too large for GitHub nags on every commit", () => {
     expect(recordedNotices).toHaveLength(3);
   });
 });
+
+// Owner, 2026-10-11: the pop-up belongs to a manual Commit/Sync and to the
+// sync at plugin start; the PERIODIC sync skips big files SILENTLY.
+describe("the periodic sync skips big files silently", () => {
+  it("while the quiet flag is up: no pop-up (the log WARN still happens once)", () => {
+    clearRecordedNotices();
+    const { p, warn } = plugin();
+    (p as unknown as { tooLargeQuiet: boolean }).tooLargeQuiet = true;
+    p.reportTooLarge("a.mp4", 150 * 1024 * 1024);
+    p.reportTooLarge("a.mp4", 150 * 1024 * 1024);
+    expect(recordedNotices).toHaveLength(0);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("sync(…, {quietTooLarge}) holds the flag exactly for its run — and drops it even if the run throws", async () => {
+    const p = Object.create(GitHubSyncPlugin.prototype) as unknown as Record<string, unknown> & {
+      sync(force?: boolean, opts?: { background?: boolean; quietTooLarge?: boolean }): Promise<void>;
+      tooLargeQuiet?: boolean;
+    };
+    const seen: Array<boolean | undefined> = [];
+    p.logger = { warn: () => {}, info: () => {}, error: () => {} };
+    p.settings = { syncStartsWithCommit: true };
+    p.isConfigured = () => true;
+    p.gateOnTokenExpired = () => false;
+    p.confirmPendingConflictsBeforeSync = async () => true;
+    p.learnGitIdentityOnce = async () => {};
+    p.cleanupMigratedGitignoresOnRemote = async () => {};
+    p.conflictCounter = { markDirty: () => {} };
+    p.tokenExpiredFlag = { note: () => {} };
+    let fail = false;
+    p.sync2Manager = {
+      isSyncBusy: () => false,
+      recordDrainError: () => {},
+      syncAll: async () => {
+        seen.push(p.tooLargeQuiet);
+        if (fail) throw new Error("boom");
+      },
+    };
+    await p.sync(false, { background: true, quietTooLarge: true });
+    await p.sync(false, { background: true }); // startup / manual: not quiet
+    fail = true;
+    await p.sync(false, { background: true, quietTooLarge: true });
+    expect(seen).toEqual([true, false, true]);
+    expect(p.tooLargeQuiet).toBe(false); // dropped after a throw too
+  });
+});
