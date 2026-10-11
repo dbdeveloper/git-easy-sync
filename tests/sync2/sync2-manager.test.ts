@@ -742,6 +742,15 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
   // Owner, 2026-10-11: "Cancel sync" must reach the retry loops and the
   // request in flight, through ONE signal. The manager fires it on cancel and
   // re-arms it at the start of every drain.
+  it("wasLastDrainCancelled: true after a cancelled drain, false after the next ordinary one (the UI's 'Sync canceled' asks this)", async () => {
+    deps.drainFn = async () => okResult({ status: "cancelled" });
+    await manager.resumeQueue();
+    expect(manager.wasLastDrainCancelled()).toBe(true);
+    deps.drainFn = async () => okResult();
+    await manager.resumeQueue();
+    expect(manager.wasLastDrainCancelled()).toBe(false);
+  });
+
   it("cancelDrain fires the shared cancel signal; the next drain starts with it re-armed", async () => {
     const signal = new CancelSignal();
     signal.cancel(); // left over from an earlier cancelled sync

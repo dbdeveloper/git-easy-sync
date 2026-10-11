@@ -3149,7 +3149,11 @@ export default class GitHubSyncPlugin extends Plugin {
     // because a background drain (interval tick, watchdog) never
     // produces one — cancelling such a drain used to report nothing at
     // all. This fires for every path that can be cancelled.
-    if (this.syncCancelRequested) {
+    // The ENGINE's word decides, not only the Cancel/Keep window's flag:
+    // Settings → "Stop sync" calls cancelDrain() directly, and its cancel
+    // used to end in "Sync done" — or, after a full sync, in a duration-0
+    // "Syncing with GitHub" box that never went away (owner, 2026-10-11).
+    if (this.syncCancelRequested || this.sync2Manager?.wasLastDrainCancelled?.()) {
       this.syncCancelRequested = false;
       this.settleDrainSection("Sync canceled");
       return;

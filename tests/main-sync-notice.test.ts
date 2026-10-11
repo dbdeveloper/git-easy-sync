@@ -650,6 +650,27 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(markDirty).toHaveBeenCalledTimes(1);
   });
 
+  // Owner, 2026-10-11: a cancel that did NOT come through the Cancel/Keep
+  // window — Settings → "Stop sync", which calls cancelDrain() directly —
+  // never showed "Sync canceled": the idle handler only knew the window's own
+  // flag, and after a full sync the duration-0 "Syncing with GitHub" box
+  // stayed on screen. The ENGINE's word decides now.
+  it.each([
+    { label: "background drain", inFullSync: false },
+    { label: "full sync", inFullSync: true },
+  ])("a cancel from outside the window ($label) still says 'Sync canceled'", ({ inFullSync }) => {
+    const p = makePlugin();
+    p.inFullSync = inFullSync;
+    p.syncCancelRequested = false; // the window was never involved
+    (p as unknown as { sync2Manager: unknown }).sync2Manager = {
+      getDrainStatus: () => ({ progress: null }),
+      wasLastDrainCancelled: () => true,
+    };
+    p.setDrainSection({ state: "live", text: "Syncing with GitHub" });
+    p.handleDrainIdle();
+    expect(lastMessage()).toBe("Sync canceled");
+  });
+
   it("a cancel is reported from idle, because a background drain has no summary", () => {
     const p = makePlugin();
     p.syncCancelRequested = true;

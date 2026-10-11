@@ -671,6 +671,13 @@ export class Sync2Manager {
     this.deps.logger.info("Sync2 cancelDrain requested");
   }
 
+  // Did the last drain end by "Cancel sync"? The UI's "Sync canceled" asks
+  // THIS, not its own window flag: Settings → "Stop sync" calls cancelDrain()
+  // directly and never touched that flag (owner, 2026-10-11).
+  wasLastDrainCancelled(): boolean {
+    return this.lastDrainWasCancelled;
+  }
+
   // RESET-PLUGIN O3: reset cancels a running drain and polls this.
   isDrainRunning(): boolean {
     return this.running;
