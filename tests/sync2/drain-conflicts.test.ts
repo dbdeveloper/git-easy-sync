@@ -624,6 +624,38 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     expect(vaultHas(remoteSiblingName(rec.siblings[1].timeLabel!))).toBe(true);
   });
 
+  // A copy EDITED after birth, through the whole drain (owner, 2026-10-11):
+  // the drain's reconcile reads the copies as they are now. Two copies,
+  // the older made identical to the newer by hand → one drain later only
+  // the NEWER (later timeLabel) remains, and the record says so.
+  it("two copies, the older edited to equal the newer → after one drain only the newer remains", async () => {
+    await setupAligned();
+    await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+    await drainOnce(makeDeps());
+    const sib1 = (await conflictStore.load()).entries.get(NOTE)!.siblings[0];
+    fs.writeFileSync(path.join(dir, remoteSiblingName(sib1.timeLabel!)), "MINE\ntwo\nthree\n");
+    const REMOTE_2 = "REMOTE-OTHER\ntwo\nthree\n";
+    world.committedAt += 5000;
+    await world.commitFiles({ [NOTE]: REMOTE_2 });
+    baseCommit = world.commits[world.commits.length - 2];
+    await drainOnce(makeDeps());
+    const two = (await conflictStore.load()).entries.get(NOTE)!.siblings;
+    expect(two).toHaveLength(2);
+
+    // The user makes the OLDER copy identical to the newer one.
+    fs.writeFileSync(path.join(dir, remoteSiblingName(two[0].timeLabel!)), REMOTE_2);
+    baseCommit = world.head;
+    const r = await drainOnce(makeDeps());
+    expect(r.status).toBe("ok");
+
+    const after = (await conflictStore.load()).entries.get(NOTE)!.siblings;
+    expect(after.map((x) => x.timeLabel)).toEqual([two[1].timeLabel]);
+    expect(vaultHas(remoteSiblingName(two[0].timeLabel!))).toBe(false);
+    expect(vaultHas(remoteSiblingName(two[1].timeLabel!))).toBe(true);
+  });
+
   // ── The fold's ANCESTOR (owner's field test, 2026-10-09) ─────────────
   // A fresh remote version descends, on main, from the remote version the
   // previous sibling was made from. So the fold's ancestor is THAT version
@@ -2055,6 +2087,29 @@ describe("FINALIZE + shouldPushToConflictBranch (§VIII G)", () => {
     expect(lastHot.lastSyncCommitSha).toBe(r.finalizedMergeSha);
     expect(await journal.load()).toBeNull();
     void preMergeMainFiles;
+  });
+
+  // The other exit from a conflict through the file system (owner,
+  // 2026-10-11): not deleting the copy, but EDITING it until it equals the
+  // base — in Obsidian or any other program. The drain's reconcile reads the
+  // copy as it is now, drops it, and the same drain finalizes.
+  it("🔑 the copy EDITED to equal the base → the same drain closes the conflict and FINALIZES", async () => {
+    await setup();
+    const branch = await birthConflict();
+    const rec = (await conflictStore.load()).entries.get(NOTE2)!;
+    const sibName = buildSiblingFilePath(NOTE2, rec.siblings[0].timeLabel!, "other-device");
+    // The base on disk holds our version; the copy is made identical to it.
+    fs.writeFileSync(path.join(dir, NOTE2), LOCAL_B);
+    fs.writeFileSync(path.join(dir, sibName), LOCAL_B);
+    baseCommit = world.head;
+
+    const r = await drainOnce(deps());
+
+    expect(r.status).toBe("ok");
+    expect(fs.existsSync(path.join(dir, sibName))).toBe(false);
+    expect((await conflictStore.load()).entries.has(NOTE2)).toBe(false);
+    expect(r.finalizedMergeSha).not.toBeNull();
+    expect(world.branchHeads.has(branch)).toBe(false);
   });
 
   it("G.8: tip already reachable from main (crash after merge, before delete) → NO second merge, just the delete; 404 branch → just the field cleanup", async () => {
