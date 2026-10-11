@@ -41,36 +41,56 @@ Use it, and note which runs you did.
 
 ## 1. Platform & build
 
-- [ ] 🖥️ `pnpm build` is green; `main.js` loads in Obsidian (desktop) with no console errors.
-- [ ] ⚠️ **AFTER EVERY REBUILD, RELOAD THE PLUGIN before testing.** Writing `main.js`
+- [x] 🖥️ `pnpm build` is green; `main.js` loads in Obsidian (desktop) with no console errors.
+- [x] ⚠️ **AFTER EVERY REBUILD, RELOAD THE PLUGIN before testing.** Writing `main.js`
       does not change the code Obsidian is RUNNING — it keeps the old module in memory
       until the plugin is disabled and re-enabled. This cost two debugging rounds on
       2026-10-03 alone (once for `data.json`, once for `main.js`), and both times the
       symptom was "the fix did nothing". The one-second check before you trust a run:
       `grep -c "<a string from the new code>" <vault>/.obsidian/plugins/git-easy-sync/main.js`
       proves the FILE is new — only a reload proves the INSTANCE is.
-- [ ] 📱 The plugin **enables** in the community-plugins list on iOS and Android **without crashing**. (Regression guard: no file-scope `require("fs")` / `require("path")` in `main.js` — `grep -E '=require\("fs"\)|=require\("path"\)' main.js` must return zero.)
-- [ ] 📱 `styles.css` is applied (check both light and dark themes).
-- [ ] 🖥️📱 The same repo synced from both a desktop and a mobile vault stays consistent.
+- [x] 📱 The plugin **enables** in the community-plugins list on iOS and Android **without crashing**. (Regression guard: no file-scope `require("fs")` / `require("path")` in `main.js` — `grep -E '=require\("fs"\)|=require\("path"\)' main.js` must return zero.)
+- [x] 📱 `styles.css` is applied (check both light and dark themes).
+- [x] 🖥️📱 The same repo synced from both a desktop and a mobile vault stays consistent.
 
 ## 2. Sync — end-to-end flows (🌐 real GitHub)
 
-- [ ] 🖥️ **Bare-repo bootstrap:** the first sync into an empty repo creates the structure and the managed `.gitignore` files. (⚠️ There is no "snapshot manifest" since THE SWITCH — local state lives in `.runtime/` as the hot metadata pair + `file-baselines`, and none of it is pushed.)
-- [ ] 🖥️ **Adoption:** the first sync against a non-empty repo produces no duplicates or losses; conflicts are classified.
-- [ ] 🖥️ **Incremental:** edit a file → `[Sync]` → it commits and pushes; delete a file → the deletion reaches the remote.
-- [ ] 🖥️ **Deletions propagate:** delete a file and sync → it is removed on the remote; on a second device, pull removes it locally. (Formerly "pending deletions" — that store no longer exists; a deletion is an ordinary batch entry now. The behaviour is still worth a pass.)
-- [ ] 🖥️ **"Sync starts with commit" = off:** `[Sync]` only pulls/pushes; the `[Commit]` ribbon button (or the *Commit local changes* command) commits separately.
-- [ ] 🖥️ **Interval scheduler:** the periodic tick syncs automatically; an initial sync runs shortly after the vault opens.
-- [ ] 🖥️ **Ribbon & status bar:** sync/commit icons work; the conflict counter (🔀) updates; the status reads *Syncing… / idle / Last error*.
-- [ ] 🖥️ **Push-queue persistence:** start a sync, force-quit Obsidian mid-push, relaunch → the queue is drained to completion by the recovery sweep.
-- [ ] 🖥️ **Large vault** (1000+ files): syncing does not freeze the UI (heavy work runs off the main thread).
+- [x] 🖥️ **Bare-repo bootstrap:** the first sync into an empty repo creates the structure and the managed `.gitignore` files. (⚠️ There is no "snapshot manifest" since THE SWITCH — local state lives in `.runtime/` as the hot metadata pair + `file-baselines`, and none of it is pushed.)
+- [x] 🖥️ **Adoption:** the first sync against a non-empty repo produces no duplicates or losses; conflicts are classified.
+- [x] 🖥️ **Incremental:** edit a file → `[Sync]` → it commits and pushes; delete a file → the deletion reaches the remote.
+- [x] 🖥️ **Deletions propagate:** delete a file and sync → it is removed on the remote; on a second device, pull removes it locally. (Formerly "pending deletions" — that store no longer exists; a deletion is an ordinary batch entry now. The behaviour is still worth a pass.)
+- [x] 🖥️ **"Sync starts with commit" = off:** `[Sync]` only pulls/pushes; the `[Commit]` ribbon button (or the *Commit local changes* command) commits separately.
+- [x] 🖥️ **Interval scheduler:** the periodic tick syncs automatically; an initial sync runs shortly after the vault opens.
+- [x] 🖥️ **Ribbon & status bar:** sync/commit icons work; the conflict counter (🔀) updates; the status reads *Syncing… / idle / Last error*.
+- [x] 🖥️ **Push-queue persistence:** start a sync, force-quit Obsidian mid-push, relaunch → the queue is drained to completion by the recovery sweep.
+- [x] 🖥️ **Large vault** (1000+ files): syncing does not freeze the UI (heavy work runs off the main thread).
 
 ## 3. Mobile-specific (📱 — Capacitor is not unit-tested)
 
-- [ ] 📱 **Capacitor rename:** conflict resolution and atomic writes never fail with *"Destination file already exists"* (iOS/Android `rename` does not overwrite; the code must remove-then-rename).
-- [ ] 📱 **Capacitor rename of a DIRECTORY (new 2026-10-04):** every commit now creates its batch in `.runtime/push-queue-staging/<id>/` and moves it into `.runtime/push-queue/` with ONE `adapter.rename` of the folder — the first folder rename anywhere in the plugin. Commit a few times on the phone: each commit must land a batch under `push-queue/`, `push-queue-staging/` must be empty (or absent) afterwards, and the log must show no rename error. Obsidian's API documents `rename` for "a file or folder", but it was never exercised on Capacitor for a folder.
-- [ ] 📱🖥️ **WASM SHA-1 in the CPU worker (new 2026-10-05):** hashing of files ≥ 100 KB now runs `hash-wasm` inside the worker. Commit a vault with several large files (images, PDFs) on desktop AND on the phone: every file must commit and push with no error, and a second Commit right after must say "Nothing to commit" (a wrong SHA would show up as files that keep re-committing). If WebAssembly is blocked the worker silently falls back to `crypto.subtle` — same result, more memory.
-- [ ] 📱 **Binary files** (PNG, PDF) sync without corruption (binary read/write path, not the text path).
+- [x] 📱 **Capacitor rename:** conflict resolution and atomic writes never fail with *"Destination file already exists"* (iOS/Android `rename` does not overwrite; the code must remove-then-rename).
+- [x] 📱 **Capacitor rename of a DIRECTORY (new 2026-10-04):** every commit now creates its batch in `.runtime/push-queue-staging/<id>/` and moves it into `.runtime/push-queue/` with ONE `adapter.rename` of the folder — the first folder rename anywhere in the plugin. Commit a few times on the phone: each commit must land a batch under `push-queue/`, `push-queue-staging/` must be empty (or absent) afterwards, and the log must show no rename error. Obsidian's API documents `rename` for "a file or folder", but it was never exercised on Capacitor for a folder.
+- [x] 📱🖥️ **WASM SHA-1 in the CPU worker (new 2026-10-05):** hashing of files ≥ 100 KB now runs `hash-wasm` inside the worker. Commit a vault with several large files (images, PDFs) on desktop AND on the phone: every file must commit and push with no error, and a second Commit right after must say "Nothing to commit" (a wrong SHA would show up as files that keep re-committing). If WebAssembly is blocked the worker silently falls back to `crypto.subtle` — same result, more memory.
+- [x] 📱 **Binary files** (PNG, PDF) sync without corruption (binary read/write path, not the text path).
+- [x] 📱🌐 **A big file just under GitHub's limit (new 2026-10-11).** A ~35 MiB binary syncs end-to-end
+      phone → GitHub → desktop, and the desktop copy is byte-identical (compare SHA-1). The limit is
+      **40 MiB, MEASURED** on the REST API (39.96 MiB → 201, 40 MiB → 422 "input was too large") —
+      not the documented 100 MB. The log line `SHA-1 engine for files ≥ 100 KB {"engine": "wasm"}`
+      at plugin start says which hasher ran (`crypto.subtle` = the silent fallback).
+- [x] 📱🖥️ **A file over the limit (> 40 MB) never breaks the sync (new 2026-10-11).** Put a file of
+      ~95 MB where `.gitignore` lets it through (e.g. the vault root):
+      - **manual Commit**, **manual Sync**, and the **sync at plugin start** each show ONE pop-up per such
+        file, ~8 s: *File "…" is too large for the repo (N MB, max 40 MB). Add it to .gitignore (Settings).*
+        — every time, not once;
+      - the **periodic** automatic sync skips it **silently** (interval on, "Sync starts with commit" on);
+      - everything else still syncs; the file stays in the vault and never reaches the queue;
+      - the pop-up stops by itself once the file is deleted, moved into a dot-folder or an ignored folder,
+        or its name/extension is added to `.gitignore`;
+      - the log has `file over GitHub's size limit — not synced` once per file per session (not per pass).
+- [x] 📱 **No orphan workers after a plugin reload (new 2026-10-11).** Developer check via Chrome DevTools
+      (`adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`, then `http://localhost:9333/json`):
+      the WebView's worker count right after a fresh Obsidian start stays the SAME after several plugin
+      disable+enable cycles (measured: 7 → 7 → 7 → 7; before the fix +5 per reload, from a second pool
+      `BatchWriter` built and nobody terminated).
 - [ ] 📱 **Token with trailing whitespace** (pasted from the keyboard suggestion bar) still works — input is trimmed and existing values self-heal on restart.
 - [ ] 📱 **Low-memory kill:** while editing or syncing, let the OS kill Obsidian → on relaunch the vault is consistent and the recovery sweep has run.
 - [ ] 📱 **Battery death** (let the device power off below 1% mid-sync) → on relaunch, no corruption and no 0-byte files.
@@ -298,6 +318,14 @@ Use it, and note which runs you did.
       "Sync done" ~1 s, and a summary with a **plugin line** (§7) ~**2.5 s**.
 - [ ] **Stop sync (§II.17):** Settings → **Stop sync** during a long run stops it at the
       next checkpoint, says so, and **loses nothing** — the next sync finishes the job.
+- [x] 📱🌐 **Cancel interrupts an upload IN FLIGHT (new 2026-10-11).** Start a sync that uploads a big file
+      (~35 MiB), then press **Sync → Cancel sync** or **Settings → Stop sync** while "Syncing with GitHub"
+      shows: the upload stops within a fraction of a second (measured on the phone: the request aborted
+      43 ms after Cancel, the drain stopped 0.3 s after) and **"Sync canceled"** appears — for both ways of
+      cancelling. The next sync uploads the file normally. (Before: Cancel waited out six ~47 s retries.)
+- [x] 📱🌐 **GitHub's "input was too large" is not retried (new 2026-10-11).** If GitHub answers a blob with
+      422 "Sorry, your input was too large to process", the log shows ONE attempt, the file is skipped with
+      a WARN, and the rest of the batch is pushed — no loop re-uploading the same blob.
 - [ ] **⚠️ A cancelled conflict is announced.** If a conflict's remote content vanishes
       from the repo, its conflict mode is cancelled and a Notice says so, naming the file
       and stating the local copy is unchanged. This is the ONE vault-step failure the
