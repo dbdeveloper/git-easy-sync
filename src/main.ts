@@ -3051,7 +3051,12 @@ export default class GitHubSyncPlugin extends Plugin {
         // and the next repaint built a new one. That is the notice
         // "jumping" the owner saw: not one box changing text, dozens of
         // boxes created and thrown away.
-        const wasRunning = this.lastDrainState === "running";
+        // "cancelling" is a running drain too (owner, 2026-10-11): cancelDrain()
+        // emits it, and with only "running" counted, a cancelled drain never
+        // reached handleDrainIdle — no "Sync canceled", and the duration-0
+        // "Syncing with GitHub" box stayed on screen.
+        const wasRunning =
+          this.lastDrainState === "running" || this.lastDrainState === "cancelling";
         this.lastDrainState = s.state;
         if (s.state === "running" && !wasRunning) {
           // The drain's slot opens the moment it starts, in EVERY case.

@@ -671,6 +671,25 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(lastMessage()).toBe("Sync canceled");
   });
 
+  // Field, 2026-10-11 (phone): the fix above was green and the phone STILL
+  // showed "Syncing with GitHub" after a cancel — the idle handler was never
+  // CALLED. cancelDrain() emits a "cancelling" status, and the listener ran
+  // the idle handler only when the state before idle was "running". This
+  // pins the whole sequence, not the handler alone.
+  it("running → cancelling → idle reaches the idle handler and says 'Sync canceled'", () => {
+    const p = makePlugin();
+    p.inFullSync = false;
+    p.syncCancelRequested = false;
+    (p as unknown as { sync2Manager: unknown }).sync2Manager = {
+      getDrainStatus: () => ({ progress: null }),
+      wasLastDrainCancelled: () => true,
+    };
+    p.handleDrainStatus({ state: "running" });
+    p.handleDrainStatus({ state: "cancelling" });
+    p.handleDrainStatus({ state: "idle" });
+    expect(lastMessage()).toBe("Sync canceled");
+  });
+
   it("a cancel is reported from idle, because a background drain has no summary", () => {
     const p = makePlugin();
     p.syncCancelRequested = true;
