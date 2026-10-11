@@ -669,6 +669,13 @@
 52. якщо batch повністю обробився і запушився на сервер, а потім був збій, тоді в metadata.files не змінились base, а 
     сам батч і файли які в ньому видаляється і це може привести до складних помилок, які потрібно вирішити. А може й ні.
     потрібно це перевірити.
+    ⇒ 2026-10-11, ВІДПОВІДЬ (закрити — рішення власника): перевірено тестами, складних помилок немає.
+    Збій після push-у, до запису журналу: рестарт бачить власний push як remote, побайтово однаковий —
+    без дубля коміту (`drain.test.ts` «B.4: crash after push, before persist»). Збої в кожному проміжку
+    епілогу (baseline-и → конфлікти → якір → журнал → прибирання) сходяться при повторі (серія «D: crash in
+    the N→M gap»). А base після вже запушеного батча з 2026-10-10 фіксує журнал прогресу
+    `.runtime/vault-step-progress.jsonl` (NEW-DRAIN §II.19): рядок на кожен шлях наприкінці батча, після
+    підтвердженого push-у, replay на старті drain-у і commit-у; тест «POWER LOSS right after a write…».
 
 53. For github instances hosted privately this plugin should still work, but github.com is hardcoded in several places 
     throughout the codebase. If we allow the full repo url to be configured on setup we can support self-hosted github 
@@ -682,7 +689,10 @@
     - tested migrating a github.com vault to the new settings - the update is transparent to the user, it assumes 
       github.com since that was the only thing supported before
 
-54. Виправити README.md під нові реалії (з'явився редактор, інша поведінка при bootstrap дві різні версії файлу remote 
+54. ✅ DONE (2026-10-11, `24b682f`): довідник налаштувань перезібрано з `tab.ts`, таблиця конфліктів звірена з
+    `diff3.ts` (два рядки були навпаки), adoption — дві різні версії без спільної бази = конфлікт, у `.obsidian/` —
+    перемагає repo; редактор `.gitignore`, переглядач лога, ліміт 40 МБ, Cancel, команди.
+    Виправити README.md під нові реалії (з'явився редактор, інша поведінка при bootstrap дві різні версії файлу remote 
     vs local -> MANUAL CONFLICT, etc.)
 
 55. ✅ DONE (2026-10-08, спека `docs/tasks/GITIGNORE-EDITOR.md`, код `src/gitignore-editor/`). Перебудувати редактор `.gitignore` (Settings, `GitignoreEditModal`) за зразком переглядача лога (власник,
@@ -692,6 +702,18 @@
     (компонент, що монтується в будь-який контейнер) + `log-viewer-view.ts` (вкладка для pop-out) +
     `log-viewer-modal.ts` (повноекранне модальне) + `log-open-target.ts` (вибір, під тестом). Робити ПІСЛЯ
     переглядача лога.
+
+56. Дослідити ОКРЕМО (власник, 2026-10-11): великі медіафайли (відео тощо) і Git LFS. REST API GitHub не приймає
+    blob від 40 MiB (виміряно: 39,96 MiB → 201, 40 MiB → 422; документація каже 100 МБ), тому зараз такі файли
+    лишаються поза sync зі спливним повідомленням (NEW-DRAIN §II.21). Питання для дослідження: чи можна говорити з
+    LFS лише через HTTP (batch API + upload на сховище) без бінарника git, як це працює на мобільному, ліміти й
+    квоти LFS на безкоштовному плані, і чи це взагалі задача цього плагіна. Власник: «наш плагін не розрахований
+    на передачу відео».
+
+57. Текст налаштування «Maximum auto-merge file size (KB)» у Settings (`src/settings/tab.ts`) каже «Above the
+    threshold the engine just uploads your local bytes (no automated merge)». Код робить інакше: файл, змінений з
+    обох боків і більший за поріг, стає КОНФЛІКТОМ (`diff3.ts`, п.4.7 «the size gate»). Знайдено 2026-10-11 під
+    час звірки README (README вже каже правду); виправити текст в UI.
 ---
 
 Оновлюй свої знання про останній статус, і продовжуємо працювати далі. Після останнього push ми виконали три великі дії:
