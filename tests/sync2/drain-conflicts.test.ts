@@ -517,11 +517,14 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     // This `vaultHas` is the one the mutation breaks, and it confirms
     // the source comment's mechanism exactly: `merged` IS the previous
     // sibling's own FileInfo (ours-wins returns the object, not a
-    // copy), so the `merged.mtime = tracked.remote.mtime` further down
+    // copy), so the `merged.timeLabel = tracked.remote.mtime` further down
     // mutates it IN PLACE — old and new then derive the same file name
     // and the transaction's step 4 deletes what its step 2 wrote. The
     // record keeps pointing at a file that is no longer there.
-    expect(rec.siblings[0].sha).toBe(firstSibling.sha);
+    // The record's sha is the content cache of the copy's file (owner,
+    // 2026-10-11): it describes the bytes on disk — the user's edit.
+    expect(rec.siblings[0].sha).toBe(await sha(SAME));
+    expect(rec.siblings[0].timeLabel).toBe(firstSibling.timeLabel); // same copy
     expect(vaultHas(firstName)).toBe(true);
     expect(fs.readFileSync(path.join(dir, firstName), "utf8")).toBe(SAME);
     // The origin still moved on to the remote just folded — the next
@@ -610,7 +613,11 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
 
     const rec = (await conflictStore.load()).entries.get(NOTE)!;
     expect(rec.siblings).toHaveLength(2); // C.12: grew by one
-    expect(rec.siblings[0].sha).toBe(sib1.sha); // old stays tracked
+    // Old stays tracked: same copy (timeLabel), same origin; its sha is the
+    // content cache of the file, now the user's edit (owner, 2026-10-11).
+    expect(rec.siblings[0].timeLabel).toBe(sib1.timeLabel);
+    expect(rec.siblings[0].originSha).toBe(sib1.originSha);
+    expect(rec.siblings[0].sha).toBe(await sha("MINE\ntwo\nthree\n"));
     expect(rec.siblings[1].sha).toBe(await sha(REMOTE_2));
     expect(rec.siblings[0].timeLabel!).toBeLessThan(rec.siblings[1].timeLabel!);
     expect(vaultHas(remoteSiblingName(rec.siblings[0].timeLabel!))).toBe(true);

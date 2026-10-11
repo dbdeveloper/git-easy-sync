@@ -113,15 +113,24 @@ describe("ConflictStoreV2", () => {
     expect(warnings.some((w) => w.includes("corrupt"))).toBe(true);
   });
 
-  it("collectReferencedShas (§12.5 source 4): conflictBase + sibling shas, nulls excluded", async () => {
+  // What a live conflict still NEEDS from sync_store: conflictBase (the
+  // branch half) and each copy's ORIGIN — the ancestor of the next fold.
+  // Not the copy's own sha: since the content cache (owner, 2026-10-11) it
+  // describes the file on disk, which may hold the user's edits and never
+  // was a blob. After a no-op fold the origin moves on while the content
+  // stays — pinning `sha` there left the fold's ancestor unprotected.
+  it("collectReferencedShas (§12.5 source 4): conflictBase + each copy's ORIGIN, nulls excluded", async () => {
     const state = sample();
+    const c = state.entries.get("clash.md")!;
+    c.siblings[0].originSha = "origin-1";
+    c.siblings[1].originSha = "origin-2";
     state.entries.set("null-sha.md", {
       conflictBase: { ...emptyFileInfo(), path: "null-sha.md" }, // sha null
       siblings: [],
     });
     await store.save(state);
     const shas = await store.collectReferencedShas();
-    expect([...shas].sort()).toEqual(["cb-sha", "sib-1", "sib-2"]);
+    expect([...shas].sort()).toEqual(["cb-sha", "origin-1", "origin-2"]);
   });
 
   it("save is atomic-write-backed: a save over an existing file replaces it wholesale", async () => {

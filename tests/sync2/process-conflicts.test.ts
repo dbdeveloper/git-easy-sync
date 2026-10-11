@@ -57,6 +57,7 @@ describe("process_conflicts (§VIII I)", () => {
       timeLabel,
       deviceLabel: label,
       mode: "",
+      originSha: await sha(content), // born from this remote version
     };
     if (onDisk) {
       putFile(buildSiblingFilePath(basePath, timeLabel, label), content);
@@ -209,10 +210,11 @@ describe("process_conflicts (§VIII I)", () => {
   // open, editor exit and every drain start. A copy whose SIZE differs from
   // the base cannot match it, so its bytes are never read or hashed — only a
   // same-size copy pays for the SHA.
-  it("I.4e: a copy of a different size is not read at all — size first, SHA only on equal size", async () => {
+  it("I.4e: a measured copy of a different size is not read, nor the base — SHA only on equal size", async () => {
     putFile("note.md", "reconciled\n");
     const state = emptyConflictsState();
     const t = await tracked("note.md", "their much longer version\n", 2000);
+    measure(t, "note.md"); // the cache is valid: an UNmeasured copy is read once to fill it
     entry(state, "note.md", [t]);
     const siblingPath = buildSiblingFilePath("note.md", 2000, "phone");
     // mock-obsidian builds a NEW adapter object on every `vault.adapter`
@@ -238,6 +240,163 @@ describe("process_conflicts (§VIII I)", () => {
     expect(reads).not.toContain(siblingPath);
     expect(result.entries.get("note.md")?.siblings).toHaveLength(1);
     expect(siblingExists("note.md", 2000)).toBe(true);
+  });
+
+  // ── The copy's content cache (owner, 2026-10-11) ─────────────────────
+  // A tracked record keeps {sha, size, mtime} of its copy's FILE as last
+  // measured — the same rule the engine applies to every vault file: while
+  // size and mtime are unchanged the stored sha is trusted; a change (or no
+  // measurement yet) re-reads the file and refreshes the record. The NAME
+  // timestamp lives in `timeLabel`, the copy's identity.
+  const spied = () => {
+    const reads: string[] = [];
+    const adapter = vault.adapter;
+    const a = {
+      ...adapter,
+      readBinary: async (p: string) => {
+        reads.push(p);
+        return adapter.readBinary(p);
+      },
+    };
+    const v = new Proxy(vault, {
+      get: (t, prop, r) => (prop === "adapter" ? a : Reflect.get(t, prop, r)),
+    });
+    return { reads, deps: { ...deps(), vault: v as never } };
+  };
+  const copyPath = (base: string, timeLabel: number, label = "phone") =>
+    buildSiblingFilePath(base, timeLabel, label);
+  const measure = (f: FileInfo, base: string): void => {
+    const st = fs.statSync(path.join(dir, copyPath(base, f.timeLabel!, f.deviceLabel!)));
+    f.size = st.size;
+    f.mtime = st.mtimeMs;
+  };
+
+  describe("the copy's content cache", () => {
+    it("🔑 size and mtime unchanged → the stored sha is used, the copy is NOT read", async () => {
+      putFile("note.md", "same size!\n");
+      const state = emptyConflictsState();
+      const t = await tracked("note.md", "SAME SIZE!\n", 2000); // same size as the base
+      measure(t, "note.md");
+      entry(state, "note.md", [t]);
+      const { reads, deps: d } = spied();
+
+      await processConflicts(d, state);
+
+      expect(reads).not.toContain(copyPath("note.md", 2000));
+      expect(siblingExists("note.md", 2000)).toBe(true);
+    });
+
+    it("🔑 the copy was edited (mtime moved) → re-read, and the record now describes the file", async () => {
+      putFile("note.md", "base\n");
+      const state = emptyConflictsState();
+      const t = await tracked("note.md", "their version\n", 2000);
+      measure(t, "note.md");
+      entry(state, "note.md", [t]);
+      putFile(copyPath("note.md", 2000), "edited by hand\n");
+      fs.utimesSync(path.join(dir, copyPath("note.md", 2000)), 99, 99);
+
+      const result = await processConflicts(deps(), state);
+
+      const rec = result.entries.get("note.md")!.siblings[0];
+      expect(rec.sha).toBe(await sha("edited by hand\n"));
+      expect(rec.size).toBe("edited by hand\n".length);
+      expect(rec.mtime).toBe(99_000);
+      expect(rec.originSha).toBe(t.originSha); // where it came from stays
+      expect(saves).toBe(1);
+    });
+
+    it("no measurement yet (mtime null) → measured once, then trusted", async () => {
+      putFile("note.md", "same size!\n");
+      const state = emptyConflictsState();
+      const t = await tracked("note.md", "SAME SIZE!\n", 2000);
+      t.mtime = null;
+      entry(state, "note.md", [t]);
+      const first = spied();
+      const after = await processConflicts(first.deps, state);
+      expect(first.reads).toContain(copyPath("note.md", 2000));
+
+      const second = spied();
+      await processConflicts(second.deps, after);
+      expect(second.reads).not.toContain(copyPath("note.md", 2000));
+    });
+  });
+
+  describe("2.2 dedup decides by the copies' CURRENT content", () => {
+    it("🔑 two tracked copies edited to the same content → the newer (by timeLabel) survives", async () => {
+      putFile("note.md", "base\n");
+      const state = emptyConflictsState();
+      const older = await tracked("note.md", "phone version\n", 2000);
+      const newer = await tracked("note.md", "laptop version\n", 5000, "laptop");
+      entry(state, "note.md", [older, newer]);
+      putFile(copyPath("note.md", 2000), "agreed\n");
+      putFile(copyPath("note.md", 5000, "laptop"), "agreed\n");
+
+      const result = await processConflicts(deps(), state);
+
+      expect(siblingExists("note.md", 2000)).toBe(false);
+      expect(siblingExists("note.md", 5000, "laptop")).toBe(true);
+      expect(result.entries.get("note.md")!.siblings.map((s) => s.timeLabel)).toEqual([5000]);
+    });
+
+    it("a tracked copy edited to equal a synthetic one → the tracked survives", async () => {
+      putFile("note.md", "base\n");
+      const state = emptyConflictsState();
+      const t = await tracked("note.md", "phone version\n", 2000);
+      entry(state, "note.md", [t]);
+      putFile(copyPath("note.md", 2000), "agreed\n");
+      putFile(copyPath("note.md", 9000, "stranger"), "agreed\n");
+
+      await processConflicts(deps(), state);
+
+      expect(siblingExists("note.md", 2000)).toBe(true);
+      expect(siblingExists("note.md", 9000, "stranger")).toBe(false);
+    });
+
+    it("🔑 born equal, one EDITED since → both stay (no data loss)", async () => {
+      putFile("note.md", "base\n");
+      const state = emptyConflictsState();
+      const a = await tracked("note.md", "same birth\n", 2000);
+      const b = await tracked("note.md", "same birth\n", 5000, "laptop");
+      entry(state, "note.md", [a, b]);
+      putFile(copyPath("note.md", 2000), "my edit in the older copy\n");
+
+      await processConflicts(deps(), state);
+
+      expect(siblingExists("note.md", 2000)).toBe(true);
+      expect(siblingExists("note.md", 5000, "laptop")).toBe(true);
+    });
+
+    it("measured copies are not read at all — and neither is the base when no copy has its size", async () => {
+      putFile("note.md", "b\n");
+      const state = emptyConflictsState();
+      const a = await tracked("note.md", "short\n", 2000);
+      const b = await tracked("note.md", "a much longer one\n", 5000, "laptop");
+      measure(a, "note.md");
+      measure(b, "note.md");
+      entry(state, "note.md", [a, b]);
+      const { reads, deps: d } = spied();
+
+      await processConflicts(d, state);
+
+      expect(reads).toEqual([]);
+    });
+
+    it("synthetic duplicates: the newer NAME wins, whatever the files' mtimes say", async () => {
+      putFile("note.md", "base\n");
+      const state = emptyConflictsState();
+      const t = await tracked("note.md", "tracked content\n", 100);
+      entry(state, "note.md", [t]);
+      putFile(copyPath("note.md", 3000, "a"), "syn dup\n");
+      putFile(copyPath("note.md", 7000, "b"), "syn dup\n");
+      // The OLDER name was touched last — the name decides, not the file.
+      fs.utimesSync(path.join(dir, copyPath("note.md", 3000, "a")), 9, 9);
+      fs.utimesSync(path.join(dir, copyPath("note.md", 7000, "b")), 1, 1);
+
+      await processConflicts(deps(), state);
+
+      expect(siblingExists("note.md", 3000, "a")).toBe(false);
+      expect(siblingExists("note.md", 7000, "b")).toBe(true);
+    });
   });
 
   it("I.4b: a synthetic that matches the base with NO tracked twin — only 2.3 can reach it", async () => {
@@ -328,8 +487,9 @@ describe("process_conflicts (§VIII I)", () => {
 
     const first = await processConflicts(deps(), state);
     const savesAfterFirst = saves;
+    expect(savesAfterFirst).toBeLessThanOrEqual(1); // at most the cache fill
     const second = await processConflicts(deps(), first);
-    expect(second.entries.get("note.md")!.siblings).toEqual([t]);
+    expect(second.entries.get("note.md")!.siblings).toHaveLength(1);
     expect(saves).toBe(savesAfterFirst); // no state change → no save
   });
 

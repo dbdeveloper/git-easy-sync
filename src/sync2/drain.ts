@@ -2444,7 +2444,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       const foldAncestor: FileInfo = {
         ...emptyFileInfo(),
         path,
-        sha: previousSibling.originSha ?? previousSibling.sha,
+        sha: previousSibling.originSha ?? null,
         mode: "",
       };
       let foldVerdict;

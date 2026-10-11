@@ -243,16 +243,18 @@ export default class ConflictStoreV2 {
   }
 
   // Sweep source №4 (§12.5.D): while a conflict lives, its
-  // conflictBase blob must NEVER be reaped — it is the diff3 ancestor
-  // for every future STEP3 fold and is only refetchable while the
-  // conflict branch still exists.
+  // conflictBase blob must NEVER be reaped — it is only refetchable while
+  // the conflict branch still exists — and neither may each copy's
+  // ORIGIN, the ancestor of its next STEP3 fold. Not the copy's own sha:
+  // that is the content cache of the file on disk (owner, 2026-10-11),
+  // possibly the user's edits, never a stored blob.
   async collectReferencedShas(): Promise<Set<string>> {
     const state = await this.load();
     const out = new Set<string>();
     for (const c of state.entries.values()) {
       if (c.conflictBase.sha !== null) out.add(c.conflictBase.sha);
       for (const s of c.siblings) {
-        if (s.sha !== null) out.add(s.sha);
+        if (s.originSha) out.add(s.originSha);
       }
     }
     return out;

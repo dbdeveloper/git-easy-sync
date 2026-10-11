@@ -56,9 +56,13 @@ export interface FileInfo {
   // CONFLICT SIBLINGS ONLY: the sha of the main-branch version this sibling
   // was last made from (its birth remote, or the remote last folded into it).
   // It is the fold's ANCESTOR (§II.6 STEP3 п.4, owner 2026-10-09): a fresh
-  // remote descends on main from exactly this version. Absent in records
-  // written before the field existed — then the sibling's own sha stands in.
+  // remote descends on main from exactly this version. Every sibling record
+  // carries it from birth; the sibling's own `sha` is NOT a stand-in — it
+  // is the content cache of the copy's file (owner, 2026-10-11).
   originSha?: string | null;
+  // (For a conflict sibling `sha`/`size`/`mtime` describe its FILE as last
+  // measured — trusted while size and mtime are unchanged, re-read
+  // otherwise; process_conflicts keeps them current.)
   // CONFLICT SIBLINGS ONLY: the timestamp in the copy's FILE NAME. With
   // deviceLabel it is the copy's identity — the path is built from the
   // pair. Not a modification time (owner, 2026-10-11: `mtime` means the
