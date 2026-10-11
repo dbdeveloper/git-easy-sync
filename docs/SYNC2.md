@@ -973,9 +973,14 @@ class hierarchy in `src/errors.ts`:
 ```
 SyncError                  (abstract base — never thrown directly)
 ├── NetworkError           (transient — retriable=true)
+├── CancelledError         (the user's Cancel reached a retry pause or
+│                            a request in flight — drain status
+│                            "cancelled", not an error)
 ├── GithubAPIError         (typed HTTP response from GitHub)
 │   ├── NotFoundError      (404)
 │   ├── ConflictError      (409 — bare repo, ref mismatch)
+│   ├── BlobTooLargeError  (422 "input was too large" on createBlob —
+│   │                        final: one attempt, the entry is skipped)
 │   ├── ValidationError    (422 — malformed request OR stale state
 │   │                        per body.message)
 │   ├── AuthError          (401, 403 — token problems)
@@ -985,6 +990,16 @@ SyncError                  (abstract base — never thrown directly)
 └── StaleStateError        (two pieces of remote state observed in
                               one sync click no longer agree)
 ```
+
+*(2026-10-11)* `BlobTooLargeError` is a 422 that is deliberately **not**
+a `ValidationError`: the drain reads a `ValidationError` on a push as
+"the head moved" and restarts the batch, which re-uploaded the same
+oversized blob in a loop. GitHub's measured ceiling is 40 MiB (39.96 MiB
+→ 201, 40 MiB → 422), not the documented 100 MB, so the commit side keeps
+such files out (`MAX_SYNC_FILE_BYTES`, NEW-DRAIN §II.21) and this class
+is the last line. The drain also throws its own `SyncError` subclasses
+(`TreeTruncatedError`, `CompareWrongFilesError`, the `…NotInRepo`
+family) — they belong to NEW-DRAIN and are described there.
 
 Three properties make the hierarchy useful at the catch site.
 
@@ -1848,11 +1863,33 @@ thread stays as a thin orchestrator.
 
 ### 8.4 Cancellation
 
-`Sync2Manager.cancelDrain()` sets an `abortRequested` flag the
-reconcile loop checks between files. For in-flight Worker jobs,
-`workerClient.terminate()` is synchronous and instant — the
-controller re-creates fresh workers from the source strings for
-the next sync (~5-10 ms via Blob URL + new Worker).
+*(Rewritten 2026-10-11 — the text this replaces described an
+`abortRequested` flag checked between files plus `terminate()`, which
+let a 127 MB upload keep retrying for minutes after "Cancel sync".)*
+
+`Sync2Manager.cancelDrain()` does two things. It sets the drain's
+own flag, which `drainOnce` checks at the batch, file, pre-push,
+Vault-step and pre-FINALIZE boundaries (NEW-DRAIN §II.17 — the
+epilogue deliberately has none). And it fires the shared
+`CancelSignal` (`src/cancel-signal.ts`, one per plugin load, created
+by `main.ts`, re-armed at every drain start), which reaches the loops
+*below* those boundaries:
+
+- `retryUntil` (every GitHub client call) and `NetworkRetry` (the
+  drain's own backoff) end a pause at once and throw `CancelledError`;
+- `WorkerClient.httpRequest` aborts the request in flight: the network
+  worker keeps one `AbortController` per request and answers the
+  `http-abort` op (the main-thread fallback keeps its own map).
+  Field-measured on a phone: an upload stopped 43 ms after the click.
+
+The CPU pool is not terminated on cancel. A cancel that lands while a
+Sync is still in its commit part lets the commit finish and starts no
+drain. `wasLastDrainCancelled()` lets the UI say `Sync canceled`
+whoever cancelled (the ribbon, the command, Settings' *Stop sync*).
+
+**One pool per plugin load.** `main.ts` owns the only `WorkerClient`
+and hands it to every consumer; `BatchWriter` used to build its own,
+which left five orphan workers behind every plugin reload.
 
 ### 8.5 Graceful main-thread fallback
 
