@@ -44,7 +44,8 @@ sync2/
 ├── normalization/         # C-series: CRLF/BOM round-trips, resume strategies
 ├── incremental/           # D-series: post-adoption incremental flows
 ├── conflicts-misc/        # E-series: reconcile-onload, binary, plugin-js semver/mtime
-├── edges/                 # F: special chars in paths + content edge cases
+├── edges/                 # F: special chars in paths + content edge cases; big-files (40 MiB limit,
+│                          #    Cancel in flight, the real 422 — ~40-60 MB uploaded per test)
 ├── multi-device/          # G-series: rotation, multi-device conflicts
 ├── drift/                 # H-series: out-of-band drift, transient PATCH retry
 ├── settings-lifecycle/    # I-series: reset, syncConfigDir toggle, deviceLabel change, repo switch
@@ -72,6 +73,8 @@ The bucket form takes a glob — `tests/integration/scenarios/sync2/conflicts*` 
 ### Sync2-specific test helpers
 
 `tests/integration/scenarios/sync2/helpers.ts`: `createSync2Client`, `Sync2TestClient`, `sync2AllAndAssertNoErrors`, `sync2FileAndAssertNoErrors`. The client owns its vault temp dir by default; pass `ownsVaultPath: false` (first instance) + `ownsVaultPath: true` (second) to share a vault across two test "sessions". Pass `autoCanonicalize: true` to opt into canonicalize for tests that exercise that codepath (helper default is `true` for back-compat with the C-series; production default is `false`).
+
+Pass `cancelSignal: new CancelSignal()` to put the client on the **production HTTP path**: it wires a real `WorkerClient` carrying that signal (under Node it runs its main-thread fallback: `fetch` + an `AbortController` per request), and hands the same signal to the manager, so `manager.cancelDrain()` aborts a request in flight exactly as in Obsidian. Without it the client talks through mock-obsidian's `requestUrl`, which the fault injector sees — and `fetch` on the production path is NOT seen by `installRequestFaultInjector`; wrap `globalThis.fetch` instead (see `edges/big-files.test.ts`).
 
 ### Fault injection
 
