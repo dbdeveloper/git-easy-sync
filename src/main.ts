@@ -116,7 +116,7 @@ import WorkerClient from "./worker/worker-client";
 import { PreSyncConflictModal } from "./sync2/views/pre-sync-conflict-modal";
 import { TrashWatcher } from "./diff2/trash-watcher";
 import { recoverAutosaveDirs } from "./diff2/onload-recovery";
-import { setAutosaveRoot, AUTOSAVE_ROOT, autosaveDir, deriveAutosaveId } from "./diff2/autosave-store";
+import { setAutosaveRoot, AUTOSAVE_ROOT, autosaveDir } from "./diff2/autosave-store";
 import {
   hasResetMarker,
   removeResetMarker,
@@ -2117,7 +2117,8 @@ export default class GitHubSyncPlugin extends Plugin {
   }
 
   // A conflict whose COPY is gone is resolved, and its open diff-editor
-  // tabs close silently, autosave wiped (owner, 2026-10-11) — whoever
+  // tabs close silently, autosave wiped, unsaved edits in them discarded
+  // without a word (owner, 2026-10-11) — whoever
   // removed it: the user (delete, rename onto the base, both files), the
   // conflict reconcile, the drain. Run at checkpoints that do not depend on
   // vault events (after a reconcile, after every drain), because Obsidian
@@ -2138,32 +2139,12 @@ export default class GitHubSyncPlugin extends Plugin {
               basePath,
               siblingPath,
               detach: () => l.detach(),
-              // A live editor knows; a deferred (never-loaded) leaf has no
-              // editor to ask — its autosave dir on disk IS its work, because a
-              // session with nothing in it is wiped when abandoned (§4.1).
-              hasUnsavedEdits: async () => {
-                if (l.view instanceof DiffEditorView) return l.view.hasUnsavedChanges();
-                for (const kind of ["tracked", "synthetic"] as const) {
-                  const dir = autosaveDir(deriveAutosaveId(kind, basePath, siblingPath));
-                  if (await this.app.vault.adapter.exists(dir)) return true;
-                }
-                return false;
-              },
             };
           }),
         adapter: this.app.vault.adapter,
       });
       if (r.closedTabs > 0) {
         this.logger.info("Editors of resolved conflicts closed (their copy is gone)", r);
-      }
-      // Option 2 (owner): closing is right — the conflict is resolved — but
-      // edits the user made in that editor are gone with it, so say so.
-      for (const basePath of r.discardedEdits) {
-        new Notice(
-          `The conflict in "${basePath}" was resolved elsewhere. Your unsaved ` +
-            `changes in its diff editor were discarded.`,
-          8000,
-        );
       }
     } catch (err) {
       this.logger.warn("closeVanishedCopyEditors failed", { err: `${err}` });

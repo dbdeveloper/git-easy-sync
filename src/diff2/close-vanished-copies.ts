@@ -14,9 +14,10 @@
 // do not depend on events (after a conflict reconcile, after a drain), and
 // on delete/rename events only as a shortcut.
 //
-// UNSAVED WORK (owner, option 2): a tab holding edits not yet applied with
-// [←] closes TOO — the conflict it was resolving no longer exists — but its
-// base is reported in `discardedEdits`, so the caller tells the user.
+// UNSAVED WORK is discarded SILENTLY (owner, 2026-10-11): once the conflict
+// was resolved outside the editor, edits not yet applied with [←] are moot —
+// "the train has left". No notice. The same rule holds for [←] itself
+// (DiffDetailController.resolvedOutside).
 //
 // Tabs are read from their SERIALIZED state, so a deferred (background)
 // leaf counts too. Both autosave kinds are wiped: a closed-over tab no longer
@@ -30,8 +31,6 @@ export interface VanishedCopyDeps {
     basePath: string;
     siblingPath: string;
     detach(): void;
-    // Asked BEFORE anything is wiped.
-    hasUnsavedEdits(): Promise<boolean>;
   }>;
   adapter: {
     exists(path: string): Promise<boolean>;
@@ -41,15 +40,13 @@ export interface VanishedCopyDeps {
 
 export async function closeEditorsOfVanishedCopies(
   deps: VanishedCopyDeps,
-): Promise<{ closedTabs: number; wipedDirs: number; discardedEdits: string[] }> {
+): Promise<{ closedTabs: number; wipedDirs: number }> {
   let closedTabs = 0;
   let wipedDirs = 0;
-  const discardedEdits: string[] = [];
   for (const tab of deps.editorTabs()) {
     if (tab.origin !== "conflict") continue;
     if (!tab.siblingPath || tab.siblingPath === tab.basePath) continue;
     if (await deps.adapter.exists(tab.siblingPath)) continue;
-    if (await tab.hasUnsavedEdits()) discardedEdits.push(tab.basePath);
     tab.detach();
     closedTabs++;
     for (const kind of ["tracked", "synthetic"] as const) {
@@ -60,5 +57,5 @@ export async function closeEditorsOfVanishedCopies(
       }
     }
   }
-  return { closedTabs, wipedDirs, discardedEdits };
+  return { closedTabs, wipedDirs };
 }

@@ -18,7 +18,7 @@ const COPY = "notes/a.conflict-from-Mac-2026-10-11T20-25-53Z.md";
 const OTHER_BASE = "notes/b.md";
 const OTHER_COPY = "notes/b.conflict-from-Mac-2026-10-11T20-25-53Z.md";
 
-type Tab = { origin: string; basePath: string; siblingPath: string; unsaved?: boolean };
+type Tab = { origin: string; basePath: string; siblingPath: string };
 
 function setup(tabs: Tab[], files: string[], dirs: string[] = []) {
   const existing = new Set([...files, ...dirs]);
@@ -26,11 +26,7 @@ function setup(tabs: Tab[], files: string[], dirs: string[] = []) {
   const wiped: string[] = [];
   const deps = {
     editorTabs: () =>
-      tabs.map((t, i) => ({
-        ...t,
-        detach: () => closed.push(i),
-        hasUnsavedEdits: async () => t.unsaved === true,
-      })),
+      tabs.map((t, i) => ({ ...t, detach: () => closed.push(i) })),
     adapter: {
       exists: async (p: string) => existing.has(p),
       rmdir: async (p: string) => {
@@ -58,7 +54,7 @@ describe("closeEditorsOfVanishedCopies", () => {
 
     expect(s.closed).toEqual([0]);
     expect(s.wiped.sort()).toEqual([synthetic, tracked].sort());
-    expect(r).toEqual({ closedTabs: 1, wipedDirs: 2, discardedEdits: [] });
+    expect(r).toEqual({ closedTabs: 1, wipedDirs: 2 });
   });
 
   it("both files deleted → closes too", async () => {
@@ -81,18 +77,6 @@ describe("closeEditorsOfVanishedCopies", () => {
     );
     await closeEditorsOfVanishedCopies(s.deps);
     expect(s.closed).toEqual([0]);
-  });
-
-  // Owner, option 2: a tab with unsaved work closes TOO (the conflict it was
-  // resolving no longer exists), but the caller is told, so the user is.
-  it("🔑 a tab with UNSAVED edits closes as well, and is reported as discarded", async () => {
-    const s = setup(
-      [{ ...conflictTab(), unsaved: true }, conflictTab(OTHER_BASE, OTHER_COPY)],
-      [BASE, OTHER_BASE],
-    );
-    const r = await closeEditorsOfVanishedCopies(s.deps);
-    expect(s.closed).toEqual([0, 1]);
-    expect(r.discardedEdits).toEqual([BASE]);
   });
 
   it("History / Deleted / Compare tabs are never touched — they show no conflict copy", async () => {

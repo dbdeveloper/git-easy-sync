@@ -92,6 +92,21 @@ export class DiffDetailController {
   // own exists-check had passed ms earlier). Close the tab silently, as that check
   // would have. A History/Deleted entry has no copy (its "sibling" IS the file, and
   // its own missing-file case closes WITH a notice) — it never takes this path.
+  // Resolved outside the editor: the copy is gone, or byte-equal to the base
+  // (sizes first — a different size cannot be equal).
+  private async resolvedOutside(meta: AutosaveMeta): Promise<boolean> {
+    const adapter = this.deps.vault.adapter;
+    const sibling = await adapter.stat(meta.siblingPath);
+    if (sibling === null) return true;
+    const base = await adapter.stat(meta.basePath);
+    if (base === null || base.size !== sibling.size) return false;
+    const [b, s] = await Promise.all([
+      adapter.readBinary(meta.basePath),
+      adapter.readBinary(meta.siblingPath),
+    ]);
+    return (await calculateGitBlobSHA(b)) === (await calculateGitBlobSHA(s));
+  }
+
   private async copyIsGone(entry: ConflictEntry): Promise<boolean> {
     if (entry.historyVersionSha !== undefined || entry.siblingPath === entry.basePath) return false;
     if (await this.deps.vault.adapter.exists(entry.siblingPath)) return false;
@@ -847,6 +862,22 @@ export class DiffDetailController {
       // byte-identical.
       if (session.isHistory) {
         await this.exitHistory(entry, owner, session);
+        return;
+      }
+
+      // A conflict RESOLVED OUTSIDE the editor (owner, 2026-10-11): its copy is gone
+      // (deleted, renamed onto the base, both files deleted) or byte-equal to the
+      // base. The editor's unsaved work is moot — "the train has left" — so [←]
+      // writes nothing and asks nothing: the TOCTOU writers below and their "Saved
+      // files changed" modal are for a conflict that is still ALIVE. Silent.
+      if (await this.resolvedOutside(session.meta)) {
+        this.deps.logger?.info("diff2 [←]: the conflict was resolved outside the editor — closing without saving", {
+          base: session.meta.basePath,
+          sibling: session.meta.siblingPath,
+        });
+        await this.deps.vault.adapter.rmdir(autosaveDir(session.conflictId), true).catch(() => {});
+        this.activeSession = null;
+        this.host.onLeaveDetail();
         return;
       }
 

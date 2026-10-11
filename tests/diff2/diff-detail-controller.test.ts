@@ -222,6 +222,74 @@ describe("DiffDetailController host seam (S2)", () => {
     ctl.dispose();
   });
 
+  // Owner, 2026-10-11: a conflict RESOLVED OUTSIDE the editor (its copy gone — deleted,
+  // renamed onto the base, both files deleted — or the copy byte-equal to the base) makes
+  // the editor's unsaved work moot: "the train has left". [←] then writes NOTHING, asks
+  // NOTHING (the TOCTOU writers and the "Saved files changed" modal are for a conflict
+  // that is still alive), wipes the autosave and closes the tab — silently. The `{}` app
+  // here would throw if any modal were opened.
+  describe("[←] over a conflict resolved outside the editor", () => {
+    async function editedSession(base: string, sibling: string) {
+      const inputs = await writeInputs(base, sibling);
+      const host = recordingHost();
+      const ctl = new DiffDetailController({} as unknown as App, deps(), host);
+      await ctl.mount(container, inputs.entry);
+      ctl.getView()!.dispatch({ changes: { from: 0, insert: "x" }, userEvent: "input.type" });
+      return { ...inputs, host, ctl };
+    }
+
+    it("🔑 the copy is gone, the base unchanged → the base is NOT overwritten, the tab closes", async () => {
+      const s = await editedSession("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+      await fx.vault.adapter.remove(s.siblingPath);
+
+      await s.ctl.exit(s.entry);
+
+      expect(dec(await fx.vault.adapter.readBinary(s.basePath))).toBe("a\nMINE\nc\n");
+      expect(await fx.vault.adapter.exists(s.siblingPath)).toBe(false);
+      expect(await fx.vault.adapter.exists(autosaveDir(s.conflictId))).toBe(false);
+      expect(s.host.leaveCount + s.host.commitCount).toBe(1);
+      s.ctl.dispose();
+    });
+
+    it("the copy renamed onto the base → nothing is written, no modal", async () => {
+      const s = await editedSession("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+      await fx.vault.adapter.remove(s.basePath);
+      await fx.vault.adapter.rename(s.siblingPath, s.basePath);
+
+      await s.ctl.exit(s.entry);
+
+      expect(dec(await fx.vault.adapter.readBinary(s.basePath))).toBe("a\nTHEIRS\nc\n");
+      expect(await fx.vault.adapter.exists(s.siblingPath)).toBe(false);
+      expect(s.host.leaveCount + s.host.commitCount).toBe(1);
+      s.ctl.dispose();
+    });
+
+    it("both files deleted → nothing is created, no modal", async () => {
+      const s = await editedSession("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+      await fx.vault.adapter.remove(s.basePath);
+      await fx.vault.adapter.remove(s.siblingPath);
+
+      await s.ctl.exit(s.entry);
+
+      expect(await fx.vault.adapter.exists(s.basePath)).toBe(false);
+      expect(await fx.vault.adapter.exists(s.siblingPath)).toBe(false);
+      expect(s.host.leaveCount + s.host.commitCount).toBe(1);
+      s.ctl.dispose();
+    });
+
+    it("the copy made byte-equal to the base elsewhere → nothing is written, the tab closes", async () => {
+      const s = await editedSession("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+      await fx.vault.adapter.writeBinary(s.siblingPath, enc("a\nMINE\nc\n"));
+
+      await s.ctl.exit(s.entry);
+
+      expect(dec(await fx.vault.adapter.readBinary(s.basePath))).toBe("a\nMINE\nc\n");
+      expect(dec(await fx.vault.adapter.readBinary(s.siblingPath))).toBe("a\nMINE\nc\n");
+      expect(s.host.leaveCount + s.host.commitCount).toBe(1);
+      s.ctl.dispose();
+    });
+  });
+
   it("exit() with no active session → onLeaveDetail (no commit)", async () => {
     const { entry } = await writeInputs("a\n", "b\n");
     const host = recordingHost();

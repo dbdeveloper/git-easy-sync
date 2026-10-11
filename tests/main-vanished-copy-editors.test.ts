@@ -70,20 +70,13 @@ describe("main.ts closes the editors of vanished conflict copies", () => {
     expect(detach).toHaveBeenCalledTimes(1);
   });
 
-  // Option 2 (owner): a closed tab that held unsaved work says so. A deferred
-  // (never-loaded) leaf has no live editor to ask — its autosave dir on disk
-  // is the work: a session with nothing in it is wiped when abandoned (§4.1).
-  it("🔑 unsaved work (a deferred tab with an autosave on disk) → a notice names the file", async () => {
+  // Owner, 2026-10-11: work left unsaved in that editor is moot once the
+  // conflict was resolved outside it — discarded SILENTLY, even with an
+  // autosave on disk.
+  it("🔑 unsaved work is discarded without a word", async () => {
     const { p, detach } = pluginWithEditorTab(false, true);
     await p.closeVanishedCopyEditors();
     expect(detach).toHaveBeenCalledTimes(1);
-    const msgs = recordedNotices.map((n) => n.message);
-    expect(msgs.some((m) => m.includes(BASE) && /discarded/i.test(m))).toBe(true);
-  });
-
-  it("no unsaved work → closes without a word", async () => {
-    const { p } = pluginWithEditorTab(false, false);
-    await p.closeVanishedCopyEditors();
     expect(recordedNotices).toHaveLength(0);
   });
 
