@@ -14,7 +14,11 @@ For the full design rationale behind any change below, see
 ## Unreleased
 
 Dot-space scope: what the plugin syncs outside your notes is now
-one explicit decision instead of several implicit ones.
+one explicit decision instead of several implicit ones. Since then
+(2026-09-23 → 2026-10-11): a sync that can be stopped at any moment
+and resumes cleanly after anything — a Cancel, a kill, a dead
+battery — a log viewer, a proper `.gitignore` editor, plugin updates
+that cannot break Obsidian, and GitHub's real file-size limit.
 
 ### ⚠️ Read before upgrading
 
@@ -70,6 +74,50 @@ expected to stay private.
   include purely local leftovers; those now surface in the
   conflicts panel, which is the only place they can be acted on.
   The badge and the pre-sync prompt now agree with each other.
+- **Files over 40 MB stay out of sync.** GitHub's API refuses a
+  file of 40 MiB or more — measured; its documentation says
+  100 MB. Such a file is left on the device and everything else
+  syncs. A manual Commit or Sync, and the startup sync, show a
+  notice per file; the periodic sync skips it silently, and the
+  log records it once per session.
+- **An automatic sync no longer stops at an open conflict.** It
+  goes ahead as "Sync anyway" would — edits of the conflicted file
+  go to its conflict branch, everything else to `main`. A manual
+  Sync still asks. Only a `.gitignore` conflict stops every sync.
+- **The badge counts files in conflict**, not conflict copies, and
+  the conflicts panel lists tracked conflicts first, in red.
+- **A new device adopts the vault's settings.** A file under
+  `.obsidian/` that both sides created on their own (no common
+  history) now takes the repository's version, not the newer one —
+  a new phone used to overwrite the repo's `core-plugins.json`
+  with its defaults.
+- **`core-plugins.json` is per-device**, like `workspace.json` and
+  `community-plugins.json`.
+- **`*.log` sits in the top managed block of the root
+  `.gitignore`**, so the plugin's own log stays local in every vault,
+  not only in vaults whose `.gitignore` the plugin created. A
+  `!`-rule still lets it sync.
+- **A plugin collision is decided by the plugin's published
+  version**, not by whichever copy was edited last.
+- **A deletion arriving from the server never removes our own
+  plugin, our managed `.gitignore` files, or files directly in
+  `.obsidian/`.** The next commit puts them back on GitHub.
+- **Commits carry your name, email and the moment you
+  committed.** The git author is learned from your GitHub account
+  on the first sync (Settings → *Git author name / email*), and the
+  commit date is the local commit time, not the push time.
+- **Notices say what is happening in plain words**:
+  `Pulling / Pushing N of M`, `Committing…` / `Checking N of M
+  files` when a commit is forecast to be slow, and a summary such as
+  `Sync done — 3 sent, 10 received` plus `2 plugins updated`. A
+  quick sync shows only the summary; a commit inside a sync no
+  longer adds its own line.
+- **Faster syncing.** An empty sync costs one request again (it had
+  grown to five). A commit hashes files in a background worker, with
+  a WebAssembly SHA-1, and reads each changed file once instead of
+  three times. Uploads use a native base64 encoder — 100 MB in a
+  fraction of a second on a phone, where Obsidian's own encoder
+  failed above 128 MB.
 
 ### Added
 
@@ -87,6 +135,36 @@ expected to stay private.
   out of sync while it keeps governing that device — useful when
   one machine needs its own `.editorconfig`. Documented in the
   README, including the cost.
+- **Cancel stops a sync at any moment**, including mid-upload: the
+  request in flight is aborted, retries stop, and `Sync canceled`
+  appears. It works during the pull and during the commit part
+  too (the commit finishes, nothing is sent). Settings → *GitHub
+  sync status* → `Stop sync` does the same, and so does the `Cancel
+  sync` command.
+- **A log viewer** (Settings → Logging → *View log*): the log as a
+  table with a column filter (`|` between pieces), search and copy;
+  new entries appear live. Its own window on desktop, full screen on
+  a phone. *Clean logs* shows the live log size.
+- **A proper editor for the root `.gitignore`** (Settings →
+  .gitignore → *Open*), behind a short warning shown every time. It
+  saves only a real change and refuses to overwrite a version a sync
+  brought in while it was open. *History* opens the file's versions.
+- **Nested `.gitignore` files are collected into the root one.** On
+  first run (and on *Check now*) their rules are translated to
+  root-anchored form and offered as a change to review; the
+  originals are renamed to `.bak`. Sync waits for the check; the
+  vault does not.
+- **Plugins updated by a sync reload themselves**, each with a toast
+  naming the new version, and a plugin a sync removed is unloaded at
+  once. An update that this Obsidian version cannot load is held
+  back and never reaches the disk, so a sync can no longer leave a
+  plugin broken until the next Obsidian upgrade.
+- **History shows deletions as versions.** Opening one shows an
+  empty side; taking it whole deletes the file (its old content
+  goes to the Deleted bin). Open History tabs refresh after every
+  sync.
+- **New commands**: `Commit all changed files`, `Commit active
+  file`, `Pull from repo and push stored commits`, `Cancel sync`.
 
 ### Fixed
 
@@ -107,6 +185,56 @@ expected to stay private.
   "this commit does not exist" and gave up. It can also reach that
   state by itself — delete every note and sync — so the next sync
   used to fail with nothing to explain it.
+- **An interrupted sync resumes cleanly, however it was
+  interrupted.** A Cancel, a killed app or a dead battery in the
+  middle of writing pulled files used to leave the next sync
+  reporting false conflicts, or re-sending what had already
+  arrived. Each finished file is now recorded on disk as it lands,
+  so the next sync knows exactly where the last one stopped. A
+  large file whose upload had completed is not uploaded again.
+- **A file too large for GitHub no longer breaks every sync.** It
+  was retried forever, and every sync after it failed.
+- **Switching to another repository** could carry the old
+  repository's unfinished sync into the new one. Every sync and
+  every commit now checks which repository it is talking to first.
+- **With *Auto-canonicalize* on**, files differing from the
+  repository only in line endings or a BOM were treated as changed.
+  The vault and the repository are now compared in the form you
+  see.
+- **`Sync canceled` did not appear** after a Cancel, from any of the
+  places a sync can be stopped.
+- **Worker threads piled up** — five more after every plugin reload
+  (each self-update is one).
+- **The conflict badge** did not update after an automatic sync.
+- **The Diff-Panel ribbon icon jumped to the top** of the ribbon
+  whenever the conflict count changed between restarts.
+- **After a Reset the old GitHub token kept being used** until
+  Obsidian restarted.
+- **A repository switch could empty the vault**: the check that
+  tells two repositories apart had stopped being read.
+- **A file whose name contains a character some systems forbid**
+  (`:`, `?`, `*`, `|`, …) and whose safe local name was already
+  taken was skipped on every sync; it now lands under the next free
+  `name (N)`. *Commit active file* makes such a name safe too.
+- **A conflict copy could be merged against the wrong ancestor**
+  when the server moved on while it was open.
+- **A file a sync could not write** was recorded as if it had
+  arrived, so the next commit could send the old version back over
+  the newer one. It is now asked about again on the next sync.
+- **The sync could stop with an internal error** on a file that
+  *Auto-canonicalize* had rewritten in place.
+- **Notices**: a progress box you tapped away comes back with the
+  next update; the "sync in progress" window closes itself when the
+  sync ends; a standalone Commit no longer makes the next Sync flash
+  `Syncing with GitHub`; a nearly empty vault no longer blinks
+  `Checking all files…`; the summary's "sent" counts what really
+  changed on the server.
+- **Errors**: every error you are shown is also written to the log,
+  and a failed HTTP request is logged at the level its status
+  deserves.
+- **Clicking a file in the file tree while a Diff-Panel tab was
+  active** opened the right sidebar or did nothing; it now focuses
+  the tab that already shows the file.
 
 ---
 
