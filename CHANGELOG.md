@@ -22,15 +22,16 @@ that cannot break Obsidian, and GitHub's real file-size limit.
 
 ### ⚠️ Read before upgrading
 
-Two changes are silent, and one of them can expose files you
-expected to stay private.
-
-- **A `.gitignore` in a subfolder is no longer obeyed.** Only
-  three locations are read: the vault root, `.obsidian/`, and one
-  level under `.obsidian/plugins/`. If `notes/private/.gitignore`
-  contained `*`, those notes were excluded and **will now sync**.
-  Move the rule into the root `.gitignore` with its path in front
-  (`notes/private/`) **before** your next sync.
+- **A `.gitignore` in a subfolder is no longer obeyed where it
+  is.** Only three locations are read: the vault root,
+  `.obsidian/`, and one level under `.obsidian/plugins/`. The
+  plugin does not drop such rules silently: on its first run it
+  finds every `.gitignore` elsewhere, translates the rules into
+  root-anchored form (`notes/private/.gitignore` with `*` becomes
+  `notes/private/`) and offers them as a change to the root
+  `.gitignore`. **Syncing is refused until you accept, edit or
+  discard that change**, so nothing those rules excluded can slip
+  out in the meantime. The originals are renamed to `.bak`.
 - **The markers around the managed blocks changed**, so a block
   written by an earlier version is no longer recognised and is left
   in place untouched. It does no harm — the new blocks are written
@@ -40,6 +41,12 @@ expected to stay private.
   `# ===== git-easy-sync invariants — DO NOT EDIT =====` (with a
   long dash) and `# ===== end of invariants =====`. Do this in
   `<vault>/.gitignore` and in `<vault>/.obsidian/.gitignore`.
+- **Expect one `.gitignore` commit after every upgrade.** The
+  first line of each managed block now carries the version of the
+  plugin that wrote it (`# ===== git-easy-sync invariants
+  v2.0.2-beta - DO NOT EDIT =====`), so the first sync after an
+  upgrade rewrites those files. That is what lets an older device
+  leave alone the rules a newer one wrote — it is not a defect.
 - **Root dot-files other than `.gitignore` stop syncing.** Earlier
   versions picked up every dot-file at the vault root
   (`.gitattributes`, `.editorconfig`, …) whether or not you asked
