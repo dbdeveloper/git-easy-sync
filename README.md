@@ -66,15 +66,19 @@ mid-range Android devices without OOM crashes.
   vaults.
 - **No catastrophic-history risk on first setup.** "Adoption" (the
   very first sync on a non-empty vault against a non-empty remote)
-  never silently overwrites local files: it mtime-checks every
-  divergence and keeps local when local is newer.
+  never silently overwrites your notes: a file that exists on both
+  sides with different content becomes a conflict, with both versions
+  kept, for you to decide. The one exception is Obsidian's own
+  settings under `.obsidian/`: there the repository's version wins,
+  so a new device adopts the vault's settings instead of imposing its
+  fresh defaults.
 - **Polling, not events — for the sync engine itself.** The plugin
   walks the vault on each sync click instead of subscribing to live
   events for sync purposes, so edits made while the plugin was
   disabled are picked up on the next click — no "missed events"
   failure mode. Vault event listeners *are* attached, but strictly
   read-only: they only refresh the pending-conflict counter (status
-  bar 🔀 + ribbon badge) in real time so you see resolution
+  bar `N ⁇` + ribbon badge) in real time so you see resolution
   progress immediately as you delete or rename sibling files. They
   never push, never pull, never mutate sync state.
 - **Click feels instant, and never silent.** The click path writes the
@@ -92,7 +96,8 @@ mid-range Android devices without OOM crashes.
   [CHANGELOG](./CHANGELOG.md).
 - **Privacy-conservative defaults.** Plugin `data.json` files
   (which routinely store API tokens) and per-device configs
-  (`workspace.json`, `community-plugins.json`) are blocked from
+  (`workspace.json`, `workspace-mobile.json`, `community-plugins.json`,
+  `core-plugins.json`) are blocked from
   sync by default; flipping a toggle in settings opt-ins.
 - **Test-connection probe** under the credentials section: one
   click verifies token + owner/repo + branch and explains exactly
@@ -122,6 +127,18 @@ mid-range Android devices without OOM crashes.
   they add a whole layer of machinery for a case this plugin has
   chosen not to serve — if your vault is that large, use a tool built
   for it.
+- **No files over 40 MB, and no Git LFS.** GitHub's API refuses a
+  single file of 40 MiB or more (measured — its documentation says
+  100 MB), so the plugin keeps any file over 40 000 000 bytes out of
+  sync instead of letting it fail every sync. Such a file stays on
+  this device untouched; everything else syncs as usual. A manual
+  Commit or Sync, and the sync at startup, show a notice for each
+  such file (`File "…" is too large for the repo (… MB, max 40 MB).
+  Add it to .gitignore (Settings).`); the periodic sync skips it
+  silently, and the log records it once per session. Adding the file
+  (or a pattern like `*.mp4`) to the root `.gitignore` silences the
+  notice for good. Video and other large media belong in a tool
+  built for them.
 
 ---
 
@@ -442,63 +459,49 @@ Settings tab layout matches what you'll see in Obsidian under
   conflict-resolution sibling filenames
   (`<note>.conflict-from-MyMacBook-<timestamp>.md`). Default
   `Obsidian`.
-- **Sync strategy** — `Manually` (default) or `On interval`.
-  *Manually* means the plugin only acts when you click; *on
-  interval* runs a sync automatically every N minutes.
-- **Sync interval** — minutes between automatic syncs when strategy
-  is `On interval`. Default 5 min.
+- **Git author name** / **Git author email** — like `git config
+  user.name` / `user.email`. Filled in from your GitHub account on
+  the first sync; change them if you prefer something else. Use a
+  verified email of that account if you want commits credited to
+  you. They are never left blank (a `@users.noreply.github.com`
+  address derived from the Owner is the fallback), because the
+  commit date travels with them: without a name and email GitHub
+  records the push time instead of when you edited.
+- **Sync strategy** — `Manually` (default) or `On Interval`.
+  *Manually* means the plugin only acts when you click; *On
+  Interval* runs a sync automatically every N minutes.
+- **Sync interval** — minutes between automatic syncs. Shown only
+  for `On Interval`. Default 5.
 - **Sync on startup** — when on, runs one sync as soon as Obsidian
   finishes loading. Off by default; the plugin is otherwise silent
   on enable.
-- **Auto-commit on interval sync** — governs both interval ticks
-  and the startup pulse. When **ON**, every tick does a full commit
-  pass (same as a manual click) — your local edits go up
-  automatically. When **OFF** (default), ticks only pull and retry
-  pending pushes; your local edits stay uncommitted until you click
-  Sync yourself.
+- **Sync starts with commit** — the master switch. When **ON**
+  (default), every sync — your click, the interval, the startup
+  sync — first commits your local changes, then exchanges with
+  GitHub. When **OFF**, a sync only pulls and sends commits that are
+  already queued; committing becomes a separate action through the
+  `[Commit]` ribbon button.
 - **Auto-canonicalize text files** — when on, text files (`.md`,
-  `.txt`, …) get rewritten locally to LF / no-BOM / trailing-NL on
-  pull and on enqueue. Off by default. Turn on if you want
+  `.txt`, …) get rewritten locally to LF / no-BOM / trailing newline,
+  both on pull and on commit, and the plugin compares your files
+  with the repository in that same form. Obsidian's own files under
+  `.obsidian/` stay byte-exact. Off by default. Turn on if you want
   canonical text on disk and don't mind a one-commit convergence
   push on first setup against a CRLF-history repo.
-- **Accumulate offline syncs into one commit** — when on, Sync
-  clicks that arrive while a previous push is still in flight are
-  folded into a single larger commit. Off by default (each click
-  is its own commit, which preserves more granular history).
-- **Sync configs (Obsidian + plugins)** — when on, files under
-  `<vault>/.obsidian/` are also synced (theme settings, community
-  plugin install state, plugin bundles, etc.). Off by default;
-  multi-device users typically don't want one machine's layout
-  overwriting another's. See
+- **Consolidate commits into one (if possible)** — folds consecutive
+  commits into one when nothing was sent in between: Sync clicks
+  made while an earlier push is still waiting (offline), or several
+  `[Commit]` clicks in a row with no Sync between them. Off by
+  default (each click is its own commit, which keeps a finer
+  history).
+- **Sync configs (.obsidian/ folder)** — when on, files under
+  `<vault>/.obsidian/` are also synced (Obsidian settings, installed
+  plugins, snippets). Off by default, and **per-device**: one
+  machine can sync configs while another doesn't. Files that
+  describe one device's state — `workspace.json`,
+  `workspace-mobile.json`, `community-plugins.json`,
+  `core-plugins.json` — never sync either way. See
   [Bonus: cloning plugins](#bonus-cloning-plugins-and-their-settings-to-the-new-device).
-### `.gitignore`
-
-This plugin reads the `.gitignore` in your vault's **root** and no other. Plain git
-reads one in every folder, so rules written deeper in the tree would apply for git and
-be invisible here — which is why the plugin offers to collect them into the root file
-instead.
-
-The first time it runs it checks the whole vault for `.gitignore` files outside the
-root. If it finds any, their rules are translated into root-anchored form and offered
-as a **change to the root `.gitignore`**, which you accept, edit or discard in the
-normal conflict editor. The originals are renamed to `.bak` — nothing is deleted.
-
-While that check is running the vault stays fully editable; only **syncing** waits,
-because those rules decide which files are synced at all. Press Sync during the check
-and you get a small window with a running count and a **Back** button; Back cancels
-that sync, and pressing Sync again brings the window back until the check is done.
-
-Two buttons live in Settings under **.gitignore**:
-
-- **Check now** — run the same check again, for a `.gitignore` you added by hand later.
-  It always reports, even when there is nothing to do.
-- **Open** — edit the root `.gitignore`. Obsidian hides files whose name starts with a
-  dot, so this is the way to reach it from inside the app.
-
-> **Syncing is refused while any `.gitignore` conflict is unresolved**, with no
-> "sync anyway". These rules decide what travels, so syncing while they disagree could
-> publish files you meant to keep private, or hide files you meant to keep.
-
 - **Sync plugins data.json** — when on, the `data.json` files of
   *other* community plugins are also synced. Off by default —
   these files frequently store API tokens, account credentials,
@@ -522,16 +525,20 @@ Two buttons live in Settings under **.gitignore**:
 ### Interface
 
 **What a sync tells you.** One notice carries the whole operation and
-changes as it goes: the commit result first (`Commit 3 files` /
-`Nothing to commit`), then — *only if the sync is still running after
-two seconds* — live progress, then the summary, which disappears after
-a moment:
+changes as it goes. A sync shows live progress *only if it is still
+running after two seconds*, then a summary that disappears after a
+moment:
 
 ```
 Syncing with GitHub
 Pulling 2 of 10
 Pushing 3 of 5
 ⚠ 2 files need resolving
+```
+
+```
+Sync done — 3 sent, 10 received
+2 plugins updated
 ```
 
 Both counters run at once because this plugin sends and receives in the
@@ -541,38 +548,120 @@ batch of local changes, another answer from the server) and would rather
 show that than a total it guessed. A quick sync shows no progress at
 all — only the summary.
 
-**Stopping a sync.** Clicking the sync button while one is running
-offers `Cancel sync`. It stops at the next safe point, so it is not
-instant on a slow upload — you will see `Sync canceled` when it actually
-stops. Nothing is left half-done: the next sync picks up exactly where
-this one left off.
+A commit that is forecast to take a while says so first —
+`Committing…`, then `Checking N of M files` (the first commit after
+setup or a Reset, with nothing to forecast from, shows `Checking all
+files…`). A
+`[Commit]` click on its own ends with `Committed N files` or
+`Nothing to commit`; inside a sync the summary speaks for both.
 
-- **Show status bar item** — shows a `GitHub` indicator in
-  Obsidian's status bar (plus the `🔀 N` conflict counter when
-  there are pending conflicts). On by default.
-- **Show sync ribbon button** — shows a refresh-cw button in the
-  side ribbon that triggers a full sync on click. On by default.
+**Stopping a sync.** Clicking the sync button while one is running
+offers `Cancel sync`; Settings → *GitHub sync status* has the same
+action as `Stop sync`. It takes effect within moments, even in the
+middle of a large upload — the request in flight is aborted, not
+waited out — and you see `Sync canceled`. A Cancel that lands while
+the sync is still committing lets the commit finish and starts no
+exchange with GitHub. Nothing is left half-done: the next sync picks
+up where this one stopped, and a large file whose upload had already
+completed is not sent again.
+
+- **Show status bar item** — shows a `GitHub` item in Obsidian's
+  status bar with the number of commits waiting to be sent and the
+  number of files in conflict — `GitHub (↑ 3 | 2 ⁇)`. Clicking it
+  opens a menu (Sync / Commit / Open diff-panel / Settings). On by
+  default.
+- **Show sync ribbon button** — the `[Sync with GitHub]` ribbon
+  button; its badge counts the commits not yet sent. What a click does
+  depends on *Sync starts with commit*. On by default.
+- **Show Diff-Panel ribbon button** — a separate ribbon button that
+  opens the conflicts / deleted / compare views; its badge counts the
+  files in conflict. On by default.
+- **Show commit ribbon button** — a `[Commit]` button that queues your
+  changed files without touching the network. Off by default; most
+  useful with *Sync starts with commit* OFF, where it is the only way
+  to commit.
+- **Spin the sync icon while syncing** — purely cosmetic; when off,
+  the icon only changes colour while a sync runs. On by default.
+
+### Diff Editor
+
+- **Editor mode (enable editing)** — open the conflict editor with
+  typing enabled. When off it is read-only: you resolve with the
+  on-screen buttons, and the phone keyboard stays down. Default: on
+  for desktop, off for mobile; each document has its own `Edit`
+  switch in the toolbar.
+- **Diff highlight mode** — `Characters` (default) marks only the
+  differing characters inside a changed line, `Words` marks whole
+  words. Large blocks always use words.
+- **Auto-focus conflicts / history / deleted** — on opening, and after
+  each resolve, scroll to the first remaining difference. On for
+  conflicts, off for history and deleted by default; also switchable
+  per document.
+
+### Performance
+
+- **Maximum auto-merge file size (KB)** — the three-way text
+  auto-merge is skipped above this size: a file changed on both sides
+  becomes a conflict for you to resolve instead. Default 1024 KB;
+  well above ~2 MB a merge can hang noticeably.
+
+### `.gitignore`
+
+This plugin reads the `.gitignore` in your vault's **root** and no other. Plain git
+reads one in every folder, so rules written deeper in the tree would apply for git and
+be invisible here — which is why the plugin offers to collect them into the root file
+instead.
+
+The first time it runs it checks the whole vault for `.gitignore` files outside the
+root. If it finds any, their rules are translated into root-anchored form and offered
+as a **change to the root `.gitignore`**, which you accept, edit or discard in the
+normal conflict editor. The originals are renamed to `.bak` — nothing is deleted.
+
+While that check is running the vault stays fully editable; only **syncing** waits,
+because those rules decide which files are synced at all. Press Sync during the check
+and you get a small window with a running count and a **Back** button; Back cancels
+that sync, and pressing Sync again brings the window back until the check is done.
+
+Three buttons live in Settings under **.gitignore**:
+
+- **Check now** — run the same check again, for a `.gitignore` you added by hand later.
+  It always reports, even when there is nothing to do.
+- **Open** — edit the root `.gitignore`. Obsidian hides files whose name starts with a
+  dot, so this is the way to reach it from inside the app. Every time, a short warning
+  comes first, with a link to git's own description of the rules: `[Cancel]` or
+  `[I know .gitignore rules]`. The editor opens in its own window on desktop and full
+  screen on a phone. `[Save]` writes only a real change, and refuses to overwrite the
+  file if a sync changed it while the editor was open — your text stays in the editor.
+- **History** — the file's version history, the same view as for any note.
+
+> **Syncing is refused while any `.gitignore` conflict is unresolved**, with no
+> "sync anyway". These rules decide what travels, so syncing while they disagree could
+> publish files you meant to keep private, or hide files you meant to keep.
 
 ### Logging
 
 - **Enable logging** — appends every operation to
-  `<vault>/git-easy-sync.log`. Off by default. The log lives at
-  the vault root so you can open it directly in Obsidian. `*.log`
-  is gitignored at the vault root by default — remove that rule if
-  you want the log to sync to GitHub (useful for analysing mobile
-  logs from desktop, but multi-device writes will collide on the
-  same filename).
-- **Clean logs** — truncates the log file to 0 bytes (visible only
-  while logging is on).
+  `<vault>/git-easy-sync.log`. Off by default. Turning it off deletes
+  the file. Logs do not sync: `*.log` sits in the top managed block
+  of the root `.gitignore`. To sync this log anyway — handy for
+  reading a phone's log on a desktop, though several devices then
+  write the same file — add `!/git-easy-sync.log` among your own
+  rules.
+- **View log** — opens the log as a table: filter by column (`|`
+  separates the pieces, left to right), search, copy. New entries
+  appear as they are written. Its own window on desktop, full screen
+  on a phone. Shown only while logging is on.
+- **Clean logs** — empties the log; the description shows its live
+  size. Shown only while logging is on.
 
 ### Danger zone
 
-- **Reset plugin** — wipes credentials, snapshot, push queue,
-  conflict store. Type `RESET` to confirm. Local vault files are
-  **not** deleted. Any pending `<note>.conflict-from-*` sibling
-  files are renamed to `<note>.unresolved-<original-timestamp>.<ext>`
-  so they won't collide if you re-enable the plugin later. Use
-  after a suspected token leak or to start clean.
+- **Reset plugin** — wipes ALL plugin state: GitHub token,
+  repository settings, sync history, the queue of unsent commits,
+  pending conflicts. Type `RESET` to confirm. Your vault is **not**
+  touched — notes stay, and `<note>.conflict-from-*` copies stay in
+  place, to be picked up as local conflicts if you set the plugin up
+  again. Use after a suspected token leak or to start clean.
 
 ### Settings removed in 2.0.1-beta
 
@@ -600,7 +689,7 @@ time looking for them:
   `Sync with GitHub` and `Sync current file with GitHub`.
 - **Pending-conflicts list in the settings tab** — **removed**.
   Visibility for unresolved conflicts now lives in three places:
-  the status bar `🔀 N` indicator, the side-ribbon badge, and the
+  the status bar `N ⁇` indicator, the side-ribbon badge, and the
   pre-sync confirmation modal. The settings tab was a fourth
   surface that didn't pull its weight — users with an active
   conflict clicked the status bar or ribbon to open the sibling,
@@ -671,6 +760,7 @@ difference between them is deliberate:
 .*                       ← hide dot-space
 .*/
 !/.gitignore
+*.log                    ← logs, the plugin's own included
 # ===== end of git-easy-sync invariants =====
 
 ...your rules go here, and they OVERRIDE the block above...
@@ -757,10 +847,13 @@ sides on its own. The strategy depends on the file type:
 | File type | Auto-merge strategy | Surfaces as a conflict only when… |
 |---|---|---|
 | Text (`.md`, `.txt`, …) | Three-way merge against the last-synced base. | Edits overlap on the same line. |
-| Plugin bundle (`<plugin>/main.js`, `<plugin>/manifest.json`) | Higher semantic version from `manifest.json` wins; mtime tie-break. | Identical version **and** identical mtime. |
-| Binary (`.png`, `.pdf`, attachments) | None — binary always surfaces. | Always (no silent overwrites of edited images). |
-| Local deleted, remote modified | Auto-resolves in favour of the modification (the more recent intent wins; the file resurrects on remote). | Never. |
-| Local modified, remote deleted | Surfaces as a conflict — your edit is preserved as a sibling. | Always. |
+| Text above *Maximum auto-merge file size* (default 1 MB) | None — merging is skipped. | The two sides differ. |
+| Plugin bundle (`<plugin>/main.js`, `<plugin>/manifest.json`) | Higher version from `manifest.json` wins; when the versions cannot decide, the newer edit wins. | Never. |
+| Other files under `.obsidian/` | The side that changed wins; if both changed, the newer edit wins — and the repository's version when there is no common history (a new device's first sync). | Never. |
+| Binary (`.png`, `.pdf`, attachments) | None — binary always surfaces. | Both sides changed it (no silent overwrites of edited images). |
+| Local modified, remote deleted | Your edit wins — the file comes back on GitHub. | Never. |
+| Local deleted, remote modified | None — only you can tell whether the deletion still stands. | Always: the remote version is kept as a conflict copy. |
+| Same new file created on both sides with different content | None — there is no common version to merge against. | Always. |
 
 When auto-merge succeeds, the merged result goes straight to GitHub
 and you're never notified — there was nothing for you to decide.
@@ -777,8 +870,8 @@ file, named:
 The original file (your local version) is **not** touched. Both
 files are visible in the Obsidian file explorer, openable in the
 editor, indistinguishable from any other Markdown / binary file.
-The status bar shows `🔀 N` for the count; the ribbon icon carries
-a matching badge.
+The status bar shows `N ⁇` — the number of files in conflict — and
+the Diff-Panel ribbon icon carries a matching badge.
 
 ### Resolution — entirely through native Obsidian file operations
 
@@ -824,6 +917,14 @@ file**. Those edits flow to a private branch on GitHub that no
 other device sees until you finalise. The conflict doesn't block
 you; other devices stay protected from your half-resolved state.
 
+The same holds for syncing. A Sync you start by hand while a conflict
+is open asks first — `Resolve` (opens the conflicts panel), `Sync
+anyway` or `Cancel`. An automatic sync (on interval or at startup) has
+nobody to ask, so it goes ahead as `Sync anyway` would: one open
+conflict never stops the rest of your vault from syncing. Only an
+unresolved `.gitignore` conflict stops every sync, automatic ones
+included.
+
 Sibling files never sync: the `*.conflict-from-*` pattern sits in
 the plugin's **final** `.gitignore` block, which is restored to
 canonical on every sync, so removing the line does not make them
@@ -835,11 +936,21 @@ half-resolved state instead of a resolution.
 
 ## Commands and integrations
 
-The plugin registers two commands (both available via the command
+The plugin registers these commands (all available via the command
 palette and assignable to hotkeys):
 
-- `Sync with GitHub` — full vault sync
-- `Sync current file with GitHub` — pushes just the active file
+- `Sync with GitHub` — a full sync; with *Sync starts with commit* on
+  it commits your changes first.
+- `Commit all changed files` — queue every changed file, no network.
+- `Commit active file` — queue just the file in front of you.
+- `Pull from repo and push stored commits` — exchange with GitHub
+  without committing anything new.
+- `Cancel sync` — stop the running sync; does nothing when none runs.
+- `Open Diff-Edit` — the conflicts / deleted / compare panel.
+- `Open history of active file` — the file's versions on GitHub (also
+  in a file's right-click menu).
+- `Compare two files…`, `Compare active file with…` — for now these
+  open the Diff-Edit panel.
 
 ### Vim mode integration
 
@@ -865,7 +976,9 @@ When something doesn't behave the way you expect:
 
 1. **Turn on logging** in plugin settings (`Enable logging`).
 2. **Reproduce** the issue.
-3. **Copy the log** from the settings page (there's a copy button).
+3. **Get the log**: Settings → Logging → *View log* lets you filter
+   and copy what matters, or attach `<vault>/git-easy-sync.log`
+   itself.
 4. **Open an issue** at
    [github.com/dbdeveloper/git-easy-sync/issues](https://github.com/dbdeveloper/git-easy-sync/issues)
    and paste the log along with:
@@ -873,8 +986,8 @@ When something doesn't behave the way you expect:
    - Obsidian version
    - Plugin version (from the settings page)
    - What you expected to happen vs. what actually happened
-5. **Turn logging off** afterwards — log files grow over time and
-   sync with the vault if `Sync configs` is on.
+5. **Turn logging off** afterwards — the log grows over time;
+   turning logging off deletes it.
 
 ### Common gotchas
 
@@ -918,16 +1031,20 @@ When something doesn't behave the way you expect:
   *onto* the base (`<note>.conflict-from-…md` → `<note>.md`,
   overwriting the local version), the sibling appears to vanish
   because it *became* the base. That's expected — the conflict is
-  now closed and the status-bar `🔀` counter will drop on the next
+  now closed and the status-bar `⁇` counter will drop on the next
   sync. Same outcome if you accepted yours by deleting the
   sibling: counter drops on the next sync, and the next push lifts
   your version to GitHub.
 - **`<file>.unresolved-<timestamp>.<ext>` files lying around the
-  vault** — these are leftovers from a previous `Reset` action.
-  Reset renames any pending `*.conflict-from-*` siblings to this
-  form so they don't collide if you re-enable the plugin. They're
-  safe to delete by hand; the plugin doesn't read or otherwise
-  manage them after the rename.
+  vault** — leftovers from a `Reset` in an older version, which
+  renamed pending conflict copies to this form. Reset no longer
+  renames anything. They're safe to delete by hand; the plugin
+  doesn't read or manage them.
+- **`File "…" is too large for the repo`** — the file is over 40 MB,
+  which GitHub's API does not accept, so it stays on this device
+  and everything else syncs. Add it (or its pattern) to the root
+  `.gitignore` to stop the notice; see
+  [What this plugin deliberately doesn't do](#what-this-plugin-deliberately-doesnt-do).
 
 ---
 
