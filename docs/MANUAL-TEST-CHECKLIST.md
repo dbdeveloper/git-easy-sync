@@ -120,25 +120,25 @@ Use it, and note which runs you did.
 
 ## 4. Conflict resolution / pseudo-merge — end-to-end (🌐)
 
-- [ ] 🖥️📱 Two devices edit the same file → a conflict sibling `*.conflict-from-<device>-<timestamp>.*` is created.
-- [ ] 🖥️ The conflict counter (🔀) in the status bar updates as siblings appear and clear.
-- [ ] 🖥️ **File tree click while our tab is active (new 2026-10-10).** Open a note in a tab, then make
+- [x] 🖥️📱 Two devices edit the same file → a conflict sibling `*.conflict-from-<device>-<timestamp>.*` is created.
+- [x] 🖥️ The conflict counter (🔀) in the status bar updates as siblings appear and clear.
+- [x] 🖥️ **File tree click while our tab is active (new 2026-10-10).** Open a note in a tab, then make
       the Diff Panel (or a History / conflict editor / log viewer tab) active and click that note in
       the file tree: the tab that already shows it comes to the front. A note open nowhere opens as
       usual; Ctrl/Cmd+click still opens a new tab; with an ordinary tab active nothing changes.
-- [ ] 🖥️ **Files in conflict, everywhere (new 2026-10-09).** One file with TWO conflict copies: the
+- [x] 🖥️ **Files in conflict, everywhere (new 2026-10-09).** One file with TWO conflict copies: the
       diff badge says 1, its tooltip "(1 file in conflict)", the pre-sync window "1 file…", "Sync
       done … 1 in conflict". In the Diff Panel that file's name is RED (light AND dark theme) and
       listed first; its tracked copies come first under it, then synthetic ones, each newest first;
       a file with only synthetic copies is listed after the red ones in the normal colour.
 - [ ] 🖥️ **Auto-merge:** non-overlapping edits merge cleanly (3-way); overlapping edits produce a sibling.
-- [ ] 🖥️ **One Sync at a time (new 2026-10-09).** Double-click Sync (or click + hotkey): only ONE
+- [x] 🖥️ **One Sync at a time (new 2026-10-09).** Double-click Sync (or click + hotkey): only ONE
       sync runs; a second click (commit part or drain) shows the Cancel/Keep window. [Cancel sync]
       during the COMMIT part: the commit finishes, nothing is pulled/pushed, the box says "Sync
       canceled"; during the drain: the drain stops. "Pull from repo and push stored commits" during a Sync
       does nothing (log line). A standalone Commit during a Sync is NOT refused.
-- [ ] 🖥️ **Edit while in conflict:** editing the base file while a sibling exists does not lose the edit.
-- [ ] 🖥️ **A newer server version REPLACES the conflict copy (new 2026-10-09).** Device A and B both
+- [x] 🖥️ **Edit while in conflict:** editing the base file while a sibling exists does not lose the edit.
+- [x] 🖥️ **A newer server version REPLACES the conflict copy (new 2026-10-09).** Device A and B both
       change the same line → B gets a conflict copy. Leave it unresolved; A changes that line AGAIN and
       syncs; B changes its file again and syncs: B still has ONE conflict copy, now with A's newest
       value (the old copy is gone), and the log says "Conflict copy updated to the newer server
@@ -149,8 +149,25 @@ Use it, and note which runs you did.
       the sync and its autosave is gone (no "resume" offer for it later).
       With the Diff Panel OPEN during that second sync: its row switches to the new copy's name
       by itself (the count stayed 1), and clicking it opens the editor on the new copy.
-- [ ] 🖥️ The pre-sync conflict dialog shows the count and lets you confirm.
+- [x] 🖥️ The pre-sync conflict dialog shows the count and lets you confirm.
 - [ ] 🖥️ When a sibling is reconciled to match the base (identical content), the sibling is cleared on the next sync.
+      (Fixed 2026-10-11, `9f134fa`: the copy's bytes on disk decide — editing the copy by hand until it
+      matches the base closes the conflict; the old code compared the copy as it first arrived.)
+- [ ] 🖥️ **Copy renamed onto the base (new 2026-10-11).** With the copy's diff-editor tab open (and some
+      unsaved edits in it), delete the base and rename the copy onto it in the file tree. The editor tab
+      closes by itself; the base holds the copy's content (NOT the editor's half-done merge); no
+      "Saved files changed" window. Same if `[←]` is pressed before the tab closes.
+- [ ] 🖥️ **Copy deleted while its editor has unsaved edits (new 2026-10-11).** Make a few resolutions in
+      the diff editor without `[←]`, then delete the copy from the file tree: the tab closes silently, no
+      notice, the base is untouched, and reopening the conflict list shows the conflict gone.
+- [ ] 🖥️ **Two conflict copies made identical (new 2026-10-11).** One note with TWO copies (from two
+      devices or two rounds). Edit the copies until both hold the same text → after the next Sync (or on
+      opening the Diff Panel) only the NEWER copy (later time in its name) remains. Then the guard: two
+      copies that arrived IDENTICAL — edit only the OLDER one → both copies stay, your edit intact.
+- [ ] 🖥️ **A conflict in `.obsidian/` — its tab closes when you turn to it (new 2026-10-11).** Open the
+      diff editor of a conflict inside a dot-folder (no file-tree events there), resolve it outside the
+      editor (delete or rename the copy from a terminal / file manager), switch to another tab and back:
+      the editor tab closes.
 - [ ] 🖥️ **Multi-device rotation:** run a realistic round-trip across 2+ devices.
 
 ## 5. Diff-editor widget
