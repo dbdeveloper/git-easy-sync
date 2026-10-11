@@ -50,6 +50,7 @@ import type { GitignoreEditorDeps } from "./gitignore-editor/gitignore-editor-pa
 import { bringLeafToFront } from "./bring-to-front";
 import { enforceIfRootGitignore } from "./gitignore-editor/after-history-write";
 import { forgetReplacedConflictCopy } from "./diff2/forget-replaced-copy";
+import { closeEditorsOfVanishedCopies } from "./diff2/close-vanished-copies";
 import { allLeaves, explorerClickTarget } from "./explorer-click";
 import { GitignoreDecisionModal } from "./sync2/views/gitignore-modal";
 import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
@@ -115,7 +116,7 @@ import WorkerClient from "./worker/worker-client";
 import { PreSyncConflictModal } from "./sync2/views/pre-sync-conflict-modal";
 import { TrashWatcher } from "./diff2/trash-watcher";
 import { recoverAutosaveDirs } from "./diff2/onload-recovery";
-import { setAutosaveRoot, AUTOSAVE_ROOT, autosaveDir } from "./diff2/autosave-store";
+import { setAutosaveRoot, AUTOSAVE_ROOT, autosaveDir, deriveAutosaveId } from "./diff2/autosave-store";
 import {
   hasResetMarker,
   removeResetMarker,
@@ -867,6 +868,20 @@ export default class GitHubSyncPlugin extends Plugin {
         name: "Open history of active file",
         callback: () => this.openHistoryOfActiveFile(),
       });
+      // A deleted or renamed conflict copy closes its editor tabs at once —
+      // a SHORTCUT only: Obsidian sends no events for dot-paths, so the
+      // checkpoints in closeVanishedCopyEditors carry correctness.
+      this.registerEvent(
+        this.app.vault.on("delete", () => void this.closeVanishedCopyEditors()),
+      );
+      this.registerEvent(
+        this.app.vault.on("rename", () => void this.closeVanishedCopyEditors()),
+      );
+      // Turning to a diff-editor tab checks its copy — the checkpoint that
+      // carries dot-paths, where the events above never fire.
+      this.registerEvent(
+        this.app.workspace.on("active-leaf-change", (leaf) => this.onEditorLeafActivated(leaf)),
+      );
       // 7a.4 — entry-point 2/3: the file-menu (right-click a file → "Open GitHub history").
       // Opens history for the CLICKED file (a TFile), not the active one.
       this.registerEvent(
@@ -2090,6 +2105,69 @@ export default class GitHubSyncPlugin extends Plugin {
     } finally {
       this.reconciling = false;
     }
+    // The reconcile may have removed a copy that matched its base.
+    await this.closeVanishedCopyEditors();
+  }
+
+  private onEditorLeafActivated(
+    leaf: { view?: { getViewType?(): string } } | null,
+  ): void {
+    if (leaf?.view?.getViewType?.() !== DIFF2_EDITOR_VIEW_TYPE) return;
+    void this.closeVanishedCopyEditors();
+  }
+
+  // A conflict whose COPY is gone is resolved, and its open diff-editor
+  // tabs close silently, autosave wiped (owner, 2026-10-11) — whoever
+  // removed it: the user (delete, rename onto the base, both files), the
+  // conflict reconcile, the drain. Run at checkpoints that do not depend on
+  // vault events (after a reconcile, after every drain), because Obsidian
+  // sends none for dot-paths; the delete/rename events in onload are only a
+  // shortcut. The editor also checks its own copy when it becomes active.
+  private async closeVanishedCopyEditors(): Promise<void> {
+    try {
+      const r = await closeEditorsOfVanishedCopies({
+        editorTabs: () =>
+          (this.app?.workspace?.getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE) ?? []).map((l) => {
+            const st = l.getViewState()?.state as
+              | { origin?: unknown; basePath?: unknown; siblingPath?: unknown }
+              | undefined;
+            const basePath = typeof st?.basePath === "string" ? st.basePath : "";
+            const siblingPath = typeof st?.siblingPath === "string" ? st.siblingPath : "";
+            return {
+              origin: typeof st?.origin === "string" ? st.origin : "",
+              basePath,
+              siblingPath,
+              detach: () => l.detach(),
+              // A live editor knows; a deferred (never-loaded) leaf has no
+              // editor to ask — its autosave dir on disk IS its work, because a
+              // session with nothing in it is wiped when abandoned (§4.1).
+              hasUnsavedEdits: async () => {
+                if (l.view instanceof DiffEditorView) return l.view.hasUnsavedChanges();
+                for (const kind of ["tracked", "synthetic"] as const) {
+                  const dir = autosaveDir(deriveAutosaveId(kind, basePath, siblingPath));
+                  if (await this.app.vault.adapter.exists(dir)) return true;
+                }
+                return false;
+              },
+            };
+          }),
+        adapter: this.app.vault.adapter,
+      });
+      if (r.closedTabs > 0) {
+        this.logger.info("Editors of resolved conflicts closed (their copy is gone)", r);
+      }
+      // Option 2 (owner): closing is right — the conflict is resolved — but
+      // edits the user made in that editor are gone with it, so say so.
+      for (const basePath of r.discardedEdits) {
+        new Notice(
+          `The conflict in "${basePath}" was resolved elsewhere. Your unsaved ` +
+            `changes in its diff editor were discarded.`,
+          8000,
+        );
+      }
+    } catch (err) {
+      this.logger.warn("closeVanishedCopyEditors failed", { err: `${err}` });
+    }
   }
 
   private async reconcileConflictsV2Once(): Promise<void> {
@@ -3163,6 +3241,8 @@ export default class GitHubSyncPlugin extends Plugin {
     // FIRST, before the early returns below — a cancelled drain may have
     // created conflicts too.
     this.conflictCounter?.markDirty();
+    // A drain may have removed or replaced a conflict copy.
+    void this.closeVanishedCopyEditors();
     this.closeCancelSyncModal();
     // Every Sync re-reads every open History list (owner, 2026-10-08), so a
     // commit it just made or brought shows at once. Quiet — see refresh().

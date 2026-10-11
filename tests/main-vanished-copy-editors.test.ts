@@ -1,0 +1,129 @@
+// @vitest-environment happy-dom
+//
+// Owner, 2026-10-11: a conflict whose COPY is gone is resolved, and its open
+// diff-editor tabs close — whoever removed the copy. The decision itself is
+// closeEditorsOfVanishedCopies (tests/diff2/close-vanished-copies.test.ts);
+// this file pins the WIRING in main.ts: the plugin reads its editor leaves'
+// serialized state, and runs the check after a conflict reconcile and after
+// every drain. Those two checkpoints do not depend on vault events, which
+// Obsidian never sends for dot-paths.
+
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import GitHubSyncPlugin from "../src/main";
+import { clearRecordedNotices, recordedNotices } from "../mock-obsidian";
+import { autosaveDir, deriveAutosaveId } from "../src/diff2/autosave-store";
+import { DIFF2_EDITOR_VIEW_TYPE } from "../src/diff2/diff-editor-view";
+
+const BASE = "notes/a.md";
+const COPY = "notes/a.conflict-from-Mac-2026-10-11T20-25-53Z.md";
+
+interface Handle {
+  app: unknown;
+  logger: unknown;
+  closeVanishedCopyEditors(): Promise<void>;
+  reconcileConflictsV2(): Promise<void>;
+  reconcileConflictsV2Once(): Promise<void>;
+  handleDrainIdle(): void;
+  onEditorLeafActivated(leaf: unknown): void;
+  closeCancelSyncModal(): void;
+  settleDrainSection(text: string): void;
+  sync2Manager: unknown;
+  syncCancelRequested: boolean;
+}
+
+function pluginWithEditorTab(copyOnDisk: boolean, autosaveOnDisk = false) {
+  const dir = autosaveDir(deriveAutosaveId("tracked", BASE, COPY));
+  const detach = vi.fn();
+  const p = Object.create(GitHubSyncPlugin.prototype) as unknown as Handle;
+  p.app = {
+    workspace: {
+      getLeavesOfType: (type: string) =>
+        type === DIFF2_EDITOR_VIEW_TYPE
+          ? [
+              {
+                getViewState: () => ({
+                  state: { origin: "conflict", basePath: BASE, siblingPath: COPY },
+                }),
+                detach,
+              },
+            ]
+          : [],
+    },
+    vault: {
+      adapter: {
+        exists: async (path: string) =>
+          path === BASE || (copyOnDisk && path === COPY) || (autosaveOnDisk && path === dir),
+        rmdir: async () => {},
+      },
+    },
+  };
+  p.logger = { info: () => {}, warn: () => {}, error: () => {} };
+  return { p, detach };
+}
+
+describe("main.ts closes the editors of vanished conflict copies", () => {
+  beforeEach(() => clearRecordedNotices());
+
+  it("🔑 reads the leaves' serialized state: a tab whose copy is gone is detached", async () => {
+    const { p, detach } = pluginWithEditorTab(false);
+    await p.closeVanishedCopyEditors();
+    expect(detach).toHaveBeenCalledTimes(1);
+  });
+
+  // Option 2 (owner): a closed tab that held unsaved work says so. A deferred
+  // (never-loaded) leaf has no live editor to ask — its autosave dir on disk
+  // is the work: a session with nothing in it is wiped when abandoned (§4.1).
+  it("🔑 unsaved work (a deferred tab with an autosave on disk) → a notice names the file", async () => {
+    const { p, detach } = pluginWithEditorTab(false, true);
+    await p.closeVanishedCopyEditors();
+    expect(detach).toHaveBeenCalledTimes(1);
+    const msgs = recordedNotices.map((n) => n.message);
+    expect(msgs.some((m) => m.includes(BASE) && /discarded/i.test(m))).toBe(true);
+  });
+
+  it("no unsaved work → closes without a word", async () => {
+    const { p } = pluginWithEditorTab(false, false);
+    await p.closeVanishedCopyEditors();
+    expect(recordedNotices).toHaveLength(0);
+  });
+
+  it("a tab whose copy is still there stays", async () => {
+    const { p, detach } = pluginWithEditorTab(true);
+    await p.closeVanishedCopyEditors();
+    expect(detach).not.toHaveBeenCalled();
+  });
+
+  // The check that carries dot-paths (owner): Obsidian sends no delete/rename
+  // events there, so the change becomes visible when the user turns to the tab.
+  it("🔑 runs when a diff-editor tab becomes active — and only for a diff-editor tab", () => {
+    const { p } = pluginWithEditorTab(false);
+    const spy = vi.fn(async () => {});
+    p.closeVanishedCopyEditors = spy;
+    p.onEditorLeafActivated({ view: { getViewType: () => "markdown" } });
+    p.onEditorLeafActivated(null);
+    expect(spy).not.toHaveBeenCalled();
+    p.onEditorLeafActivated({ view: { getViewType: () => DIFF2_EDITOR_VIEW_TYPE } });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs after a conflict reconcile (onload, panel open, editor close)", async () => {
+    const { p } = pluginWithEditorTab(false);
+    p.reconcileConflictsV2Once = async () => {};
+    const spy = vi.fn(async () => {});
+    p.closeVanishedCopyEditors = spy;
+    await p.reconcileConflictsV2();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs after every drain — the cancelled one too", () => {
+    const { p } = pluginWithEditorTab(false);
+    p.closeCancelSyncModal = () => {};
+    p.settleDrainSection = () => {};
+    p.syncCancelRequested = true; // the earliest return in handleDrainIdle
+    p.sync2Manager = { wasLastDrainCancelled: () => true };
+    const spy = vi.fn(async () => {});
+    p.closeVanishedCopyEditors = spy;
+    p.handleDrainIdle();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
