@@ -425,7 +425,7 @@ export function trackedSiblingPathsFor(
   const entry = c.conflictStore.getCachedState().entries.get(basePath);
   if (!entry) return [];
   return entry.siblings.map((s) =>
-    buildSiblingFilePath(basePath, s.mtime ?? 0, s.deviceLabel),
+    buildSiblingFilePath(basePath, s.timeLabel ?? 0, s.deviceLabel),
   );
 }
 
