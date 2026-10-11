@@ -236,6 +236,24 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   `Syncing with GitHub`; a nearly empty vault no longer blinks
   `Checking all files…`; the summary's "sent" counts what really
   changed on the server.
+- **Two conflict copies could lose an edit.** If two copies of the
+  same note arrived identical and you then edited one of them, the
+  plugin still treated them as duplicates and kept only the newer —
+  deleting your edit when it was in the older copy. It now compares
+  what the copies contain NOW. Copies you made identical by hand are
+  now recognised as duplicates, and the newest one stays.
+- **A conflict copy edited by hand to match its note never closed the
+  conflict.** Making the copy identical to the note — in Obsidian or
+  any other program — is one of the ways to resolve a conflict, but
+  the plugin compared the note with the copy as it first arrived. It
+  now looks at the file as it is.
+- **The diff editor ignored conflicts resolved outside it.** When the
+  copy was deleted, renamed onto the note, or made identical to it,
+  the editor tab stayed open; pressing `[←]` then overwrote the note
+  with the half-finished merge, or asked about "changed files" for a
+  conflict that no longer existed. The tab now closes by itself and
+  writes nothing — the files on disk have the last word. Unsaved
+  edits in that tab are discarded.
 - **Setting "Maximum auto-merge file size" to 0 did nothing.** The
   field took 0 for a typo and quietly stored the 1 MB default, so
   conflicts kept merging automatically. 0 now means what it was
