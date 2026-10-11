@@ -3551,12 +3551,19 @@ def process_conflicts():
        #      тому, що шлях інший, `conflicts` ключується по path) — але це СЕМАНТИЧНО той самий,
        #      ще не розв'язаний конфлікт, і резолюція (SHA(base)==SHA(sibling) → видалити sibling)
        #      мусить спрацювати для нього так само, як і для tracked:
+       # ⚠️ 2026-10-11 (польовий дефект, власник, `~/Obsidian-test`): `entry.sha` — це sha, з яким копія
+       #      НАРОДИЛАСЬ; користувач, який руками зробив копію такою, як base, його не змінює. Псевдокод
+       #      нижче порівнював саме його, тож такий конфлікт не закривався НІКОЛИ. Тепер вирішують байти
+       #      копії НА ДИСКУ. Ціна (рішення власника, варіант 2): спершу РОЗМІР — копія іншого розміру
+       #      не читається взагалі; sha рахується лише для копії того самого розміру, що й base, а sha
+       #      base — ліниво, один раз. Запис у `conflicts.json` не змінюється (sha копії там лишається
+       #      sha народження — його читають 2.2 і STEP3). Тести I.4c/I.4d/I.4e.
        base_exists = vaultFileExists(path)
-       baseHash = base_exists ? hashOfVaultFile(path) : null
        if base_exists:
            for entry in found.trackedOnDisk:
                if entry in removedTracked: continue
-               if baseHash == entry.sha:
+               if sizeOfVaultFile(entry.siblingPath) != sizeOfVaultFile(path): continue
+               if hashOfVaultFile(entry.siblingPath) == hashOfVaultFile(path):
                    removeFromVault(entry)
                    removedTracked.add(entry)
            for entry in found.synthetic:
@@ -3564,8 +3571,9 @@ def process_conflicts():
                # жодного бухгалтерського обліку в списку не потрібно (наступний скан Vault
                # просто більше його не знайде). НЕ впливає на len(newSiblings) нижче і, отже, НЕ
                # впливає на conflicts.delete(path)/гейт conflict_branch — так само, як і решта
-               # дій над synthetic (контракт "TRACKED vs SYNTHETIC" вище).
-               if baseHash == entry.sha:
+               # дій над synthetic (контракт "TRACKED vs SYNTHETIC" вище). Скан уже порахував sha
+               # synthetic-копії з диска; той самий гейт розміру — до sha base.
+               if entry.size == sizeOfVaultFile(path) and entry.sha == hashOfVaultFile(path):
                    removeFromVault(entry)
 
        # 2.4. новий siblings-список — старий мінус усе розв'язане цим проходом (2.1 фізична

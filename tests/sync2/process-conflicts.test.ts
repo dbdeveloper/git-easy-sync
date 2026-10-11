@@ -177,6 +177,69 @@ describe("process_conflicts (§VIII I)", () => {
     expect(siblingExists("note.md", 8000, "other")).toBe(false);
   });
 
+  // Field, 2026-10-11 (owner, ~/Obsidian-test): the user EDITED the tracked
+  // copy until it matched the base. The record still carries the sha the
+  // copy was born with, so a rule reading the record never fires — I.4
+  // above could not see it, because its copy is born already equal.
+  it("I.4c: a tracked copy the user EDITED to match the base → resolved (the file's bytes decide, not the record)", async () => {
+    putFile("note.md", "reconciled\n");
+    const state = emptyConflictsState();
+    const t = await tracked("note.md", "their version\n", 2000);
+    putFile(buildSiblingFilePath("note.md", 2000, "phone"), "reconciled\n");
+    entry(state, "note.md", [t]);
+
+    const result = await processConflicts(deps(), state);
+    expect(result.entries.has("note.md")).toBe(false);
+    expect(siblingExists("note.md", 2000)).toBe(false);
+  });
+
+  it("I.4d: a tracked copy edited to something ELSE than the base stays, and so does the conflict", async () => {
+    putFile("note.md", "reconciled\n");
+    const state = emptyConflictsState();
+    const t = await tracked("note.md", "their version\n", 2000);
+    putFile(buildSiblingFilePath("note.md", 2000, "phone"), "half-merged\n");
+    entry(state, "note.md", [t]);
+
+    const result = await processConflicts(deps(), state);
+    expect(result.entries.get("note.md")?.siblings).toHaveLength(1);
+    expect(siblingExists("note.md", 2000)).toBe(true);
+  });
+
+  // Cost (owner, 2026-10-11, option 2): the reconciler runs at onload, panel
+  // open, editor exit and every drain start. A copy whose SIZE differs from
+  // the base cannot match it, so its bytes are never read or hashed — only a
+  // same-size copy pays for the SHA.
+  it("I.4e: a copy of a different size is not read at all — size first, SHA only on equal size", async () => {
+    putFile("note.md", "reconciled\n");
+    const state = emptyConflictsState();
+    const t = await tracked("note.md", "their much longer version\n", 2000);
+    entry(state, "note.md", [t]);
+    const siblingPath = buildSiblingFilePath("note.md", 2000, "phone");
+    // mock-obsidian builds a NEW adapter object on every `vault.adapter`
+    // read, so patching it in place is lost — spy through a proxy.
+    const reads: string[] = [];
+    const adapter = vault.adapter;
+    const spied = {
+      ...adapter,
+      readBinary: async (p: string) => {
+        reads.push(p);
+        return adapter.readBinary(p);
+      },
+    };
+    const spyVault = new Proxy(vault, {
+      get: (target, prop, receiver) =>
+        prop === "adapter" ? spied : Reflect.get(target, prop, receiver),
+    });
+
+    const result = await processConflicts(
+      { ...deps(), vault: spyVault as never },
+      state,
+    );
+    expect(reads).not.toContain(siblingPath);
+    expect(result.entries.get("note.md")?.siblings).toHaveLength(1);
+    expect(siblingExists("note.md", 2000)).toBe(true);
+  });
+
   it("I.4b: a synthetic that matches the base with NO tracked twin — only 2.3 can reach it", async () => {
     // Found by mutation probe (§IX.3, 2026-09-23): disabling the
     // synthetic half of 2.3 left the suite green. I.4 above looks like
