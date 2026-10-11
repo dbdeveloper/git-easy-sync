@@ -91,9 +91,21 @@ Use it, and note which runs you did.
       the WebView's worker count right after a fresh Obsidian start stays the SAME after several plugin
       disable+enable cycles (measured: 7 → 7 → 7 → 7; before the fix +5 per reload, from a second pool
       `BatchWriter` built and nobody terminated).
-- [ ] 📱 **Token with trailing whitespace** (pasted from the keyboard suggestion bar) still works — input is trimmed and existing values self-heal on restart.
-- [ ] 📱 **Low-memory kill:** while editing or syncing, let the OS kill Obsidian → on relaunch the vault is consistent and the recovery sweep has run.
-- [ ] 📱 **Battery death** (let the device power off below 1% mid-sync) → on relaunch, no corruption and no 0-byte files.
+- [x] 📱 **Token with trailing whitespace** (pasted from the keyboard suggestion bar) still works — input is trimmed and existing values self-heal on restart.
+- [x] 📱 **Low-memory kill:** while editing or syncing, let the OS kill Obsidian → on relaunch the vault is consistent and the recovery sweep has run.
+      Done 2026-10-10/11 by force-stopping Obsidian mid-sync: on the phone (twice during a first pull, once in an
+      upload loop; the sweep reported `cleaned: 1`), and on two desktop vaults killed repeatedly during commits and
+      pulls (the resume replayed the progress log — `lines: 4` — and fetched the rest). End state checked on the
+      files themselves: the synced content of both vaults byte-identical, no 0-byte files, no `.ges-tmp`/`.ges-bak`
+      leftovers, queues empty, no conflicts.
+- [x] 📱 **Battery death** (let the device power off below 1% mid-sync) → on relaunch, no corruption and no 0-byte files.
+      Closed without a literal battery run (owner, 2026-10-11): on a phone whose battery cannot be pulled, hitting
+      the milliseconds of an actual write is practically impossible, and the outcome a power cut can add over a
+      process kill (unflushed OS writes) lands in the same two states the design already handles — a half-written
+      staging file, or a rename that did not happen — both repaired by AtomicWriteRecovery at the next start.
+      Covered by: the kill runs above, the atomic-write recovery unit suites, and the drain's "POWER LOSS"
+      before/after-write tests. A precise kill-during-write on the phone is possible via DevTools (a breakpoint in
+      `atomicWriteFile`, then force-stop) if it is ever needed.
 - [ ] 📱 **Touch:** ribbon, settings, and the conflict list respond to taps as they do to clicks on desktop.
 
 **Installing a build on a device (BRAT).** There is no public-store build, so use [BRAT](https://github.com/TfTHacker/obsidian42-brat): *Add Beta Plugin* → this repo's URL → BRAT pulls `main.js` + `manifest.json` from the latest release tag. To test an unreleased branch, push an `X.Y.Z-beta` tag (the `release.yml` workflow cuts the artifact BRAT can fetch). Then run the 📱 / 🖥️📱 items here plus sections 2, 4, 6, 7, 8 on the device. "Pass" means the desktop contract holds identically on mobile.
