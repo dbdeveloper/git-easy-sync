@@ -16,8 +16,11 @@
 //     { basePath, deviceLabel, isoTimestamp }. Used by the conflicts
 //     list (Phase 1) to render device label + timestamp in each row.
 
-const SIBLING_PATTERN =
-  /^(.+?)\.conflict-from-(.+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)(\..+)?$/;
+import { SIBLING_PATTERN } from "../sync2/conflict-siblings";
+
+// The parser itself lives in sync2 since 2026-10-12 (the synthetic-copy
+// finder moved there); re-exported for the diff2 callers.
+export { parseSiblingFilename, type ParsedSibling } from "../sync2/conflict-siblings";
 
 // Returns the base path corresponding to a sibling file. Returns null
 // when the input does not match the sibling-naming convention; the
@@ -34,40 +37,6 @@ export function stripConflictSuffix(siblingPath: string): string | null {
 
   const [, stem, , , ext = ""] = m;
   return `${dir}${stem}${ext}`;
-}
-
-// Parsed components of a sibling filename. `basePath` is the
-// reconstructed base file path (same value stripConflictSuffix
-// returns). `deviceLabel` is the bracket-sanitized device segment
-// (parens replaced with brackets by buildSiblingPath — caller must
-// reverse if they want the original label, but for display the
-// bracket form is fine). `isoTimestamp` is the exact 20-character
-// "YYYY-MM-DDTHH-MM-SSZ" substring; convert to Date via
-// `new Date(isoTimestamp.replace(/-/g, ":").replace(/T(\d\d):(\d\d):/, "T$1:$2:").replace("Z", ".000Z"))`
-// — actually it's simpler to use the raw string for display since
-// it's already ISO-like.
-export interface ParsedSibling {
-  basePath: string;
-  deviceLabel: string;
-  isoTimestamp: string;
-}
-
-export function parseSiblingFilename(
-  siblingPath: string,
-): ParsedSibling | null {
-  const slash = siblingPath.lastIndexOf("/");
-  const dir = slash === -1 ? "" : siblingPath.slice(0, slash + 1);
-  const basename = slash === -1 ? siblingPath : siblingPath.slice(slash + 1);
-
-  const m = basename.match(SIBLING_PATTERN);
-  if (!m) return null;
-
-  const [, stem, deviceLabel, isoTimestamp, ext = ""] = m;
-  return {
-    basePath: `${dir}${stem}${ext}`,
-    deviceLabel,
-    isoTimestamp,
-  };
 }
 
 // Reformat the 20-char filesystem-safe `isoTimestamp` ("YYYY-MM-DDTHH-MM-SSZ" — colons

@@ -36,9 +36,12 @@ import {
   UNKNOWN_DEVICE_LABEL,
 } from "../sync2/conflict-siblings";
 import { deriveAutosaveId } from "./autosave-store";
-import { readRootGitignore, walkDotDir } from "../sync2/dot-space";
+import {
+  syntheticCopiesFromDotSpace,
+  syntheticCopiesFromIndex,
+} from "../sync2/synthetic-conflicts";
 import { baseFacts, copyMatchesBase, type BaseFacts } from "../sync2/conflict-live";
-import { buildConflictModel } from "../sync2/conflict-model";
+import { buildConflictModel, type SyntheticCopy } from "../sync2/conflict-model";
 import { calculateGitBlobSHA } from "../utils";
 
 export type ConflictEntryKind = "tracked" | "synthetic";
@@ -180,18 +183,15 @@ export function syntheticFromIndex(
   vault: Vault,
   conflictStore: ConflictStoreV2,
 ): ConflictEntry[] {
+  // The finder is sync2's (owner, 2026-10-12); this only shapes the rows.
+  return toEntries(conflictStore, syntheticCopiesFromIndex(vault, conflictStore));
+}
+
+function toEntries(conflictStore: ConflictStoreV2, copies: SyntheticCopy[]): ConflictEntry[] {
   const out: ConflictEntry[] = [];
-  for (const file of vault.getFiles()) {
-    // NOTE (2026-06-18): an ABSENT base is NOT skipped. A sibling whose base
-    // file is missing is a delete-vs-modify conflict (base deleted, sibling holds
-    // the other side) — both TRACKED (R2.5) and SYNTHETIC. It is LISTED so the user
-    // can resolve it via the panel (delete the sibling → deletion wins; or keep its
-    // content). The diff editor renders the ours side empty (mountDiffPane reads ""
-    // when basePath is absent). Genuine leftover siblings surface too, by design.
-    const entry = entryFromSibling(conflictStore, file.path);
-    if (!entry) continue; // not a sibling
-    if (entry.kind === "tracked") continue; // the store branch owns these
-    out.push(entry);
+  for (const c of copies) {
+    const entry = entryFromSibling(conflictStore, c.path);
+    if (entry) out.push(entry);
   }
   return out;
 }
@@ -226,70 +226,7 @@ export async function syntheticFromDotSpace(
   conflictStore: ConflictStoreV2,
   opts: { configDir: string; syncConfigDir: () => boolean },
 ): Promise<ConflictEntry[]> {
-  const optIn = await readRootGitignore({
-    vault,
-    configDir: opts.configDir,
-    syncConfigDir: opts.syncConfigDir,
-  });
-  const out: ConflictEntry[] = [];
-  for (const target of optIn.walkTargets) {
-    const { files } = await walkDotDir(vault, target);
-    for (const f of files) {
-      const entry = entryFromSibling(conflictStore, f.path);
-      if (!entry) continue;
-      // Tracked ones are listed by the store branch, which sees them
-      // whether or not any walk reaches them.
-      if (entry.kind === "tracked") continue;
-      out.push(entry);
-    }
-  }
-
-  // …and the opt-in set's dot FILES, whose siblings no walk target
-  // covers. A `dotFiles` member is addressed by exact path (that is the
-  // whole point of §4.2 — no listing, no guessing WHERE), so the
-  // DIRECTORY it lives in is never walked; for `.gitignore` that
-  // directory is the vault root.
-  //
-  // Found 2026-09-27 by probe and confirmed against obsidian.asar,
-  // whose indexer hides a path if ANY segment is dotted:
-  //   function(e){for(;e;){if(basename(e).startsWith("."))return!0;
-  //                        e=dirname(e)}return!1}
-  // So a SYNTHETIC sibling of `<root>/.gitignore` was seen by nobody —
-  // not this branch, not the index. (The TRACKED case always worked:
-  // trackedEntries reads the STORE and only asks the disk whether the
-  // derived name exists.) Owner's rule: every conflict must be findable.
-  //
-  // Grouped by directory so a root carrying several members costs one
-  // listing rather than one per member.
-  const byDir = new Map<string, Set<string>>();
-  for (const filePath of optIn.dotFiles) {
-    const slash = filePath.lastIndexOf("/");
-    const dir = slash === -1 ? "" : filePath.slice(0, slash);
-    const members = byDir.get(dir) ?? new Set<string>();
-    members.add(filePath);
-    byDir.set(dir, members);
-  }
-  for (const [dir, members] of byDir) {
-    let listing: { files: string[] };
-    try {
-      listing = await vault.adapter.list(dir);
-    } catch {
-      continue; // unreadable or vanished mid-scan — skip-class
-    }
-    for (const candidate of listing.files) {
-      const entry = entryFromSibling(conflictStore, normalizePath(candidate));
-      if (!entry) continue;
-      // A listing holds every sibling in the directory, including ones
-      // belonging to files that are NOT members. Those are either the
-      // index branch's job (ordinary files) or deliberately out of
-      // reach (a dot-file nobody opted into) — same boundary the
-      // walk-target rule draws one level up.
-      if (!members.has(entry.basePath)) continue;
-      if (entry.kind === "tracked") continue; // the store branch owns these
-      out.push(entry);
-    }
-  }
-  return out;
+  return toEntries(conflictStore, await syntheticCopiesFromDotSpace(vault, conflictStore, opts));
 }
 
 // Fold late dot-space findings into a list the panel is already

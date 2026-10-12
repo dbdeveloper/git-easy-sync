@@ -171,9 +171,37 @@ function siblingNameRegex(basePath: string): RegExp {
 
 // The inverse of formatTimestampForFilename: "2026-10-11T20-25-53Z" → ms.
 // The name carries whole seconds, so this is the timeLabel to the second.
-function timeLabelFromStamp(stamp: string): number {
+export function timeLabelFromStamp(stamp: string): number {
   const [date, time] = stamp.split("T");
   return Date.parse(`${date}T${time.replace(/-/g, ":")}`);
+}
+
+// Reading a copy's name back (moved here from diff2's strip-conflict-suffix,
+// owner 2026-10-12, with the synthetic-copy finder: finding conflicts is the
+// engine's, not the UI's).
+//
+//   "<dir>/<stem>.conflict-from-<deviceLabel>-<isoTs><ext>"
+//
+// `basePath` is the reconstructed base path; `deviceLabel` the label as it
+// stands in the name (parens already bracketed); `isoTimestamp` the exact
+// 20-character "YYYY-MM-DDTHH-MM-SSZ" substring. null = not a copy's name.
+export const SIBLING_PATTERN =
+  /^(.+?)\.conflict-from-(.+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)(\..+)?$/;
+
+export interface ParsedSibling {
+  basePath: string;
+  deviceLabel: string;
+  isoTimestamp: string;
+}
+
+export function parseSiblingFilename(siblingPath: string): ParsedSibling | null {
+  const slash = siblingPath.lastIndexOf("/");
+  const dir = slash === -1 ? "" : siblingPath.slice(0, slash + 1);
+  const basename = slash === -1 ? siblingPath : siblingPath.slice(slash + 1);
+  const m = basename.match(SIBLING_PATTERN);
+  if (!m) return null;
+  const [, stem, deviceLabel, isoTimestamp, ext = ""] = m;
+  return { basePath: `${dir}${stem}${ext}`, deviceLabel, isoTimestamp };
 }
 
 // Write the sibling's bytes at the derived name. Callers IGNORE the
