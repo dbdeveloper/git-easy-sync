@@ -41,6 +41,8 @@ import {
 } from "./synthetic-detector";
 import type { BackNav, DiffEditorOrigin } from "./editor-tabs";
 import type { HistoryVersion } from "./history-versions";
+import { isConflictPair } from "../sync2/conflict-siblings";
+import { ConflictResolvedModal } from "./recovery-dialog";
 
 export const DIFF2_PANEL_VIEW_TYPE = "diff2-panel-view";
 
@@ -438,7 +440,7 @@ export class DiffPanelView extends ItemView {
             this.conflictSelectedKey = key;
             this.conflictLaunchedKey = key; // launch position for [←]
             this.applyConflictSelection();
-            this.deps.openEditor?.(entry, toRight);
+            void this.launchEntry(entry, toRight);
           },
         },
         this.conflictSelectedKey,
@@ -518,7 +520,30 @@ export class DiffPanelView extends ItemView {
     if (!ref) return;
     this.conflictSelectedKey = conflictKey(ref.entry);
     this.conflictLaunchedKey = this.conflictSelectedKey; // launch position for [←]
-    this.deps.openEditor?.(ref.entry, toRight);
+    void this.launchEntry(ref.entry, toRight);
+  }
+
+  // Open a row's conflict — but first ask the disk, here in the panel (owner,
+  // 2026-10-12): a conflict already resolved (its copy gone, or identical to
+  // its file — e.g. removed outside Obsidian) does not open an editor tab at
+  // all. Opening one first blanked the panel and only then said "resolved".
+  // The window shows over the panel as it is; after it the list is re-read
+  // and the row goes. Two separate files are not a conflict: they just open.
+  private async launchEntry(entry: ConflictEntry, toRight?: boolean): Promise<void> {
+    if (
+      isConflictPair(entry.basePath, entry.siblingPath) &&
+      this.deps.isCopyResolved &&
+      (await this.deps.isCopyResolved(entry.basePath, entry.siblingPath))
+    ) {
+      await this.showResolved(entry.basePath);
+      await this.refreshConflicts({ clean: true });
+      return;
+    }
+    this.deps.openEditor?.(entry, toRight);
+  }
+
+  private showResolved(basePath: string): Promise<void> {
+    return new ConflictResolvedModal(this.app, basePath, "open").prompt();
   }
 
   // On [←] back-nav: return the cursor to the conflict we LAUNCHED (not wherever the list was

@@ -91,3 +91,46 @@ describe("Diff Panel — every focus is a Ctrl/Cmd+R", () => {
   });
 });
 
+
+// Owner, 2026-10-12: clicking a row whose conflict is already resolved (copy
+// gone or identical to its file — removed outside Obsidian, say) opened an
+// editor tab first — the panel went blank — and only then said "resolved".
+// The check now happens IN THE PANEL, before anything opens: the window shows
+// over the panel as it is, and after it the list is re-read (the row goes).
+describe("Diff Panel — a click on an already resolved conflict", () => {
+  interface Launch {
+    launchEntry(entry: unknown, toRight: boolean): Promise<void>;
+    showResolved: (basePath: string) => Promise<void>;
+  }
+  const entry = {
+    basePath: ".test/test.md",
+    siblingPath: ".test/test.conflict-from-Phone-2026-06-05T09-19-10Z.md",
+    deviceLabel: "Phone",
+    isoTimestamp: "2026-06-05T09-19-10Z",
+    kind: "synthetic" as const,
+  };
+  const setup = (resolved: boolean) => {
+    const { panel, scan } = makePanel();
+    const openEditor = vi.fn();
+    const showResolved = vi.fn(async () => {});
+    (panel.deps as Record<string, unknown>).openEditor = openEditor;
+    (panel.deps as Record<string, unknown>).isCopyResolved = async () => resolved;
+    (panel as unknown as Launch).showResolved = showResolved;
+    return { panel: panel as unknown as Launch, scan, openEditor, showResolved };
+  };
+
+  it("🔑 resolved → the window over the panel, NO editor opened, then the list is re-read", async () => {
+    const { panel, scan, openEditor, showResolved } = setup(true);
+    await panel.launchEntry(entry, false);
+    expect(openEditor).not.toHaveBeenCalled();
+    expect(showResolved).toHaveBeenCalledWith(".test/test.md");
+    expect(scan.mock.calls).toEqual([[true]]);
+  });
+
+  it("still in conflict → the editor opens as before", async () => {
+    const { panel, openEditor, showResolved } = setup(false);
+    await panel.launchEntry(entry, true);
+    expect(openEditor).toHaveBeenCalledWith(entry, true);
+    expect(showResolved).not.toHaveBeenCalled();
+  });
+});

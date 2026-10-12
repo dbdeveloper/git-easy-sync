@@ -189,6 +189,9 @@ export async function safeRename(
 // while the file is still there is a real failure and throws.
 // (Obsidian's adapter.remove throws on a missing file.)
 export async function removeIfPresent(adapter: DataAdapter, p: string): Promise<boolean> {
+  // Asked first, so "removed here" never depends on whether the adapter
+  // throws for a missing file (some are lenient about it).
+  if (!(await adapter.exists(p))) return false;
   try {
     await adapter.remove(p);
     return true;
