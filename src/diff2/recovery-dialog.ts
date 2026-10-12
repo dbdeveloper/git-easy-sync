@@ -334,3 +334,40 @@ export class SaveToAltModal extends Modal {
     });
   }
 }
+
+// A conflict resolved OUTSIDE the editor (owner, 2026-10-12): its copy is
+// gone or byte-equal to its base — the file system is the ground truth. One
+// button, no choice: the editor's work on it is moot.
+//   "open"  — the user tried to open it: "already resolved" [Continue];
+//   "focus" — the tab the user is looking at: "resolved outside" [Close].
+export class ConflictResolvedModal extends Modal {
+  constructor(
+    app: App,
+    private readonly basePath: string,
+    private readonly when: "open" | "focus",
+  ) {
+    super(app);
+  }
+
+  prompt(): Promise<void> {
+    return new Promise((resolve) => {
+      this.onClose = () => resolve();
+      this.titleEl.setText(
+        this.when === "open" ? "This conflict is already resolved" : "This conflict was resolved outside the editor",
+      );
+      this.contentEl.empty();
+      this.contentEl.createEl("p").setText(
+        this.when === "open"
+          ? `"${this.basePath}" has no conflict copy left that differs from it, so there is nothing to resolve. The next sync finishes the clean-up.`
+          : `"${this.basePath}" no longer has a conflict copy that differs from it — it was deleted, renamed, or made identical outside this editor. Your changes here are discarded.`,
+      );
+      const row = this.contentEl.createDiv({ cls: "modal-button-container" });
+      const btn = row.createEl("button", {
+        text: this.when === "open" ? "Continue" : "Close",
+        cls: "mod-cta",
+      });
+      btn.addEventListener("click", () => this.close());
+      this.open();
+    });
+  }
+}

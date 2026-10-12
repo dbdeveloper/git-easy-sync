@@ -64,12 +64,23 @@ export async function copyMatchesBase(
   base: BaseFacts,
 ): Promise<"gone" | boolean> {
   const copyPath = buildSiblingFilePath(basePath, copy.timeLabel ?? 0, copy.deviceLabel);
+  return copyAtPathMatchesBase(deps, copyPath, base, copy);
+}
+
+// The same comparison for a copy known only by its path (a synthetic copy,
+// or an editor tab's): `cache` is its ledger record when there is one.
+export async function copyAtPathMatchesBase(
+  deps: ConflictLiveDeps,
+  copyPath: string,
+  base: BaseFacts,
+  cache: FileInfo | null,
+): Promise<"gone" | boolean> {
   const st = await deps.adapter.stat(copyPath);
   if (st === null) return "gone";
   if (base.size === null || st.size !== base.size) return false;
   const copySha =
-    copy.sha !== null && copy.size === st.size && copy.mtime === st.mtime
-      ? copy.sha
+    cache !== null && cache.sha !== null && cache.size === st.size && cache.mtime === st.mtime
+      ? cache.sha
       : await deps.computeSha(await deps.adapter.readBinary(copyPath));
   return copySha === (await base.sha());
 }

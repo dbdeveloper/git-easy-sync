@@ -30,8 +30,16 @@ export interface VanishedCopyDeps {
     origin: string;
     basePath: string;
     siblingPath: string;
+    // The tab the user is looking at (owner, 2026-10-12): not closed under
+    // them — they are told first.
+    isActive?: boolean;
     detach(): void;
   }>;
+  // The conflict model's verdict for this copy (owner, 2026-10-12): resolved
+  // when the copy is gone OR byte-equal to its base. Default: gone only.
+  isResolved?: (basePath: string, copyPath: string) => Promise<boolean>;
+  // Shown before the FOCUSED tab closes ("resolved outside the editor").
+  notifyResolved?: (basePath: string) => Promise<void>;
   adapter: {
     exists(path: string): Promise<boolean>;
     rmdir(path: string, recursive: boolean): Promise<void>;
@@ -46,7 +54,11 @@ export async function closeEditorsOfVanishedCopies(
   for (const tab of deps.editorTabs()) {
     if (tab.origin !== "conflict") continue;
     if (!tab.siblingPath || tab.siblingPath === tab.basePath) continue;
-    if (await deps.adapter.exists(tab.siblingPath)) continue;
+    const resolved = deps.isResolved
+      ? await deps.isResolved(tab.basePath, tab.siblingPath)
+      : !(await deps.adapter.exists(tab.siblingPath));
+    if (!resolved) continue;
+    if (tab.isActive && deps.notifyResolved) await deps.notifyResolved(tab.basePath);
     tab.detach();
     closedTabs++;
     for (const kind of ["tracked", "synthetic"] as const) {

@@ -36,6 +36,7 @@ function pluginWithEditorTab(copyOnDisk: boolean, autosaveOnDisk = false) {
   const p = Object.create(GitHubSyncPlugin.prototype) as unknown as Handle;
   p.app = {
     workspace: {
+      activeLeaf: null,
       getLeavesOfType: (type: string) =>
         type === DIFF2_EDITOR_VIEW_TYPE
           ? [
@@ -52,11 +53,15 @@ function pluginWithEditorTab(copyOnDisk: boolean, autosaveOnDisk = false) {
       adapter: {
         exists: async (path: string) =>
           path === BASE || (copyOnDisk && path === COPY) || (autosaveOnDisk && path === dir),
+        // The copy (when present) differs from the base in size: unresolved.
+        stat: async (path: string) =>
+          path === BASE ? { size: 5, mtime: 1 } : copyOnDisk && path === COPY ? { size: 9, mtime: 1 } : null,
         rmdir: async () => {},
       },
     },
   };
   p.logger = { info: () => {}, warn: () => {}, error: () => {} };
+  (p as unknown as { workerClient: unknown }).workerClient = { computeGitBlobSHA: async () => "sha" };
   return { p, detach };
 }
 
@@ -77,6 +82,20 @@ describe("main.ts closes the editors of vanished conflict copies", () => {
     await p.closeVanishedCopyEditors();
     expect(detach).toHaveBeenCalledTimes(1);
     expect(recordedNotices).toHaveLength(0);
+  });
+
+  // The model's rule through main.ts (owner, 2026-10-12): a copy that still
+  // EXISTS but is byte-equal to its base is resolved — its tab closes.
+  it("🔑 a copy present but byte-equal to its base → resolved, its tab is detached", async () => {
+    const { p, detach } = pluginWithEditorTab(true);
+    const adapter = (p.app as { vault: { adapter: Record<string, unknown> } }).vault.adapter;
+    adapter.stat = async (path: string) => (path === BASE || path === COPY ? { size: 5, mtime: 7 } : null);
+    adapter.readBinary = async () => new TextEncoder().encode("same\n").buffer;
+    (p as unknown as { workerClient: unknown }).workerClient = {
+      computeGitBlobSHA: async (b: ArrayBuffer) => `sha-${b.byteLength}`,
+    };
+    await p.closeVanishedCopyEditors();
+    expect(detach).toHaveBeenCalledTimes(1);
   });
 
   it("a tab whose copy is still there stays", async () => {

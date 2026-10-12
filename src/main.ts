@@ -51,7 +51,7 @@ import { bringLeafToFront } from "./bring-to-front";
 import { enforceIfRootGitignore } from "./gitignore-editor/after-history-write";
 import { forgetReplacedConflictCopy } from "./diff2/forget-replaced-copy";
 import { closeEditorsOfVanishedCopies } from "./diff2/close-vanished-copies";
-import { conflictBaseShaWhileInForce } from "./sync2/conflict-live";
+import { conflictBaseShaWhileInForce, copyAtPathMatchesBase, baseFacts } from "./sync2/conflict-live";
 import { allLeaves, explorerClickTarget } from "./explorer-click";
 import { GitignoreDecisionModal } from "./sync2/views/gitignore-modal";
 import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
@@ -147,7 +147,7 @@ import {
   type DiffEditorOrigin,
   type EditorTabState,
 } from "./diff2/editor-tabs";
-import { EditorBusyModal } from "./diff2/recovery-dialog";
+import { EditorBusyModal, ConflictResolvedModal } from "./diff2/recovery-dialog";
 import {
   autosaveIdForEntry,
   findAllConflicts,
@@ -1617,6 +1617,10 @@ export default class GitHubSyncPlugin extends Plugin {
       computeSha: (bytes) => this.workerClient.computeGitBlobSHA(bytes),
     });
     conflictCounter.subscribe(() => this.refreshConflictUI());
+    // The editor-tab cleaner follows the conflict model (owner, 2026-10-12):
+    // whatever recomputes it — an event, a drain, the panel, a commit — a tab
+    // whose conflict is resolved closes (the focused one after a window).
+    conflictCounter.subscribe(() => void this.closeVanishedCopyEditors());
     this.conflictCounter = conflictCounter;
     // Seed the counter with whatever conflicts persisted from the
     // last session. markDirty + flush so the UI badge reflects
@@ -2101,6 +2105,19 @@ export default class GitHubSyncPlugin extends Plugin {
     void this.closeVanishedCopyEditors();
   }
 
+  // Is this conflict copy resolved — gone, or byte-equal to its base? The
+  // conflict model's per-copy rule (conflict-live.ts), for a copy known by
+  // its path (an editor tab); the ledger record, if any, is its cache.
+  async isCopyResolved(basePath: string, copyPath: string): Promise<boolean> {
+    const deps = {
+      adapter: this.app.vault.adapter,
+      computeSha: (bytes: ArrayBuffer) => this.workerClient.computeGitBlobSHA(bytes),
+    };
+    const cache = this.conflictStoreV2?.getBySiblingPath(copyPath)?.sibling ?? null;
+    const verdict = await copyAtPathMatchesBase(deps, copyPath, await baseFacts(deps, basePath), cache);
+    return verdict !== false;
+  }
+
   // A conflict whose COPY is gone is resolved, and its open diff-editor
   // tabs close silently, autosave wiped, unsaved edits in them discarded
   // without a word (owner, 2026-10-11) — whoever
@@ -2124,9 +2141,15 @@ export default class GitHubSyncPlugin extends Plugin {
               basePath,
               siblingPath,
               detach: () => l.detach(),
+              isActive: l === this.app.workspace.activeLeaf,
             };
           }),
         adapter: this.app.vault.adapter,
+        // The conflict model's rule (owner, 2026-10-12): resolved when the
+        // copy is gone OR byte-equal to its base.
+        isResolved: (basePath, copyPath) => this.isCopyResolved(basePath, copyPath),
+        notifyResolved: (basePath) =>
+          new ConflictResolvedModal(this.app, basePath, "focus").prompt(),
       });
       if (r.closedTabs > 0) {
         this.logger.info("Editors of resolved conflicts closed (their copy is gone)", r);
