@@ -296,15 +296,23 @@ export function editorOpenDecision(o: {
 }
 
 // Ctrl/Cmd+R inside a diff editor (owner, 2026-10-12): look at the disk again.
+// `pair` = the second file is a conflict copy of the first (isConflictPair).
+// Anything else — two ordinary files, two copies of one file — is two
+// SEPARATE files: nothing about them is "resolved", and if one is gone the
+// comparison cannot go on.
 export type EditorRefreshDecision =
-  | "close-resolved" // resolved outside: "resolved outside" [Close], tab closes
+  | "close-resolved" // conflict resolved outside: "resolved outside" [Close], tab closes
+  | "close-file-gone" // separate files, one is gone: "One of the files is gone" [Exit]
   | "reopen" // changed on disk: remount as a user open → the recovery window decides
   | "nothing";
 
 export function editorRefreshDecision(o: {
-  resolved: boolean;
+  pair: boolean;
+  resolved: boolean; // pair only: copy gone or equal to its base
+  fileGone: boolean; // separate files only: either of them is missing
   changedOnDisk: boolean;
 }): EditorRefreshDecision {
-  if (o.resolved) return "close-resolved";
+  if (o.pair && o.resolved) return "close-resolved";
+  if (!o.pair && o.fileGone) return "close-file-gone";
   return o.changedOnDisk ? "reopen" : "nothing";
 }

@@ -344,7 +344,8 @@ export class ConflictResolvedModal extends Modal {
   constructor(
     app: App,
     private readonly basePath: string,
-    private readonly when: "open" | "focus" | "replaced",
+    // "gone": two SEPARATE files compared, and the one named here vanished.
+    private readonly when: "open" | "focus" | "replaced" | "gone",
   ) {
     super(app);
   }
@@ -367,6 +368,11 @@ export class ConflictResolvedModal extends Modal {
         replaced: {
           title: "The conflict copy was replaced",
           body: `A newer version of "${this.basePath}" arrived from the server and replaced the conflict copy you were editing. Your changes here are discarded; open the conflict again to work on the new copy.`,
+          button: "Exit",
+        },
+        gone: {
+          title: "One of the files is gone",
+          body: `"${this.basePath}" no longer exists, so this comparison cannot continue. Your changes here are discarded.`,
           button: "Exit",
         },
       }[this.when];

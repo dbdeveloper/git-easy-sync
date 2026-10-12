@@ -15,15 +15,44 @@ import { editorRefreshDecision } from "../../src/diff2/editor-tabs";
 //   nothing changed               → nothing happens.
 describe("editorRefreshDecision", () => {
   it("🔑 resolved outside → close (with the window)", () => {
-    expect(editorRefreshDecision({ resolved: true, changedOnDisk: true })).toBe("close-resolved");
-    expect(editorRefreshDecision({ resolved: true, changedOnDisk: false })).toBe("close-resolved");
+    expect(editorRefreshDecision({ pair: true, resolved: true, fileGone: false, changedOnDisk: true })).toBe("close-resolved");
+    expect(editorRefreshDecision({ pair: true, resolved: true, fileGone: false, changedOnDisk: false })).toBe("close-resolved");
   });
 
   it("🔑 changed on disk, still in conflict → reopen through recovery", () => {
-    expect(editorRefreshDecision({ resolved: false, changedOnDisk: true })).toBe("reopen");
+    expect(editorRefreshDecision({ pair: true, resolved: false, fileGone: false, changedOnDisk: true })).toBe("reopen");
   });
 
   it("nothing changed → nothing", () => {
-    expect(editorRefreshDecision({ resolved: false, changedOnDisk: false })).toBe("nothing");
+    expect(editorRefreshDecision({ pair: true, resolved: false, fileGone: false, changedOnDisk: false })).toBe("nothing");
   });
 });
+
+// Two SEPARATE files (owner, 2026-10-12): not a file and its own conflict
+// copy — two ordinary files, or two copies of one file. Nothing about them is
+// "resolved"; if one of them is gone the comparison cannot go on: "One of the
+// files is gone" [Exit].
+describe("editorRefreshDecision — two separate files", () => {
+  it("🔑 one of the files is gone → close with 'file gone'", () => {
+    expect(editorRefreshDecision({ pair: false, resolved: false, fileGone: true, changedOnDisk: false })).toBe(
+      "close-file-gone",
+    );
+  });
+
+  it("'resolved' never applies to them", () => {
+    expect(editorRefreshDecision({ pair: false, resolved: true, fileGone: false, changedOnDisk: false })).toBe(
+      "nothing",
+    );
+  });
+
+  it("changed on disk → reopen through recovery, as for a conflict", () => {
+    expect(editorRefreshDecision({ pair: false, resolved: false, fileGone: false, changedOnDisk: true })).toBe(
+      "reopen",
+    );
+  });
+
+  it("for a conflict pair a missing file is the conflict's business (copy gone = resolved; base gone = conflict goes on)", () => {
+    expect(editorRefreshDecision({ pair: true, resolved: false, fileGone: true, changedOnDisk: false })).toBe("nothing");
+  });
+});
+

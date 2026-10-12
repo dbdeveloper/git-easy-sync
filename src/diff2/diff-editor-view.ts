@@ -174,21 +174,39 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   // the window, then back to the Diff Panel; changed on disk → remount as a
   // user open, so the existing recovery window asks whether to continue the
   // saved edits or start over; nothing changed → nothing.
+  //
+  // Two SEPARATE files (not a file and its own conflict copy — two ordinary
+  // files, or two copies of one file; owner, 2026-10-12): if one of them is
+  // gone, "One of the files is gone" [Exit] and the tab closes.
   private async refreshFromDisk(): Promise<void> {
     const entry = this.entry;
-    if (!entry || this.state?.origin !== "conflict") return;
-    if (!isConflictPair(entry.basePath, entry.siblingPath)) return;
-    const resolved = this.deps.isCopyResolved
-      ? await this.deps.isCopyResolved(entry.basePath, entry.siblingPath)
-      : !(await this.deps.vault.adapter.exists(entry.siblingPath));
+    if (!entry || !this.state || this.state.origin === "history") return;
+    const pair = isConflictPair(entry.basePath, entry.siblingPath);
+    const adapter = this.deps.vault.adapter;
+    const resolved = !pair
+      ? false
+      : this.deps.isCopyResolved
+        ? await this.deps.isCopyResolved(entry.basePath, entry.siblingPath)
+        : !(await adapter.exists(entry.siblingPath));
+    let gonePath: string | null = null;
+    if (!pair) {
+      if (!(await adapter.exists(entry.basePath))) gonePath = entry.basePath;
+      else if (!(await adapter.exists(entry.siblingPath))) gonePath = entry.siblingPath;
+    }
+    const fileGone = gonePath !== null;
     const decision = editorRefreshDecision({
+      pair,
       resolved,
-      changedOnDisk: resolved ? false : await this.controller.changedOnDiskSinceStart(),
+      fileGone,
+      changedOnDisk: resolved || fileGone ? false : await this.controller.changedOnDiskSinceStart(),
     });
     if (decision === "close-resolved") {
       await new ConflictResolvedModal(this.app, entry.basePath, "focus").prompt();
       this.leaf.detach();
       this.deps.showDiffPanel?.();
+    } else if (decision === "close-file-gone") {
+      await new ConflictResolvedModal(this.app, gonePath!, "gone").prompt();
+      this.leaf.detach();
     } else if (decision === "reopen" && this.state) {
       this.controller.dispose();
       this.mounted = false;
