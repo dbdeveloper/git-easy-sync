@@ -25,7 +25,8 @@ import { normalizePath, type Vault } from "obsidian";
 import type ConflictStoreV2 from "./conflict-store-v2";
 import { parseSiblingFilename, timeLabelFromStamp } from "./conflict-siblings";
 import { readRootGitignore, walkDotDir } from "./dot-space";
-import type { SyntheticCopy } from "./conflict-model";
+import { buildConflictModel, type SyntheticCopy } from "./conflict-model";
+import { calculateGitBlobSHA } from "../utils";
 
 export interface DotSpaceScope {
   configDir: string;
@@ -108,4 +109,78 @@ export async function syntheticCopiesFromDotSpace(
     }
   }
   return out;
+}
+
+// THE cleanup of synthetic copies (owner, 2026-10-12). The drain is about
+// tracked conflicts and touches a synthetic copy only next to a tracked one;
+// everywhere else a synthetic copy with nothing left to say is removed here:
+//   - equal to its file  → the conflict is resolved;
+//   - a duplicate        → the same bytes as a copy that stays (tracked beats
+//                          synthetic, then the newer).
+// The verdicts are the conflict model's, so the panel, the badge and this
+// agree. A TRACKED copy is never touched — the drain prunes those together
+// with their ledger records. Copies are never synced (*.conflict-from-*), so a
+// removal stays on this device.
+//
+// Run when the Diff Panel opens, on Ctrl/Cmd+R in the panel and once at
+// plugin start, after the startup sync. While a drain runs it only looks: the
+// drain writes a new tracked copy before it records it in the ledger, and for
+// that moment the copy looks synthetic. The next run removes what was left.
+export interface CleanSyntheticDeps {
+  vault: Vault;
+  store: ConflictStoreV2;
+  scope: DotSpaceScope;
+  drainRunning: () => boolean;
+  computeSha?: (bytes: ArrayBuffer) => Promise<string>;
+  logger?: { info(message: string, data?: unknown): void };
+  now?: () => number;
+}
+
+export async function cleanSyntheticConflicts(
+  deps: CleanSyntheticDeps,
+): Promise<{ survivors: SyntheticCopy[]; removed: string[] }> {
+  const now = deps.now ?? (() => Date.now());
+  const started = now();
+  const found = new Map<string, SyntheticCopy>();
+  for (const c of syntheticCopiesFromIndex(deps.vault, deps.store)) found.set(c.path, c);
+  for (const c of await syntheticCopiesFromDotSpace(deps.vault, deps.store, deps.scope)) {
+    found.set(c.path, c);
+  }
+  const copies = [...found.values()];
+
+  const model = await buildConflictModel(
+    { adapter: deps.vault.adapter as never, computeSha: deps.computeSha ?? calculateGitBlobSHA },
+    deps.store.getCachedState(),
+    copies,
+  );
+  const removed: string[] = [];
+  for (const entry of model.entries.values()) {
+    for (const c of entry.copies) {
+      if (c.kind !== "synthetic") continue;
+      if (c.state !== "equals-base" && c.state !== "duplicate") continue;
+      if (deps.drainRunning()) continue;
+      if (!(await deps.vault.adapter.exists(c.path))) continue;
+      if (c.state === "equals-base") {
+        deps.logger?.info("Conflict copy removed: identical to the file — the conflict is resolved", {
+          path: entry.basePath,
+          copy: c.path,
+        });
+      } else {
+        deps.logger?.info("Conflict copy removed: identical to another copy", {
+          path: entry.basePath,
+          copy: c.path,
+          kept: c.duplicateOf,
+        });
+      }
+      await deps.vault.adapter.remove(c.path);
+      removed.push(c.path);
+    }
+  }
+  deps.logger?.info("Looked for leftover conflict copies", {
+    found: copies.length,
+    removed: removed.length,
+    ms: now() - started,
+  });
+  const gone = new Set(removed);
+  return { survivors: copies.filter((c) => !gone.has(c.path)), removed };
 }
