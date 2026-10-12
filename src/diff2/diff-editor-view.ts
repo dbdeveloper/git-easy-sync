@@ -537,7 +537,9 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   // Leaving without a commit (resolved outside on [←], the copy gone at mount,
   // Cancel in the recovery window). A CONFLICT editor always lands in the Diff
   // Panel, opening it if it is closed (owner, 2026-10-12 — otherwise Obsidian
-  // activates whatever tab is next). History and two separate files just close.
+  // activates whatever tab is next). History and two separate files just close
+  // — for now: the future "Diff with…" mode will open the FIRST file's tab
+  // (the one the user started from; TODO п.58).
   onLeaveDetail(): void {
     const s = this.state;
     const toPanel =
@@ -567,7 +569,8 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
         this.deps.onEditorCommitted?.(origin, entry.basePath),
       ).finally(() => src.detach());
     } else if (!isConflictPair(entry.basePath, entry.siblingPath)) {
-      // Two separate files: the Diff Panel is about conflicts — just close.
+      // Two separate files: the Diff Panel is about conflicts — just close (for
+      // now; the future "Diff with…" mode opens the first file's tab, TODO п.58).
       src.detach();
     } else {
       // Conflict: unchanged — the panel is a singleton with its own spot.
