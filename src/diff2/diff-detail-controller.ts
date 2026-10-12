@@ -54,6 +54,7 @@ import {
   commitOrDiscardExit,
   commitToAlt,
   commitUnchangedSide,
+  classifyToctou,
   guardEmpty,
   isResolvedPristine,
   type ResolvedSides,
@@ -86,6 +87,14 @@ export interface DiffDetailHost {
 }
 
 export class DiffDetailController {
+  // Ctrl/Cmd+R (owner, 2026-10-12): did the base or the copy change on disk
+  // since this session started? The same check [←] runs (TOCTOU).
+  async changedOnDiskSinceStart(): Promise<boolean> {
+    const s = this.activeSession;
+    if (!s || s.isHistory) return false;
+    return (await classifyToctou(this.deps.vault, s.meta)).kind === "mismatch";
+  }
+
   // A failed mount whose conflict copy is no longer on disk is not an error: the
   // conflict was resolved under the tab (field, 2026-10-11 — a reload restored the
   // tab while the onload reconcile deleted a copy that matched its base; the view's

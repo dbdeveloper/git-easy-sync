@@ -36,6 +36,7 @@ import {
   type EditorTabState,
   type OpenEditorDesc,
   editorOpenDecision,
+  editorRefreshDecision,
 } from "./editor-tabs";
 import {
   autosaveIdForEntry,
@@ -132,6 +133,14 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       window,
       "keydown",
       (e) => {
+        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "r" || e.key === "R")) {
+          // Ctrl/Cmd+R — only for the editor the user is in.
+          if (this.app.workspace.activeLeaf !== this.leaf) return;
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          void this.refreshFromDisk();
+          return;
+        }
         if (!((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "f" || e.key === "F"))) return;
         const v = this.controller.getView();
         if (!v || !v.dom.contains(document.activeElement)) return;
@@ -158,6 +167,32 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     this.syncEscScope(this.app.workspace.activeLeaf ?? null);
 
     void this.tryMount();
+  }
+
+  // Ctrl/Cmd+R (owner, 2026-10-12): look at the disk again. Resolved outside →
+  // the window, then back to the Diff Panel; changed on disk → remount as a
+  // user open, so the existing recovery window asks whether to continue the
+  // saved edits or start over; nothing changed → nothing.
+  private async refreshFromDisk(): Promise<void> {
+    const entry = this.entry;
+    if (!entry || this.state?.origin !== "conflict") return;
+    const resolved = this.deps.isCopyResolved
+      ? await this.deps.isCopyResolved(entry.basePath, entry.siblingPath)
+      : !(await this.deps.vault.adapter.exists(entry.siblingPath));
+    const decision = editorRefreshDecision({
+      resolved,
+      changedOnDisk: resolved ? false : await this.controller.changedOnDiskSinceStart(),
+    });
+    if (decision === "close-resolved") {
+      await new ConflictResolvedModal(this.app, entry.basePath, "focus").prompt();
+      this.leaf.detach();
+      this.deps.showDiffPanel?.();
+    } else if (decision === "reopen" && this.state) {
+      this.controller.dispose();
+      this.mounted = false;
+      this.state = { ...this.state, openMode: "user" };
+      await this.tryMount();
+    }
   }
 
   // TODO #8 — push the ESC scope iff this leaf is active; pop otherwise. Idempotent.
@@ -228,6 +263,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
         resolved,
         userOpened: this.state.openMode === "user",
         focused: this.leaf === this.app.workspace.activeLeaf,
+        startingUp: this.deps.isStartingUp?.() ?? false,
       });
       if (decision !== "mount") {
         if (decision !== "close-silently") {
@@ -238,6 +274,9 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
           ).prompt();
         }
         this.leaf.detach();
+        if (decision === "notify-resolved-outside" || decision === "close-to-panel") {
+          this.deps.showDiffPanel?.();
+        }
         return;
       }
 

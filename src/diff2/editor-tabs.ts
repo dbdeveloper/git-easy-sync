@@ -278,14 +278,33 @@ export type EditorOpenDecision =
   | "mount"
   | "notify-already-resolved" // the user opened it: "already resolved" [Continue]
   | "notify-resolved-outside" // restored, and in focus: "resolved outside" [Close]
+  | "close-to-panel" // restored, in focus, plugin STARTING: no window, then the Diff Panel
   | "close-silently"; // restored, not in focus
 
 export function editorOpenDecision(o: {
   resolved: boolean;
   userOpened: boolean;
   focused: boolean;
+  startingUp?: boolean;
 }): EditorOpenDecision {
   if (!o.resolved) return "mount";
   if (o.userOpened) return "notify-already-resolved";
-  return o.focused ? "notify-resolved-outside" : "close-silently";
+  if (!o.focused) return "close-silently";
+  // Owner, 2026-10-12: at plugin start no window, but the user still lands
+  // in the Diff Panel.
+  return o.startingUp ? "close-to-panel" : "notify-resolved-outside";
+}
+
+// Ctrl/Cmd+R inside a diff editor (owner, 2026-10-12): look at the disk again.
+export type EditorRefreshDecision =
+  | "close-resolved" // resolved outside: "resolved outside" [Close], tab closes
+  | "reopen" // changed on disk: remount as a user open → the recovery window decides
+  | "nothing";
+
+export function editorRefreshDecision(o: {
+  resolved: boolean;
+  changedOnDisk: boolean;
+}): EditorRefreshDecision {
+  if (o.resolved) return "close-resolved";
+  return o.changedOnDisk ? "reopen" : "nothing";
 }

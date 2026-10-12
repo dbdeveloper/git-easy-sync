@@ -26,6 +26,15 @@ describe("editorOpenDecision", () => {
     expect(editorOpenDecision({ resolved: true, userOpened: false, focused: true })).toBe("notify-resolved-outside");
   });
 
+  // Owner, 2026-10-12: at PLUGIN START even the focused restored tab closes
+  // without a window — but the user still lands in the Diff Panel (opened if
+  // it was closed). Outside start-up the focused tab gets the window.
+  it("🔑 resolved + restored + in focus + plugin STARTING → close silently, then the Diff Panel", () => {
+    expect(editorOpenDecision({ resolved: true, userOpened: false, focused: true, startingUp: true })).toBe(
+      "close-to-panel",
+    );
+  });
+
   it("resolved + restored + not in focus → close silently", () => {
     expect(editorOpenDecision({ resolved: true, userOpened: false, focused: false })).toBe("close-silently");
   });

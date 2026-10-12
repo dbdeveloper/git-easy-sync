@@ -40,6 +40,8 @@ export interface VanishedCopyDeps {
   isResolved?: (basePath: string, copyPath: string) => Promise<boolean>;
   // Shown before the FOCUSED tab closes ("resolved outside the editor").
   notifyResolved?: (basePath: string) => Promise<void>;
+  // After the FOCUSED tab closed: back to the Diff Panel (owner, 2026-10-12).
+  onFocusedClosed?: () => void;
   adapter: {
     exists(path: string): Promise<boolean>;
     rmdir(path: string, recursive: boolean): Promise<void>;
@@ -60,6 +62,7 @@ export async function closeEditorsOfVanishedCopies(
     if (!resolved) continue;
     if (tab.isActive && deps.notifyResolved) await deps.notifyResolved(tab.basePath);
     tab.detach();
+    if (tab.isActive) deps.onFocusedClosed?.();
     closedTabs++;
     for (const kind of ["tracked", "synthetic"] as const) {
       const dir = autosaveDir(deriveAutosaveId(kind, tab.basePath, tab.siblingPath));

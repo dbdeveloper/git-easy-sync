@@ -43,6 +43,7 @@ function setup(tabs: Tab[], files: string[], dirs: string[] = [], equalToBase: s
       notified.push(basePath);
       order.push(`notify:${basePath}`);
     },
+    onFocusedClosed: () => order.push("panel"),
     adapter: {
       exists: async (p: string) => existing.has(p),
       rmdir: async (p: string) => {
@@ -112,7 +113,8 @@ describe("closeEditorsOfVanishedCopies", () => {
     );
     await closeEditorsOfVanishedCopies(s.deps);
     expect(s.notified).toEqual([BASE]);
-    expect(s.order).toEqual([`notify:${BASE}`, "close:0", "close:1"]);
+    // …and the user lands in the Diff Panel again (owner).
+    expect(s.order).toEqual([`notify:${BASE}`, "close:0", "panel", "close:1"]);
   });
 
   it("History / Deleted / Compare tabs are never touched — they show no conflict copy", async () => {

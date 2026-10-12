@@ -692,6 +692,17 @@ export default class GitHubSyncPlugin extends Plugin {
       this.logger.info("Plugin onload: initSync2 done");
 
       this.app.workspace.onLayoutReady(() => {
+        // Start-up ends once the restored layout has had one pass of the
+        // editor-tab cleaner (owner, 2026-10-12): until then a focused editor
+        // whose conflict is resolved closes WITHOUT a window, and the user
+        // lands in the Diff Panel.
+        void (async () => {
+          try {
+            await this.closeVanishedCopyEditors();
+          } finally {
+            this.startingUp = false;
+          }
+        })();
         // §4.5.3 (B3) — replay a fresh saved layout (fast reload) so our windows return
         // in place; then start snapshotting the layout on every change so onunload has a
         // current pre-teardown snapshot. Restore FIRST (its changeLayout fires a
@@ -2105,6 +2116,10 @@ export default class GitHubSyncPlugin extends Plugin {
     void this.closeVanishedCopyEditors();
   }
 
+  // True from onload until the first editor-tab cleaner pass after the
+  // layout is ready — no windows about resolved conflicts in that window.
+  private startingUp = true;
+
   // Is this conflict copy resolved — gone, or byte-equal to its base? The
   // conflict model's per-copy rule (conflict-live.ts), for a copy known by
   // its path (an editor tab); the ledger record, if any, is its cache.
@@ -2148,8 +2163,13 @@ export default class GitHubSyncPlugin extends Plugin {
         // The conflict model's rule (owner, 2026-10-12): resolved when the
         // copy is gone OR byte-equal to its base.
         isResolved: (basePath, copyPath) => this.isCopyResolved(basePath, copyPath),
-        notifyResolved: (basePath) =>
-          new ConflictResolvedModal(this.app, basePath, "focus").prompt(),
+        // No window while the plugin starts (owner, 2026-10-12) — but the
+        // user still lands in the Diff Panel.
+        notifyResolved: async (basePath) => {
+          if (this.startingUp) return;
+          await new ConflictResolvedModal(this.app, basePath, "focus").prompt();
+        },
+        onFocusedClosed: () => void this.activateDiffEditView(),
       });
       if (r.closedTabs > 0) {
         this.logger.info("Editors of resolved conflicts closed (their copy is gone)", r);
@@ -4653,6 +4673,8 @@ export default class GitHubSyncPlugin extends Plugin {
       reconcileConflicts: () => this.reconcileConflictsV2(),
       isCopyResolved: (basePath: string, copyPath: string) => this.isCopyResolved(basePath, copyPath),
       computeSha: (bytes: ArrayBuffer) => this.workerClient.computeGitBlobSHA(bytes),
+      showDiffPanel: () => void this.activateDiffEditView(),
+      isStartingUp: () => this.startingUp,
       // DOT-FILES §4.3 — bound here because this is where configDir and
       // the per-device toggle live; the panel stays ignorant of both.
       scanDotSpaceConflicts: () =>
