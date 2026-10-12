@@ -17,11 +17,14 @@ interface PanelHandle {
   refreshAgain: boolean;
   cleanPending: boolean;
   refreshConflicts(opts?: { clean?: boolean }): Promise<void>;
+  onActivated(): void;
+  focusConflictList: () => void;
 }
 
 function makePanel() {
   const panel = Object.create(DiffPanelView.prototype) as PanelHandle;
   const scan = vi.fn(async (_clean: boolean) => []);
+  const invalidate = vi.fn();
   panel.deps = {
     vault: {
       getFiles: () => [],
@@ -32,14 +35,16 @@ function makePanel() {
       getBySiblingPath: () => null,
     },
     scanDotSpaceConflicts: scan,
+    conflictAnalyzer: { invalidate },
   };
+  panel.focusConflictList = vi.fn();
   panel.viewState = { tab: "conflicts" };
   panel.conflictEntries = [];
   panel.render = vi.fn();
   panel.refreshing = false;
   panel.refreshAgain = false;
   panel.cleanPending = false;
-  return { panel, scan };
+  return { panel, scan, invalidate };
 }
 
 describe("Diff Panel — when the slow pass cleans up synthetic copies", () => {
@@ -67,3 +72,22 @@ describe("Diff Panel — when the slow pass cleans up synthetic copies", () => {
     expect(scan.mock.calls).toEqual([[false], [true]]);
   });
 });
+
+// Owner, 2026-10-12: EVERY time the Diff Panel tab gets the focus it works as
+// Ctrl/Cmd+R — the files it shows are re-read: new conflicts of any kind
+// appear, resolved or vanished ones go (also in dot-folders, where Obsidian
+// sends no events), and the badge is recomputed too.
+describe("Diff Panel — every focus is a Ctrl/Cmd+R", () => {
+  it("🔑 focus → the full refresh with the cleanup", async () => {
+    const { panel, scan } = makePanel();
+    panel.onActivated();
+    await vi.waitFor(() => expect(scan.mock.calls).toEqual([[true]]));
+  });
+
+  it("🔑 a full refresh asks the conflict model to recompute (the badge follows)", async () => {
+    const { panel, invalidate } = makePanel();
+    await panel.refreshConflicts({ clean: true });
+    expect(invalidate).toHaveBeenCalled();
+  });
+});
+

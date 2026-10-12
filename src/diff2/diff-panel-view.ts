@@ -224,7 +224,7 @@ export class DiffPanelView extends ItemView {
     // No-ops on the Deleted tab (conflictListEl is null there). Same fix as the history view.
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
-        if (leaf === this.leaf) this.focusConflictList();
+        if (leaf === this.leaf) this.onActivated();
       }),
     );
     this.registerDomEvent(this.contentEl, "mousedown", () =>
@@ -262,8 +262,22 @@ export class DiffPanelView extends ItemView {
     return true;
   }
 
+  // Every time this tab gets the focus it works as Ctrl/Cmd+R (owner,
+  // 2026-10-12): the files it shows are re-read — new conflicts of any kind
+  // appear, resolved or vanished ones go, also in dot-folders where Obsidian
+  // sends no events. Back from a diff editor included.
+  onActivated(): void {
+    this.focusConflictList();
+    void this.refreshConflicts({ clean: true });
+  }
+
   async refreshConflicts(opts: { clean?: boolean } = {}): Promise<void> {
-    if (opts.clean) this.cleanPending = true;
+    if (opts.clean) {
+      this.cleanPending = true;
+      // A full refresh re-reads the disk; the badge and the status bar
+      // follow (a tracked copy edited in a dot-folder sends no event).
+      this.deps.conflictAnalyzer?.invalidate();
+    }
     if (this.refreshing) {
       this.refreshAgain = true;
       return;

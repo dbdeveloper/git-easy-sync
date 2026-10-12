@@ -23,7 +23,6 @@ interface Handle {
   closeVanishedCopyEditors(): Promise<void>;
   reconcileConflictsV2(): Promise<void>;
   handleDrainIdle(): void;
-  onEditorLeafActivated(leaf: unknown): void;
   closeCancelSyncModal(): void;
   settleDrainSection(text: string): void;
   sync2Manager: unknown;
@@ -126,19 +125,6 @@ describe("main.ts closes the editors of vanished conflict copies", () => {
     const { p, detach } = pluginWithEditorTab(true);
     await p.closeVanishedCopyEditors();
     expect(detach).not.toHaveBeenCalled();
-  });
-
-  // The check that carries dot-paths (owner): Obsidian sends no delete/rename
-  // events there, so the change becomes visible when the user turns to the tab.
-  it("🔑 runs when a diff-editor tab becomes active — and only for a diff-editor tab", () => {
-    const { p } = pluginWithEditorTab(false);
-    const spy = vi.fn(async () => {});
-    p.closeVanishedCopyEditors = spy;
-    p.onEditorLeafActivated({ view: { getViewType: () => "markdown" } });
-    p.onEditorLeafActivated(null);
-    expect(spy).not.toHaveBeenCalled();
-    p.onEditorLeafActivated({ view: { getViewType: () => DIFF2_EDITOR_VIEW_TYPE } });
-    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   // Owner, 2026-10-11: conflicts.json is the DRAIN's ledger — only the drain

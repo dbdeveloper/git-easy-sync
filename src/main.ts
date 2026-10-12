@@ -895,11 +895,11 @@ export default class GitHubSyncPlugin extends Plugin {
       this.registerEvent(
         this.app.vault.on("rename", () => void this.closeVanishedCopyEditors()),
       );
-      // Turning to a diff-editor tab checks its copy — the checkpoint that
-      // carries dot-paths, where the events above never fire.
-      this.registerEvent(
-        this.app.workspace.on("active-leaf-change", (leaf) => this.onEditorLeafActivated(leaf)),
-      );
+      // Turning to a diff-editor tab re-checks its files: the view does that
+      // itself on every focus, exactly as Ctrl/Cmd+R (owner, 2026-10-12) —
+      // the checkpoint that carries dot-paths, where the events above never
+      // fire. (It used to be a second hook here, which would now show the
+      // "resolved" window twice.)
       // 7a.4 — entry-point 2/3: the file-menu (right-click a file → "Open GitHub history").
       // Opens history for the CLICKED file (a TFile), not the active one.
       this.registerEvent(
@@ -2127,13 +2127,6 @@ export default class GitHubSyncPlugin extends Plugin {
     await this.closeVanishedCopyEditors();
   }
 
-  private onEditorLeafActivated(
-    leaf: { view?: { getViewType?(): string } } | null,
-  ): void {
-    if (leaf?.view?.getViewType?.() !== DIFF2_EDITOR_VIEW_TYPE) return;
-    void this.closeVanishedCopyEditors();
-  }
-
   // True from onload until the first editor-tab cleaner pass after the
   // layout is ready — no windows about resolved conflicts in that window.
   private startingUp = true;
@@ -2215,7 +2208,7 @@ export default class GitHubSyncPlugin extends Plugin {
         onFocusedClosed: () => void this.activateDiffEditView(),
       });
       if (r.closedTabs > 0) {
-        this.logger.info("Editors of resolved conflicts closed (their copy is gone)", r);
+        this.logger.info("Editors of resolved conflicts closed (the copy is gone or identical to its file)", r);
       }
     } catch (err) {
       this.logger.warn("closeVanishedCopyEditors failed", { err: `${err}` });

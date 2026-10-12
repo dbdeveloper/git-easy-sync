@@ -128,8 +128,8 @@ export async function syntheticCopiesFromDotSpace(
 // with their ledger records. Copies are never synced (*.conflict-from-*), so a
 // removal stays on this device.
 //
-// Run when the Diff Panel opens, on Ctrl/Cmd+R in the panel and once at
-// plugin start — alongside the drain, never waiting for it. Two properties
+// Run every time the Diff Panel tab gets the focus (opening it included), on
+// Ctrl/Cmd+R in the panel and once at plugin start — alongside the drain, never waiting for it. Two properties
 // make that safe for tracked conflicts (owner + advisor, 2026-10-12):
 //   (A) no content loss — at the moment of removal the bytes are proven to
 //       exist elsewhere: the verdict is RE-CHECKED against the disk right

@@ -139,7 +139,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
           if (this.app.workspace.activeLeaf !== this.leaf) return;
           e.preventDefault();
           e.stopImmediatePropagation();
-          void this.refreshFromDisk();
+          void this.onActivated(); // the same check as a focus, one at a time
           return;
         }
         if (!((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "f" || e.key === "F"))) return;
@@ -162,12 +162,29 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
         this.syncEscScope(leaf);
         // Re-focus the editor when this leaf becomes active again (Obsidian does
         // this for MarkdownView but not a custom ItemView).
-        if (leaf === this.leaf) this.controller.getView()?.focus();
+        if (leaf === this.leaf) {
+          this.controller.getView()?.focus();
+          void this.onActivated();
+        }
       }),
     );
     this.syncEscScope(this.app.workspace.activeLeaf ?? null);
 
     void this.tryMount();
+  }
+
+  // Every focus of this tab works as Ctrl/Cmd+R (owner, 2026-10-12). One
+  // check at a time: the windows it may show move the focus, and that is not
+  // a second check; nothing runs before the editor is mounted.
+  private activating = false;
+  async onActivated(): Promise<void> {
+    if (!this.mounted || this.activating) return;
+    this.activating = true;
+    try {
+      await this.refreshFromDisk();
+    } finally {
+      this.activating = false;
+    }
   }
 
   // Ctrl/Cmd+R (owner, 2026-10-12): look at the disk again. Resolved outside →
@@ -294,9 +311,10 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
           ).prompt();
         }
         this.leaf.detach();
-        if (decision === "notify-resolved-outside" || decision === "close-to-panel") {
-          this.deps.showDiffPanel?.();
-        }
+        // Back to the panel in every case with a window or at start-up — and
+        // the panel's focus re-reads its list, so the row of a conflict found
+        // resolved here goes too (owner, 2026-10-12).
+        if (decision !== "close-silently") this.deps.showDiffPanel?.();
         return;
       }
 

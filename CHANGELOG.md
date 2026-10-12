@@ -255,8 +255,9 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   cleaned up.** A copy that was not part of an open conflict (left over
   after a reset, a repo switch, or a folder move) stayed forever, even
   once it was identical to its note or to another copy. Such copies are
-  now removed when you open the Diff Panel, press Ctrl/Cmd+R in it, and
-  once each time the plugin starts — everywhere in the vault, including
+  now removed each time you switch to the Diff Panel (opening it
+  included), press Ctrl/Cmd+R in it, and once each time the plugin
+  starts — everywhere in the vault, including
   hidden folders and the root `.gitignore`. Each removal is written to
   the log. This runs alongside a sync without ever touching a copy that
   belongs to an open conflict.
