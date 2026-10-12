@@ -38,6 +38,7 @@ import {
 import { deriveAutosaveId } from "./autosave-store";
 import { readRootGitignore, walkDotDir } from "../sync2/dot-space";
 import { baseFacts, copyMatchesBase, type BaseFacts } from "../sync2/conflict-live";
+import { buildConflictModel } from "../sync2/conflict-model";
 import { calculateGitBlobSHA } from "../utils";
 
 export type ConflictEntryKind = "tracked" | "synthetic";
@@ -358,15 +359,55 @@ export async function findAllConflicts(
 // file + N conflicts → "…tracked conflicts…resolve them" (else the user is told "1 conflict"
 // but the panel shows several). With >1 files the copy is uniformly plural, so the exact
 // count is not consulted there.
+// The conflict model's filter for a listed set of copies (owner,
+// 2026-10-12): keep only LIVE copies — on disk, different from their base,
+// not a duplicate of a surviving copy (tracked beats synthetic, then the
+// newer). A copy the user resolved by hand disappears from the panel and the
+// gate at once; the drain removes the file on the next sync.
+export async function keepLiveEntries(
+  vault: Vault,
+  conflictStore: ConflictStoreV2,
+  entries: ConflictEntry[],
+  computeSha: (bytes: ArrayBuffer) => Promise<string> = calculateGitBlobSHA,
+): Promise<ConflictEntry[]> {
+  const synthetic = entries
+    .filter((e) => e.kind === "synthetic")
+    .map((e) => ({ path: e.siblingPath, basePath: e.basePath, timeLabel: timeLabelOf(e.isoTimestamp) }));
+  const model = await buildConflictModel(
+    { adapter: vault.adapter as never, computeSha },
+    conflictStore.getCachedState(),
+    synthetic,
+  );
+  return entries.filter((e) => {
+    const copy = model.entries.get(e.basePath)?.copies.find((c) => c.path === e.siblingPath);
+    return copy === undefined || copy.state === "live";
+  });
+}
+
+// "2026-10-11T20-25-53Z" (the name's form) → ms.
+function timeLabelOf(isoTimestamp: string): number {
+  const [date, time = ""] = isoTimestamp.split("T");
+  const ms = Date.parse(`${date}T${time.replace(/-/g, ":")}`);
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
 export async function pendingConflictSummary(
   vault: Vault,
   conflictStore: ConflictStoreV2,
+  computeSha: (bytes: ArrayBuffer) => Promise<string> = calculateGitBlobSHA,
 ): Promise<{ trackedPaths: string[]; trackedConflictCount: number } | null> {
   // Tracked-only, and tracked now comes straight from the store — so
   // this no longer walks the vault index at all. It also means the gate
   // sees a tracked conflict in dot-space, which the scan-derived
   // version could not (§4.3.1 п.2).
-  const tracked = await trackedEntries(vault, conflictStore);
+  // Only conflicts still in force (the conflict model): a copy resolved by
+  // hand is nothing to ask about — the commit already sends the user's side.
+  const tracked = await keepLiveEntries(
+    vault,
+    conflictStore,
+    await trackedEntries(vault, conflictStore),
+    computeSha,
+  );
   const perBase = new Map<string, number>();
   for (const e of tracked) {
     perBase.set(e.basePath, (perBase.get(e.basePath) ?? 0) + 1);

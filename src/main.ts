@@ -2721,6 +2721,7 @@ export default class GitHubSyncPlugin extends Plugin {
     const summary = await pendingConflictSummary(
       this.app.vault,
       this.conflictStoreV2,
+      (bytes) => this.workerClient.computeGitBlobSHA(bytes),
     );
     if (!summary) return true;
     if (origin === "auto") {
@@ -4651,6 +4652,7 @@ export default class GitHubSyncPlugin extends Plugin {
       conflictCounter: this.conflictCounter,
       reconcileConflicts: () => this.reconcileConflictsV2(),
       isCopyResolved: (basePath: string, copyPath: string) => this.isCopyResolved(basePath, copyPath),
+      computeSha: (bytes: ArrayBuffer) => this.workerClient.computeGitBlobSHA(bytes),
       // DOT-FILES §4.3 — bound here because this is where configDir and
       // the per-device toggle live; the panel stays ignorant of both.
       scanDotSpaceConflicts: () =>

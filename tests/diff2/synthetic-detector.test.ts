@@ -15,6 +15,7 @@ import {
   findAllConflicts,
   groupByBasePath,
   pendingConflictSummary,
+  keepLiveEntries,
   mergeDotSpaceFindings,
   findGitignoreDisputes,
   syntheticFromDotSpace,
@@ -247,6 +248,38 @@ describe("findAllConflicts", () => {
   // §24 — the gate/modal is TRACKED-only. A synthetic conflict (a *.conflict-from-*
   // sibling with NO conflicts.json entry — a local leftover) carries no cross-device
   // consequence, so pendingConflictSummary excludes it.
+  // The conflict model (owner, 2026-10-12): a tracked copy that still exists
+  // but is byte-equal to its base is RESOLVED — the manual pre-sync window
+  // must not ask about it (the commit already sends the user's version).
+  it("🔑 a tracked copy made equal to its base → summary is null (nothing to ask about)", async () => {
+    writeFile(fx.root, "done.md", "ours");
+    await track(fx, "done.md", "Phone", Date.UTC(2026, 4, 26, 10, 0, 0), "ours");
+    const summary = await pendingConflictSummary(
+      fx.vault as unknown as import("obsidian").Vault,
+      fx.store,
+    );
+    expect(summary).toBeNull();
+  });
+
+  it("🔑 keepLiveEntries: the panel keeps only LIVE copies — not equal-to-base, not duplicates", async () => {
+    writeFile(fx.root, "a.md", "ours");
+    const equal = await track(fx, "a.md", "Phone", Date.UTC(2026, 4, 26, 10, 0, 0), "ours");
+    const live = await track(fx, "a.md", "Laptop", Date.UTC(2026, 4, 26, 11, 0, 0), "theirs");
+    const dupSynthetic = siblingPathFor("a.md", "Stranger", Date.UTC(2026, 4, 26, 12, 0, 0));
+    writeFile(fx.root, dupSynthetic, "theirs");
+    const { entries } = await findAllConflicts(
+      fx.vault as unknown as import("obsidian").Vault,
+      fx.store,
+    );
+    expect(entries.map((e) => e.siblingPath).sort()).toEqual([dupSynthetic, equal, live].sort());
+    const kept = await keepLiveEntries(
+      fx.vault as unknown as import("obsidian").Vault,
+      fx.store,
+      entries,
+    );
+    expect(kept.map((e) => e.siblingPath)).toEqual([live]);
+  });
+
   it("§24 synthetic-only vault → summary is null (gate lets sync proceed, no modal)", async () => {
     writeFile(fx.root, "note.md", "ours");
     writeFile(
@@ -282,8 +315,10 @@ describe("findAllConflicts", () => {
 
   it("§24 one file with MULTIPLE tracked siblings → one path, trackedConflictCount counts all", async () => {
     writeFile(fx.root, "busy.md", "ours");
-    await track(fx, "busy.md", "Phone", Date.UTC(2026, 4, 26, 10, 0, 0));
-    await track(fx, "busy.md", "Laptop", Date.UTC(2026, 4, 26, 11, 0, 0));
+    // Different contents: two IDENTICAL copies are one live copy plus a
+    // duplicate in the conflict model (owner, 2026-10-12).
+    await track(fx, "busy.md", "Phone", Date.UTC(2026, 4, 26, 10, 0, 0), "theirs from the phone");
+    await track(fx, "busy.md", "Laptop", Date.UTC(2026, 4, 26, 11, 0, 0), "theirs from the laptop");
 
     const summary = await pendingConflictSummary(
       fx.vault as unknown as import("obsidian").Vault,

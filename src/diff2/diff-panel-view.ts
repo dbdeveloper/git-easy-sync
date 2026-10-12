@@ -35,6 +35,7 @@ import type Logger from "../logger";
 import {
   assembleResult,
   findAllConflicts,
+  keepLiveEntries,
   mergeDotSpaceFindings,
   type ConflictEntry,
 } from "./synthetic-detector";
@@ -58,6 +59,8 @@ export interface DiffEditViewDeps {
   // The conflict model's per-copy verdict (owner, 2026-10-12): the copy is
   // gone or byte-equal to its base. Used before a diff editor mounts.
   isCopyResolved?: (basePath: string, copyPath: string) => Promise<boolean>;
+  // The hash the conflict model uses (production: the worker's).
+  computeSha?: (bytes: ArrayBuffer) => Promise<string>;
   // DOT-FILES §4.3 — the SLOW half of the conflicts list: siblings that
   // live in permitted dot-space, which Obsidian's index cannot see.
   // Injected as a thunk so the panel never has to know about configDir
@@ -268,7 +271,15 @@ export class DiffPanelView extends ItemView {
           this.deps.vault,
           this.deps.conflictStore,
         );
-        this.conflictEntries = entries;
+        // Only LIVE copies (the conflict model, owner 2026-10-12): one the
+        // user made equal to its base, or a duplicate, leaves the list at
+        // once; the drain removes the file on the next sync.
+        this.conflictEntries = await keepLiveEntries(
+          this.deps.vault,
+          this.deps.conflictStore,
+          entries,
+          this.deps.computeSha,
+        );
         this.render();
 
         // Then the expensive half. The user sees the fast list first and
@@ -282,7 +293,12 @@ export class DiffPanelView extends ItemView {
             fromDotSpace,
           );
           if (merged.added > 0) {
-            this.conflictEntries = merged.entries;
+            this.conflictEntries = await keepLiveEntries(
+              this.deps.vault,
+              this.deps.conflictStore,
+              merged.entries,
+              this.deps.computeSha,
+            );
             this.render();
           }
         }
