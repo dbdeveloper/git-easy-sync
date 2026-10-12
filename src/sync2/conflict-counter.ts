@@ -193,9 +193,9 @@ export class ConflictCounter {
   }
 
   private async computeCount(): Promise<number> {
-    // TODO #7 — when wired (main.ts), count EXACTLY what the diff-panel lists
-    // (tracked + synthetic siblings, via findAllConflicts) so the badge / status
-    // bar / menu can't undercount. The store-only walk below is the default.
+    // TODO #7 — an optional hook to count EXACTLY what the diff-panel lists
+    // (tracked + synthetic). ⚠️ NOT wired in main.ts: the badge / status bar /
+    // menu count TRACKED files only — the store walk below is what runs.
     if (this.countConflicts) return this.countConflicts();
     // FILES IN CONFLICT, not conflict copies (owner, 2026-10-09): the badge
     // says how many files are kept from the server until resolved. A file
