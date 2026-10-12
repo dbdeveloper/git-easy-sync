@@ -40,7 +40,7 @@
 import { normalizePath, TFile, type Vault } from "obsidian";
 import { atomicWriteFile, MODIFY_IN_PLACE_MAX_BYTES, stagingPathFor, withViewPreserve } from "../sync2/atomic-write";
 import { restoreEol } from "./eol";
-import { safeRename } from "../sync2/cross-platform";
+import { removeIfPresent, safeRename } from "../sync2/cross-platform";
 import { buildSiblingFilePath } from "../sync2/conflict-siblings";
 import { calculateGitBlobSHA } from "../utils";
 import { autosaveDir, readMeta, type AutosaveMeta } from "./autosave-store";
@@ -316,10 +316,11 @@ export async function commit7Step(
   let siblingRemoved = false;
   if (
     targetSibling === meta.siblingPath &&
-    expectedBaseSha === expectedSiblingSha &&
-    (await vault.adapter.exists(meta.siblingPath))
+    expectedBaseSha === expectedSiblingSha
   ) {
-    await vault.adapter.remove(meta.siblingPath);
+    // The synthetic-copy cleanup (or the drain) may get to this copy first —
+    // it equals its file now (2026-10-12). Gone either way.
+    await removeIfPresent(vault.adapter, meta.siblingPath);
     siblingRemoved = true;
   }
 
@@ -717,10 +718,9 @@ export async function recoverCommit(
     // Step 6.5 — proactive sibling cleanup if both sides committed identical.
     let siblingRemoved = false;
     if (
-      done.expectedBaseSha === done.expectedSiblingSha &&
-      (await vault.adapter.exists(meta.siblingPath))
+      done.expectedBaseSha === done.expectedSiblingSha
     ) {
-      await vault.adapter.remove(meta.siblingPath);
+      await removeIfPresent(vault.adapter, meta.siblingPath); // see step 6.5 above
       siblingRemoved = true;
     }
     await vault.adapter.rmdir(autosaveDir(autosaveId), true); // step 7

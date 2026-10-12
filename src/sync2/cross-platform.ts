@@ -180,3 +180,20 @@ export async function safeRename(
   }
   await adapter.rename(src, dst);
 }
+
+// Remove a file that someone else may be removing at the same moment.
+// Three places remove conflict copies independently — the drain, [←] in the
+// diff editor and the synthetic-copy cleanup (owner, 2026-10-12) — so a file
+// checked a moment ago can be gone by now. That is the goal reached, not a
+// failure: true = removed here, false = already gone. A removal that fails
+// while the file is still there is a real failure and throws.
+// (Obsidian's adapter.remove throws on a missing file.)
+export async function removeIfPresent(adapter: DataAdapter, p: string): Promise<boolean> {
+  try {
+    await adapter.remove(p);
+    return true;
+  } catch (err) {
+    if (await adapter.exists(p)) throw err;
+    return false;
+  }
+}

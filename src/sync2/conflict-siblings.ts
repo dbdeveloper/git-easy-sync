@@ -250,7 +250,15 @@ export async function readSiblingFileFromVault(
     // (STEP3) decides what to do.
     return null;
   }
-  return vault.adapter.readBinary(siblingPath);
+  try {
+    return await vault.adapter.readBinary(siblingPath);
+  } catch (err) {
+    // Removed between the check and the read — [←] or the cleanup got there
+    // first (2026-10-12). Same answer as "not there"; a real read failure of
+    // a file that IS there still throws.
+    if (await vault.adapter.exists(siblingPath)) throw err;
+    return null;
+  }
 }
 
 export interface SiblingScanResult {

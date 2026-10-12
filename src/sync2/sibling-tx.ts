@@ -32,6 +32,7 @@
 
 import { normalizePath, type Vault } from "obsidian";
 import { atomicWriteFile } from "./atomic-write";
+import { removeIfPresent } from "./cross-platform";
 import {
   buildSiblingFilePath,
   saveConflictSiblingFile,
@@ -97,7 +98,12 @@ export default class SiblingTx {
     const stat = await this.vault.adapter.stat(siblingPath);
     if (!stat) return false;
     if (f.size !== null && stat.size !== f.size) return false;
-    const bytes = await this.vault.adapter.readBinary(siblingPath);
+    let bytes: ArrayBuffer;
+    try {
+      bytes = await this.vault.adapter.readBinary(siblingPath);
+    } catch {
+      return false; // removed between the stat and the read — not intact
+    }
     return (await this.computeSha(bytes)) === f.sha;
   }
 
@@ -153,16 +159,9 @@ export default class SiblingTx {
     const p = normalizePath(
       buildSiblingFilePath(f.path ?? "", f.timeLabel ?? 0, f.deviceLabel),
     );
-    if (await this.vault.adapter.exists(p)) {
-      try {
-        await this.vault.adapter.remove(p);
-      } catch (err) {
-        // Removed meanwhile by the synthetic-copy cleanup, which runs
-        // alongside the drain (2026-10-12): after step 3 the old copy is no
-        // longer tracked. The goal is reached; anything else still fails.
-        if (await this.vault.adapter.exists(p)) throw err;
-      }
-    }
+    // After step 3 the old copy is no longer tracked: the synthetic-copy
+    // cleanup (or [←]) may have removed it meanwhile (2026-10-12).
+    await removeIfPresent(this.vault.adapter, p);
   }
 
   // The replace branch of STEP3, steps 1-5 (§II.11). `newSibling`

@@ -29,6 +29,7 @@ import { buildConflictModel, type SyntheticCopy } from "./conflict-model";
 import { calculateGitBlobSHA } from "../utils";
 import { baseFacts, copyAtPathMatchesBase } from "./conflict-live";
 import { SYNC_BAK_SUFFIX, SYNC_TMP_SUFFIX } from "./atomic-write";
+import { removeIfPresent } from "./cross-platform";
 
 export interface DotSpaceScope {
   configDir: string;
@@ -190,12 +191,8 @@ export async function cleanSyntheticConflicts(
       // (B) the tracked check and the removal in one step.
       let gone = false;
       const done = await deps.store.removeIfUntracked(c.path, async () => {
-        try {
-          await deps.vault.adapter.remove(c.path);
-          gone = true;
-        } catch {
-          // Removed by someone else meanwhile ([←]) — nothing to do.
-        }
+        // false = someone else ([←], the drain) removed it meanwhile.
+        gone = await removeIfPresent(deps.vault.adapter, c.path);
       });
       if (!done || !gone) continue;
       if (c.state === "equals-base") {
