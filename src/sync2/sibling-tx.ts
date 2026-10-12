@@ -193,7 +193,7 @@ export default class SiblingTx {
       timeLabel: newSibling.timeLabel ?? 0,
       deviceLabel: newSibling.deviceLabel,
       blob: newSibling.blob,
-    });
+    }, this.store);
     // 3 — the DURABLE commit: replaceLast + guid, saved NOW.
     conflicts.entries.set(path, {
       conflictBase: current.conflictBase,

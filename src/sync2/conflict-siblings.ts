@@ -208,9 +208,15 @@ export function parseSiblingFilename(siblingPath: string): ParsedSibling | null 
 // return value on purpose (§III): the raw FileInfo (with .path == P)
 // goes into the `siblings` list unchanged; the disk name stays
 // derived, never stored.
+//
+// `ledger` is told BEFORE the file appears (owner + advisor, 2026-10-12): the
+// synthetic-copy cleanup may run alongside the drain, and a copy the ledger
+// does not know yet looks synthetic to it. Required, so no write site can
+// forget it.
 export async function saveConflictSiblingFile(
   vault: Vault,
   fileInfo: SiblingFileInfo,
+  ledger: { announceCopy(copyPath: string): Promise<void> },
 ): Promise<void> {
   if (fileInfo.blob == null) {
     throw new Error(
@@ -222,6 +228,7 @@ export async function saveConflictSiblingFile(
     fileInfo.timeLabel,
     fileInfo.deviceLabel,
   );
+  await ledger.announceCopy(normalizePath(siblingPath));
   // AtomicWrite — the same crash protocol as every vault write
   // (§II.11 relies on it for the STEP3 replace transaction).
   await atomicWriteFile(vault, normalizePath(siblingPath), fileInfo.blob);

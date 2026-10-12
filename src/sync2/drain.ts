@@ -2378,7 +2378,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           timeLabel: tracked.remote.mtime ?? 0, // remote commit date (§VII.5)
           deviceLabel: tracked.remote.deviceLabel,
           blob: tracked.remote.blob,
-        });
+        }, deps.conflictStore);
         conflicts!.entries.set(path, {
           conflictBase: current.conflictBase,
           siblings: [siblingInfoFrom(tracked.remote)],
@@ -2619,7 +2619,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           timeLabel: tracked.remote.mtime ?? 0,
           deviceLabel: tracked.remote.deviceLabel,
           blob: tracked.remote.blob,
-        });
+        }, deps.conflictStore);
         deps.logger?.warn("Conflict: the newer server version clashes with the edits in the conflict copy — a second conflict copy is added", {
           path,
           server: tracked.remote.sha?.slice(0, 7),
@@ -2782,7 +2782,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         timeLabel: tracked.remote.mtime ?? 0,
         deviceLabel: tracked.remote.deviceLabel,
         blob: tracked.remote.blob,
-      });
+      }, deps.conflictStore);
       conflicts!.entries.set(path, {
         conflictBase: siblingInfoFrom(tracked.remote),
         siblings: [siblingInfoFrom(tracked.remote)],

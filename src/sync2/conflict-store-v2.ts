@@ -40,7 +40,7 @@ import {
   fileInfoToJson,
 } from "./drain-journal";
 import type { FileInfo } from "./diff3";
-import { buildSiblingFilePath } from "./conflict-siblings";
+import { buildSiblingFilePath, parseSiblingFilename } from "./conflict-siblings";
 
 export const CONFLICTS_FILE = "conflicts.json";
 
@@ -87,17 +87,75 @@ export default class ConflictStoreV2 {
     this.logger = deps.logger;
   }
 
+  // Copies the drain has ANNOUNCED — about to write, or written and not yet
+  // saved (owner + advisor, 2026-10-12). The synthetic-copy cleanup runs
+  // alongside the drain; conflicts.json is saved only at the drain's end, so
+  // without this a fresh tracked copy looked synthetic for the rest of the
+  // drain. Memory only: an announcement ends once its copy is recorded and
+  // saved; one whose write failed lingers until the plugin restarts, which
+  // only means the cleanup leaves that name alone.
+  private announced = new Set<string>();
+  // Removals of untracked copies in flight, by name: a drain announcing the
+  // same name waits for the removal before it writes (see removeIfUntracked).
+  private removals = new Map<string, Promise<void>>();
+
   private rebuildCache(state: ConflictsState): void {
     this.cachedState = state;
     this.siblingPathIndex = new Map();
     for (const [basePath, entry] of state.entries) {
       for (const sibling of entry.siblings) {
         this.siblingPathIndex.set(
-          buildSiblingFilePath(basePath, sibling.timeLabel ?? 0, sibling.deviceLabel),
+          copyKey(buildSiblingFilePath(basePath, sibling.timeLabel ?? 0, sibling.deviceLabel)),
           { basePath, sibling },
         );
       }
     }
+    for (const k of [...this.announced]) {
+      if (this.siblingPathIndex.has(k)) this.announced.delete(k);
+    }
+  }
+
+  // THE question every deletion of a "synthetic" copy asks: does the ledger
+  // track this name? Saved records, the drain's records in memory (the drain
+  // mutates the cached state in place) and announced copies all count.
+  isTrackedCopy(copyPath: string): boolean {
+    const k = copyKey(copyPath);
+    if (this.siblingPathIndex.has(k) || this.announced.has(k)) return true;
+    const parsed = parseSiblingFilename(k);
+    if (parsed === null) return false;
+    const entry = this.cachedState.entries.get(parsed.basePath);
+    return (
+      entry?.siblings.some(
+        (s) => copyKey(buildSiblingFilePath(parsed.basePath, s.timeLabel ?? 0, s.deviceLabel)) === k,
+      ) ?? false
+    );
+  }
+
+  // The drain, BEFORE it writes a copy file: from here on the name is tracked.
+  // If an untracked copy at that very name is being removed right now, wait
+  // for the removal — otherwise it could land after the drain's write and
+  // delete the new tracked copy.
+  async announceCopy(copyPath: string): Promise<void> {
+    const k = copyKey(copyPath);
+    this.announced.add(k);
+    const removal = this.removals.get(k);
+    if (removal !== undefined) await removal.catch(() => undefined);
+  }
+
+  // The cleanup's removal of an untracked copy: the tracked check and the
+  // claim on the name are ONE synchronous step, so a drain either announced
+  // first (nothing removed) or waits for this removal before writing.
+  async removeIfUntracked(copyPath: string, remove: () => Promise<void>): Promise<boolean> {
+    if (this.isTrackedCopy(copyPath)) return false;
+    const k = copyKey(copyPath);
+    const removal = remove();
+    this.removals.set(k, removal);
+    try {
+      await removal;
+    } finally {
+      if (this.removals.get(k) === removal) this.removals.delete(k);
+    }
+    return true;
   }
 
   // The last loaded/saved state. UI readers (counter default formula,
@@ -115,7 +173,7 @@ export default class ConflictStoreV2 {
 
   // O(1): is this vault path a TRACKED sibling's derived disk name?
   hasSiblingPath(path: string): boolean {
-    return this.siblingPathIndex.has(path);
+    return this.siblingPathIndex.has(copyKey(path));
   }
 
   // Tracked-sibling lookup by disk name — the synthetic-detector's
@@ -123,7 +181,7 @@ export default class ConflictStoreV2 {
   getBySiblingPath(
     siblingPath: string,
   ): { basePath: string; sibling: FileInfo } | null {
-    return this.siblingPathIndex.get(siblingPath) ?? null;
+    return this.siblingPathIndex.get(copyKey(siblingPath)) ?? null;
   }
 
   private filePath(): string {
@@ -273,4 +331,12 @@ export default class ConflictStoreV2 {
       }
     }
   }
+}
+
+// A copy's name as a lookup key: Obsidian's normalizePath (which also makes
+// it NFC — checked in obsidian.asar, 2026-10-12), so a label typed in another
+// Unicode form still names the same copy. NFC applied here too, because the
+// test double's normalizePath does not.
+function copyKey(p: string): string {
+  return normalizePath(p).normalize("NFC");
 }

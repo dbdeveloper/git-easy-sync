@@ -2,7 +2,7 @@
 // Vladyslav Kozlovskyy <dbdevelop@gmail.com>, 2026.
 // AGPL-3.0 — see LICENSE.
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -164,5 +164,84 @@ describe("cleanSyntheticConflicts", () => {
     const summary = logs.find((l) => l.message === "Looked for leftover conflict copies");
     expect(summary?.data).toMatchObject({ found: 2, removed: 1 });
     expect(typeof (summary?.data as { ms: number }).ms).toBe("number");
+  });
+});
+
+// ── The ledger's "is this copy tracked?" — the one predicate every deletion
+// of a synthetic copy asks (advisor review, 2026-10-12). It must see a copy
+// the drain is about to write (announced), one recorded in memory but not yet
+// saved, and a name written in another Unicode form (Obsidian's normalizePath
+// is NFC); and the check and the removal must be one step, or a drain can
+// write a tracked copy at that name between them.
+describe("ConflictStoreV2 — the tracked-copy predicate and the removal handshake", () => {
+  let root: string;
+  let store: ConflictStoreV2;
+  beforeEach(async () => {
+    root = path.join(os.tmpdir(), `tracked-pred-${crypto.randomBytes(4).toString("hex")}`);
+    fs.mkdirSync(path.join(root, CONFIG_DIR), { recursive: true });
+    const vault = new Vault(root);
+    store = new ConflictStoreV2({ vault: vault as unknown as import("obsidian").Vault, selfPluginId: "git-easy-sync" });
+    await store.load();
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+  const name = (label = "Phone") => buildSiblingFilePath("a.md", T1, label);
+
+  it("an ANNOUNCED copy (file not written yet) is tracked", async () => {
+    expect(store.isTrackedCopy(name())).toBe(false);
+    await store.announceCopy(name());
+    expect(store.isTrackedCopy(name())).toBe(true);
+  });
+
+  it("a copy recorded in the ledger in memory but not saved yet is tracked", () => {
+    store.getCachedState().entries.set("a.md", {
+      conflictBase: { ...emptyFileInfo(), path: "a.md" },
+      siblings: [{ ...emptyFileInfo(), path: "a.md", timeLabel: T1, deviceLabel: "Phone" }],
+    });
+    expect(store.isTrackedCopy(name())).toBe(true);
+  });
+
+  it("🔑 a Cyrillic label in another Unicode form is still the same copy", async () => {
+    const nfd = "Телефон й".normalize("NFD");
+    const s = emptyConflictsState();
+    s.entries.set("a.md", {
+      conflictBase: { ...emptyFileInfo(), path: "a.md" },
+      siblings: [{ ...emptyFileInfo(), path: "a.md", timeLabel: T1, deviceLabel: nfd }],
+    });
+    await store.save(s);
+    expect(store.isTrackedCopy(name(nfd).normalize("NFC"))).toBe(true);
+  });
+
+  it("an announcement outlives an unrelated save, and ends once its copy is recorded and saved", async () => {
+    await store.announceCopy(name());
+    await store.save(emptyConflictsState());
+    expect(store.isTrackedCopy(name())).toBe(true);
+    const s = emptyConflictsState();
+    s.entries.set("a.md", {
+      conflictBase: { ...emptyFileInfo(), path: "a.md" },
+      siblings: [{ ...emptyFileInfo(), path: "a.md", timeLabel: T1, deviceLabel: "Phone" }],
+    });
+    await store.save(s);
+    await store.save(emptyConflictsState()); // the record pruned later
+    expect(store.isTrackedCopy(name())).toBe(false);
+  });
+
+  it("removeIfUntracked never removes a tracked copy", async () => {
+    await store.announceCopy(name());
+    const remove = vi.fn(async () => {});
+    expect(await store.removeIfUntracked(name(), remove)).toBe(false);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("🔑 a drain announcing a name whose removal is in flight WAITS for it before writing", async () => {
+    let finish!: () => void;
+    const removal = store.removeIfUntracked(name(), () => new Promise<void>((r) => (finish = r)));
+    let announced = false;
+    const announce = store.announceCopy(name()).then(() => (announced = true));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(announced).toBe(false); // the drain would write now — it must not
+    finish();
+    await removal;
+    await announce;
+    expect(announced).toBe(true);
   });
 });

@@ -1063,6 +1063,95 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     expect(vaultHas(remoteSiblingName(rec.siblings[0].timeLabel!))).toBe(true);
   });
 
+  // 🔑 A new copy is ANNOUNCED to the ledger in memory BEFORE its file
+  // appears (owner, 2026-10-12). The synthetic-copy cleanup runs alongside
+  // the drain (panel open, plugin start) and asks the ledger "is this copy
+  // tracked?" right before it deletes. conflicts.json is saved only at the
+  // drain's end, and the derived-name index used to be rebuilt only there —
+  // so for the whole rest of the drain a freshly written tracked copy looked
+  // synthetic and could be removed. Checked at the moment every copy file
+  // comes into existence, at all four write sites.
+  describe("🔑 a copy file never appears before the ledger knows it", () => {
+    const COPY = /\.conflict-from-.+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(\.[^./]+)?$/;
+    let unannounced: string[];
+    let appeared: string[];
+    const watchCopyFiles = () => {
+      unannounced = [];
+      appeared = [];
+      // mock-obsidian's `adapter` is a getter that builds a fresh object per
+      // read, so the watch pins ONE wrapped object on this vault instance.
+      const a = vault.adapter as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+      Object.defineProperty(vault, "adapter", { get: () => a, configurable: true });
+      for (const m of ["rename", "writeBinary", "write"]) {
+        const orig = a[m].bind(a);
+        a[m] = async (...args: unknown[]) => {
+          const r = await orig(...args);
+          const target = String(m === "rename" ? args[1] : args[0]);
+          if (!COPY.test(target)) return r;
+          appeared.push(target);
+          if (!conflictStore.isTrackedCopy(target)) unannounced.push(target);
+          return r;
+        };
+      }
+    };
+
+    it("birth on the first sibling (STEP1 → Vault-step)", async () => {
+      await setupAligned();
+      await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+      await stageBatch({ [NOTE]: LOCAL_CLASH });
+      vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+      watchCopyFiles();
+      expect((await drainOnce(makeDeps())).status).toBe("ok");
+      expect((await conflictStore.load()).entries.get(NOTE)!.siblings).toHaveLength(1);
+      expect(appeared.length).toBeGreaterThan(0); // the watch saw the write
+      expect(unannounced).toEqual([]);
+    });
+
+    it("birth on the Vault-step", async () => {
+      await setupAligned();
+      await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+      vaultFiles.files.set(NOTE, { content: "USER\ntwo\nthree\n", mtime: 200 });
+      watchCopyFiles();
+      expect((await drainOnce(makeDeps())).status).toBe("ok");
+      expect((await conflictStore.load()).entries.get(NOTE)!.siblings).toHaveLength(1);
+      expect(appeared.length).toBeGreaterThan(0); // the watch saw the write
+      expect(unannounced).toEqual([]);
+    });
+
+    it("fold (the replace transaction)", async () => {
+      await setupAligned();
+      await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+      await stageBatch({ [NOTE]: LOCAL_CLASH });
+      vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+      await drainOnce(makeDeps());
+      world.committedAt += 5000;
+      await world.commitFiles({ [NOTE]: "REMOTE\ntwo\nTHREE-v2\n" });
+      baseCommit = world.commits[world.commits.length - 2];
+      watchCopyFiles();
+      expect((await drainOnce(makeDeps())).status).toBe("ok");
+      expect(appeared.length).toBeGreaterThan(0); // the watch saw the write
+      expect(unannounced).toEqual([]);
+    });
+
+    it("append (a second copy)", async () => {
+      await setupAligned();
+      await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+      await stageBatch({ [NOTE]: LOCAL_CLASH });
+      vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+      await drainOnce(makeDeps());
+      const sib1 = (await conflictStore.load()).entries.get(NOTE)!.siblings[0];
+      fs.writeFileSync(path.join(dir, remoteSiblingName(sib1.timeLabel!)), "MINE\ntwo\nthree\n");
+      world.committedAt += 5000;
+      await world.commitFiles({ [NOTE]: "REMOTE-OTHER\ntwo\nthree\n" });
+      baseCommit = world.commits[world.commits.length - 2];
+      watchCopyFiles();
+      expect((await drainOnce(makeDeps())).status).toBe("ok");
+      expect((await conflictStore.load()).entries.get(NOTE)!.siblings).toHaveLength(2);
+      expect(appeared.length).toBeGreaterThan(0); // the watch saw the write
+      expect(unannounced).toEqual([]);
+    });
+  });
+
   it("C.11: an idle lingering conflict (no fresh pull, no batch) passes through the drain with ZERO side effects", async () => {
     await setupAligned();
     await world.commitFiles({ [NOTE]: REMOTE_CLASH });

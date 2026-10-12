@@ -30,6 +30,8 @@ const enc = (s: string): ArrayBuffer =>
   new TextEncoder().encode(s).buffer as ArrayBuffer;
 const dec = (b: ArrayBuffer): string => new TextDecoder().decode(b);
 
+const NO_LEDGER = { announceCopy: async () => {} };
+
 describe("buildSiblingFilePath (pure)", () => {
   it("produces the canonical shape", () => {
     expect(buildSiblingFilePath("Notes/idea.md", TS, "Phone")).toBe(
@@ -108,7 +110,7 @@ describe("sibling IO helpers", () => {
       deviceLabel: "Phone",
       blob: enc("theirs content\n"),
     };
-    await saveConflictSiblingFile(vault as never, info);
+    await saveConflictSiblingFile(vault as never, info, NO_LEDGER);
     expect(
       fs.existsSync(
         path.join(
@@ -146,8 +148,8 @@ describe("sibling IO helpers", () => {
       deviceLabel: "Laptop",
       blob: enc("B"),
     };
-    await saveConflictSiblingFile(vault as never, a);
-    await saveConflictSiblingFile(vault as never, b);
+    await saveConflictSiblingFile(vault as never, a, NO_LEDGER);
+    await saveConflictSiblingFile(vault as never, b, NO_LEDGER);
     expect(dec((await readSiblingFileFromVault(vault as never, a))!)).toBe("A");
     expect(dec((await readSiblingFileFromVault(vault as never, b))!)).toBe("B");
   });
@@ -167,7 +169,7 @@ describe("sibling IO helpers", () => {
         timeLabel: TS + 1000,
         deviceLabel: "Tablet",
       };
-      await saveConflictSiblingFile(vault as never, tracked);
+      await saveConflictSiblingFile(vault as never, tracked, NO_LEDGER);
       // A synthetic: right shape, but not in the tracked list.
       const synthName =
         "Notes/idea.conflict-from-Stranger-2026-05-09T10-00-00Z.md";
