@@ -51,3 +51,79 @@ describe("diff-editor — every focus is a Ctrl/Cmd+R", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 });
+
+// Owner, 2026-10-12 (field): [←] on a conflict resolved outside closed the
+// editor, and the NEXT tab (a markdown note) became active — not the Diff
+// Panel. Every way a conflict editor leaves goes to the panel (opening it if
+// it is closed): resolved outside on [←], the copy gone at mount, Cancel in
+// the recovery window. A History editor and two separate files just close.
+describe("diff-editor — leaving a conflict editor lands in the Diff Panel", () => {
+  interface Leave {
+    leaf: { detach: () => void };
+    state: unknown;
+    deps: unknown;
+    onLeaveDetail(): void;
+  }
+  const COPY = "notes/a.conflict-from-Phone-2026-06-05T09-19-10Z.md";
+  const setup = (origin: string, siblingPath: string) => {
+    const ed = Object.create(DiffEditorView.prototype) as Leave;
+    const detach = vi.fn();
+    const showDiffPanel = vi.fn();
+    ed.leaf = { detach };
+    ed.state = { origin, basePath: "notes/a.md", siblingPath, openMode: "user" };
+    ed.deps = { showDiffPanel };
+    return { ed, detach, showDiffPanel };
+  };
+
+  it("🔑 a conflict editor closes AND the Diff Panel becomes the active tab", () => {
+    const { ed, detach, showDiffPanel } = setup("conflict", COPY);
+    ed.onLeaveDetail();
+    expect(detach).toHaveBeenCalled();
+    expect(showDiffPanel).toHaveBeenCalled();
+  });
+
+  it("two separate files just close", () => {
+    const { ed, showDiffPanel } = setup("conflict", "notes/b.md");
+    ed.onLeaveDetail();
+    expect(showDiffPanel).not.toHaveBeenCalled();
+  });
+
+  it("a History editor just closes", () => {
+    const { ed, showDiffPanel } = setup("history", "notes/a.md");
+    ed.onLeaveDetail();
+    expect(showDiffPanel).not.toHaveBeenCalled();
+  });
+});
+
+// [←] after a save: a conflict goes to the Diff Panel (unchanged); two
+// separate files just close (owner, 2026-10-12 — the panel is about conflicts).
+describe("diff-editor — [←] after a save", () => {
+  interface Exit {
+    leaf: { detach: () => void };
+    state: unknown;
+    deps: unknown;
+    onCommitExit(entry: unknown): void;
+  }
+  const setup = (siblingPath: string) => {
+    const ed = Object.create(DiffEditorView.prototype) as Exit;
+    const detach = vi.fn();
+    const onEditorCommitted = vi.fn();
+    ed.leaf = { detach };
+    ed.state = { origin: "conflict", basePath: "notes/a.md", siblingPath, openMode: "user" };
+    ed.deps = { onEditorCommitted };
+    return { ed, detach, onEditorCommitted, entry: { basePath: "notes/a.md", siblingPath } };
+  };
+
+  it("a conflict → the Diff Panel", () => {
+    const { ed, onEditorCommitted, entry } = setup("notes/a.conflict-from-Phone-2026-06-05T09-19-10Z.md");
+    ed.onCommitExit(entry);
+    expect(onEditorCommitted).toHaveBeenCalledWith("conflict", "notes/a.md");
+  });
+
+  it("🔑 two separate files → the tab just closes", () => {
+    const { ed, detach, onEditorCommitted, entry } = setup("notes/b.md");
+    ed.onCommitExit(entry);
+    expect(detach).toHaveBeenCalled();
+    expect(onEditorCommitted).not.toHaveBeenCalled();
+  });
+});

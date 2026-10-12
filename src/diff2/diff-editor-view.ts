@@ -534,8 +534,19 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   // editor is pure detail (R-D); there is no list to fall back to. detach() →
   // onClose → controller.dispose() runs the §4.1 abandon-wipe if the session was
   // a fresh net-0 (the controller already nulls activeSession on a real commit).
+  // Leaving without a commit (resolved outside on [←], the copy gone at mount,
+  // Cancel in the recovery window). A CONFLICT editor always lands in the Diff
+  // Panel, opening it if it is closed (owner, 2026-10-12 — otherwise Obsidian
+  // activates whatever tab is next). History and two separate files just close.
   onLeaveDetail(): void {
+    const s = this.state;
+    const toPanel =
+      s?.origin === "conflict" &&
+      typeof s.basePath === "string" &&
+      typeof s.siblingPath === "string" &&
+      isConflictPair(s.basePath, s.siblingPath);
     this.leaf.detach();
+    if (toPanel) this.deps.showDiffPanel?.();
   }
 
   // `[←]` committed → close the tab + navigate back (R-D, S5). Capture the origin
@@ -555,6 +566,9 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       void Promise.resolve(
         this.deps.onEditorCommitted?.(origin, entry.basePath),
       ).finally(() => src.detach());
+    } else if (!isConflictPair(entry.basePath, entry.siblingPath)) {
+      // Two separate files: the Diff Panel is about conflicts — just close.
+      src.detach();
     } else {
       // Conflict: unchanged — the panel is a singleton with its own spot.
       src.detach();
