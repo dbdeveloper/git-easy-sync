@@ -125,6 +125,31 @@ describe("process_conflicts (§VIII I)", () => {
     expect(siblingExists("note.md", 9000, "stranger")).toBe(false);
   });
 
+  it("🔑 a synthetic copy the cleanup removed first (after exists, before remove) is not a drain failure", async () => {
+    // The synthetic-copy cleanup runs alongside the drain (owner,
+    // 2026-10-12); both may remove the same leftover.
+    putFile("note.md", "base\n");
+    const state = emptyConflictsState();
+    entry(state, "note.md", [await tracked("note.md", "dup content\n", 2000)]);
+    const twin = buildSiblingFilePath("note.md", 9000, "stranger");
+    putFile(twin, "dup content\n");
+    const adapter = vault.adapter;
+    Object.defineProperty(vault, "adapter", { get: () => adapter, configurable: true });
+    const exists = adapter.exists.bind(adapter);
+    adapter.exists = async (p: string) => {
+      const r = await exists(p);
+      if (p === twin) fs.rmSync(path.join(dir, twin), { force: true }); // the cleanup got there first
+      return r;
+    };
+    // Obsidian's adapter.remove throws on a missing file (the test double
+    // is lenient).
+    adapter.remove = async (p: string) => {
+      if (!fs.existsSync(path.join(dir, p))) throw new Error(`ENOENT: ${p}`);
+      fs.rmSync(path.join(dir, p));
+    };
+    await expect(processConflicts(deps(), state)).resolves.toBeDefined();
+  });
+
   it("I.2: several tracked duplicates → the NEWEST survives; the rest leave both the disk and the list", async () => {
     putFile("note.md", "base\n");
     const state = emptyConflictsState();

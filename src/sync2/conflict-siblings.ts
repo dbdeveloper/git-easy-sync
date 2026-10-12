@@ -302,7 +302,14 @@ export async function findConflictSiblingFilesInVault(
     if (expectedPaths.has(candidatePath)) continue;
     const stat = await vault.adapter.stat(candidatePath);
     if (!stat) continue; // vanished mid-scan — skip-class
-    const bytes = await vault.adapter.readBinary(candidatePath);
+    let bytes: ArrayBuffer;
+    try {
+      bytes = await vault.adapter.readBinary(candidatePath);
+    } catch {
+      // Vanished between the stat and the read — the synthetic-copy cleanup
+      // runs alongside the drain (2026-10-12). Same skip-class as above.
+      continue;
+    }
     synthetic.push({
       path: candidatePath,
       timeLabel: timeLabelFromStamp(match[1]),

@@ -224,6 +224,23 @@ describe("sibling IO helpers", () => {
       expect(synthetic).toEqual([]);
     });
 
+    it("🔑 a synthetic copy removed between its stat and its read is skipped, not a drain failure", async () => {
+      // The synthetic-copy cleanup runs alongside the drain (owner,
+      // 2026-10-12) and may remove a copy this scan has just listed and
+      // stat'ed — the same "vanished mid-scan" skip as a stat miss.
+      const name = "root.conflict-from-D-2026-05-08T15-30-00Z.md";
+      fs.writeFileSync(path.join(dir, name), "s");
+      const adapter = vault.adapter;
+      Object.defineProperty(vault, "adapter", { get: () => adapter, configurable: true });
+      const read = adapter.readBinary.bind(adapter);
+      adapter.readBinary = async (p: string) => {
+        if (p === name) fs.rmSync(path.join(dir, name)); // the cleanup got there first
+        return read(p);
+      };
+      const { synthetic } = await findConflictSiblingFilesInVault(vault as never, "root.md", []);
+      expect(synthetic).toEqual([]);
+    });
+
     it("root-level base scans the vault root without crashing", async () => {
       fs.writeFileSync(
         path.join(dir, "root.conflict-from-D-2026-05-08T15-30-00Z.md"),
