@@ -71,7 +71,10 @@ export interface DiffEditViewDeps {
   // Injected as a thunk so the panel never has to know about configDir
   // or the settings toggle; main.ts binds it. Optional: without it the
   // panel simply shows the fast half, which is the pre-Крок-C list.
-  scanDotSpaceConflicts?: () => Promise<ConflictEntry[]>;
+  // `clean` (panel open, Ctrl/Cmd+R): the slow pass is the synthetic-copy
+  // cleanup (sync2), which removes copies with nothing left to say and
+  // returns the rest — one walk, not two (owner, 2026-10-12).
+  scanDotSpaceConflicts?: (clean: boolean) => Promise<ConflictEntry[]>;
   conflictAnalyzer: ConflictAnalyzer;
   // Snapshot store passed to atomicWriteFile so the post-write
   // recordSync step lines up with the snapshot's expectations.
@@ -156,6 +159,8 @@ export class DiffPanelView extends ItemView {
   // instead of stacking walks.
   private refreshing = false;
   private refreshAgain = false;
+  // A refresh asked to clean up synthetic copies (open, Ctrl/Cmd+R); survives coalescing.
+  private cleanPending = false;
   private conflictSelectedIndex = 0;
   private conflictSelectedKey: string | null = null;
   // The conflict LAST OPENED from this list (the "launch position"). [←] returns the cursor
@@ -228,7 +233,7 @@ export class DiffPanelView extends ItemView {
 
     this.viewState = initialState();
     this.render();
-    void this.refreshConflicts();
+    void this.refreshConflicts({ clean: true });
   }
 
   // Rebuild the conflict list. Paints the cheap half immediately
@@ -257,7 +262,8 @@ export class DiffPanelView extends ItemView {
     return true;
   }
 
-  async refreshConflicts(): Promise<void> {
+  async refreshConflicts(opts: { clean?: boolean } = {}): Promise<void> {
+    if (opts.clean) this.cleanPending = true;
     if (this.refreshing) {
       this.refreshAgain = true;
       return;
@@ -266,6 +272,8 @@ export class DiffPanelView extends ItemView {
     try {
       do {
         this.refreshAgain = false;
+        const clean = this.cleanPending;
+        this.cleanPending = false;
         // Cheapest first (§4.3.1 п.4): drop rows whose sibling file is
         // already gone, straight off the list we are holding. No walk,
         // no store read — so a conflict the user just resolved leaves
@@ -291,7 +299,7 @@ export class DiffPanelView extends ItemView {
         // the dot-space findings arrive a moment later — explicitly
         // accepted (§4.3): open the panel, see 10 rows, then 11. The
         // alternative is blocking the view on a directory walk.
-        const fromDotSpace = await this.deps.scanDotSpaceConflicts?.();
+        const fromDotSpace = await this.deps.scanDotSpaceConflicts?.(clean);
         if (fromDotSpace && fromDotSpace.length > 0) {
           const merged = mergeDotSpaceFindings(
             this.conflictEntries,
@@ -522,7 +530,7 @@ export class DiffPanelView extends ItemView {
     // it down cannot stack directory walks.
     if ((e.ctrlKey || e.metaKey) && (e.key === "r" || e.key === "R")) {
       e.preventDefault();
-      void this.refreshConflicts();
+      void this.refreshConflicts({ clean: true });
       return;
     }
     const r = nextHistorySelection(

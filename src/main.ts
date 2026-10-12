@@ -2,6 +2,8 @@
 // Modified by Claude Code under the attentive guidance of Vladyslav Kozlovskyy <dbdevelop@gmail.com>, 2026.
 // AGPL-3.0 — see LICENSE.
 
+import { cleanSyntheticConflicts, type DotSpaceScope } from "./sync2/synthetic-conflicts";
+import type { SyntheticCopy } from "./sync2/conflict-model";
 import {
   App,
   EventRef,
@@ -154,6 +156,7 @@ import {
   findGitignoreDisputes,
   pendingConflictSummary,
   syntheticFromDotSpace,
+  toEntries,
   type ConflictEntry,
 } from "./diff2/synthetic-detector";
 import { setWordDiffPerfSink } from "./diff2/word-level-diff";
@@ -750,9 +753,14 @@ export default class GitHubSyncPlugin extends Plugin {
           this.startupSyncTimer = null;
           this.startSyncInterval();
           this.logger.info("Plugin onload: interval scheduler started");
-          if (this.settings.syncOnStartup && this.isConfigured()) {
-            void this.runStartupSync();
-          }
+          const startup =
+            this.settings.syncOnStartup && this.isConfigured()
+              ? this.runStartupSync()
+              : Promise.resolve();
+          // Leftover synthetic conflict copies are cleaned once per start,
+          // AFTER the startup sync (owner, 2026-10-12) — a drain in flight
+          // would only let it look.
+          void startup.finally(() => void this.cleanSyntheticCopies());
         }, STARTUP_SYNC_DELAY_MS);
       });
 
@@ -4243,6 +4251,35 @@ export default class GitHubSyncPlugin extends Plugin {
   // (offline pushes that never went through). The user explicitly
   // opted into "sync on startup" — pushing whatever they had queued
   // last time is the obvious right thing.
+  private dotSpaceScope(): DotSpaceScope {
+    return {
+      configDir: this.app.vault.configDir,
+      syncConfigDir: () => this.settings.syncConfigDir ?? true,
+    };
+  }
+
+  // THE cleanup of synthetic conflict copies (sync2/synthetic-conflicts.ts):
+  // at plugin start, when the Diff Panel opens and on Ctrl/Cmd+R in it.
+  // Returns the copies that remain, for the panel's list. Never throws.
+  private async cleanSyntheticCopies(): Promise<SyntheticCopy[]> {
+    if (!this.conflictStoreV2) return [];
+    try {
+      const r = await cleanSyntheticConflicts({
+        vault: this.app.vault,
+        store: this.conflictStoreV2,
+        scope: this.dotSpaceScope(),
+        drainRunning: () => this.sync2Manager?.isDrainRunning() ?? false,
+        computeSha: (bytes: ArrayBuffer) => this.workerClient.computeGitBlobSHA(bytes),
+        logger: this.logger,
+      });
+      if (r.removed.length > 0) this.conflictAnalyzer?.invalidate();
+      return r.survivors;
+    } catch (err) {
+      this.logger.error("Could not look for leftover conflict copies", `${err}`);
+      return [];
+    }
+  }
+
   private async runStartupSync(): Promise<void> {
     await this.intervalScheduler.runStartup();
   }
@@ -4713,11 +4750,10 @@ export default class GitHubSyncPlugin extends Plugin {
       isStartingUp: () => this.startingUp,
       // DOT-FILES §4.3 — bound here because this is where configDir and
       // the per-device toggle live; the panel stays ignorant of both.
-      scanDotSpaceConflicts: () =>
-        syntheticFromDotSpace(this.app.vault, this.conflictStoreV2, {
-          configDir: this.app.vault.configDir,
-          syncConfigDir: () => this.settings.syncConfigDir ?? true,
-        }),
+      scanDotSpaceConflicts: async (clean: boolean) =>
+        clean
+          ? toEntries(this.conflictStoreV2, await this.cleanSyntheticCopies())
+          : syntheticFromDotSpace(this.app.vault, this.conflictStoreV2, this.dotSpaceScope()),
       // §5.0.e one-side-silent exit logs here instead of a Notice.
       logger: this.logger,
       localDeviceLabel: () => this.settings.deviceLabel ?? "Obsidian",

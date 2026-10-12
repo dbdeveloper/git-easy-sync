@@ -187,7 +187,7 @@ export function syntheticFromIndex(
   return toEntries(conflictStore, syntheticCopiesFromIndex(vault, conflictStore));
 }
 
-function toEntries(conflictStore: ConflictStoreV2, copies: SyntheticCopy[]): ConflictEntry[] {
+export function toEntries(conflictStore: ConflictStoreV2, copies: SyntheticCopy[]): ConflictEntry[] {
   const out: ConflictEntry[] = [];
   for (const c of copies) {
     const entry = entryFromSibling(conflictStore, c.path);
