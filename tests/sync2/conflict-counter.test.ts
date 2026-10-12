@@ -101,6 +101,13 @@ async function track(
   return { siblingPath };
 }
 
+async function recount(f: ReturnType<typeof fixture>): Promise<number> {
+  f.counter.markDirty();
+  f.scheduler.flush();
+  await f.counter.flush();
+  return f.counter.getValue();
+}
+
 describe("ConflictCounter", () => {
   let f: ReturnType<typeof fixture>;
 
@@ -274,22 +281,19 @@ describe("ConflictCounter", () => {
     expect(f.counter.getValue()).toBe(1);
   });
 
-  it("v2 deviation: a content-equal (resolved-in-place) sibling still COUNTS until process_conflicts prunes it", async () => {
-    // v1's default formula skipped SHA-equal siblings using the
-    // record's cached base/sibling shas. v2 entries carry no local
-    // base sha, and hashing on a UI counter would put a read+SHA on
-    // every recompute — so the DEFAULT formula counts any sibling
-    // whose file exists. This matches what production shows anyway:
-    // the injected findAllConflicts override (TODO #7) lists that
-    // sibling too. The next process_conflicts pass deletes the file
-    // and prunes the entry, and the count drops then.
+  it("a content-equal (resolved-in-place) copy does NOT count — the model sees it before the drain prunes it", async () => {
+    // Was the opposite until 2026-10-12 ("still COUNTS until process_conflicts
+    // prunes it" — no local base sha, and hashing on a UI counter was judged
+    // too costly). The owner's conflict model reverses it: the badge counts
+    // what is in force on disk, and the cost stays low — only a copy of the
+    // base's size is ever hashed, and a measured one comes from the cache.
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "theirs\n");
     await track(f);
 
     f.counter.markDirty();
     await f.counter.flush();
-    expect(f.counter.getValue()).toBe(1);
+    expect(f.counter.getValue()).toBe(0);
   });
 
   it("multiple records with mixed states are counted independently", async () => {
@@ -407,5 +411,36 @@ describe("ConflictCounter", () => {
     // set (markDirty set it; no consumeSweepRequest ack yet).
     expect(f.counter.consumeSweepRequest()).toBe(true);
   });
+
+  // ─── the conflict model (owner, 2026-10-12) ────────────────────────
+  // The counter computes through ONE read-only model of ledger + disk, so
+  // the badge counts what is really in force — and its subscribers (status
+  // bar, ribbon, panel, editor-tab cleaner) hear about every change of that
+  // picture, not only of the number.
+
+  it("🔑 a copy made byte-equal to its base is NOT counted once the model sees it", async () => {
+    await f.store.load();
+    writeVaultFile(f.root, "Notes/note.md", "local\n");
+    const { siblingPath } = await track(f);
+    expect(await recount(f)).toBe(1);
+    writeVaultFile(f.root, siblingPath, "local\n"); // resolved by hand
+    expect(await recount(f)).toBe(0);
+  });
+
+  it("🔑 subscribers hear a change of the PICTURE even when the number stays", async () => {
+    await f.store.load();
+    writeVaultFile(f.root, "Notes/note.md", "local\n");
+    const a = await track(f);
+    await track(f); // a second copy keeps the file in conflict
+    await recount(f);
+    let calls = 0;
+    f.counter.subscribe(() => calls++);
+    writeVaultFile(f.root, a.siblingPath, "local\n"); // one copy resolved
+    expect(await recount(f)).toBe(1); // still one file in conflict
+    expect(calls).toBe(1);
+    expect(f.counter.getModel()?.entries.get("Notes/note.md")?.copies.map((c) => c.state).sort())
+      .toEqual(["equals-base", "live"]);
+  });
+
 });
 

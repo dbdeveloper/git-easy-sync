@@ -40,7 +40,8 @@
 
 import { Vault } from "obsidian";
 import ConflictStoreV2 from "./conflict-store-v2";
-import { buildSiblingFilePath } from "./conflict-siblings";
+import { buildConflictModel, type ConflictModel } from "./conflict-model";
+import { calculateGitBlobSHA } from "../utils";
 
 export interface ConflictCounterDeps {
   vault: Vault;
@@ -57,6 +58,8 @@ export interface ConflictCounterDeps {
   // sync2 module never imports the diff2 detector (the sync2 ↛ diff2 rule). The
   // default (no override) is the store-only count, used by the unit suite.
   countConflicts?: () => number;
+  // The hash the conflict model uses (production: the worker's).
+  computeSha?: (bytes: ArrayBuffer) => Promise<string>;
 }
 
 export type CountChangeCallback = (count: number) => void;
@@ -68,6 +71,12 @@ export class ConflictCounter {
   private readonly countConflicts?: () => number;
 
   private cachedValue: number = 0;
+  // The conflict model (owner, 2026-10-12): ONE read-only picture of the
+  // ledger plus the disk, rebuilt on every recompute; the count is its
+  // filesInConflict. Readers take it from here instead of re-deriving.
+  private model: ConflictModel | null = null;
+  private modelSignature = "";
+  private readonly computeSha: (bytes: ArrayBuffer) => Promise<string>;
   private dirty: boolean = false;
   // True while a microtask is queued but hasn't fired yet. Prevents
   // bulk markDirty() from queueing N tasks for one debounce window.
@@ -92,6 +101,12 @@ export class ConflictCounter {
     this.scheduleMicrotask =
       deps.scheduleMicrotask ?? ((fn) => queueMicrotask(fn));
     this.countConflicts = deps.countConflicts;
+    this.computeSha = deps.computeSha ?? calculateGitBlobSHA;
+  }
+
+  // The latest conflict model (null before the first recompute).
+  getModel(): ConflictModel | null {
+    return this.model;
   }
 
   // O(1). Sets the dirty flag (for UI counter recompute) AND the
@@ -171,8 +186,13 @@ export class ConflictCounter {
     this.dirty = false;
     this.currentRun = (async () => {
       const newCount = await this.computeCount();
-      const changed = newCount !== this.cachedValue;
+      const signature = this.signatureOf(this.model);
+      // Subscribers hear a change of the PICTURE, not only of the number:
+      // one of two copies resolved leaves the count at 1, but the panel
+      // and the editor-tab cleaner must still react.
+      const changed = newCount !== this.cachedValue || signature !== this.modelSignature;
       this.cachedValue = newCount;
+      this.modelSignature = signature;
       if (changed) {
         // Snapshot so subscribers can unsubscribe during the loop
         // without invalidating iteration.
@@ -198,26 +218,25 @@ export class ConflictCounter {
     // menu count TRACKED files only — the store walk below is what runs.
     if (this.countConflicts) return this.countConflicts();
     // FILES IN CONFLICT, not conflict copies (owner, 2026-10-09): the badge
-    // says how many files are kept from the server until resolved. A file
-    // with three copies is ONE such file — the Diff Panel shows it in red,
-    // so the red rows and the badge agree.
-    let count = 0;
-    for (const [basePath, entry] of this.store.getCachedState().entries) {
-      for (const sibling of entry.siblings) {
-        const name = buildSiblingFilePath(
-          basePath,
-          sibling.timeLabel ?? 0,
-          sibling.deviceLabel,
-        );
-        // A tracked sibling whose file is gone is resolved-pending-prune
-        // (the next process_conflicts drops it) — not counted. One copy
-        // still on disk is enough to count the file.
-        if (await this.vault.adapter.exists(name)) {
-          count++;
-          break;
-        }
-      }
+    // says how many files are kept from the server until resolved — now as
+    // the conflict model sees them (owner, 2026-10-12): a file counts while
+    // it has a LIVE tracked copy, i.e. on disk and different from its base.
+    // A copy deleted or made equal to the base by hand stops counting as
+    // soon as a recompute sees it; the drain then prunes the ledger.
+    this.model = await buildConflictModel(
+      { adapter: this.vault.adapter as never, computeSha: this.computeSha },
+      this.store.getCachedState(),
+      [],
+    );
+    return this.model.filesInConflict;
+  }
+
+  private signatureOf(model: ConflictModel | null): string {
+    if (model === null) return "";
+    const parts: string[] = [];
+    for (const e of model.entries.values()) {
+      for (const c of e.copies) parts.push(`${c.path}=${c.state}`);
     }
-    return count;
+    return parts.sort().join("\n");
   }
 }

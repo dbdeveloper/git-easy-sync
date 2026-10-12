@@ -1609,6 +1609,12 @@ export default class GitHubSyncPlugin extends Plugin {
       // Accepted trade-off, stated plainly: the badge no longer hints at
       // synthetic-only leftovers. Those surface in the panel, which is where
       // they can actually be acted on.
+      //
+      // Since 2026-10-12 the count comes from the conflict model (ledger +
+      // disk): a tracked file counts while it has a LIVE copy — on disk and
+      // different from its base. Hashing only ever happens for a copy of
+      // the base's size whose cache is stale, off the main thread.
+      computeSha: (bytes) => this.workerClient.computeGitBlobSHA(bytes),
     });
     conflictCounter.subscribe(() => this.refreshConflictUI());
     this.conflictCounter = conflictCounter;
