@@ -251,6 +251,15 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   deleting your edit when it was in the older copy. It now compares
   what the copies contain NOW. Copies you made identical by hand are
   now recognised as duplicates, and the newest one stays.
+- **Leftover conflict copies the plugin did not track were never
+  cleaned up.** A copy that was not part of an open conflict (left over
+  after a reset, a repo switch, or a folder move) stayed forever, even
+  once it was identical to its note or to another copy. Such copies are
+  now removed when you open the Diff Panel, press Ctrl/Cmd+R in it, and
+  once each time the plugin starts — everywhere in the vault, including
+  hidden folders and the root `.gitignore`. Each removal is written to
+  the log. This runs alongside a sync without ever touching a copy that
+  belongs to an open conflict.
 - **A conflict copy edited by hand to match its note never closed the
   conflict.** Making the copy identical to the note — in Obsidian or
   any other program — is one of the ways to resolve a conflict, but

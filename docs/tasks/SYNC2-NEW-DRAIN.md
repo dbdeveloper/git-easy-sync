@@ -3275,6 +3275,17 @@ def saveConflictSiblingFile(fileInfo):
     # time_label ЗАВЖДИ tracked.remote.mtime; device_label — той самий принцип, вище). fileInfo.blob —
     # байти вмісту.
     siblingPath = buildSiblingFilePath(fileInfo.path, fileInfo.time_label, fileInfo.device_label)
+    # ⚠️ ОГОЛОСИТИ копію журналу ДО появи файлу (власник + advisor, 2026-10-12). Поруч із drain-ом
+    # працює прибирання synthetic-копій (панель, старт плагіна); conflicts.json зберігається лише
+    # в кінці drain-у, а записи кроків народження йдуть ПІСЛЯ запису файлу — без оголошення свіжа
+    # tracked-копія до кінця drain-у виглядала б synthetic і могла бути видалена. Оголошення —
+    # лише в пам'яті (conflicts.json пишеться в тих самих точках, поведінка після збою та сама);
+    # знімається, коли копію записано в журнал і збережено. Якщо саме зараз прибирання видаляє
+    # synthetic-копію З ТИМ САМИМ іменем — чекаємо, доки видалення завершиться, і лише тоді пишемо.
+    # НЕ «спрощувати» це прибиранням оголошень: усі чотири сайти (STEP3 перша копія, Vault-step-born,
+    # append, заміна в mark-транзакції) покриті тестом «файл копії не з'являється раніше, ніж журнал
+    # про нього знає» (tests/sync2/drain-conflicts.test.ts).
+    ledger.announceCopy(siblingPath)
     atomicWrite(siblingPath, fileInfo.blob)
     # Повертане значення викликачі ІГНОРУЮТЬ — сирий fileInfo (`.path == P`) іде в `siblings`-
     # список без змін (§III, усюди); фактичне ім'я на диску похідне (path+time_label+device_label),
@@ -3293,6 +3304,12 @@ def readSiblingFileFromVault(fileInfo):
     return readBytes(siblingPath)
 
 
+# ⚠️ Прибирання synthetic-копій працює ПОРУЧ із drain-ом (2026-10-12), тож synthetic-файл може
+# зникнути між кроками drain-у: між stat і читанням у скані нижче — пропустити (той самий
+# skip-class, що й «зник посеред скану»); при видаленні (process_conflicts 2.2/2.3, крок 4
+# mark-транзакції) — «вже нема» означає «мети досягнуто», а не помилку. Який із однакових
+# двійників лишається — survivorOf (tracked > synthetic, далі новіший time_label, далі шлях):
+# ТОЙ САМИЙ повний порядок, що в прибиранні, щоб два видаляльники не лишили різних двійників.
 def findConflictSiblingFilesInVault(path, siblings):
     # path — шлях BASE-файлу (P). siblings — `current_conflict.siblings`, список ВЖЕ ВІДОМИХ
     # tracked-елементів для цього path (§III `process_conflicts()`, крок 2.1).
