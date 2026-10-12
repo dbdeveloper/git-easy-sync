@@ -43,6 +43,7 @@ import {
   entryFromSibling,
   type ConflictEntry,
 } from "./synthetic-detector";
+import { isConflictPair } from "../sync2/conflict-siblings";
 
 export const DIFF2_EDITOR_VIEW_TYPE = "diff2-editor-view";
 
@@ -176,6 +177,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   private async refreshFromDisk(): Promise<void> {
     const entry = this.entry;
     if (!entry || this.state?.origin !== "conflict") return;
+    if (!isConflictPair(entry.basePath, entry.siblingPath)) return;
     const resolved = this.deps.isCopyResolved
       ? await this.deps.isCopyResolved(entry.basePath, entry.siblingPath)
       : !(await this.deps.vault.adapter.exists(entry.siblingPath));
@@ -420,7 +422,11 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     // deleted) — reconcile conflicts.json with that reality so the
     // resolved entry prunes (and, via the prune seam, trash's
     // the record is pruned) without waiting for the next drain.
-    void this.deps.reconcileConflicts?.();
+    // Only for a conflict copy — not History, not two ordinary files.
+    const closed = this.entry;
+    if (closed && isConflictPair(closed.basePath, closed.siblingPath)) {
+      void this.deps.reconcileConflicts?.();
+    }
   }
 
   // S4 open-guard — this editor's descriptor for `openGuard` (the autosaveId

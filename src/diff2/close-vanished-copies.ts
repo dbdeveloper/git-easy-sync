@@ -24,6 +24,7 @@
 // says whether its copy was tracked or synthetic.
 
 import { autosaveDir, deriveAutosaveId } from "./autosave-store";
+import { isConflictPair } from "../sync2/conflict-siblings";
 
 export interface VanishedCopyDeps {
   editorTabs(): Array<{
@@ -55,6 +56,8 @@ export async function closeEditorsOfVanishedCopies(
   let wipedDirs = 0;
   for (const tab of deps.editorTabs()) {
     if (tab.origin !== "conflict") continue;
+    // Not a conflict copy of its base (two ordinary files) — not ours.
+    if (!isConflictPair(tab.basePath, tab.siblingPath)) continue;
     if (!tab.siblingPath || tab.siblingPath === tab.basePath) continue;
     const resolved = deps.isResolved
       ? await deps.isResolved(tab.basePath, tab.siblingPath)

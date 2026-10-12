@@ -41,6 +41,7 @@ import { normalizePath, TFile, type Vault } from "obsidian";
 import { atomicWriteFile, MODIFY_IN_PLACE_MAX_BYTES, stagingPathFor, withViewPreserve } from "../sync2/atomic-write";
 import { restoreEol } from "./eol";
 import { removeIfPresent, safeRename } from "../sync2/cross-platform";
+import { isConflictPair } from "../sync2/conflict-siblings";
 import { buildSiblingFilePath } from "../sync2/conflict-siblings";
 import { calculateGitBlobSHA } from "../utils";
 import { autosaveDir, readMeta, type AutosaveMeta } from "./autosave-store";
@@ -316,6 +317,9 @@ export async function commit7Step(
   let siblingRemoved = false;
   if (
     targetSibling === meta.siblingPath &&
+    // Only a conflict COPY of the base is removed — never one of two ordinary
+    // files compared in the editor (owner, 2026-10-12).
+    isConflictPair(meta.basePath, meta.siblingPath) &&
     expectedBaseSha === expectedSiblingSha
   ) {
     // The synthetic-copy cleanup (or the drain) may get to this copy first —
@@ -718,6 +722,7 @@ export async function recoverCommit(
     // Step 6.5 — proactive sibling cleanup if both sides committed identical.
     let siblingRemoved = false;
     if (
+      isConflictPair(meta.basePath, meta.siblingPath) && // see step 6.5 above
       done.expectedBaseSha === done.expectedSiblingSha
     ) {
       await removeIfPresent(vault.adapter, meta.siblingPath); // see step 6.5 above

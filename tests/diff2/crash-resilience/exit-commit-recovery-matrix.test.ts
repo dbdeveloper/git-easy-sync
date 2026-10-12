@@ -327,7 +327,7 @@ function matrixSuite(label: string, BASE: string, SIB: string): void {
 // to base-absent + sibling-absent (6.5 unifies the two empty sides).
 describe("recoverCommit — delete-base (absent base, resolve-to-empty)", () => {
   const BASE = "Notes/del.md";
-  const SIB = "Notes/del.conflict-from-Phone-X.md";
+  const SIB = "Notes/del.conflict-from-Phone-2026-05-29T12-00-00Z.md";
   const EMPTY_SHA = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
 
   let fx: ReturnType<typeof fixture>;
@@ -517,9 +517,9 @@ async function placeSideRaw(
   if (slot.bak) await vault.adapter.writeBinary(stagingPathFor(finalPath, "bak"), enc(oldBytes));
 }
 
-matrixSuite("vault", "Notes/doc.md", "Notes/doc.conflict-from-Phone-X.md");
+matrixSuite("vault", "Notes/doc.md", "Notes/doc.conflict-from-Phone-2026-05-29T12-00-00Z.md");
 matrixSuite(
   "dot-dir",
   ".obsidian/plugins/p/data.json",
-  ".obsidian/plugins/p/data.conflict-from-Phone-X.json",
+  ".obsidian/plugins/p/data.conflict-from-Phone-2026-05-29T12-00-00Z.json",
 );

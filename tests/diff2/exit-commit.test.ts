@@ -29,7 +29,7 @@ import {
 const NOW = "2026-06-02T12:00:00.000Z";
 const ID = "tracked-commit";
 const BASE = "Notes/meeting.md";
-const SIB = "Notes/meeting.conflict-from-Phone-X.md";
+const SIB = "Notes/meeting.conflict-from-Phone-2026-05-29T12-00-00Z.md";
 const enc = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
 
 it("GIT_EMPTY_BLOB_SHA equals a live calculateGitBlobSHA of 0 bytes", async () => {
@@ -561,7 +561,7 @@ describe("commit7Step — config-dir (.obsidian/) conflict paths (dot-dir)", () 
   // takes the safeRename fallback (no editor to preserve) — and the staging /
   // recovery must work for the hidden-dir path shape just as for a vault file.
   const CBASE = ".obsidian/plugins/foo/data.json";
-  const CSIB = ".obsidian/plugins/foo/data.conflict-from-Phone-X.json";
+  const CSIB = ".obsidian/plugins/foo/data.conflict-from-Phone-2026-05-29T12-00-00Z.json";
   let fx: ReturnType<typeof fixture>;
   beforeEach(() => {
     setMockPlatform("desktop");

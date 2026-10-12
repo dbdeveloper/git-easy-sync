@@ -204,6 +204,16 @@ export function parseSiblingFilename(siblingPath: string): ParsedSibling | null 
   return { basePath: `${dir}${stem}${ext}`, deviceLabel, isoTimestamp };
 }
 
+// Is `copyPath` a conflict copy of exactly `basePath`? (owner, 2026-10-12)
+// The diff editor is not only about conflicts — it is meant to compare any two
+// files too — so every piece of conflict logic (the analyzer, "resolved
+// outside", removing the copy on [←], closing tabs of resolved conflicts)
+// asks this first. Two ordinary files are never a conflict, and neither of
+// them is ever removed.
+export function isConflictPair(basePath: string, copyPath: string): boolean {
+  return parseSiblingFilename(copyPath)?.basePath === basePath;
+}
+
 // Write the sibling's bytes at the derived name. Callers IGNORE the
 // return value on purpose (§III): the raw FileInfo (with .path == P)
 // goes into the `siblings` list unchanged; the disk name stays

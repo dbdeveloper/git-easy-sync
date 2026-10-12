@@ -67,6 +67,7 @@ import {
 import { type DiffToolbarHandle, renderDiffToolbar } from "./diff-toolbar";
 import type { DiffEditViewDeps } from "./diff-panel-view";
 import { calculateGitBlobSHA } from "../utils";
+import { isConflictPair } from "../sync2/conflict-siblings";
 
 // The navigation seam. Composition, NOT a base class: the controller asks the host
 // to perform the parts that differ between the single-tab panel host and the
@@ -104,6 +105,8 @@ export class DiffDetailController {
   // Resolved outside the editor: the copy is gone, or byte-equal to the base
   // (sizes first — a different size cannot be equal).
   private async resolvedOutside(meta: AutosaveMeta): Promise<boolean> {
+    // Only a conflict can be "resolved" — two ordinary files never are.
+    if (!isConflictPair(meta.basePath, meta.siblingPath)) return false;
     const adapter = this.deps.vault.adapter;
     const sibling = await adapter.stat(meta.siblingPath);
     if (sibling === null) return true;
@@ -117,7 +120,7 @@ export class DiffDetailController {
   }
 
   private async copyIsGone(entry: ConflictEntry): Promise<boolean> {
-    if (entry.historyVersionSha !== undefined || entry.siblingPath === entry.basePath) return false;
+    if (entry.historyVersionSha !== undefined || !isConflictPair(entry.basePath, entry.siblingPath)) return false;
     if (await this.deps.vault.adapter.exists(entry.siblingPath)) return false;
     this.deps.logger?.info("diff2: the conflict copy is gone (resolved) — closing its editor", {
       base: entry.basePath,
