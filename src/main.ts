@@ -1813,7 +1813,12 @@ export default class GitHubSyncPlugin extends Plugin {
       // OLD one at once — close its editor tabs, wipe its autosave dir,
       // whether a tab was open or not. Tabs are read from their SERIALIZED
       // state, so a deferred (background) leaf counts too.
+      // NOT awaited by the drain's progress (owner, 2026-10-12): the focused
+      // tab now shows a window that waits for a click, and a drain must never
+      // stand still on a click. The forget runs on its own; its own order
+      // (close tabs, then wipe the autosave) is unchanged.
       onConflictCopyReplaced: async (path: string, oldSiblingPath: string) => {
+        void (async () => {
         const r = await forgetReplacedConflictCopy(
           {
             editorTabs: () =>
@@ -1821,15 +1826,24 @@ export default class GitHubSyncPlugin extends Plugin {
                 const st = l.getViewState()?.state as { siblingPath?: unknown } | undefined;
                 return {
                   siblingPath: typeof st?.siblingPath === "string" ? st.siblingPath : null,
+                  isActive: l === this.app.workspace.activeLeaf,
                   detach: () => l.detach(),
                 };
               }),
             adapter: this.app.vault.adapter,
+            notifyReplaced: async (basePath: string) => {
+              if (this.startingUp) return; // no windows at start-up (owner)
+              await new ConflictResolvedModal(this.app, basePath, "replaced").prompt();
+            },
+            onFocusedClosed: () => void this.activateDiffEditView(),
           },
           path,
           oldSiblingPath,
         );
         this.logger.info("Replaced conflict copy forgotten", { path, oldSiblingPath, ...r });
+        })().catch((err) =>
+          this.logger.warn("Could not forget the replaced conflict copy (tabs / autosave)", { path, err: `${err}` }),
+        );
       },
       onConflictsTouched: () => {
         for (const leaf of this.app.workspace.getLeavesOfType(DIFF2_PANEL_VIEW_TYPE)) {
@@ -2141,7 +2155,32 @@ export default class GitHubSyncPlugin extends Plugin {
   // vault events (after a reconcile, after every drain), because Obsidian
   // sends none for dot-paths; the delete/rename events in onload are only a
   // shortcut. The editor also checks its own copy when it becomes active.
+  // ONE pass at a time (owner's windows, 2026-10-12): a pass may wait on the
+  // focused tab's window, and that tab is still open meanwhile — an
+  // overlapping pass would show a SECOND window for it. Later triggers
+  // coalesce into one more pass after the current one.
+  private cleaningEditors: Promise<void> | null = null;
+  private cleanEditorsAgain = false;
+
   private async closeVanishedCopyEditors(): Promise<void> {
+    if (this.cleaningEditors) {
+      this.cleanEditorsAgain = true;
+      return this.cleaningEditors;
+    }
+    this.cleaningEditors = (async () => {
+      do {
+        this.cleanEditorsAgain = false;
+        await this.closeVanishedCopyEditorsOnce();
+      } while (this.cleanEditorsAgain);
+    })();
+    try {
+      await this.cleaningEditors;
+    } finally {
+      this.cleaningEditors = null;
+    }
+  }
+
+  private async closeVanishedCopyEditorsOnce(): Promise<void> {
     try {
       const r = await closeEditorsOfVanishedCopies({
         editorTabs: () =>

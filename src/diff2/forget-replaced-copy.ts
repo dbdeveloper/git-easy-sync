@@ -17,7 +17,11 @@ import { autosaveDir, deriveAutosaveId } from "./autosave-store";
 
 export interface ForgetDeps {
   // The open diff2 editor tabs, by the conflict copy each one shows.
-  editorTabs(): Array<{ siblingPath: string | null; detach(): void }>;
+  editorTabs(): Array<{ siblingPath: string | null; isActive?: boolean; detach(): void }>;
+  // The tab the user is in (owner, 2026-10-12): told before it closes
+  // ("replaced by a newer version" [Exit]), then back to the Diff Panel.
+  notifyReplaced?: (basePath: string) => Promise<void>;
+  onFocusedClosed?: () => void;
   adapter: {
     exists(path: string): Promise<boolean>;
     rmdir(path: string, recursive: boolean): Promise<void>;
@@ -32,7 +36,9 @@ export async function forgetReplacedConflictCopy(
   let closedTabs = 0;
   for (const tab of deps.editorTabs()) {
     if (tab.siblingPath !== oldSiblingPath) continue;
+    if (tab.isActive && deps.notifyReplaced) await deps.notifyReplaced(basePath);
     tab.detach();
+    if (tab.isActive) deps.onFocusedClosed?.();
     closedTabs++;
   }
   let wipedDirs = 0;

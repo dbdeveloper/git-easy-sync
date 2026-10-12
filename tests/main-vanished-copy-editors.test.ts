@@ -98,6 +98,30 @@ describe("main.ts closes the editors of vanished conflict copies", () => {
     expect(detach).toHaveBeenCalledTimes(1);
   });
 
+  // A pass may wait on the focused tab's window; an overlapping pass would
+  // show a SECOND window for the same tab. Passes never overlap, and any
+  // number of triggers during one pass coalesce into ONE more.
+  it("🔑 cleaner passes never overlap; triggers during a pass coalesce into one more", async () => {
+    const { p } = pluginWithEditorTab(true);
+    let running = 0;
+    let maxRunning = 0;
+    let passes = 0;
+    (p as unknown as { closeVanishedCopyEditorsOnce(): Promise<void> }).closeVanishedCopyEditorsOnce = async () => {
+      running++;
+      maxRunning = Math.max(maxRunning, running);
+      passes++;
+      await new Promise((r) => setTimeout(r, 5));
+      running--;
+    };
+    await Promise.all([
+      p.closeVanishedCopyEditors(),
+      p.closeVanishedCopyEditors(),
+      p.closeVanishedCopyEditors(),
+    ]);
+    expect(maxRunning).toBe(1);
+    expect(passes).toBe(2);
+  });
+
   it("a tab whose copy is still there stays", async () => {
     const { p, detach } = pluginWithEditorTab(true);
     await p.closeVanishedCopyEditors();

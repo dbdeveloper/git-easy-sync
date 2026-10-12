@@ -15,11 +15,12 @@ const BASE = "notes/a.md";
 const OLD = "notes/a.conflict-from-Mac-2026-10-09T18-26-16Z.md";
 const NEW = "notes/a.conflict-from-Mac-2026-10-09T18-26-52Z.md";
 
-function setup(openTabs: (string | null)[], dirs: string[]) {
+function setup(openTabs: (string | null)[], dirs: string[], activeIndex = -1) {
   const existing = new Set(dirs);
   const order: string[] = [];
   const tabs = openTabs.map((siblingPath, i) => ({
     siblingPath,
+    isActive: i === activeIndex,
     detach: () => order.push(`close:${i}`),
   }));
   const adapter = {
@@ -29,7 +30,18 @@ function setup(openTabs: (string | null)[], dirs: string[]) {
       existing.delete(p);
     },
   };
-  return { order, existing, deps: { editorTabs: () => tabs, adapter } };
+  return {
+    order,
+    existing,
+    deps: {
+      editorTabs: () => tabs,
+      adapter,
+      notifyReplaced: async (basePath: string) => {
+        order.push(`notify:${basePath}`);
+      },
+      onFocusedClosed: () => order.push("panel"),
+    },
+  };
 }
 
 describe("forgetReplacedConflictCopy", () => {
@@ -55,5 +67,20 @@ describe("forgetReplacedConflictCopy", () => {
     const s = setup([NEW], [newDir]);
     expect(await forgetReplacedConflictCopy(s.deps, BASE, OLD)).toEqual({ closedTabs: 0, wipedDirs: 0 });
     expect(s.order).toEqual([]);
+  });
+
+  // Owner, 2026-10-12: the copy the user is editing RIGHT NOW was replaced by a
+  // newer server version — they are told ([Exit]) before the tab goes, and
+  // land in the Diff Panel. A tab not in focus closes silently, as before.
+  it("🔑 the FOCUSED tab of the replaced copy: notify → close → back to the panel", async () => {
+    const s = setup([OLD], [trackedDir], 0);
+    await forgetReplacedConflictCopy(s.deps, BASE, OLD);
+    expect(s.order.slice(0, 3)).toEqual([`notify:${BASE}`, "close:0", "panel"]);
+  });
+
+  it("a tab NOT in focus: no window, no panel", async () => {
+    const s = setup([OLD], [trackedDir]);
+    await forgetReplacedConflictCopy(s.deps, BASE, OLD);
+    expect(s.order.filter((o) => o.startsWith("notify") || o === "panel")).toEqual([]);
   });
 });

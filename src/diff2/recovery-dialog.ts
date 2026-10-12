@@ -344,7 +344,7 @@ export class ConflictResolvedModal extends Modal {
   constructor(
     app: App,
     private readonly basePath: string,
-    private readonly when: "open" | "focus",
+    private readonly when: "open" | "focus" | "replaced",
   ) {
     super(app);
   }
@@ -352,18 +352,30 @@ export class ConflictResolvedModal extends Modal {
   prompt(): Promise<void> {
     return new Promise((resolve) => {
       this.onClose = () => resolve();
-      this.titleEl.setText(
-        this.when === "open" ? "This conflict is already resolved" : "This conflict was resolved outside the editor",
-      );
+      const text = {
+        open: {
+          title: "This conflict is already resolved",
+          body: `"${this.basePath}" has no conflict copy left that differs from it, so there is nothing to resolve. The next sync finishes the clean-up.`,
+          button: "Continue",
+        },
+        focus: {
+          title: "This conflict was resolved outside the editor",
+          body: `"${this.basePath}" no longer has a conflict copy that differs from it — it was deleted, renamed, or made identical outside this editor. Your changes here are discarded.`,
+          button: "Close",
+        },
+        // The drain replaced the copy being edited with a newer server version.
+        replaced: {
+          title: "The conflict copy was replaced",
+          body: `A newer version of "${this.basePath}" arrived from the server and replaced the conflict copy you were editing. Your changes here are discarded; open the conflict again to work on the new copy.`,
+          button: "Exit",
+        },
+      }[this.when];
+      this.titleEl.setText(text.title);
       this.contentEl.empty();
-      this.contentEl.createEl("p").setText(
-        this.when === "open"
-          ? `"${this.basePath}" has no conflict copy left that differs from it, so there is nothing to resolve. The next sync finishes the clean-up.`
-          : `"${this.basePath}" no longer has a conflict copy that differs from it — it was deleted, renamed, or made identical outside this editor. Your changes here are discarded.`,
-      );
+      this.contentEl.createEl("p").setText(text.body);
       const row = this.contentEl.createDiv({ cls: "modal-button-container" });
       const btn = row.createEl("button", {
-        text: this.when === "open" ? "Continue" : "Close",
+        text: text.button,
         cls: "mod-cta",
       });
       btn.addEventListener("click", () => this.close());
