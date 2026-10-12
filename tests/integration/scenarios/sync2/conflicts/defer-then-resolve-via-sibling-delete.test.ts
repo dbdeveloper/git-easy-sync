@@ -25,7 +25,6 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 import {
-  reconcileConflictsForTest,
   trackedSiblingPathsFor,
   conflictEntryCount,
 } from "../helpers";
@@ -132,8 +131,9 @@ describe.skipIf(!integrationEnabled())(
         // would auto-fire here; pre-wire, we drive the classifier
         // manually.
         fs.rmSync(siblingAbs);
-        await reconcileConflictsForTest(client);
-        expect(client.conflictStore.hasBase("note.md")).toBe(false);
+        // The ledger is the DRAIN's (owner, 2026-10-11): nothing outside a sync
+        // prunes it, so the record stands until the next sync — which resolves it.
+        expect(client.conflictStore.hasBase("note.md")).toBe(true);
 
         await sync2AllAndAssertNoErrors(client);
 

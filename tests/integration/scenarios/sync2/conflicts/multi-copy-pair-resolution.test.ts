@@ -24,7 +24,6 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 import {
-  reconcileConflictsForTest,
   trackedSiblingPathsFor,
   conflictEntryCount,
 } from "../helpers";
@@ -116,21 +115,24 @@ describe.skipIf(!integrationEnabled())(
         // record; path stays pending because sibling 2 is still
         // there.
         fs.rmSync(path.join(client.vaultPath, records[0]));
-        await reconcileConflictsForTest(client);
-        expect(client.conflictStore.hasBase("shared.md")).toBe(true);
-        expect(trackedSiblingPathsFor(client, "shared.md")).toHaveLength(1);
+        // The ledger is the DRAIN's: untouched until a sync.
+        expect(trackedSiblingPathsFor(client, "shared.md")).toHaveLength(2);
 
-        // Sync after first resolve — path still blocked, remote
-        // unchanged.
+        // Sync after first resolve — sibling 2 still differs, so the
+        // conflict is still in force: path still blocked, remote
+        // unchanged; the drain prunes the deleted copy.
         await sync2AllAndAssertNoErrors(client);
         expect(await readRemoteFile(branch, "shared.md")).toBe(
           "theirs v2\n",
         );
+        expect(client.conflictStore.hasBase("shared.md")).toBe(true);
+        expect(trackedSiblingPathsFor(client, "shared.md")).toHaveLength(1);
 
         // Resolve sibling 2 — path closes.
         fs.rmSync(path.join(client.vaultPath, records[1]));
-        await reconcileConflictsForTest(client);
-        expect(client.conflictStore.hasBase("shared.md")).toBe(false);
+        // The ledger is the DRAIN's (owner, 2026-10-11): nothing outside a sync
+        // prunes it, so the record stands until the next sync — which resolves it.
+        expect(client.conflictStore.hasBase("shared.md")).toBe(true);
 
         // Now sync pushes ours.
         await sync2AllAndAssertNoErrors(client);

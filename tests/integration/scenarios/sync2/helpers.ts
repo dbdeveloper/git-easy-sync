@@ -380,11 +380,30 @@ export async function createSync2Client(
   };
 }
 
+// How ONE user sync is driven (owner, 2026-10-12). The plugin offers two
+// shapes and the suites used to know only the first:
+//   "sync"  — [Sync] with "Sync starts with commit" ON: syncAll (commit, then
+//             drain, inside one call);
+//   "split" — the [Commit] button, then [Sync] with the toggle OFF:
+//             commitOnly, then resumeQueue (a standalone drain).
+// The same scenario must hold in both. INT_SYNC_MODE picks it for a whole
+// run (`pnpm test:integration:split`), so every test that syncs through
+// this helper runs in both shapes without a line changed.
+export type IntSyncMode = "sync" | "split";
+export function intSyncMode(): IntSyncMode {
+  return process.env.INT_SYNC_MODE === "split" ? "split" : "sync";
+}
+
 export async function sync2AllAndAssertNoErrors(
   c: Sync2TestClient,
 ): Promise<void> {
   clearRecordedNotices();
-  await c.manager.syncAll();
+  if (intSyncMode() === "split") {
+    await c.manager.commitOnly();
+    await c.manager.resumeQueue();
+  } else {
+    await c.manager.syncAll();
+  }
   const errors = recordedNotices
     .map((n) => n.message)
     .filter((m) => m.toLowerCase().includes("error"));
@@ -408,25 +427,12 @@ export async function sync2FileAndAssertNoErrors(
 }
 
 // ── v2 conflict-test helpers (THE SWITCH M-pass) ─────────────────────
-
-// The v1 classifier's evaluateConflictState analog: reconcile
-// conflicts.json with the live vault (dedup, content-equal
-// auto-resolve, prune) and persist. Production runs this at the drain
-// restarts + the three UI sites; the mock vault fires no events, so
-// tests drive it explicitly, exactly like they drove the classifier.
-export async function reconcileConflictsForTest(
-  c: Sync2TestClient,
-): Promise<void> {
-  const state = await processConflicts(
-    {
-      vault: c.vault,
-      store: c.conflictStore,
-      computeSha: calculateGitBlobSHA,
-    },
-    null,
-  );
-  await c.conflictStore.save(state);
-}
+//
+// (reconcileConflictsForTest is GONE, 2026-10-12: it ran the drain's
+// reconcile and saved conflicts.json before a sync — a step production no
+// longer has anywhere outside the drain (owner: conflicts.json is the
+// drain's ledger). Calling it hid the double-sync defect; a test that needs
+// the drain's verdict must run a sync.)
 
 // Derived on-disk sibling names for a base path's tracked siblings
 // (v2 keeps FileInfo rows; the disk name is derived, not stored).

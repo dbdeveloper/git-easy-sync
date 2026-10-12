@@ -130,6 +130,31 @@ describe.skipIf(!integrationEnabled())(
       );
     }
 
+    // Owner, 2026-10-12: between two syncs only the DISK counts, and the
+    // ledger stays as the drain left it. A copy deleted and put back (or
+    // re-created under the same name) before the next sync is the same
+    // tracked copy again — the conflict is still in force.
+    it(
+      "the copy deleted and put back BEFORE the sync → the conflict goes on, nothing sent",
+      async () => {
+        const { c, copy } = await openConflict();
+        client = c;
+        const abs = path.join(c.vaultPath, copy);
+        const bytes = fs.readFileSync(abs);
+        fs.rmSync(abs);
+        await c.manager.commitOnly(); // a Commit while it is gone
+        fs.writeFileSync(abs, bytes); // …then it is back
+
+        await oneSync(c, "sync");
+
+        expect(trackedSiblingPathsFor(c, "note.md")).toEqual([copy]);
+        expect(fs.existsSync(abs)).toBe(true);
+        expect(await readRemoteFile(branch, "note.md")).toBe(THEIRS); // main untouched
+        expect(await getBranchHead(conflictBranch!)).not.toBeNull(); // still open
+      },
+      300_000,
+    );
+
     it(
       "the copy renamed onto the base (take theirs) → nothing to send, main keeps THEIRS, branch merged",
       async () => {

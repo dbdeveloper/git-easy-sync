@@ -24,7 +24,6 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 import {
-  reconcileConflictsForTest,
   trackedSiblingPathsFor,
   conflictEntryCount,
 } from "../helpers";
@@ -108,13 +107,14 @@ describe.skipIf(!integrationEnabled())(
           "utf8",
         );
 
-        // Drive the classifier (production has ConflictWatcher; mock
-        // vault doesn't auto-fire events on fs writes).
-        await reconcileConflictsForTest(client);
+        // The ledger is the DRAIN's (owner, 2026-10-11): before a sync the
+        // record and the copy stay as they are.
+        expect(client.conflictStore.hasBase("note.md")).toBe(true);
 
-        // Record dropped, sibling removed by the classifier (case 6
-        // sweeps the now-redundant sibling), base stays at remote
-        // content.
+        // ONE sync: the commit pass sees the conflict no longer in force
+        // (copy == base) and the base equal to main — nothing to send; the
+        // drain removes the now-redundant copy and closes the record.
+        await sync2AllAndAssertNoErrors(client);
         expect(client.conflictStore.hasBase("note.md")).toBe(false);
         expect(fs.existsSync(siblingAbs)).toBe(false);
         expect(
@@ -123,10 +123,6 @@ describe.skipIf(!integrationEnabled())(
             "utf8",
           ),
         ).toBe("remote edit\n");
-
-        // Next sync is a no-op for the path on GitHub — remote
-        // already holds the same bytes. Convergence is silent.
-        await sync2AllAndAssertNoErrors(client);
         expect(await readRemoteFile(branch, "note.md")).toBe(
           "remote edit\n",
         );

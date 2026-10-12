@@ -25,7 +25,6 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 import {
-  reconcileConflictsForTest,
   trackedSiblingPathsFor,
   conflictEntryCount,
 } from "../helpers";
@@ -116,9 +115,9 @@ describe.skipIf(!integrationEnabled())(
         const siblingAbs = path.join(client.vaultPath, records[0]);
 
         fs.rmSync(siblingAbs);
-        await reconcileConflictsForTest(client);
-
-        expect(client.conflictStore.hasBase("x.md")).toBe(false);
+        // The ledger is the DRAIN's (owner, 2026-10-11): nothing outside a sync
+        // prunes it, so the record stands until the next sync — which resolves it.
+        expect(client.conflictStore.hasBase("x.md")).toBe(true);
 
         await sync2AllAndAssertNoErrors(client);
 
@@ -141,12 +140,22 @@ describe.skipIf(!integrationEnabled())(
         // case 6 (accept-theirs) → record + sibling dropped.
         const theirsBytes = await client.vault.adapter.readBinary(siblingPath);
         await client.vault.adapter.writeBinary("x.md", theirsBytes);
-        await reconcileConflictsForTest(client);
-
-        expect(client.conflictStore.hasBase("x.md")).toBe(false);
+        // The ledger is the DRAIN's (owner, 2026-10-11): nothing outside a sync
+        // prunes it, so the record stands until the next sync — which resolves it.
+        expect(client.conflictStore.hasBase("x.md")).toBe(true);
         expect(
           fs.readFileSync(path.join(client.vaultPath, "x.md"), "utf8"),
         ).toBe("x v2 from other device\n");
+        expect(await readRemoteFile(branch, "x.md")).toBe(
+          "x v2 from other device\n",
+        );
+
+        // ONE sync: the copy equals the base → the conflict is no longer in
+        // force; the base equals main → nothing to send; the drain removes the
+        // copy and closes the record.
+        await sync2AllAndAssertNoErrors(client);
+        expect(client.conflictStore.hasBase("x.md")).toBe(false);
+        expect(fs.existsSync(path.join(client.vaultPath, siblingPath))).toBe(false);
         expect(await readRemoteFile(branch, "x.md")).toBe(
           "x v2 from other device\n",
         );

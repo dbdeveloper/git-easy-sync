@@ -29,7 +29,6 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 import {
-  reconcileConflictsForTest,
   trackedSiblingPathsFor,
   conflictEntryCount,
 } from "../helpers";
@@ -133,8 +132,9 @@ describe.skipIf(!integrationEnabled())(
       const records = trackedSiblingPathsFor(client!, p);
       expect(records.length).toBeGreaterThan(0);
       fs.rmSync(path.join(client!.vaultPath, records[0]));
-      await reconcileConflictsForTest(client!);
-      expect(client!.conflictStore.hasBase(p)).toBe(false);
+      // The ledger is the DRAIN's (owner, 2026-10-11): nothing outside a sync
+      // prunes it, so the record stands until the next sync — which resolves it.
+      expect(client!.conflictStore.hasBase(p)).toBe(true);
     };
 
     it(

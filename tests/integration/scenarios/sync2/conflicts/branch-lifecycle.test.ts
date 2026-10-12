@@ -26,7 +26,6 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 import {
-  reconcileConflictsForTest,
   trackedSiblingPathsFor,
   conflictEntryCount,
 } from "../helpers";
@@ -134,8 +133,9 @@ describe.skipIf(!integrationEnabled())(
         // Resolve via sibling delete (case 1: accept ours).
         const siblingAbs = path.join(client.vaultPath, records[0]);
         fs.rmSync(siblingAbs);
-        await reconcileConflictsForTest(client);
-        expect(client.conflictStore.hasBase("note.md")).toBe(false);
+        // The ledger is the DRAIN's (owner, 2026-10-11): nothing outside a sync
+        // prunes it, so the record stands until the next sync — which resolves it.
+        expect(client.conflictStore.hasBase("note.md")).toBe(true);
 
         // Next sync drains the queue (carries ours), then finalize
         // hook merges the branch back into main + deletes the branch.

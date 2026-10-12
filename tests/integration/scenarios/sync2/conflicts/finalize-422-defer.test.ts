@@ -24,7 +24,7 @@ import {
   Sync2TestClient,
   sync2AllAndAssertNoErrors,
 } from "../helpers";
-import { reconcileConflictsForTest, trackedSiblingPathsFor } from "../helpers";
+import { trackedSiblingPathsFor } from "../helpers";
 
 // §VIII K.1 (Phase 6) — the crash-matrix subset that earns a REAL server.
 //
@@ -118,8 +118,9 @@ describe.skipIf(!integrationEnabled())(
         // Resolve (accept ours) so the next sync would otherwise
         // FINALIZE: merge the branch into main and delete it.
         fs.rmSync(path.join(client.vaultPath, records[0]));
-        await reconcileConflictsForTest(client);
-        expect(client.conflictStore.hasBase("note.md")).toBe(false);
+        // The ledger is the DRAIN's (owner, 2026-10-11): nothing outside a sync
+        // prunes it, so the record stands until the next sync — which resolves it.
+        expect(client.conflictStore.hasBase("note.md")).toBe(true);
 
         // THE HOOK. `createCommit` with TWO parents is the FINALIZE
         // merge and nothing else — ordinary pushes have one. Right

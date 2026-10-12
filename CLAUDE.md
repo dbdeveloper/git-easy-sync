@@ -95,6 +95,7 @@ Package manager is **pnpm** (CI uses `pnpm@latest-10`).
 - `pnpm test` — vitest unit suite, runs once and exits (~5 s).
 - `pnpm test:watch` — vitest watch mode.
 - `pnpm test:integration` — full integration suite against real GitHub (~20 min). Bootstrap suite included.
+- `pnpm test:integration:split` — the same suite with every helper-driven sync run as **Commit, then a standalone drain** (`INT_SYNC_MODE=split`) instead of `syncAll`. The plugin has both shapes; a scenario must hold in both.
 - `pnpm test:integration:bootstrap` — bootstrap suite only (~3 min).
 - `pnpm test:integration:nonbootstrap` — everything except bootstrap (~17 min).
 - `pnpm test:perf` — opt-in performance baselines under `tests/perf/`. Not in CI; emits `PERF_BASELINE {…}` lines.

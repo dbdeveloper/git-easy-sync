@@ -24,7 +24,6 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 import {
-  reconcileConflictsForTest,
   trackedSiblingPathsFor,
   conflictEntryCount,
 } from "../helpers";
@@ -124,7 +123,6 @@ describe.skipIf(!integrationEnabled())(
         expect(records).toHaveLength(1);
         const siblingPath = records[0];
         fs.rmSync(path.join(client.vaultPath, siblingPath));
-        await reconcileConflictsForTest(client);
 
         await sync2AllAndAssertNoErrors(client);
 

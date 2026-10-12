@@ -22,7 +22,6 @@ import {
   sync2AllAndAssertNoErrors,
 } from "../helpers";
 import {
-  reconcileConflictsForTest,
   trackedSiblingPathsFor,
   conflictEntryCount,
 } from "../helpers";
@@ -137,8 +136,9 @@ describe.skipIf(!integrationEnabled())(
         // User on B picks "ours" by deleting the sibling. Classifier
         // case 1 → drop record. Next sync pushes B's bytes.
         fs.rmSync(siblingAbs);
-        await reconcileConflictsForTest(deviceB);
-        expect(deviceB.conflictStore.hasBase("img.png")).toBe(false);
+        // The ledger is the DRAIN's (owner, 2026-10-11): nothing outside a sync
+        // prunes it, so the record stands until the next sync — which resolves it.
+        expect(deviceB.conflictStore.hasBase("img.png")).toBe(true);
 
         await sync2AllAndAssertNoErrors(deviceB);
 
