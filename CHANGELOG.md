@@ -236,6 +236,15 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   `Syncing with GitHub`; a nearly empty vault no longer blinks
   `Checking all files…`; the summary's "sent" counts what really
   changed on the server.
+- **A conflict resolved by hand took two syncs.** After editing the
+  copy into the note (or deleting the copy), the first Sync closed the
+  conflict but left the server's version on GitHub — the one you
+  rejected — and only the second Sync sent yours. Other devices could
+  pick up the rejected version in between. One Sync now does it.
+- **While a conflict was open, every sync committed the same note
+  again** (with nothing actually sent). It no longer does.
+- **A `.gitignore` conflict copy made identical to the file no longer
+  blocks syncing.**
 - **Two conflict copies could lose an edit.** If two copies of the
   same note arrived identical and you then edited one of them, the
   plugin still treated them as duplicates and kept only the newer —

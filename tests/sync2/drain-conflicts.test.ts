@@ -624,6 +624,33 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     expect(vaultHas(remoteSiblingName(rec.siblings[1].timeLabel!))).toBe(true);
   });
 
+  // The content cache is valid from the copy's first second (owner,
+  // 2026-10-11): the drain writes the copy itself, so it records the file's
+  // size and mtime right away — readers then decide by stat alone until the
+  // user edits the copy.
+  it("🔑 a newly written copy's record carries its FILE's size and mtime (birth and replace)", async () => {
+    await setupAligned();
+    await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+    await stageBatch({ [NOTE]: LOCAL_CLASH });
+    vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+    await drainOnce(makeDeps());
+    const born = (await conflictStore.load()).entries.get(NOTE)!.siblings[0];
+    const st1 = fs.statSync(path.join(dir, remoteSiblingName(born.timeLabel!)));
+    expect(born.mtime).toBe(st1.mtimeMs);
+    expect(born.size).toBe(st1.size);
+
+    // A newer server version replaces the copy (unedited → clean fold).
+    world.committedAt += 5000;
+    await world.commitFiles({ [NOTE]: "REMOTE\ntwo\nTHREE-v2\n" });
+    baseCommit = world.commits[world.commits.length - 2];
+    await drainOnce(makeDeps());
+    const replaced = (await conflictStore.load()).entries.get(NOTE)!.siblings[0];
+    expect(replaced.timeLabel).not.toBe(born.timeLabel);
+    const st2 = fs.statSync(path.join(dir, remoteSiblingName(replaced.timeLabel!)));
+    expect(replaced.mtime).toBe(st2.mtimeMs);
+    expect(replaced.size).toBe(st2.size);
+  });
+
   // A copy EDITED after birth, through the whole drain (owner, 2026-10-11):
   // the drain's reconcile reads the copies as they are now. Two copies,
   // the older made identical to the newer by hand → one drain later only
