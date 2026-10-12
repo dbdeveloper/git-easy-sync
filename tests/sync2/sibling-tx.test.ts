@@ -131,6 +131,33 @@ describe("SiblingTx (§II.11 / §VIII C.14-22)", () => {
     expect(durable.entries.get(BASE)!.siblings[0].blob).toBeNull();
   });
 
+  it("🔑 the old copy removed by the synthetic cleanup before step 4 → the transaction still completes", async () => {
+    // After step 3 the old copy is no longer tracked; the cleanup, which
+    // runs alongside the drain (2026-10-12), may remove it first when it is
+    // equal to the file or to the new copy. Obsidian's adapter.remove throws
+    // on a missing file (the test double is lenient).
+    const oldSib = await sibling("old fold\n", 1000);
+    const state = stateWith([oldSib]);
+    await store.save(state);
+    const merged = await sibling("new fold\n", 2000, "phone", false);
+    merged.blob = enc("new fold\n");
+    const adapter = vault.adapter;
+    Object.defineProperty(vault, "adapter", { get: () => adapter, configurable: true });
+    const exists = adapter.exists.bind(adapter);
+    adapter.exists = async (p: string) => {
+      const r = await exists(p);
+      if (path.join(dir, p) === siblingAbs(oldSib)) fs.rmSync(siblingAbs(oldSib), { force: true });
+      return r;
+    };
+    adapter.remove = async (p: string) => {
+      if (!fs.existsSync(path.join(dir, p))) throw new Error(`ENOENT: ${p}`);
+      fs.rmSync(path.join(dir, p));
+    };
+    await tx.runReplaceTransaction(state, BASE, oldSib, merged);
+    expect(fs.existsSync(siblingAbs(merged))).toBe(true);
+    expect(fs.existsSync(markAbs())).toBe(false);
+  });
+
   it("C.15: crash between the mark and a full new-file write (absent OR torn) → BACKWARD: metadata untouched, artifact cleaned, unmark", async () => {
     const oldSib = await sibling("old\n", 1000);
     await store.save(stateWith([oldSib]));

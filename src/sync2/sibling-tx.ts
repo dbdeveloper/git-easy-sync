@@ -154,7 +154,14 @@ export default class SiblingTx {
       buildSiblingFilePath(f.path ?? "", f.timeLabel ?? 0, f.deviceLabel),
     );
     if (await this.vault.adapter.exists(p)) {
-      await this.vault.adapter.remove(p);
+      try {
+        await this.vault.adapter.remove(p);
+      } catch (err) {
+        // Removed meanwhile by the synthetic-copy cleanup, which runs
+        // alongside the drain (2026-10-12): after step 3 the old copy is no
+        // longer tracked. The goal is reached; anything else still fails.
+        if (await this.vault.adapter.exists(p)) throw err;
+      }
     }
   }
 

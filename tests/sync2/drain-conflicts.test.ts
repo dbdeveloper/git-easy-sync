@@ -13,6 +13,7 @@ import SiblingTx, {
   SIBLING_TX_MARK_FILE,
 } from "../../src/sync2/sibling-tx";
 import { drainOnce, DrainDeps } from "../../src/sync2/drain";
+import { cleanSyntheticConflicts } from "../../src/sync2/synthetic-conflicts";
 import { mergeBlobsWithMainThreadDiff3 } from "../../src/sync2/diff3";
 import {
   buildSiblingFilePath,
@@ -1075,9 +1076,11 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
     const COPY = /\.conflict-from-.+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(\.[^./]+)?$/;
     let unannounced: string[];
     let appeared: string[];
+    let onCopyAppeared: ((copyPath: string) => Promise<void>) | null;
     const watchCopyFiles = () => {
       unannounced = [];
       appeared = [];
+      onCopyAppeared = null;
       // mock-obsidian's `adapter` is a getter that builds a fresh object per
       // read, so the watch pins ONE wrapped object on this vault instance.
       const a = vault.adapter as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
@@ -1090,10 +1093,46 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
           if (!COPY.test(target)) return r;
           appeared.push(target);
           if (!conflictStore.isTrackedCopy(target)) unannounced.push(target);
+          await onCopyAppeared?.(target);
           return r;
         };
       }
     };
+
+    it("🔑 the REAL cleanup, run the moment a fold writes a copy equal to the file, leaves it and its record alone", async () => {
+      await setupAligned();
+      await world.commitFiles({ [NOTE]: REMOTE_CLASH });
+      await stageBatch({ [NOTE]: LOCAL_CLASH });
+      vaultFiles.files.set(NOTE, { content: LOCAL_CLASH, mtime: 100 });
+      await drainOnce(makeDeps());
+      // The server now carries exactly the user's version: the fold's
+      // result equals the file — a copy the cleanup WOULD remove if it
+      // took it for a synthetic one.
+      world.committedAt += 5000;
+      await world.commitFiles({ [NOTE]: LOCAL_CLASH });
+      baseCommit = world.commits[world.commits.length - 2];
+      // The drain reads the base through the fake; the cleanup reads the
+      // disk — put the user's file there too.
+      fs.writeFileSync(path.join(dir, NOTE), LOCAL_CLASH);
+      watchCopyFiles();
+      const survivedAtBirth: boolean[] = [];
+      const bornAs: string[] = [];
+      onCopyAppeared = async (copyPath) => {
+        bornAs.push(fs.readFileSync(path.join(dir, copyPath), "utf8"));
+        await cleanSyntheticConflicts({
+          vault: vault as never,
+          store: conflictStore,
+          scope: { configDir: ".obsidian", syncConfigDir: () => true },
+        });
+        survivedAtBirth.push(fs.existsSync(path.join(dir, copyPath)));
+      };
+      expect((await drainOnce(makeDeps())).status).toBe("ok");
+      expect(appeared.length).toBeGreaterThan(0);
+      expect(bornAs).toEqual([LOCAL_CLASH]); // equal to the file — eligible
+      expect(survivedAtBirth).toEqual([true]);
+      // (The drain's own epilogue then resolves it — the drain's job, not
+      // the cleanup's: a tracked copy equal to its file ends the conflict.)
+    });
 
     it("birth on the first sibling (STEP1 → Vault-step)", async () => {
       await setupAligned();
