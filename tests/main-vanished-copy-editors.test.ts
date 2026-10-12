@@ -99,6 +99,39 @@ describe("main.ts closes the editors of vanished conflict copies", () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
+  // Owner, 2026-10-11: conflicts.json is the DRAIN's ledger — only the drain
+  // changes it. The UI points (onload, panel open, editor close) READ: they
+  // refresh the counter and close dead editor tabs, and never save the store
+  // or delete a file, even for a copy that is gone or equal to its base.
+  it("🔑 the UI reconcile writes NOTHING: no store save, no file removed", async () => {
+    const { p } = pluginWithEditorTab(true);
+    const save = vi.fn(async () => {});
+    const load = vi.fn(async () => ({
+      lastSiblingTxGuid: null,
+      entries: new Map([
+        [BASE, {
+          conflictBase: { path: BASE, sha: "cb", size: null, mtime: null, blob: null, mode: "", deviceLabel: null },
+          // A copy that is NOT on disk: the old reconcile pruned it and saved.
+          siblings: [{ path: BASE, sha: "x", size: 1, mtime: null, blob: null, mode: "", deviceLabel: "Mac", timeLabel: 1 }],
+        }],
+      ]),
+    }));
+    const remove = vi.fn(async () => {});
+    const h = p as unknown as Record<string, unknown>;
+    h.conflictStoreV2 = { load, save, getCachedState: () => ({ entries: new Map() }) };
+    h.conflictCounter = { markDirty: vi.fn() };
+    h.workerClient = { computeGitBlobSHA: async () => "sha" };
+    (p.app as { vault: { adapter: Record<string, unknown> } }).vault.adapter.remove = remove;
+    (p.app as { vault: { adapter: Record<string, unknown> } }).vault.adapter.stat = async () => null;
+    (p.app as { vault: { adapter: Record<string, unknown> } }).vault.adapter.list = async () => ({ files: [], folders: [] });
+
+    await (p as unknown as { reconcileConflictsV2Once(): Promise<void> }).reconcileConflictsV2Once();
+
+    expect(save).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect((h.conflictCounter as { markDirty: ReturnType<typeof vi.fn> }).markDirty).toHaveBeenCalled();
+  });
+
   it("runs after a conflict reconcile (onload, panel open, editor close)", async () => {
     const { p } = pluginWithEditorTab(false);
     p.reconcileConflictsV2Once = async () => {};

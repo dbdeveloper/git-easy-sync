@@ -88,7 +88,6 @@ import CommitStats from "./sync2/commit-stats";
 import DrainJournal from "./sync2/drain-journal";
 import SiblingTx from "./sync2/sibling-tx";
 import BatchHistorySource from "./sync2/batch-history-source";
-import { processConflicts } from "./sync2/process-conflicts";
 import { ConflictCounter } from "./sync2/conflict-counter";
 import { ConflictWatcher } from "./sync2/conflict-watcher";
 import {
@@ -2169,17 +2168,15 @@ export default class GitHubSyncPlugin extends Plugin {
     // constructed) counts as idle — only a RUNNING drain skips.
     const drainState = this.sync2Manager?.getDrainStatus().state;
     if (drainState !== undefined && drainState !== "idle") return;
+    // READ-ONLY (owner, 2026-10-11): conflicts.json is the DRAIN's ledger,
+    // and only the drain changes it — prunes records, deletes copies,
+    // refreshes their content cache. These UI points (onload, panel open,
+    // editor close) only refresh what the user sees: the counter re-reads
+    // the disk, and the caller closes editor tabs whose copy is gone. They
+    // used to run the drain's full reconcile here — deleting files and
+    // saving the store outside the drain, unordered against a standalone
+    // Commit. The next Sync brings conflicts.json up to the disk's truth.
     try {
-      const state = await processConflicts(
-        {
-          vault: this.app.vault,
-          store: this.conflictStoreV2,
-          computeSha: (bytes) => this.workerClient.computeGitBlobSHA(bytes),
-          logger: this.logger,
-        },
-        null,
-      );
-      await this.conflictStoreV2.save(state);
       this.conflictCounter?.markDirty();
     } catch (err) {
       this.logger.warn("reconcileConflictsV2 failed", { err: `${err}` });
