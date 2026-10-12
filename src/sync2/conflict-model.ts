@@ -96,15 +96,29 @@ export async function buildConflictModel(
       const needed = m.size === base.size || (sizes.get(m.size!) ?? 0) > 1;
       if (!needed) continue;
       const r = m.record;
-      m.sha =
-        r !== null && r.sha !== null && r.size === m.size && r.mtime === m.mtime
-          ? r.sha
-          : await deps.computeSha(await deps.adapter.readBinary(m.copy.path));
+      if (r !== null && r.sha !== null && r.size === m.size && r.mtime === m.mtime) {
+        m.sha = r.sha;
+        continue;
+      }
+      try {
+        m.sha = await deps.computeSha(await deps.adapter.readBinary(m.copy.path));
+      } catch {
+        // Removed between the stat and the read (another cleanup, [←], the
+        // drain) — it is gone, and the picture goes on without it.
+        m.size = null;
+      }
     }
+    const baseSha = async (): Promise<string | null> => {
+      try {
+        return await base.sha();
+      } catch {
+        return null; // the base vanished meanwhile — nothing equals it
+      }
+    };
 
     for (const m of measured) {
       if (m.size === null) m.copy.state = "gone";
-      else if (m.size === base.size && m.sha !== null && m.sha === (await base.sha())) {
+      else if (m.size === base.size && m.sha !== null && m.sha === (await baseSha())) {
         m.copy.state = "equals-base";
       }
     }

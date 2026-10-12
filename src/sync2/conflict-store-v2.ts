@@ -145,9 +145,12 @@ export default class ConflictStoreV2 {
   // The cleanup's removal of an untracked copy: the tracked check and the
   // claim on the name are ONE synchronous step, so a drain either announced
   // first (nothing removed) or waits for this removal before writing.
+  // One removal per name at a time: a second cleanup running alongside
+  // (plugin start + panel open) finds the name already claimed and goes on.
   async removeIfUntracked(copyPath: string, remove: () => Promise<void>): Promise<boolean> {
     if (this.isTrackedCopy(copyPath)) return false;
     const k = copyKey(copyPath);
+    if (this.removals.has(k)) return false;
     const removal = remove();
     this.removals.set(k, removal);
     try {

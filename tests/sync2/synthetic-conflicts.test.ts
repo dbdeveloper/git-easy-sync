@@ -221,6 +221,38 @@ describe("cleanSyntheticConflicts", () => {
     expect(r.removed).toEqual([]);
   });
 
+  it("🔑 two cleanups at once (start-up + panel open) → both finish, the copy is removed once", async () => {
+    put("a.md", "same\n");
+    put(copy("a.md", "Phone", T1), "same\n");
+    put("b.md", "ours\n");
+    put(copy("b.md", "Phone", T1), "theirs\n");
+    put(copy("b.md", "Laptop", T2), "theirs\n");
+    const [r1, r2] = await Promise.all([clean(), clean()]);
+    expect(exists(copy("a.md", "Phone", T1))).toBe(false);
+    expect(exists(copy("b.md", "Phone", T1))).toBe(false);
+    expect(exists(copy("b.md", "Laptop", T2))).toBe(true);
+    expect([...r1.removed, ...r2.removed].sort()).toEqual(
+      [copy("a.md", "Phone", T1), copy("b.md", "Phone", T1)].sort(),
+    );
+  });
+
+  it("🔑 the other cleanup removed a copy while this one was measuring it → it just goes on", async () => {
+    put("a.md", "same\n");
+    put(copy("a.md", "Phone", T1), "same\n");
+    put("b.md", "same b\n");
+    put(copy("b.md", "Phone", T1), "same b\n");
+    const adapter = vault.adapter;
+    Object.defineProperty(vault, "adapter", { get: () => adapter, configurable: true });
+    const read = adapter.readBinary.bind(adapter);
+    adapter.readBinary = async (p: string) => {
+      // The first read of a's copy: the other cleanup got there first.
+      if (p === copy("a.md", "Phone", T1)) fs.rmSync(path.join(root, p), { force: true });
+      return read(p);
+    };
+    const r = await clean();
+    expect(r.removed).toEqual([copy("b.md", "Phone", T1)]); // the rest still done
+  });
+
   it("logs how long the search took and what it did", async () => {
     put("a.md", "same\n");
     put(copy("a.md", "Phone", T1), "same\n");
