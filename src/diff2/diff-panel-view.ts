@@ -55,6 +55,9 @@ export interface DiffEditViewDeps {
   // deleted a sibling in the file explorer, …). main.ts binds it to
   // processConflicts + store.save + counter refresh.
   reconcileConflicts?: () => Promise<void>;
+  // The conflict model's per-copy verdict (owner, 2026-10-12): the copy is
+  // gone or byte-equal to its base. Used before a diff editor mounts.
+  isCopyResolved?: (basePath: string, copyPath: string) => Promise<boolean>;
   // DOT-FILES §4.3 — the SLOW half of the conflicts list: siblings that
   // live in permitted dot-space, which Obsidian's index cannot see.
   // Injected as a thunk so the panel never has to know about configDir

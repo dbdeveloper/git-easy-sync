@@ -4650,6 +4650,7 @@ export default class GitHubSyncPlugin extends Plugin {
       conflictStore: this.conflictStoreV2,
       conflictCounter: this.conflictCounter,
       reconcileConflicts: () => this.reconcileConflictsV2(),
+      isCopyResolved: (basePath: string, copyPath: string) => this.isCopyResolved(basePath, copyPath),
       // DOT-FILES §4.3 — bound here because this is where configDir and
       // the per-device toggle live; the panel stays ignorant of both.
       scanDotSpaceConflicts: () =>

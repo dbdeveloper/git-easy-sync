@@ -28,12 +28,14 @@ import {
 } from "./diff-detail-controller";
 import type { DiffEditViewDeps } from "./diff-panel-view";
 import { installMobileHeaderClamp } from "./mobile-header-clamp";
+import { ConflictResolvedModal } from "./recovery-dialog";
 import {
   openDescFor,
   persistedEditorState,
   historyEntryFromState,
   type EditorTabState,
   type OpenEditorDesc,
+  editorOpenDecision,
 } from "./editor-tabs";
 import {
   autosaveIdForEntry,
@@ -215,7 +217,26 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       // than rendering a "Failed to load diff" error body. (Absent BASE is legit — a
       // delete-vs-modify conflict; mount reads "" for it. Only an absent SIBLING means
       // "resolved → gone".)
-      if (!(await this.deps.vault.adapter.exists(siblingPath))) {
+      // Owner, 2026-10-12: a conflict resolved OUTSIDE the editor (its copy
+      // gone, or byte-equal to its base) does not open. The user who opened
+      // it is told it is already resolved; a restored tab in focus is told it
+      // was resolved outside; any other restored tab closes silently.
+      const resolved = this.deps.isCopyResolved
+        ? await this.deps.isCopyResolved(entry.basePath, siblingPath)
+        : !(await this.deps.vault.adapter.exists(siblingPath));
+      const decision = editorOpenDecision({
+        resolved,
+        userOpened: this.state.openMode === "user",
+        focused: this.leaf === this.app.workspace.activeLeaf,
+      });
+      if (decision !== "mount") {
+        if (decision !== "close-silently") {
+          await new ConflictResolvedModal(
+            this.app,
+            entry.basePath,
+            decision === "notify-already-resolved" ? "open" : "focus",
+          ).prompt();
+        }
         this.leaf.detach();
         return;
       }

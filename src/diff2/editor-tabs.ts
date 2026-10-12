@@ -270,3 +270,22 @@ export function sessionHasValue(editDepth: number): boolean {
 export function overlapAction(dirty: boolean): "reload" | "modal" {
   return dirty ? "modal" : "reload";
 }
+
+// Opening a diff editor for a conflict already resolved outside it (owner,
+// 2026-10-12) — its copy gone or byte-equal to its base. Pure, so the view's
+// wiring stays a one-line switch.
+export type EditorOpenDecision =
+  | "mount"
+  | "notify-already-resolved" // the user opened it: "already resolved" [Continue]
+  | "notify-resolved-outside" // restored, and in focus: "resolved outside" [Close]
+  | "close-silently"; // restored, not in focus
+
+export function editorOpenDecision(o: {
+  resolved: boolean;
+  userOpened: boolean;
+  focused: boolean;
+}): EditorOpenDecision {
+  if (!o.resolved) return "mount";
+  if (o.userOpened) return "notify-already-resolved";
+  return o.focused ? "notify-resolved-outside" : "close-silently";
+}
