@@ -22,7 +22,6 @@ interface Handle {
   logger: unknown;
   closeVanishedCopyEditors(): Promise<void>;
   reconcileConflictsV2(): Promise<void>;
-  reconcileConflictsV2Once(): Promise<void>;
   handleDrainIdle(): void;
   onEditorLeafActivated(leaf: unknown): void;
   closeCancelSyncModal(): void;
@@ -125,7 +124,7 @@ describe("main.ts closes the editors of vanished conflict copies", () => {
     (p.app as { vault: { adapter: Record<string, unknown> } }).vault.adapter.stat = async () => null;
     (p.app as { vault: { adapter: Record<string, unknown> } }).vault.adapter.list = async () => ({ files: [], folders: [] });
 
-    await (p as unknown as { reconcileConflictsV2Once(): Promise<void> }).reconcileConflictsV2Once();
+    await p.reconcileConflictsV2();
 
     expect(save).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
@@ -134,7 +133,6 @@ describe("main.ts closes the editors of vanished conflict copies", () => {
 
   it("runs after a conflict reconcile (onload, panel open, editor close)", async () => {
     const { p } = pluginWithEditorTab(false);
-    p.reconcileConflictsV2Once = async () => {};
     const spy = vi.fn(async () => {});
     p.closeVanishedCopyEditors = spy;
     await p.reconcileConflictsV2();
