@@ -263,7 +263,10 @@ export interface ChangeDetectorDeps {
   // an unchanged base never re-commits, and an edited one commits once
   // (routed to the branch). Same source as the split-push router's
   // `hasPending`, so the two can't diverge. Wired from ConflictStore.
-  conflictBaseSha?: (path: string) => string | null | undefined;
+  // The conflicted base's "unchanged?" reference: its CONFLICT BRANCH
+  // version, but ONLY while the conflict is still in force (owner,
+  // 2026-10-11 — conflict-live.ts). undefined = compare with the baseline.
+  conflictBaseSha?: (path: string) => string | null | undefined | Promise<string | null | undefined>;
   // Called when a walk target could not be fully enumerated. Optional
   // because it is diagnostics — the BELT that protects the data does
   // not depend on anyone listening (§3.3).
@@ -434,9 +437,7 @@ export default class ChangeDetector {
   private readonly pushPluginsDataJson: () => boolean;
   private readonly logger?: { warn(message: string, data?: unknown): void };
   private readonly queue: PeekableQueue | undefined;
-  private readonly conflictBaseSha:
-    | ((path: string) => string | null | undefined)
-    | undefined;
+  private readonly conflictBaseSha: ChangeDetectorDeps["conflictBaseSha"];
   private readonly logWalkIncomplete:
     | ((target: string) => void)
     | undefined;
@@ -694,7 +695,7 @@ export default class ChangeDetector {
         // the same cost the upcoming push would pay; we just bring
         // it forward.
         const addConflictRef = this.conflictBaseSha
-          ? this.conflictBaseSha(file.path)
+          ? await this.conflictBaseSha(file.path)
           : undefined;
         plan.push(
           this.queue || addConflictRef !== undefined
@@ -766,7 +767,7 @@ export default class ChangeDetector {
         // baseline is main's version while the conflict is open (STEP2),
         // so without this every pass reported the same deletion again
         // (owner, 2026-10-11).
-        if (this.conflictBaseSha?.(path) === null) continue;
+        if ((await this.conflictBaseSha?.(path)) === null) continue;
         deletions.push({
           kind: "deleted",
           path,
@@ -873,7 +874,7 @@ export default class ChangeDetector {
     // edited base differs from its branch value → committed once (then
     // pushConflictPathsToBranch advances branchBaseSha).
     const conflictRef = this.conflictBaseSha
-      ? this.conflictBaseSha(file.path)
+      ? await this.conflictBaseSha(file.path)
       : undefined;
     if (conflictRef !== undefined) {
       // unchanged vs branch (and already canonical on disk)

@@ -51,6 +51,7 @@ import { bringLeafToFront } from "./bring-to-front";
 import { enforceIfRootGitignore } from "./gitignore-editor/after-history-write";
 import { forgetReplacedConflictCopy } from "./diff2/forget-replaced-copy";
 import { closeEditorsOfVanishedCopies } from "./diff2/close-vanished-copies";
+import { conflictBaseShaWhileInForce } from "./sync2/conflict-live";
 import { allLeaves, explorerClickTarget } from "./explorer-click";
 import { GitignoreDecisionModal } from "./sync2/views/gitignore-modal";
 import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
@@ -1407,7 +1408,16 @@ export default class GitHubSyncPlugin extends Plugin {
       // §6.3 churn" — but that ruling was about a deferred drain; here
       // it meant one no-op commit on EVERY tick while a conflict stayed
       // open. Lazy: the store is constructed further down in onload.
-      conflictBaseSha: (p: string) => this.conflictStoreV2?.conflictBaseShaFor(p),
+      // …and only while the conflict is still IN FORCE (a tracked copy on
+      // disk that differs from the base): a resolution made through the
+      // file system is then committed in the same sync (conflict-live.ts).
+      conflictBaseSha: (p: string) =>
+        this.conflictStoreV2
+          ? conflictBaseShaWhileInForce(this.conflictStoreV2, {
+              adapter: this.app.vault.adapter,
+              computeSha: (bytes) => this.workerClient.computeGitBlobSHA(bytes),
+            })(p)
+          : undefined,
     });
     // DOT-FILES §8.0 — which managed .gitignore files are, right now,
     // exactly what we seeded. The drain uses them as fake ancestors so
@@ -2392,6 +2402,7 @@ export default class GitHubSyncPlugin extends Plugin {
             this.app.vault,
             this.conflictStoreV2,
             MIGRATION_DEVICE_LABEL,
+            (bytes) => this.workerClient.computeGitBlobSHA(bytes),
           )
         : [];
       const open = disputes.find((d) => d.isMigrationProposal) ?? disputes[0];
@@ -2674,6 +2685,7 @@ export default class GitHubSyncPlugin extends Plugin {
         this.app.vault,
         this.conflictStoreV2,
         MIGRATION_DEVICE_LABEL,
+        (bytes) => this.workerClient.computeGitBlobSHA(bytes),
       );
       if (disputes.length > 0) {
         this.logger.warn("sync blocked: .gitignore in conflict", {

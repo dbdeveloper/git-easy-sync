@@ -37,6 +37,8 @@ import {
 } from "../sync2/conflict-siblings";
 import { deriveAutosaveId } from "./autosave-store";
 import { readRootGitignore, walkDotDir } from "../sync2/dot-space";
+import { baseFacts, copyMatchesBase, type BaseFacts } from "../sync2/conflict-live";
+import { calculateGitBlobSHA } from "../utils";
 
 export type ConflictEntryKind = "tracked" | "synthetic";
 
@@ -430,8 +432,25 @@ export async function findGitignoreDisputes(
   vault: Vault,
   conflictStore: ConflictStoreV2,
   migrationLabel: string,
+  // Default for tests and the plugin alike; production passes the worker's.
+  computeSha: (bytes: ArrayBuffer) => Promise<string> = calculateGitBlobSHA,
 ): Promise<GitignoreDispute[]> {
   const out = new Map<string, GitignoreDispute>();
+  // A copy byte-equal to its base is a conflict RESOLVED through the file
+  // system (owner, 2026-10-11): it no longer holds the conflict, and the
+  // gate blocks every sync while only a drain can remove that copy —
+  // blocking on it would be a dead end. Same comparison as everywhere
+  // (conflict-live.ts): size first, then the record's cache, then bytes.
+  const liveDeps = { adapter: vault.adapter as never, computeSha };
+  const bases = new Map<string, BaseFacts>();
+  const baseOf = async (basePath: string): Promise<BaseFacts> => {
+    let b = bases.get(basePath);
+    if (b === undefined) {
+      b = await baseFacts(liveDeps, basePath);
+      bases.set(basePath, b);
+    }
+    return b;
+  };
   const consider = (siblingPath: string): void => {
     const parsed = parseSiblingFilename(siblingPath);
     if (!parsed) return;
@@ -454,7 +473,8 @@ export async function findGitignoreDisputes(
         sibling.timeLabel ?? 0,
         sibling.deviceLabel,
       );
-      if (!(await vault.adapter.exists(siblingPath))) continue;
+      // "gone" or equal to the base → not in force, nothing to block on.
+      if ((await copyMatchesBase(liveDeps, basePath, sibling, await baseOf(basePath))) !== false) continue;
       consider(siblingPath);
     }
   }
@@ -465,6 +485,20 @@ export async function findGitignoreDisputes(
       const p = normalizePath(f);
       // A staged proposal is mid-write, not yet a conflict.
       if (p.endsWith(".ges-tmp")) continue;
+      const parsed = parseSiblingFilename(p);
+      if (parsed && parsed.basePath.split("/").pop() === ".gitignore") {
+        const base = await baseOf(parsed.basePath);
+        if (base.size !== null) {
+          const st = await vault.adapter.stat(p);
+          if (
+            st !== null &&
+            st.size === base.size &&
+            (await computeSha(await vault.adapter.readBinary(p))) === (await base.sha())
+          ) {
+            continue; // equal to its base — resolved, not a dispute
+          }
+        }
+      }
       consider(p);
     }
   } catch {

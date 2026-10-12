@@ -846,4 +846,21 @@ describe("§8.1.5a findGitignoreDisputes — the pre-sync gate's check", () => {
     writeFile(fx.root, ".gitignore", ".*\n");
     expect(await find()).toEqual([]);
   });
+  // Owner, 2026-10-11: a conflict resolved through the file system — the
+  // copy made byte-equal to the base — is no longer in force, so it must
+  // not block. The gate blocks EVERY sync, and only a drain removes such a
+  // copy: blocking on it would be a dead end.
+  it("🔑 a TRACKED .gitignore copy made equal to the base is NOT a dispute", async () => {
+    writeFile(fx.root, ".gitignore", ".*\n");
+    const sib = await track(fx, ".gitignore", "Phone", 1_700_000_000_000);
+    writeFile(fx.root, sib, ".*\n");
+    expect(await find()).toEqual([]);
+  });
+
+  it("🔑 a SYNTHETIC .gitignore copy equal to the base is NOT a dispute", async () => {
+    writeFile(fx.root, ".gitignore", ".*\n");
+    writeFile(fx.root, siblingPathFor(".gitignore", "Phone", 1_700_000_000_000), ".*\n");
+    expect(await find()).toEqual([]);
+  });
+
 });

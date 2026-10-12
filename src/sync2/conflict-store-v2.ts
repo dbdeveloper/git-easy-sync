@@ -107,18 +107,6 @@ export default class ConflictStoreV2 {
     return this.cachedState;
   }
 
-  // The commit pass's "unchanged?" reference for a CONFLICTED base
-  // (owner, 2026-10-11; the old engine's TODO §26): what sits on the
-  // conflict branch. While a conflict is open the baseline is main's
-  // version (STEP2 sets base = R_m), so comparing the base file with it
-  // re-committed our unchanged version on every sync, and the drain
-  // dropped it every time. undefined = not in conflict; null = the branch
-  // records a DELETION; otherwise the branch's sha.
-  conflictBaseShaFor(path: string): string | null | undefined {
-    const entry = this.cachedState.entries.get(path);
-    return entry === undefined ? undefined : entry.conflictBase.sha;
-  }
-
   // O(1): does this base path carry a live conflict entry? (An entry
   // with siblings==[] is STILL a conflict — I.7.)
   hasBase(path: string): boolean {
