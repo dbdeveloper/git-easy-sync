@@ -40,7 +40,7 @@ import { processConflicts } from "../../../../src/sync2/process-conflicts";
 import { buildSiblingFilePath } from "../../../../src/sync2/conflict-siblings";
 import * as crypto from "crypto";
 import { ConflictWatcher } from "../../../../src/sync2/conflict-watcher";
-import { ConflictCounter } from "../../../../src/sync2/conflict-counter";
+import { ConflictAnalyzer } from "../../../../src/sync2/conflict-analyzer";
 import DeletedStore from "../../../../src/diff2/deleted-store";
 import {
   GitHubSyncSettings,
@@ -261,8 +261,8 @@ export async function createSync2Client(
     syncStore,
   });
   await deletedStore.load();
-  // ConflictCounter + counter-only ConflictWatcher. The watcher's
-  // only side effect is `counter.markDirty()` on relevant vault
+  // ConflictAnalyzer + counter-only ConflictWatcher. The watcher's
+  // only side effect is `counter.invalidate()` on relevant vault
   // events. Production main.ts wires identically.
   // Phase 5.5 step 3b: counter + watcher read the V2 store (same as
   // production main.ts). The old engine keeps writing v1 until THE
@@ -281,14 +281,14 @@ export async function createSync2Client(
     computeSha: calculateGitBlobSHA,
     generateGuid: () => crypto.randomUUID(),
   });
-  const conflictCounter = new ConflictCounter({
+  const conflictAnalyzer = new ConflictAnalyzer({
     vault,
     store: conflictStoreV2,
   });
   const conflictWatcher = new ConflictWatcher({
     vault,
     store: conflictStoreV2,
-    counter: conflictCounter,
+    analyzer: conflictAnalyzer,
   });
   conflictWatcher.start();
 

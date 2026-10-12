@@ -1,5 +1,5 @@
-// Unit tests for ConflictCounter — the UI-side count formula +
-// debounced recompute machinery. See src/sync2/conflict-counter.ts
+// Unit tests for ConflictAnalyzer — the UI-side count formula +
+// debounced recompute machinery. See src/sync2/conflict-analyzer.ts
 // for the contract and docs/PSEUDO-MERGE-MODE.md §5 for the
 // architectural role.
 
@@ -20,14 +20,14 @@ import ConflictStoreV2, {
 } from "../../src/sync2/conflict-store-v2";
 import { buildSiblingFilePath } from "../../src/sync2/conflict-siblings";
 import { emptyFileInfo } from "../../src/sync2/diff3";
-import { ConflictCounter } from "../../src/sync2/conflict-counter";
+import { ConflictAnalyzer } from "../../src/sync2/conflict-analyzer";
 import { Vault } from "../../mock-obsidian";
 
 const CONFIG_DIR = ".obsidian";
 const SELF_PLUGIN_ID = "git-easy-sync";
 
 // A controllable microtask scheduler so tests can verify the
-// debounce behavior: many markDirty() calls within one "tick"
+// debounce behavior: many invalidate() calls within one "tick"
 // should coalesce into a single scheduled recompute. The test
 // fixture exposes pending() / flush() so each test drives the
 // schedule explicitly.
@@ -49,7 +49,7 @@ function makeScheduler() {
 function fixture() {
   const root = path.join(
     os.tmpdir(),
-    `conflict-counter-${crypto.randomBytes(4).toString("hex")}`,
+    `conflict-analyzer-${crypto.randomBytes(4).toString("hex")}`,
   );
   fs.mkdirSync(path.join(root, CONFIG_DIR), { recursive: true });
   const vault = new Vault(root);
@@ -58,13 +58,13 @@ function fixture() {
     selfPluginId: SELF_PLUGIN_ID,
   });
   const scheduler = makeScheduler();
-  const counter = new ConflictCounter({
+  const analyzer = new ConflictAnalyzer({
     vault: vault as unknown as import("obsidian").Vault,
     store,
     scheduleMicrotask: scheduler.schedule,
   });
   const state: ConflictsState = emptyConflictsState();
-  return { root, vault, store, counter, scheduler, state };
+  return { root, vault, store, analyzer, scheduler, state };
 }
 
 function writeVaultFile(root: string, rel: string, content: string): void {
@@ -102,13 +102,13 @@ async function track(
 }
 
 async function recount(f: ReturnType<typeof fixture>): Promise<number> {
-  f.counter.markDirty();
+  f.analyzer.invalidate();
   f.scheduler.flush();
-  await f.counter.flush();
-  return f.counter.getValue();
+  await f.analyzer.refresh();
+  return f.analyzer.filesInConflict();
 }
 
-describe("ConflictCounter", () => {
+describe("ConflictAnalyzer", () => {
   let f: ReturnType<typeof fixture>;
 
   beforeEach(() => {
@@ -119,19 +119,19 @@ describe("ConflictCounter", () => {
     fs.rmSync(f.root, { recursive: true, force: true });
   });
 
-  // ─── markDirty coalesces ────────────────────────────────────────────
+  // ─── invalidate coalesces ────────────────────────────────────────────
 
-  it("markDirty x10 in the same tick schedules at most one recompute", async () => {
+  it("invalidate x10 in the same tick schedules at most one recompute", async () => {
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "local\n");
-    // Create a record so the counter has something to recompute.
+    // Create a record so the analyzer has something to recompute.
     await track(f);
 
     // Reset scheduler — constructor may have done its own initial
     // dirty schedule.
     f.scheduler.flush();
 
-    for (let i = 0; i < 10; i++) f.counter.markDirty();
+    for (let i = 0; i < 10; i++) f.analyzer.invalidate();
 
     expect(f.scheduler.pending()).toBeLessThanOrEqual(1);
   });
@@ -145,24 +145,24 @@ describe("ConflictCounter", () => {
     // null/unmatched → counts as a conflict.
     void rec;
 
-    f.counter.markDirty();
-    await f.counter.flush();
-    expect(f.counter.getValue()).toBe(1);
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
+    expect(f.analyzer.filesInConflict()).toBe(1);
 
-    // Subsequent markDirty without any state change → flush is a
+    // Subsequent invalidate without any state change → flush is a
     // cheap no-change recompute, getValue still returns 1.
-    f.counter.markDirty();
-    await f.counter.flush();
-    expect(f.counter.getValue()).toBe(1);
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
+    expect(f.analyzer.filesInConflict()).toBe(1);
   });
 
   it("TODO #7 — injected countConflicts OVERRIDES the store-only walk", async () => {
     // main.ts wires this to findAllConflicts().entries.length so the badge counts
-    // tracked + SYNTHETIC siblings. Here a spy returns a fixed value; the counter
+    // tracked + SYNTHETIC siblings. Here a spy returns a fixed value; the analyzer
     // must use it and ignore the (empty) store.
     const scheduler = makeScheduler();
     let synthetic = 4;
-    const counter = new ConflictCounter({
+    const analyzer = new ConflictAnalyzer({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store, // empty store → store-only walk would give 0
       scheduleMicrotask: scheduler.schedule,
@@ -170,14 +170,14 @@ describe("ConflictCounter", () => {
     });
     await f.store.load();
 
-    counter.markDirty();
-    await counter.flush();
-    expect(counter.getValue()).toBe(4); // injected, not the store's 0
+    analyzer.invalidate();
+    await analyzer.refresh();
+    expect(analyzer.filesInConflict()).toBe(4); // injected, not the store's 0
 
     synthetic = 7; // a new synthetic sibling appeared
-    counter.markDirty();
-    await counter.flush();
-    expect(counter.getValue()).toBe(7);
+    analyzer.invalidate();
+    await analyzer.refresh();
+    expect(analyzer.filesInConflict()).toBe(7);
   });
 
   // ─── subscribe semantics ────────────────────────────────────────────
@@ -188,18 +188,18 @@ describe("ConflictCounter", () => {
     await track(f);
 
     const calls: number[] = [];
-    const unsubscribe = f.counter.subscribe((n) => {
+    const unsubscribe = f.analyzer.subscribe((n) => {
       calls.push(n);
     });
 
     // First dirty round: count was 0 (initial), now 1 → callback fires.
-    f.counter.markDirty();
-    await f.counter.flush();
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
 
     // Second dirty round: nothing changed, count is still 1 → callback
     // does NOT fire.
-    f.counter.markDirty();
-    await f.counter.flush();
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
 
     expect(calls).toEqual([1]);
     unsubscribe();
@@ -211,12 +211,12 @@ describe("ConflictCounter", () => {
     await track(f);
 
     const calls: number[] = [];
-    const unsubscribe = f.counter.subscribe((n) => {
+    const unsubscribe = f.analyzer.subscribe((n) => {
       calls.push(n);
     });
 
-    f.counter.markDirty();
-    await f.counter.flush();
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
     expect(calls).toEqual([1]);
 
     unsubscribe();
@@ -225,8 +225,8 @@ describe("ConflictCounter", () => {
     // callback.
     await track(f, "Other/note.md");
     writeVaultFile(f.root, "Other/note.md", "local2\n");
-    f.counter.markDirty();
-    await f.counter.flush();
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
     expect(calls).toEqual([1]);
   });
 
@@ -237,21 +237,21 @@ describe("ConflictCounter", () => {
     writeVaultFile(f.root, "Notes/note.md", "local\n");
     await track(f);
 
-    f.counter.markDirty();
+    f.analyzer.invalidate();
     // Without flushing the scheduler manually — flush() should pick
     // up the dirty flag and recompute synchronously (well, via its
     // own awaited path).
-    await f.counter.flush();
-    expect(f.counter.getValue()).toBe(1);
+    await f.analyzer.refresh();
+    expect(f.analyzer.filesInConflict()).toBe(1);
   });
 
   // ─── Counter formula edge cases ─────────────────────────────────────
 
   it("empty store → count is 0", async () => {
     await f.store.load();
-    f.counter.markDirty();
-    await f.counter.flush();
-    expect(f.counter.getValue()).toBe(0);
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
+    expect(f.analyzer.filesInConflict()).toBe(0);
   });
 
   it("entry with !siblingExists → NOT counted (resolved-pending-prune)", async () => {
@@ -260,12 +260,12 @@ describe("ConflictCounter", () => {
     const rec = await track(f);
 
     // User externally deletes the sibling — record stays in store
-    // until next drain, but counter shouldn't include it.
+    // until next drain, but analyzer shouldn't include it.
     fs.unlinkSync(path.join(f.root, rec.siblingPath));
 
-    f.counter.markDirty();
-    await f.counter.flush();
-    expect(f.counter.getValue()).toBe(0);
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
+    expect(f.analyzer.filesInConflict()).toBe(0);
   });
 
   it("entry with !baseExists, siblingExists → COUNTED (base gone, sibling alone — delete-vs-modify)", async () => {
@@ -276,14 +276,14 @@ describe("ConflictCounter", () => {
     // User externally deletes the base file. Sibling still on disk.
     fs.unlinkSync(path.join(f.root, "Notes/note.md"));
 
-    f.counter.markDirty();
-    await f.counter.flush();
-    expect(f.counter.getValue()).toBe(1);
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
+    expect(f.analyzer.filesInConflict()).toBe(1);
   });
 
   it("a content-equal (resolved-in-place) copy does NOT count — the model sees it before the drain prunes it", async () => {
     // Was the opposite until 2026-10-12 ("still COUNTS until process_conflicts
-    // prunes it" — no local base sha, and hashing on a UI counter was judged
+    // prunes it" — no local base sha, and hashing on a UI analyzer was judged
     // too costly). The owner's conflict model reverses it: the badge counts
     // what is in force on disk, and the cost stays low — only a copy of the
     // base's size is ever hashed, and a measured one comes from the cache.
@@ -291,9 +291,9 @@ describe("ConflictCounter", () => {
     writeVaultFile(f.root, "Notes/note.md", "theirs\n");
     await track(f);
 
-    f.counter.markDirty();
-    await f.counter.flush();
-    expect(f.counter.getValue()).toBe(0);
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
+    expect(f.analyzer.filesInConflict()).toBe(0);
   });
 
   it("multiple records with mixed states are counted independently", async () => {
@@ -312,9 +312,9 @@ describe("ConflictCounter", () => {
     // c.md: normal conflict → counts as 1
     await track(f, "c.md");
 
-    f.counter.markDirty();
-    await f.counter.flush();
-    expect(f.counter.getValue()).toBe(2);
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
+    expect(f.analyzer.filesInConflict()).toBe(2);
   });
 
   // Owner, 2026-10-09: the badge counts FILES IN CONFLICT — files kept from
@@ -329,9 +329,9 @@ describe("ConflictCounter", () => {
     await track(f, "a.md");
     await track(f, "a.md");
     await track(f, "b.md");
-    f.counter.markDirty();
-    await f.counter.flush();
-    expect(f.counter.getValue()).toBe(2);
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
+    expect(f.analyzer.filesInConflict()).toBe(2);
   });
 
   it("a file whose copies are ALL gone from disk does not count; one copy left is enough", async () => {
@@ -339,14 +339,14 @@ describe("ConflictCounter", () => {
     const c1 = await track(f, "a.md");
     await track(f, "a.md");
     fs.unlinkSync(path.join(f.root, c1.siblingPath));
-    f.counter.markDirty();
-    await f.counter.flush();
-    expect(f.counter.getValue()).toBe(1);
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
+    expect(f.analyzer.filesInConflict()).toBe(1);
   });
 
   // ─── bulk vault events coalesce ─────────────────────────────────────
 
-  it("100 markDirty calls in tight loop produce a single scheduled recompute", async () => {
+  it("100 invalidate calls in tight loop produce a single scheduled recompute", async () => {
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "local\n");
     await track(f);
@@ -354,24 +354,24 @@ describe("ConflictCounter", () => {
     // Reset scheduler after any constructor-time scheduling.
     f.scheduler.flush();
 
-    for (let i = 0; i < 100; i++) f.counter.markDirty();
+    for (let i = 0; i < 100; i++) f.analyzer.invalidate();
 
     expect(f.scheduler.pending()).toBe(1);
   });
 
-  it("bulk markDirty before any subscriber → still only one callback fire after subscribe + flush", async () => {
+  it("bulk invalidate before any subscriber → still only one callback fire after subscribe + flush", async () => {
     await f.store.load();
     writeVaultFile(f.root, "Notes/note.md", "local\n");
     await track(f);
 
-    for (let i = 0; i < 50; i++) f.counter.markDirty();
+    for (let i = 0; i < 50; i++) f.analyzer.invalidate();
 
     const calls: number[] = [];
-    f.counter.subscribe((n) => {
+    f.analyzer.subscribe((n) => {
       calls.push(n);
     });
 
-    await f.counter.flush();
+    await f.analyzer.refresh();
     expect(calls.length).toBeLessThanOrEqual(1);
     if (calls.length === 1) expect(calls[0]).toBe(1);
   });
@@ -381,39 +381,39 @@ describe("ConflictCounter", () => {
   it("consumeSweepRequest: initial state returns true (sweep on first drain)", () => {
     // After construction we don't know if anything changed while
     // the plugin was off, so the first drain must run the sweep.
-    expect(f.counter.consumeSweepRequest()).toBe(true);
+    expect(f.analyzer.consumeSweepRequest()).toBe(true);
   });
 
-  it("consumeSweepRequest: clears the flag — second call returns false until markDirty()", () => {
-    expect(f.counter.consumeSweepRequest()).toBe(true);
-    expect(f.counter.consumeSweepRequest()).toBe(false);
-    expect(f.counter.consumeSweepRequest()).toBe(false);
+  it("consumeSweepRequest: clears the flag — second call returns false until invalidate()", () => {
+    expect(f.analyzer.consumeSweepRequest()).toBe(true);
+    expect(f.analyzer.consumeSweepRequest()).toBe(false);
+    expect(f.analyzer.consumeSweepRequest()).toBe(false);
   });
 
-  it("consumeSweepRequest: markDirty re-arms the flag", () => {
+  it("consumeSweepRequest: invalidate re-arms the flag", () => {
     // Consume the initial true.
-    expect(f.counter.consumeSweepRequest()).toBe(true);
-    expect(f.counter.consumeSweepRequest()).toBe(false);
+    expect(f.analyzer.consumeSweepRequest()).toBe(true);
+    expect(f.analyzer.consumeSweepRequest()).toBe(false);
 
-    // Vault event fires → markDirty → flag re-armed.
-    f.counter.markDirty();
-    expect(f.counter.consumeSweepRequest()).toBe(true);
-    expect(f.counter.consumeSweepRequest()).toBe(false);
+    // Vault event fires → invalidate → flag re-armed.
+    f.analyzer.invalidate();
+    expect(f.analyzer.consumeSweepRequest()).toBe(true);
+    expect(f.analyzer.consumeSweepRequest()).toBe(false);
   });
 
   it("consumeSweepRequest: independent of microtask recompute (survives flush)", async () => {
     // dirty/scheduled/currentRun are cleared by the recompute
     // microtask; sweepRequested must NOT be — drain may run
     // independently of UI recomputes.
-    f.counter.markDirty();
-    await f.counter.flush();
+    f.analyzer.invalidate();
+    await f.analyzer.refresh();
     // After flush, `dirty` is cleared but sweepRequested is still
-    // set (markDirty set it; no consumeSweepRequest ack yet).
-    expect(f.counter.consumeSweepRequest()).toBe(true);
+    // set (invalidate set it; no consumeSweepRequest ack yet).
+    expect(f.analyzer.consumeSweepRequest()).toBe(true);
   });
 
   // ─── the conflict model (owner, 2026-10-12) ────────────────────────
-  // The counter computes through ONE read-only model of ledger + disk, so
+  // The analyzer computes through ONE read-only model of ledger + disk, so
   // the badge counts what is really in force — and its subscribers (status
   // bar, ribbon, panel, editor-tab cleaner) hear about every change of that
   // picture, not only of the number.
@@ -434,11 +434,11 @@ describe("ConflictCounter", () => {
     await track(f); // a second copy keeps the file in conflict
     await recount(f);
     let calls = 0;
-    f.counter.subscribe(() => calls++);
+    f.analyzer.subscribe(() => calls++);
     writeVaultFile(f.root, a.siblingPath, "local\n"); // one copy resolved
     expect(await recount(f)).toBe(1); // still one file in conflict
     expect(calls).toBe(1);
-    expect(f.counter.getModel()?.entries.get("Notes/note.md")?.copies.map((c) => c.state).sort())
+    expect(f.analyzer.getModel()?.entries.get("Notes/note.md")?.copies.map((c) => c.state).sort())
       .toEqual(["equals-base", "live"]);
   });
 

@@ -643,11 +643,11 @@ describe("sync notice lifecycle (§II.16)", () => {
     { label: "a cancelled drain", setup: (p: NoticeHandle) => void (p.syncCancelRequested = true) },
   ])("$label reaching idle re-counts the conflicts (the ribbon's number)", ({ setup }) => {
     const p = makePlugin();
-    const markDirty = vi.fn();
-    (p as unknown as { conflictCounter: { markDirty(): void } }).conflictCounter = { markDirty };
+    const invalidate = vi.fn();
+    (p as unknown as { conflictAnalyzer: { invalidate(): void } }).conflictAnalyzer = { invalidate };
     setup(p);
     p.handleDrainIdle();
-    expect(markDirty).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledTimes(1);
   });
 
   // Owner, 2026-10-11: a cancel that did NOT come through the Cancel/Keep

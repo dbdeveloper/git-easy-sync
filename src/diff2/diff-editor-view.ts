@@ -11,7 +11,7 @@
 // Unlike the panel, the editor:
 //   - is NOT a singleton (many open at once — S4 open-guard keeps the write-sets
 //     disjoint);
-//   - does NOT subscribe to ConflictCounter (it is not a list — S2 contract);
+//   - does NOT subscribe to ConflictAnalyzer (it is not a list — S2 contract);
 //   - has a STATIC title (the file it resolves, fixed for the leaf's lifetime —
 //     no dynamic `getDisplayText` flip / `refreshHeader` hack; title-simplification
 //     starts here per §12).

@@ -91,7 +91,7 @@ describe("the periodic sync skips big files silently", () => {
     p.confirmPendingConflictsBeforeSync = async () => true;
     p.learnGitIdentityOnce = async () => {};
     p.cleanupMigratedGitignoresOnRemote = async () => {};
-    p.conflictCounter = { markDirty: () => {} };
+    p.conflictAnalyzer = { invalidate: () => {} };
     p.tokenExpiredFlag = { note: () => {} };
     let fail = false;
     p.sync2Manager = {

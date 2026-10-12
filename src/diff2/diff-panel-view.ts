@@ -5,7 +5,7 @@
 // lives in `DiffDetailController`, driven by the multi-tab `DiffEditorView`. The
 // panel no longer hosts detail mode at all — a conflicts-list row-click opens a
 // dedicated `diff2-editor-view` tab (behind the open-guard). So this view is now a
-// PURE list: sub-tabs (Conflicts / Deleted), the conflicts list, the ConflictCounter
+// PURE list: sub-tabs (Conflicts / Deleted), the conflicts list, the ConflictAnalyzer
 // subscription, the singleton guard, and the `[←]` back-nav target (applyBackNav).
 // S6 deleted the dead detail code (controller, the DiffDetailHost callbacks, the
 // Mod+F search hook, the ESC scope, the dynamic-title flip) that the slim-down made
@@ -22,7 +22,7 @@
 //   - docs/tasks/SPLIT-PANEL-EDITOR-FEASIBILITY.md §12 (the split), R-A/R-D (panel/[←])
 
 import { ItemView, type Vault, WorkspaceLeaf } from "obsidian";
-import type { ConflictCounter } from "../sync2/conflict-counter";
+import type { ConflictAnalyzer } from "../sync2/conflict-analyzer";
 import type ConflictStoreV2 from "../sync2/conflict-store-v2";
 import {
   conflictKey,
@@ -46,7 +46,7 @@ export const DIFF2_PANEL_VIEW_TYPE = "diff2-panel-view";
 
 // The dependency object both diff2 hosts (this panel + the editor) take. Most fields
 // are consumed by the editor's DiffDetailController; the panel itself uses only vault,
-// conflictStore, conflictCounter, and openEditor.
+// conflictStore, conflictAnalyzer, and openEditor.
 export interface DiffEditViewDeps {
   vault: Vault;
   conflictStore: ConflictStoreV2;
@@ -72,7 +72,7 @@ export interface DiffEditViewDeps {
   // or the settings toggle; main.ts binds it. Optional: without it the
   // panel simply shows the fast half, which is the pre-Крок-C list.
   scanDotSpaceConflicts?: () => Promise<ConflictEntry[]>;
-  conflictCounter: ConflictCounter;
+  conflictAnalyzer: ConflictAnalyzer;
   // Snapshot store passed to atomicWriteFile so the post-write
   // recordSync step lines up with the snapshot's expectations.
   // Optional in test fixtures; required in production for
@@ -135,7 +135,7 @@ function initialState(): PanelViewState {
 export class DiffPanelView extends ItemView {
   private viewState: PanelViewState = initialState();
   private readonly deps: DiffEditViewDeps;
-  // Unsubscribe handle from ConflictCounter.subscribe — set on open, called on close.
+  // Unsubscribe handle from ConflictAnalyzer.subscribe — set on open, called on close.
   private unsubscribeCounter: (() => void) | null = null;
   // Keyboard-driven conflict-list selection (mirrors the history view). The nav walks the FLAT
   // ref list (file-name group headers aren't refs → skipped). selectedKey persists across
@@ -207,9 +207,9 @@ export class DiffPanelView extends ItemView {
     // lands.
     void this.deps.reconcileConflicts?.();
 
-    // ConflictCounter notifies on any sibling-event vault change → re-render the list.
+    // ConflictAnalyzer notifies on any sibling-event vault change → re-render the list.
     // Deferred to a microtask so multiple rapid changes collapse into one re-render.
-    this.unsubscribeCounter = this.deps.conflictCounter.subscribe(() => {
+    this.unsubscribeCounter = this.deps.conflictAnalyzer.subscribe(() => {
       queueMicrotask(() => void this.refreshConflicts());
     });
 
@@ -349,7 +349,7 @@ export class DiffPanelView extends ItemView {
   // Scroll the conflicts list to a base group's first row. Deferred past layout: the
   // panel was just revealed / re-rendered, so its geometry isn't measured yet and a
   // synchronous scrollIntoView would no-op or mis-target (same reason the editor's
-  // auto-focus and focus-on-reveal defer). rAF also lets the ConflictCounter re-render
+  // auto-focus and focus-on-reveal defer). rAF also lets the ConflictAnalyzer re-render
   // settle first, so the scroll targets the final DOM. `row?.` covers "the base group is
   // already gone" — the last-sibling-resolved path (planBackNav passed null, but a
   // racing re-render can drop the row too) falls out as a no-op.

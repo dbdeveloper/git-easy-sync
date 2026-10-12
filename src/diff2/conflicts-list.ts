@@ -41,7 +41,7 @@ export function conflictKey(e: ConflictEntry): string {
 
 // Render the conflicts list into the supplied container. Idempotent:
 // clears the container first so this can be called on every refresh
-// (e.g. after a ConflictCounter notify) without leaking stale DOM.
+// (e.g. after a ConflictAnalyzer notify) without leaking stale DOM.
 export function renderConflictsList(
   container: HTMLElement,
   entries: ConflictEntry[],

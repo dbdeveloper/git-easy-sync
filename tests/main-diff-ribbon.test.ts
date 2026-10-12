@@ -29,7 +29,7 @@ proto.createSpan ??= function (this: HTMLElement, o) {
 
 interface RibbonHandle {
   addRibbonIcon(icon: string, title: string, cb: () => void): HTMLElement;
-  conflictCounter: { getValue(): number };
+  conflictAnalyzer: { filesInConflict(): number };
   diffRibbonIcon: HTMLElement | null;
   diffRibbonConflictBadge: HTMLElement | null;
   showDiffRibbonIcon(): void;
@@ -42,7 +42,7 @@ function makePlugin(count: number): { p: RibbonHandle; titles: string[] } {
     titles.push(title);
     return document.createElement("div");
   };
-  p.conflictCounter = { getValue: () => count };
+  p.conflictAnalyzer = { filesInConflict: () => count };
   p.diffRibbonIcon = null;
   p.diffRibbonConflictBadge = null;
   return { p, titles };

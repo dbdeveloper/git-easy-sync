@@ -349,7 +349,7 @@ export async function findAllConflicts(
 //     synthetic leftovers) → the gate lets the sync proceed with no modal.
 // The modal's "Resolve" opens the diff CONFLICTS PANEL (the full list), so no specific
 // sibling path is needed here. The badge / status bar / menu count TRACKED files only
-// (ConflictCounter's store walk — a file counts while ≥1 tracked copy is on disk); TODO #7's
+// (ConflictAnalyzer's store walk — a file counts while ≥1 tracked copy is on disk); TODO #7's
 // countConflicts hook (tracked + synthetic) exists but is NOT wired in main.ts.
 //
 // `trackedConflictCount` = total number of tracked SIBLINGS across the tracked base(s). One

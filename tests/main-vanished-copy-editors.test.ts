@@ -161,7 +161,7 @@ describe("main.ts closes the editors of vanished conflict copies", () => {
     const remove = vi.fn(async () => {});
     const h = p as unknown as Record<string, unknown>;
     h.conflictStoreV2 = { load, save, getCachedState: () => ({ entries: new Map() }) };
-    h.conflictCounter = { markDirty: vi.fn() };
+    h.conflictAnalyzer = { invalidate: vi.fn() };
     h.workerClient = { computeGitBlobSHA: async () => "sha" };
     (p.app as { vault: { adapter: Record<string, unknown> } }).vault.adapter.remove = remove;
     (p.app as { vault: { adapter: Record<string, unknown> } }).vault.adapter.stat = async () => null;
@@ -171,7 +171,7 @@ describe("main.ts closes the editors of vanished conflict copies", () => {
 
     expect(save).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
-    expect((h.conflictCounter as { markDirty: ReturnType<typeof vi.fn> }).markDirty).toHaveBeenCalled();
+    expect((h.conflictAnalyzer as { invalidate: ReturnType<typeof vi.fn> }).invalidate).toHaveBeenCalled();
   });
 
   it("runs after a conflict reconcile (onload, panel open, editor close)", async () => {

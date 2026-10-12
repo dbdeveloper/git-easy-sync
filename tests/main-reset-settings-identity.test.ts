@@ -49,7 +49,7 @@ interface ResetHandle {
   baselines: unknown;
   deletedStore: unknown;
   conflictStoreV2: unknown;
-  conflictCounter: unknown;
+  conflictAnalyzer: unknown;
   app: unknown;
   saveSettings: () => Promise<void>;
   resetPluginState: () => Promise<void>;
@@ -80,7 +80,7 @@ function pluginAfterReset(): {
   p.baselines = { clear: async () => {} };
   p.deletedStore = { load: async () => {} };
   p.conflictStoreV2 = { load: async () => {} };
-  p.conflictCounter = { markDirty: () => {}, flush: async () => {} };
+  p.conflictAnalyzer = { invalidate: () => {}, refresh: async () => {} };
   const files = new Map<string, string>();
   p.app = {
     vault: {

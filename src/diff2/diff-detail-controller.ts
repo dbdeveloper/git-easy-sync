@@ -15,7 +15,7 @@
 //
 // Lifetime: per-VIEW (the host creates one in onOpen, disposes it in onClose). The
 // mount/dispose cycle happens INSIDE; view-level concerns (escScope, Mod+F window
-// keydown, ConflictCounter subscription) stay in the host.
+// keydown, ConflictAnalyzer subscription) stay in the host.
 
 import { type App, Notice } from "obsidian";
 import { closeSearchPanel, openSearchPanel, searchPanelOpen } from "@codemirror/search";

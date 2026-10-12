@@ -88,7 +88,7 @@ import CommitStats from "./sync2/commit-stats";
 import DrainJournal from "./sync2/drain-journal";
 import SiblingTx from "./sync2/sibling-tx";
 import BatchHistorySource from "./sync2/batch-history-source";
-import { ConflictCounter } from "./sync2/conflict-counter";
+import { ConflictAnalyzer } from "./sync2/conflict-analyzer";
 import { ConflictWatcher } from "./sync2/conflict-watcher";
 import {
   buildStatusMenu,
@@ -427,7 +427,7 @@ export default class GitHubSyncPlugin extends Plugin {
   syncStore!: SyncStore;
   githubClient: GithubClient | null = null;
   conflictWatcher!: ConflictWatcher;
-  conflictCounter!: ConflictCounter;
+  conflictAnalyzer!: ConflictAnalyzer;
   // diff2 trash subsystem (see docs/DIFF2_IMPLEMENTATION_PLAN.md §R3).
   private trashWatcher: TrashWatcher | null = null;
   // Set when a self-reload has been scheduled (the plugin's own files were
@@ -735,8 +735,8 @@ export default class GitHubSyncPlugin extends Plugin {
         // now that getFiles() is ready AND the UI surfaces exist, so persisted conflicts
         // paint on first layout. (Before #7 the count came from the ConflictStore, which
         // IS loaded by initSync2 — hence the regression.)
-        this.conflictCounter?.markDirty();
-        void this.conflictCounter?.flush();
+        this.conflictAnalyzer?.invalidate();
+        void this.conflictAnalyzer?.refresh();
 
         // Delay BOTH the interval scheduler AND the startup sync past the
         // STARTUP_SYNC_DELAY_MS window — so NO timer (periodic tick, watchdog,
@@ -811,7 +811,7 @@ export default class GitHubSyncPlugin extends Plugin {
       // Diff-Edit widget — Phase 1 (conflicts list + sub-tabs + stub
       // detail view). Registers the view type so workspace can
       // instantiate it; dependencies (vault, conflictStore,
-      // conflictCounter) passed via closure since the view needs
+      // conflictAnalyzer) passed via closure since the view needs
       // them to populate the list and react to changes.
       // Panel host (singleton, list↔detail) and the multi-tab editor host
       // (one per base:sibling pair, S3) share the SAME dependency object.
@@ -1195,8 +1195,8 @@ export default class GitHubSyncPlugin extends Plugin {
         // too, or the next flush would write the old numbers back — and
         // the first commit after a RESET must say "Checking all files…".
         this.commitStats?.reset();
-        this.conflictCounter?.markDirty();
-        await this.conflictCounter?.flush();
+        this.conflictAnalyzer?.invalidate();
+        await this.conflictAnalyzer?.refresh();
       },
     });
     if (outcome === "drain-stuck") {
@@ -1602,12 +1602,12 @@ export default class GitHubSyncPlugin extends Plugin {
     // launch and never finish.
     void this.startMigrationAnalysis();
 
-    // ConflictCounter owns the count formula + debounced recompute;
-    // ConflictWatcher just calls counter.markDirty() on relevant
+    // ConflictAnalyzer owns the count formula + debounced recompute;
+    // ConflictWatcher just calls counter.invalidate() on relevant
     // vault events; the counter notifies UI surfaces via
     // subscribe(). See docs/PSEUDO-MERGE-MODE.md §5 for the layer
     // separation.
-    const conflictCounter = new ConflictCounter({
+    const conflictAnalyzer = new ConflictAnalyzer({
       vault: this.app.vault,
       store: conflictStoreV2,
       // ✅ TODO #7 CLOSED the other way (DOT-FILES §4.3, owner decision): the
@@ -1627,21 +1627,21 @@ export default class GitHubSyncPlugin extends Plugin {
       // the base's size whose cache is stale, off the main thread.
       computeSha: (bytes) => this.workerClient.computeGitBlobSHA(bytes),
     });
-    conflictCounter.subscribe(() => this.refreshConflictUI());
+    conflictAnalyzer.subscribe(() => this.refreshConflictUI());
     // The editor-tab cleaner follows the conflict model (owner, 2026-10-12):
     // whatever recomputes it — an event, a drain, the panel, a commit — a tab
     // whose conflict is resolved closes (the focused one after a window).
-    conflictCounter.subscribe(() => void this.closeVanishedCopyEditors());
-    this.conflictCounter = conflictCounter;
+    conflictAnalyzer.subscribe(() => void this.closeVanishedCopyEditors());
+    this.conflictAnalyzer = conflictAnalyzer;
     // Seed the counter with whatever conflicts persisted from the
-    // last session. markDirty + flush so the UI badge reflects
+    // last session. invalidate + flush so the UI badge reflects
     // current state on first paint.
-    conflictCounter.markDirty();
-    await conflictCounter.flush();
+    conflictAnalyzer.invalidate();
+    await conflictAnalyzer.refresh();
     const conflictWatcher = new ConflictWatcher({
       vault: this.app.vault,
       store: conflictStoreV2,
-      counter: conflictCounter,
+      analyzer: conflictAnalyzer,
     });
     conflictWatcher.start();
     this.conflictWatcher = conflictWatcher;
@@ -2042,7 +2042,7 @@ export default class GitHubSyncPlugin extends Plugin {
     // listeners that normally drive the counter. Mark dirty so the
     // counter recomputes and the subscribe → refreshConflictUI()
     // path fires when the badge value actually changes.
-    this.conflictCounter?.markDirty();
+    this.conflictAnalyzer?.invalidate();
   }
 
   // Background drain — entry point for the interval timer when
@@ -2099,8 +2099,8 @@ export default class GitHubSyncPlugin extends Plugin {
         new Notice(`Error syncing. ${err}`);
       }
     }
-    // See markDirty rationale in sync() above.
-    this.conflictCounter?.markDirty();
+    // See invalidate rationale in sync() above.
+    this.conflictAnalyzer?.invalidate();
   }
 
   // ── stage 10 — pre-sync conflict gate + UI refresh ──────────────────
@@ -2119,7 +2119,7 @@ export default class GitHubSyncPlugin extends Plugin {
   // drain; with nothing written, neither is needed — refactor, owner's
   // command, 2026-10-12.)
   private async reconcileConflictsV2(): Promise<void> {
-    this.conflictCounter?.markDirty();
+    this.conflictAnalyzer?.invalidate();
     await this.closeVanishedCopyEditors();
   }
 
@@ -2822,11 +2822,11 @@ export default class GitHubSyncPlugin extends Plugin {
   }
 
   // Refresh every visibility surface (status bar, ribbon badge)
-  // from the current ConflictCounter value. The counter formula
+  // from the current ConflictAnalyzer value. The counter formula
   // (excludes records with !siblingExists and records where
   // siblingSha == baseSha) reflects what the user actually still
   // has to resolve, not the raw record count.
-  // Conflict-count changed (ConflictCounter.subscribe, line ~866). E2: the
+  // Conflict-count changed (ConflictAnalyzer.subscribe, line ~866). E2: the
   // count now lives in the single "GitHub" status-bar item (the "M ⁇" suffix),
   // so a count change just repaints that item. The ribbon sync-icon badge is
   // push-queue depth, NOT conflicts (SYNC2 §4.3); the optional diff ribbon icon
@@ -3269,7 +3269,7 @@ export default class GitHubSyncPlugin extends Plugin {
     // watchdog / startup with commit off) never reached the ribbon's number.
     // FIRST, before the early returns below — a cancelled drain may have
     // created conflicts too.
-    this.conflictCounter?.markDirty();
+    this.conflictAnalyzer?.invalidate();
     // A drain may have removed or replaced a conflict copy.
     void this.closeVanishedCopyEditors();
     this.closeCancelSyncModal();
@@ -3599,7 +3599,7 @@ export default class GitHubSyncPlugin extends Plugin {
     if (this.tokenExpiredFlag?.isExpiredCached() ?? false) {
       ghSpan.addClass("git-easy-sync-statusbar-token-expired");
     }
-    const conflicts = this.conflictCounter?.getValue() ?? 0;
+    const conflicts = this.conflictAnalyzer?.filesInConflict() ?? 0;
     for (const seg of statusBarSuffix(this.currentQueueDepth, conflicts)) {
       const span = el.createSpan({ text: seg.text });
       if (seg.cls === "up") span.addClass("git-easy-sync-statusbar-up");
@@ -3620,7 +3620,7 @@ export default class GitHubSyncPlugin extends Plugin {
       ),
       pluginName: manifest.name,
       queueDepth: this.currentQueueDepth,
-      conflictCount: this.conflictCounter?.getValue() ?? 0,
+      conflictCount: this.conflictAnalyzer?.filesInConflict() ?? 0,
       hasActiveFile: this.activeFilePath() !== null,
     });
     for (const item of items) {
@@ -3795,7 +3795,7 @@ export default class GitHubSyncPlugin extends Plugin {
       () => void this.activateDiffEditView(),
     );
     // Seed badge + tooltip on creation (correct on a cold onload AND when the
-    // settings toggle creates this icon mid-session — ConflictCounter is live).
+    // settings toggle creates this icon mid-session — ConflictAnalyzer is live).
     this.refreshDiffRibbonBadge();
   }
 
@@ -3808,11 +3808,11 @@ export default class GitHubSyncPlugin extends Plugin {
 
   // Repaint the diff icon's conflict badge + tooltip. The ICON stays visible at
   // 0 conflicts (its value is Deleted/Compare access, R2.7.4) — only the badge
-  // is removed. Called from refreshConflictUI (ConflictCounter subscribe).
+  // is removed. Called from refreshConflictUI (ConflictAnalyzer subscribe).
   private refreshDiffRibbonBadge(): void {
     const icon = this.diffRibbonIcon;
     if (!icon) return;
-    const count = this.conflictCounter?.getValue() ?? 0;
+    const count = this.conflictAnalyzer?.filesInConflict() ?? 0;
     setTooltip(icon, diffTooltip(count)); // tooltip tracks the count even at 0
     if (count <= 0) {
       this.diffRibbonConflictBadge?.remove();
@@ -3902,7 +3902,7 @@ export default class GitHubSyncPlugin extends Plugin {
         new Notice(`Upload failed: ${err}`, 10000);
       }
     }
-    this.conflictCounter?.markDirty();
+    this.conflictAnalyzer?.invalidate();
   }
 
   // 2.0.2-beta2: commit a single file (typically the file in the
@@ -4708,7 +4708,7 @@ export default class GitHubSyncPlugin extends Plugin {
       },
       vault: this.app.vault,
       conflictStore: this.conflictStoreV2,
-      conflictCounter: this.conflictCounter,
+      conflictAnalyzer: this.conflictAnalyzer,
       reconcileConflicts: () => this.reconcileConflictsV2(),
       isCopyResolved: (basePath: string, copyPath: string) => this.isCopyResolved(basePath, copyPath),
       computeSha: (bytes: ArrayBuffer) => this.workerClient.computeGitBlobSHA(bytes),

@@ -2,48 +2,39 @@
 // Vladyslav Kozlovskyy <dbdevelop@gmail.com>, 2026.
 // AGPL-3.0 — see LICENSE.
 
-// ConflictCounter — read-only UI counter for the conflict status
-// indicators (status bar + ribbon). Reactive to vault.on events
-// via ConflictWatcher; never mutates store. See
-// docs/PSEUDO-MERGE-MODE.md §5 for the layer separation.
+// ConflictAnalyzer (owner, 2026-10-12; was "ConflictCounter" — it stopped
+// being just a counter when it began to hold the conflict model). The ONE
+// module that decides, for TRACKED conflicts, what is still in force: it
+// reads the drain's ledger (conflicts.json) plus the disk, builds the
+// conflict model (conflict-model.ts), keeps it in memory and tells its
+// subscribers whenever the picture changes. It never writes the ledger or
+// a file. Synthetic copies are not its business — the Diff Panel finds
+// those itself, only where they are needed.
 //
 // Contract:
 //
-//   - markDirty() is O(1): sets dirty flag, schedules at most ONE
+//   - invalidate() is O(1): marks the model stale, schedules at most ONE
 //     debounced recompute via the supplied microtask scheduler.
-//     Multiple back-to-back calls coalesce into one scheduled task.
+//     Back-to-back calls coalesce into one scheduled task. Anyone may call
+//     it — the vault-event watcher, the drain, the commit pass, the UI.
 //
-//   - getValue() is O(1): returns the CACHED count. Callers that
-//     need a guaranteed-fresh value await flush() first.
+//   - refresh() is async: recomputes NOW (does not wait for the
+//     scheduler), looping until quiescent. Callers that must act on a
+//     fresh picture (the commit pass, the drain) await it.
 //
-//   - flush() is async: runs the recompute INLINE (does NOT wait
-//     for the scheduler to fire). Loops until quiescent (dirty
-//     cleared and no in-flight recompute). Used by drain at start
-//     and by tests.
+//   - getModel() / filesInConflict(): the cached model and its count (the
+//     badge's number) — O(1).
 //
-//   - subscribe(cb) registers a callback that fires after each
-//     recompute, but ONLY if the value CHANGED. Returns an
-//     unsubscribe function. Used by status bar + ribbon for
-//     reactive UI.
-//
-// Default recompute formula (v2 port — production overrides it with
-// the injected findAllConflicts count, TODO #7, so panel and badge
-// can never diverge):
-//   count = 0
-//   for (basePath, entry) in store.getCachedState().entries:
-//     for sibling in entry.siblings:
-//       if exists(derived sibling disk name): count++
-//   // v1 additionally skipped SHA-equal (auto-cleaning) siblings using
-//   // the record's cached base/sibling shas; v2 entries carry no local
-//   // base sha, and hashing here would put a read+SHA on a UI counter.
-//   // The next process_conflicts prunes those entries anyway.
+//   - subscribe(cb) fires after a recompute whenever the PICTURE changed
+//     (not only the number). Status bar, ribbon, Diff Panel and the
+//     editor-tab cleaner subscribe.
 
 import { Vault } from "obsidian";
 import ConflictStoreV2 from "./conflict-store-v2";
 import { buildConflictModel, type ConflictModel } from "./conflict-model";
 import { calculateGitBlobSHA } from "../utils";
 
-export interface ConflictCounterDeps {
+export interface ConflictAnalyzerDeps {
   vault: Vault;
   store: ConflictStoreV2;
   // Override clock for deterministic tests.
@@ -62,9 +53,9 @@ export interface ConflictCounterDeps {
   computeSha?: (bytes: ArrayBuffer) => Promise<string>;
 }
 
-export type CountChangeCallback = (count: number) => void;
+export type ModelChangeCallback = (count: number) => void;
 
-export class ConflictCounter {
+export class ConflictAnalyzer {
   private readonly vault: Vault;
   private readonly store: ConflictStoreV2;
   private readonly scheduleMicrotask: (fn: () => void) => void;
@@ -79,23 +70,23 @@ export class ConflictCounter {
   private readonly computeSha: (bytes: ArrayBuffer) => Promise<string>;
   private dirty: boolean = false;
   // True while a microtask is queued but hasn't fired yet. Prevents
-  // bulk markDirty() from queueing N tasks for one debounce window.
+  // bulk invalidate() from queueing N tasks for one debounce window.
   private scheduled: boolean = false;
   // Non-null while a recompute is actually running. flush() awaits
-  // this; markDirty() does not re-schedule if it's set (the in-flight
+  // this; invalidate() does not re-schedule if it's set (the in-flight
   // run will re-arm via the post-await dirty-check loop below).
   private currentRun: Promise<void> | null = null;
   // Separate from `dirty` — survives recompute cycles. Set by any
-  // markDirty() call (including the initial state). Cleared only by
+  // invalidate() call (including the initial state). Cleared only by
   // `consumeSweepRequest()`, which the drain calls at the start of
   // each cycle. Lets the drain skip its evaluateConflictState sweep
   // when nothing relevant changed since the last drain.
   // Initial `true` so the first drain after onload always runs the
   // sweep (we don't know what changed while the plugin was off).
   private sweepRequested: boolean = true;
-  private readonly subscribers: Set<CountChangeCallback> = new Set();
+  private readonly subscribers: Set<ModelChangeCallback> = new Set();
 
-  constructor(deps: ConflictCounterDeps) {
+  constructor(deps: ConflictAnalyzerDeps) {
     this.vault = deps.vault;
     this.store = deps.store;
     this.scheduleMicrotask =
@@ -109,11 +100,11 @@ export class ConflictCounter {
     return this.model;
   }
 
-  // O(1). Sets the dirty flag (for UI counter recompute) AND the
+  // O(1). Sets the dirty flag (for the model recompute) AND the
   // sweep-requested flag (for drain). Schedules at most one debounced
   // recompute via the microtask scheduler. Back-to-back calls
   // coalesce into one scheduled callback.
-  markDirty(): void {
+  invalidate(): void {
     this.dirty = true;
     this.sweepRequested = true;
     if (this.scheduled || this.currentRun !== null) return;
@@ -124,7 +115,7 @@ export class ConflictCounter {
     });
   }
 
-  // Drain-side companion to markDirty(). Atomically reads the sweep-
+  // Drain-side companion to invalidate(). Atomically reads the sweep-
   // requested flag AND clears it. The drain calls this at the top of
   // each cycle:
   //
@@ -134,7 +125,7 @@ export class ConflictCounter {
   //
   // Returns true:
   //   - on first call after construction (initial state forces sweep)
-  //   - after any markDirty() since the previous consumeSweepRequest
+  //   - after any invalidate() since the previous consumeSweepRequest
   //
   // Returns false when nothing relevant has changed since the previous
   // drain — skips the per-record stat walk entirely on idle clicks.
@@ -146,14 +137,14 @@ export class ConflictCounter {
 
   // O(1). Returns the cached count. UI surfaces (status bar, ribbon)
   // either subscribe() or check this after their own flush().
-  getValue(): number {
+  filesInConflict(): number {
     return this.cachedValue;
   }
 
   // Subscribe to count changes. Callback fires after each recompute
   // IF and only if the new value differs from the previous cache.
   // Returns an unsubscribe function.
-  subscribe(callback: CountChangeCallback): () => void {
+  subscribe(callback: ModelChangeCallback): () => void {
     this.subscribers.add(callback);
     return () => {
       this.subscribers.delete(callback);
@@ -162,8 +153,8 @@ export class ConflictCounter {
 
   // Force the recompute to run NOW, bypassing the microtask debounce.
   // Loops until quiescent (no dirty flag set, no in-flight run) so
-  // markDirty() calls landing during a recompute are picked up.
-  async flush(): Promise<void> {
+  // invalidate() calls landing during a recompute are picked up.
+  async refresh(): Promise<void> {
     while (this.dirty || this.currentRun !== null) {
       if (this.currentRun !== null) {
         await this.currentRun;

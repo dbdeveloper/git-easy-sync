@@ -1,12 +1,12 @@
 // ConflictWatcher tests. See src/sync2/conflict-watcher.ts +
 // docs/PSEUDO-MERGE-MODE.md §5 — the watcher is READ-ONLY and its
-// only side effect is calling `counter.markDirty()` on relevant
+// only side effect is calling `analyzer.invalidate()` on relevant
 // vault events.
 //
 // What's covered:
 //   - start()/stop() register & unregister listeners; idempotent
-//   - handle() on irrelevant path → no markDirty call
-//   - handle() on base or sibling path → markDirty called
+//   - handle() on irrelevant path → no invalidate call
+//   - handle() on base or sibling path → invalidate called
 //   - rename event drives BOTH new and old paths through handle()
 
 import {
@@ -27,7 +27,7 @@ import ConflictStoreV2, {
 import { buildSiblingFilePath } from "../../src/sync2/conflict-siblings";
 import { emptyFileInfo } from "../../src/sync2/diff3";
 import { ConflictWatcher } from "../../src/sync2/conflict-watcher";
-import { ConflictCounter } from "../../src/sync2/conflict-counter";
+import { ConflictAnalyzer } from "../../src/sync2/conflict-analyzer";
 import { Vault } from "../../mock-obsidian";
 
 const CONFIG_DIR = ".obsidian";
@@ -44,14 +44,14 @@ function fixture() {
     vault: vault as unknown as import("obsidian").Vault,
     selfPluginId: SELF_PLUGIN_ID,
   });
-  // Counter is mocked with a spy on markDirty so tests can assert
-  // the watcher's only side effect. We don't exercise the counter's
-  // own behavior here — that's covered in conflict-counter.test.ts.
-  const markDirty = vi.fn();
-  const conflictCounter = {
-    markDirty,
-  } as unknown as ConflictCounter;
-  return { root, vault, store, conflictCounter, markDirty };
+  // Counter is mocked with a spy on invalidate so tests can assert
+  // the watcher's only side effect. We don't exercise the analyzer's
+  // own behavior here — that's covered in conflict-analyzer.test.ts.
+  const invalidate = vi.fn();
+  const conflictAnalyzer = {
+    invalidate,
+  } as unknown as ConflictAnalyzer;
+  return { root, vault, store, conflictAnalyzer, invalidate };
 }
 
 function writeVaultFile(root: string, rel: string, content: string): void {
@@ -85,7 +85,7 @@ async function trackNote(
   return { siblingPath };
 }
 
-describe("ConflictWatcher (counter-only listener)", () => {
+describe("ConflictWatcher (analyzer-only listener)", () => {
   let f: ReturnType<typeof fixture>;
 
   beforeEach(() => {
@@ -98,62 +98,62 @@ describe("ConflictWatcher (counter-only listener)", () => {
 
   // ─── Fast-path Set check ────────────────────────────────────────────
 
-  it("handle(): irrelevant path → no markDirty call", async () => {
+  it("handle(): irrelevant path → no invalidate call", async () => {
     await f.store.load();
     const watcher = new ConflictWatcher({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store,
-      counter: f.conflictCounter,
+      analyzer: f.conflictAnalyzer,
     });
 
     watcher.handle("unrelated/file.md");
 
-    expect(f.markDirty).not.toHaveBeenCalled();
+    expect(f.invalidate).not.toHaveBeenCalled();
   });
 
-  it("handle(): SYNTHETIC sibling path (no store record) → markDirty called (TODO #7)", async () => {
+  it("handle(): SYNTHETIC sibling path (no store record) → invalidate called (TODO #7)", async () => {
     await f.store.load();
     const watcher = new ConflictWatcher({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store,
-      counter: f.conflictCounter,
+      analyzer: f.conflictAnalyzer,
     });
 
     // A `*.conflict-from-*` sibling the store does NOT know about — without the
     // synthetic check the badge would stay stale vs the diff-panel.
     watcher.handle("Notes/note.conflict-from-Phone-2026-06-05T00-00-00Z.md");
 
-    expect(f.markDirty).toHaveBeenCalledTimes(1);
+    expect(f.invalidate).toHaveBeenCalledTimes(1);
   });
 
-  it("handle(): base path with active conflict → markDirty called", async () => {
+  it("handle(): base path with active conflict → invalidate called", async () => {
     writeVaultFile(f.root, "Notes/note.md", "local\n");
     await f.store.load();
     await trackNote(f);
     const watcher = new ConflictWatcher({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store,
-      counter: f.conflictCounter,
+      analyzer: f.conflictAnalyzer,
     });
 
     watcher.handle("Notes/note.md");
 
-    expect(f.markDirty).toHaveBeenCalledTimes(1);
+    expect(f.invalidate).toHaveBeenCalledTimes(1);
   });
 
-  it("handle(): sibling path → markDirty called (fast-path includes siblings)", async () => {
+  it("handle(): sibling path → invalidate called (fast-path includes siblings)", async () => {
     writeVaultFile(f.root, "Notes/note.md", "local\n");
     await f.store.load();
     const rec = await trackNote(f);
     const watcher = new ConflictWatcher({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store,
-      counter: f.conflictCounter,
+      analyzer: f.conflictAnalyzer,
     });
 
     watcher.handle(rec.siblingPath);
 
-    expect(f.markDirty).toHaveBeenCalledTimes(1);
+    expect(f.invalidate).toHaveBeenCalledTimes(1);
   });
 
   // ─── start / stop ───────────────────────────────────────────────────
@@ -163,7 +163,7 @@ describe("ConflictWatcher (counter-only listener)", () => {
     const watcher = new ConflictWatcher({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store,
-      counter: f.conflictCounter,
+      analyzer: f.conflictAnalyzer,
     });
     expect(
       (f.vault as unknown as { listeners: unknown[] }).listeners.length,
@@ -186,7 +186,7 @@ describe("ConflictWatcher (counter-only listener)", () => {
     const watcher = new ConflictWatcher({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store,
-      counter: f.conflictCounter,
+      analyzer: f.conflictAnalyzer,
     });
     watcher.start();
     watcher.start();
@@ -200,7 +200,7 @@ describe("ConflictWatcher (counter-only listener)", () => {
     const watcher = new ConflictWatcher({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store,
-      counter: f.conflictCounter,
+      analyzer: f.conflictAnalyzer,
     });
     watcher.start();
     watcher.stop();
@@ -211,20 +211,20 @@ describe("ConflictWatcher (counter-only listener)", () => {
 
   // ─── End-to-end via mock fireEvent ──────────────────────────────────
 
-  it("end-to-end: vault.fireEvent('delete', sibling) → markDirty called", async () => {
+  it("end-to-end: vault.fireEvent('delete', sibling) → invalidate called", async () => {
     writeVaultFile(f.root, "Notes/note.md", "local\n");
     await f.store.load();
     const rec = await trackNote(f);
     const watcher = new ConflictWatcher({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store,
-      counter: f.conflictCounter,
+      analyzer: f.conflictAnalyzer,
     });
     watcher.start();
 
     f.vault.fireEvent("delete", { path: rec.siblingPath });
 
-    expect(f.markDirty).toHaveBeenCalledTimes(1);
+    expect(f.invalidate).toHaveBeenCalledTimes(1);
   });
 
   it("end-to-end: vault.fireEvent('rename', new, old) → both paths trigger handle", async () => {
@@ -234,7 +234,7 @@ describe("ConflictWatcher (counter-only listener)", () => {
     const watcher = new ConflictWatcher({
       vault: f.vault as unknown as import("obsidian").Vault,
       store: f.store,
-      counter: f.conflictCounter,
+      analyzer: f.conflictAnalyzer,
     });
     watcher.start();
 
@@ -246,6 +246,6 @@ describe("ConflictWatcher (counter-only listener)", () => {
       "Notes/note.md",
     );
 
-    expect(f.markDirty).toHaveBeenCalledTimes(1);
+    expect(f.invalidate).toHaveBeenCalledTimes(1);
   });
 });

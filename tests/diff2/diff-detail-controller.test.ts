@@ -111,7 +111,7 @@ describe("DiffDetailController host seam (S2)", () => {
   });
 
   // deps the controller actually touches: vault + the optional read-fns. conflictStore /
-  // conflictCounter are list-host concerns the controller never reads → cast past them.
+  // conflictAnalyzer are list-host concerns the controller never reads → cast past them.
   // autoFocus:false avoids the rAF-deferred focusFirstConflict (happy-dom has no layout).
   function deps(): DiffEditViewDeps {
     return {
