@@ -100,6 +100,21 @@ export class ConflictAnalyzer {
     return this.model;
   }
 
+  // The commit pass's "unchanged?" reference for a file with a conflict
+  // record (owner, 2026-10-12), read from the model in memory — the caller
+  // refresh()es first. While the conflict is in force: its conflict-branch
+  // version (conflictBase.sha; null = the branch records a deletion). Once
+  // it is not (copies gone / equal to the base / only duplicates left):
+  // undefined, so the file is compared with its baseline like any other and
+  // a resolution made through the file system is sent in the same sync. A
+  // record whose copy is not written yet (siblings == []) stays in force.
+  conflictBaseShaFor(path: string): string | null | undefined {
+    const entry = this.store.getCachedState().entries.get(path);
+    if (entry === undefined) return undefined;
+    if (entry.siblings.length === 0) return entry.conflictBase.sha;
+    return this.model?.entries.get(path)?.inForce ? entry.conflictBase.sha : undefined;
+  }
+
   // O(1). Sets the dirty flag (for the model recompute) AND the
   // sweep-requested flag (for drain). Schedules at most one debounced
   // recompute via the microtask scheduler. Back-to-back calls
@@ -151,10 +166,14 @@ export class ConflictAnalyzer {
     };
   }
 
-  // Force the recompute to run NOW, bypassing the microtask debounce.
-  // Loops until quiescent (no dirty flag set, no in-flight run) so
-  // invalidate() calls landing during a recompute are picked up.
+  // "Recompute NOW and let me wait" (owner, 2026-10-12) — with or without a
+  // prior invalidate(): whoever needs a fresh picture to ACT on (commit,
+  // drain, the pre-sync gates) calls just this. Bypasses the microtask
+  // debounce; loops until quiescent so invalidate() calls landing during a
+  // recompute are picked up.
   async refresh(): Promise<void> {
+    this.dirty = true;
+    this.sweepRequested = true;
     while (this.dirty || this.currentRun !== null) {
       if (this.currentRun !== null) {
         await this.currentRun;

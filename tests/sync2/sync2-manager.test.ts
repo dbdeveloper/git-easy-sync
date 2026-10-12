@@ -366,6 +366,25 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(enforced).toBe(1);
   });
 
+  // Owner, 2026-10-12: the commit pass does not re-derive "is this conflict
+  // still in force?" — it asks the ConflictAnalyzer for a FRESH model
+  // (refresh(), awaited) BEFORE detecting changes, and the
+  // detector reads that model.
+  it("🔑 a COMMIT pass refreshes the conflict analyzer BEFORE detecting changes", async () => {
+    const order: string[] = [];
+    (deps as unknown as { conflictAnalyzer: unknown }).conflictAnalyzer = {
+      refresh: async () => {
+        order.push("refresh");
+      },
+    };
+    deps.detector.findChanges = async () => {
+      order.push("detect");
+      return [];
+    };
+    await manager.commitOnly();
+    expect(order).toEqual(["refresh", "detect"]);
+  });
+
   it("a COMMIT pass enforces the invariants BEFORE detecting changes — so a file enforce() fixes rides in THAT commit", async () => {
     // Probed 2026-09-23 while answering "does the syncConfigDir toggle
     // need its own enforce() call?": removing this call outright, or

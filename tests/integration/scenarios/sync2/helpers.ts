@@ -48,7 +48,6 @@ import {
 } from "../../../../src/settings/settings";
 import { requireEnv, RepoEnv } from "../../helpers";
 import { autoMergeLimitBytes } from "../../../../src/settings/auto-merge-size";
-import { conflictBaseShaWhileInForce } from "../../../../src/sync2/conflict-live";
 import manifest from "../../../../manifest.json";
 
 const SELF_PLUGIN_ID = manifest.id;
@@ -191,7 +190,7 @@ export async function createSync2Client(
   // Detector's queue-dedup reads the manager's per-pass index —
   // same lazy-thunk wiring as production main.ts.
   let managerRef: Sync2Manager | null = null;
-  let conflictStoreRef: ConflictStoreV2 | undefined;
+  let conflictAnalyzerRef: ConflictAnalyzer | undefined;
   const detector = new ChangeDetector({
     vault,
     hotMeta,
@@ -212,13 +211,7 @@ export async function createSync2Client(
     autoCanonicalize: () => opts.autoCanonicalize ?? true,
     // Production composition: a conflicted base is compared with its
     // CONFLICT BRANCH version. Lazy — the store is built further down.
-    conflictBaseSha: (p: string) =>
-      conflictStoreRef
-        ? conflictBaseShaWhileInForce(conflictStoreRef, {
-            adapter: vault.adapter,
-            computeSha: calculateGitBlobSHA,
-          })(p)
-        : undefined,
+    conflictBaseSha: (p: string) => conflictAnalyzerRef?.conflictBaseShaFor(p),
   });
   // DOT-FILES §8.0 — the fixture MUST carry the same composition the
   // product has. An earlier shape of this fix was optional here, the
@@ -273,7 +266,6 @@ export async function createSync2Client(
     selfPluginId: SELF_PLUGIN_ID,
   });
   await conflictStoreV2.load();
-  conflictStoreRef = conflictStoreV2;
   const siblingTx = new SiblingTx({
     vault,
     selfPluginId: SELF_PLUGIN_ID,
@@ -292,7 +284,9 @@ export async function createSync2Client(
   });
   conflictWatcher.start();
 
+  conflictAnalyzerRef = conflictAnalyzer;
   const manager = new Sync2Manager({
+    conflictAnalyzer,
     cancelSignal: opts.cancelSignal,
     vault,
     selfPluginId: SELF_PLUGIN_ID,

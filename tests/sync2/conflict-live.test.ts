@@ -8,7 +8,7 @@ import * as path from "path";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { Vault } from "../../mock-obsidian";
-import { isConflictInForce, copyMatchesBase, conflictBaseShaWhileInForce } from "../../src/sync2/conflict-live";
+import { isConflictInForce, copyMatchesBase } from "../../src/sync2/conflict-live";
 import { buildSiblingFilePath } from "../../src/sync2/conflict-siblings";
 import { FileInfo, emptyFileInfo } from "../../src/sync2/diff3";
 import { calculateGitBlobSHA } from "../../src/utils";
@@ -130,34 +130,6 @@ describe("isConflictInForce", () => {
     expect(await copyMatchesBase(deps(), "note.md", await copy(null), base)).toBe("gone");
     expect(await copyMatchesBase(deps(), "note.md", await copy("ours\n", 3000), base)).toBe(true);
     expect(await copyMatchesBase(deps(), "note.md", await copy("theirs\n", 4000), base)).toBe(false);
-  });
-
-  describe("conflictBaseShaWhileInForce — the commit pass's reference", () => {
-    const storeWith = (siblings: FileInfo[]) => ({
-      getCachedState: () => ({
-        entries: new Map([
-          ["note.md", { conflictBase: { ...emptyFileInfo(), path: "note.md", sha: "branch-sha" }, siblings }],
-        ]),
-      }),
-    });
-
-    it("in force → the conflict branch's sha", async () => {
-      put("note.md", "ours\n");
-      const resolve = conflictBaseShaWhileInForce(storeWith([await copy("theirs\n")]), deps());
-      expect(await resolve("note.md")).toBe("branch-sha");
-    });
-
-    it("🔑 resolved through the file system → undefined (compare with the baseline)", async () => {
-      put("note.md", "ours\n");
-      const resolve = conflictBaseShaWhileInForce(storeWith([await copy("ours\n")]), deps());
-      expect(await resolve("note.md")).toBeUndefined();
-    });
-
-    it("no record → undefined; an EMPTY siblings list (copy not written yet) → still the branch's sha", async () => {
-      put("note.md", "ours\n");
-      expect(await conflictBaseShaWhileInForce(storeWith([]), deps())("other.md")).toBeUndefined();
-      expect(await conflictBaseShaWhileInForce(storeWith([]), deps())("note.md")).toBe("branch-sha");
-    });
   });
 
   // The drain must agree with every reader: the same fixture through the

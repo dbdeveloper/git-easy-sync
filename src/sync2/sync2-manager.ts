@@ -120,6 +120,9 @@ export interface Sync2ManagerDeps {
   syncStore: SyncStore;
   journal: DrainJournal;
   conflictStore: ConflictStoreV2;
+  // The ONE module that decides which tracked conflicts are still in force
+  // (owner, 2026-10-12). The commit pass refreshes it before detecting.
+  conflictAnalyzer?: { refresh(): Promise<void> };
   siblingTx: SiblingTx;
   invariants?: { enforce(): Promise<void> } | null;
   // DOT-FILES §8.0 — read-only view for the engine: "is this managed
@@ -828,6 +831,12 @@ export class Sync2Manager {
     if (this.deps.invariants) await this.deps.invariants.enforce();
     lap("enforceMs");
     await this.replayProgressLog();
+    // The conflict picture, FRESH (owner, 2026-10-12): the detector asks
+    // the analyzer, per file, what to compare a conflicted base with — so
+    // the model must reflect the disk as it is now (events miss dot-paths).
+    // Only reads; awaited.
+    await this.deps.conflictAnalyzer?.refresh();
+    lap("conflictsMs");
     // Forbidden names are made safe on BOTH paths (owner, 2026-10-10): the
     // one-file path used to skip it, so "Commit/Sync active file" sent a
     // forbidden name to the server. The renamed path is what gets committed.

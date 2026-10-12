@@ -442,5 +442,43 @@ describe("ConflictAnalyzer", () => {
       .toEqual(["equals-base", "live"]);
   });
 
+
+  // The commit pass's reference, straight from the model in memory (owner,
+  // 2026-10-12): the conflict branch's version while the conflict is in
+  // force, undefined once it is not (compare with the baseline). A record
+  // with no copy written yet (siblings == []) stays in force.
+  it("🔑 conflictBaseShaFor: in force → the branch's sha; resolved by hand → undefined", async () => {
+    await f.store.load();
+    writeVaultFile(f.root, "Notes/note.md", "local\n");
+    const { siblingPath } = await track(f);
+    await recount(f);
+    expect(f.analyzer.conflictBaseShaFor("Notes/note.md")).toBe("cb");
+    expect(f.analyzer.conflictBaseShaFor("other.md")).toBeUndefined();
+    writeVaultFile(f.root, siblingPath, "local\n");
+    await recount(f);
+    expect(f.analyzer.conflictBaseShaFor("Notes/note.md")).toBeUndefined();
+  });
+
+  it("a record whose copy is not written yet (siblings == []) stays in force", async () => {
+    await f.store.load();
+    f.state.entries.set("x.md", { conflictBase: { ...emptyFileInfo(), path: "x.md", sha: "cbx" }, siblings: [] });
+    await f.store.save(f.state);
+    await recount(f);
+    expect(f.analyzer.conflictBaseShaFor("x.md")).toBe("cbx");
+  });
+
+  // refresh() means "recompute NOW and let me wait" — with or without a prior
+  // invalidate() (owner, 2026-10-12): whoever needs a fresh picture to ACT on
+  // (commit, drain, the pre-sync gates) calls just refresh().
+  it("🔑 refresh() recomputes even when nothing called invalidate()", async () => {
+    await f.store.load();
+    writeVaultFile(f.root, "Notes/note.md", "local\n");
+    const { siblingPath } = await track(f);
+    await recount(f);
+    expect(f.analyzer.filesInConflict()).toBe(1);
+    writeVaultFile(f.root, siblingPath, "local\n"); // no event, no invalidate()
+    await f.analyzer.refresh();
+    expect(f.analyzer.filesInConflict()).toBe(0);
+  });
 });
 

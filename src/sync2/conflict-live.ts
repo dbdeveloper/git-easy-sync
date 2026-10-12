@@ -96,32 +96,3 @@ export async function isConflictInForce(
   }
   return false;
 }
-
-// The commit pass's reference for a file that HAS a conflict record: its
-// conflict-branch version (conflictBase.sha; null = the branch records a
-// deletion) while the conflict is in force; undefined once it is not —
-// then the file is compared with its baseline like any other, so a
-// resolution made through the file system is committed, and reaches main,
-// in the SAME sync (owner, 2026-10-11 — the double-sync defect).
-//
-// A record whose siblings list is still EMPTY (STEP1 ran, the copy is not
-// written yet — a drain-internal transient that a crash can persist) stays
-// in force: there is no copy to judge by, and dropping the filter there
-// would re-commit our version to main mid-conflict.
-export function conflictBaseShaWhileInForce(
-  store: {
-    getCachedState(): {
-      entries: Map<string, { conflictBase: FileInfo; siblings: FileInfo[] }>;
-    };
-  },
-  deps: ConflictLiveDeps,
-): (path: string) => Promise<string | null | undefined> {
-  return async (path) => {
-    const entry = store.getCachedState().entries.get(path);
-    if (entry === undefined) return undefined;
-    if (entry.siblings.length > 0 && !(await isConflictInForce(deps, path, entry.siblings))) {
-      return undefined;
-    }
-    return entry.conflictBase.sha;
-  };
-}

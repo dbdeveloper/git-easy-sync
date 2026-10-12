@@ -51,7 +51,7 @@ import { bringLeafToFront } from "./bring-to-front";
 import { enforceIfRootGitignore } from "./gitignore-editor/after-history-write";
 import { forgetReplacedConflictCopy } from "./diff2/forget-replaced-copy";
 import { closeEditorsOfVanishedCopies } from "./diff2/close-vanished-copies";
-import { conflictBaseShaWhileInForce, copyAtPathMatchesBase, baseFacts } from "./sync2/conflict-live";
+import { copyAtPathMatchesBase, baseFacts } from "./sync2/conflict-live";
 import { allLeaves, explorerClickTarget } from "./explorer-click";
 import { GitignoreDecisionModal } from "./sync2/views/gitignore-modal";
 import { deleteMigratedFromRemote } from "./sync2/gitignore-remote-cleanup";
@@ -1421,13 +1421,9 @@ export default class GitHubSyncPlugin extends Plugin {
       // …and only while the conflict is still IN FORCE (a tracked copy on
       // disk that differs from the base): a resolution made through the
       // file system is then committed in the same sync (conflict-live.ts).
-      conflictBaseSha: (p: string) =>
-        this.conflictStoreV2
-          ? conflictBaseShaWhileInForce(this.conflictStoreV2, {
-              adapter: this.app.vault.adapter,
-              computeSha: (bytes) => this.workerClient.computeGitBlobSHA(bytes),
-            })(p)
-          : undefined,
+      // From the ConflictAnalyzer's model — the commit pass refresh()es it
+      // first (Sync2Manager). Lazy: the analyzer is built later in onload.
+      conflictBaseSha: (p: string) => this.conflictAnalyzer?.conflictBaseShaFor(p),
     });
     // DOT-FILES §8.0 — which managed .gitignore files are, right now,
     // exactly what we seeded. The drain uses them as fake ancestors so
@@ -1654,6 +1650,7 @@ export default class GitHubSyncPlugin extends Plugin {
 
     this.sync2Manager = new Sync2Manager({
       cancelSignal: this.syncCancel,
+      conflictAnalyzer,
       // COMMIT-PASS-PERF 3a: summarised into the timing line, flushed
       // after every commit pass.
       commitStats,
