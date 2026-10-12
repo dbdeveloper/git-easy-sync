@@ -8,7 +8,7 @@ import * as path from "path";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { Vault } from "../../mock-obsidian";
-import { buildConflictModel } from "../../src/sync2/conflict-model";
+import { buildConflictModel, survivorOf } from "../../src/sync2/conflict-model";
 import { buildSiblingFilePath } from "../../src/sync2/conflict-siblings";
 import { FileInfo, emptyFileInfo } from "../../src/sync2/diff3";
 import { emptyConflictsState, type ConflictsState } from "../../src/sync2/conflict-store-v2";
@@ -184,6 +184,18 @@ describe("buildConflictModel", () => {
     expect(m.filesInConflict).toBe(0);
   });
 
+  it("🔑 two synthetic twins of the same second → the same one survives in either listing order", async () => {
+    put(BASE, "ours\n");
+    const a = { path: copyPath(9000, "A"), basePath: BASE, timeLabel: 9000 };
+    const b = { path: copyPath(9000, "B"), basePath: BASE, timeLabel: 9000 };
+    put(a.path, "same\n");
+    put(b.path, "same\n");
+    const m1 = await buildConflictModel(deps(), emptyConflictsState(), [a, b]);
+    const m2 = await buildConflictModel(deps(), emptyConflictsState(), [b, a]);
+    expect(stateOf(m1, a.path)).toBe(stateOf(m2, a.path));
+    expect(stateOf(m1, b.path)).toBe(stateOf(m2, b.path));
+  });
+
   it("read-only: the ledger's records are left exactly as they were", async () => {
     put(BASE, "ours\n");
     const c = await tracked("theirs!!\n", "ours\n");
@@ -191,4 +203,26 @@ describe("buildConflictModel", () => {
     await buildConflictModel(deps(), ledger([c]), []);
     expect(JSON.stringify(c)).toBe(before);
   });
+});
+
+// 🔑 Which of two identical copies stays must not depend on listing order
+// (advisor, 2026-10-12): the drain lists a directory, the cleanup reads
+// Obsidian's index — on a same-second tie each could keep a DIFFERENT copy
+// and remove the other, and the bytes would be gone. One rule for both:
+// tracked beats synthetic, then the newer timeLabel, then the path.
+describe("survivorOf — one total order for drain and cleanup", () => {
+  const c = (path: string, timeLabel: number, tracked = false) => ({ path, timeLabel, tracked });
+  const key = (x: ReturnType<typeof c>) => x;
+
+  it("same second, two labels → the same survivor whatever the order", () => {
+    const a = c("n.conflict-from-A-x.md", 1000);
+    const b = c("n.conflict-from-B-x.md", 1000);
+    expect(survivorOf([a, b], key)).toBe(survivorOf([b, a], key));
+  });
+
+  it("tracked beats synthetic, then the newer", () => {
+    expect(survivorOf([c("s", 9000), c("t", 1000, true)], key).path).toBe("t");
+    expect(survivorOf([c("old", 1000), c("new", 2000)], key).path).toBe("new");
+  });
+
 });

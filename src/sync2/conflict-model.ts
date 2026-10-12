@@ -117,10 +117,11 @@ export async function buildConflictModel(
     }
     for (const group of bySha.values()) {
       if (group.length < 2) continue;
-      const pool = group.some((m) => m.copy.kind === "tracked")
-        ? group.filter((m) => m.copy.kind === "tracked")
-        : group;
-      const survivor = pool.reduce((a, b) => (b.copy.timeLabel > a.copy.timeLabel ? b : a));
+      const survivor = survivorOf(group, (m) => ({
+        tracked: m.copy.kind === "tracked",
+        timeLabel: m.copy.timeLabel,
+        path: m.copy.path,
+      }));
       for (const m of group) {
         if (m === survivor) continue;
         m.copy.state = "duplicate";
@@ -133,6 +134,25 @@ export async function buildConflictModel(
     entries.set(basePath, { basePath, copies: measured.map((m) => m.copy), inForce });
   }
   return { entries, filesInConflict };
+}
+
+// Which of several byte-identical copies stays (owner's drain rule, made a
+// TOTAL order by the advisor review, 2026-10-12): tracked beats synthetic,
+// then the newer timeLabel, then the greater path. The drain
+// (process_conflicts 2.2) and the synthetic cleanup both ask this, and they
+// list copies in different orders — a tie decided by order could let each
+// keep a different twin and remove the other.
+export function survivorOf<T>(
+  group: T[],
+  key: (t: T) => { tracked: boolean; timeLabel: number; path: string },
+): T {
+  return group.reduce((a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    if (ka.tracked !== kb.tracked) return kb.tracked ? b : a;
+    if (ka.timeLabel !== kb.timeLabel) return kb.timeLabel > ka.timeLabel ? b : a;
+    return kb.path > ka.path ? b : a;
+  });
 }
 
 async function measure(
