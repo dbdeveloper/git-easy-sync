@@ -27,6 +27,8 @@ import { parseSiblingFilename, timeLabelFromStamp } from "./conflict-siblings";
 import { readRootGitignore, walkDotDir } from "./dot-space";
 import { buildConflictModel, type SyntheticCopy } from "./conflict-model";
 import { calculateGitBlobSHA } from "../utils";
+import { baseFacts, copyAtPathMatchesBase } from "./conflict-live";
+import { SYNC_BAK_SUFFIX, SYNC_TMP_SUFFIX } from "./atomic-write";
 
 export interface DotSpaceScope {
   configDir: string;
@@ -35,9 +37,12 @@ export interface DotSpaceScope {
 
 // The copy at `path`, if it is an UNTRACKED copy's name; null otherwise.
 function syntheticAt(store: ConflictStoreV2, path: string): SyntheticCopy | null {
+  // A staging file of an atomic write (`…Z.ges-tmp.md`) also fits the name
+  // pattern; it belongs to the crash recovery, never to us.
+  if (path.includes(SYNC_TMP_SUFFIX) || path.includes(SYNC_BAK_SUFFIX)) return null;
   const parsed = parseSiblingFilename(path);
   if (!parsed) return null;
-  if (store.getBySiblingPath(path)) return null; // tracked — the ledger's
+  if (store.isTrackedCopy(path)) return null; // tracked — the ledger's
   const t = timeLabelFromStamp(parsed.isoTimestamp);
   return { path, basePath: parsed.basePath, timeLabel: Number.isNaN(t) ? 0 : t };
 }
@@ -123,14 +128,21 @@ export async function syntheticCopiesFromDotSpace(
 // removal stays on this device.
 //
 // Run when the Diff Panel opens, on Ctrl/Cmd+R in the panel and once at
-// plugin start, after the startup sync. While a drain runs it only looks: the
-// drain writes a new tracked copy before it records it in the ledger, and for
-// that moment the copy looks synthetic. The next run removes what was left.
+// plugin start — alongside the drain, never waiting for it. Two properties
+// make that safe for tracked conflicts (owner + advisor, 2026-10-12):
+//   (A) no content loss — at the moment of removal the bytes are proven to
+//       exist elsewhere: the verdict is RE-CHECKED against the disk right
+//       before removing (the file or the surviving twin may have changed
+//       since the model was built), and which twin survives is one total
+//       order shared with the drain (survivorOf);
+//   (B) no structural damage — the tracked check and the removal are one
+//       step (ConflictStoreV2.removeIfUntracked), the drain announces every
+//       copy before writing it, and a drain writing a copy at a name being
+//       removed waits for the removal first.
 export interface CleanSyntheticDeps {
   vault: Vault;
   store: ConflictStoreV2;
   scope: DotSpaceScope;
-  drainRunning: () => boolean;
   computeSha?: (bytes: ArrayBuffer) => Promise<string>;
   logger?: { info(message: string, data?: unknown): void };
   now?: () => number;
@@ -148,18 +160,44 @@ export async function cleanSyntheticConflicts(
   }
   const copies = [...found.values()];
 
+  const computeSha = deps.computeSha ?? calculateGitBlobSHA;
   const model = await buildConflictModel(
-    { adapter: deps.vault.adapter as never, computeSha: deps.computeSha ?? calculateGitBlobSHA },
+    { adapter: deps.vault.adapter as never, computeSha },
     deps.store.getCachedState(),
     copies,
   );
+  const liveDeps = { adapter: deps.vault.adapter as never, computeSha };
+  const shaOf = async (p: string): Promise<string | null> => {
+    try {
+      return await computeSha(await deps.vault.adapter.readBinary(p));
+    } catch {
+      return null; // gone meanwhile
+    }
+  };
   const removed: string[] = [];
   for (const entry of model.entries.values()) {
     for (const c of entry.copies) {
       if (c.kind !== "synthetic") continue;
       if (c.state !== "equals-base" && c.state !== "duplicate") continue;
-      if (deps.drainRunning()) continue;
-      if (!(await deps.vault.adapter.exists(c.path))) continue;
+      // (A) re-check the verdict against the disk as it is NOW.
+      if (c.state === "equals-base") {
+        const base = await baseFacts(liveDeps, entry.basePath);
+        if ((await copyAtPathMatchesBase(liveDeps, c.path, base, null)) !== true) continue;
+      } else {
+        const mine = await shaOf(c.path);
+        if (mine === null || c.duplicateOf === undefined || mine !== (await shaOf(c.duplicateOf))) continue;
+      }
+      // (B) the tracked check and the removal in one step.
+      let gone = false;
+      const done = await deps.store.removeIfUntracked(c.path, async () => {
+        try {
+          await deps.vault.adapter.remove(c.path);
+          gone = true;
+        } catch {
+          // Removed by someone else meanwhile ([←]) — nothing to do.
+        }
+      });
+      if (!done || !gone) continue;
       if (c.state === "equals-base") {
         deps.logger?.info("Conflict copy removed: identical to the file — the conflict is resolved", {
           path: entry.basePath,
@@ -172,7 +210,6 @@ export async function cleanSyntheticConflicts(
           kept: c.duplicateOf,
         });
       }
-      await deps.vault.adapter.remove(c.path);
       removed.push(c.path);
     }
   }

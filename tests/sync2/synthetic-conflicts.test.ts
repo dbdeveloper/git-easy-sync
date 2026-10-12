@@ -15,6 +15,7 @@ import ConflictStoreV2, {
 import { buildSiblingFilePath } from "../../src/sync2/conflict-siblings";
 import { emptyFileInfo } from "../../src/sync2/diff3";
 import { cleanSyntheticConflicts } from "../../src/sync2/synthetic-conflicts";
+import { calculateGitBlobSHA } from "../../src/utils";
 
 // Cleaning up SYNTHETIC conflict copies (owner, 2026-10-12). The drain is
 // about tracked conflicts: it touches a synthetic copy only next to a tracked
@@ -33,7 +34,6 @@ describe("cleanSyntheticConflicts", () => {
   let vault: Vault;
   let store: ConflictStoreV2;
   let state: ConflictsState;
-  let drainRunning: boolean;
   const logs: { message: string; data?: unknown }[] = [];
 
   const put = (rel: string, content: string) => {
@@ -54,14 +54,13 @@ describe("cleanSyntheticConflicts", () => {
     put(copy(base, device, when), content);
     await store.save(state);
   };
-  const clean = () =>
-    cleanSyntheticConflicts({
-      vault: vault as unknown as import("obsidian").Vault,
-      store,
-      scope: { configDir: CONFIG_DIR, syncConfigDir: () => true },
-      drainRunning: () => drainRunning,
-      logger: { info: (message, data) => logs.push({ message, data }) },
-    });
+  const cleanDeps = () => ({
+    vault: vault as unknown as import("obsidian").Vault,
+    store,
+    scope: { configDir: CONFIG_DIR, syncConfigDir: () => true },
+    logger: { info: (message: string, data?: unknown) => logs.push({ message, data }) },
+  });
+  const clean = () => cleanSyntheticConflicts(cleanDeps());
 
   beforeEach(async () => {
     root = path.join(os.tmpdir(), `synthetic-clean-${crypto.randomBytes(4).toString("hex")}`);
@@ -73,7 +72,6 @@ describe("cleanSyntheticConflicts", () => {
     });
     await store.load();
     state = emptyConflictsState();
-    drainRunning = false;
     logs.length = 0;
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -146,12 +144,80 @@ describe("cleanSyntheticConflicts", () => {
     expect(exists(copy(".myconfig/n.md", "Phone", T1))).toBe(false);
   });
 
-  it("🔑 while a drain runs it removes nothing (a copy the drain just wrote is not in the ledger yet)", async () => {
+  it("🔑 a copy the drain ANNOUNCED (about to write / not saved yet) is never removed", async () => {
     put("a.md", "same\n");
     put(copy("a.md", "Phone", T1), "same\n");
-    drainRunning = true;
+    await store.announceCopy(copy("a.md", "Phone", T1));
     const r = await clean();
     expect(exists(copy("a.md", "Phone", T1))).toBe(true);
+    expect(r.removed).toEqual([]);
+  });
+
+  it("🔑 a copy the drain recorded in memory (conflicts.json not saved yet) is never removed", async () => {
+    put("a.md", "same\n");
+    put(copy("a.md", "Phone", T1), "same\n");
+    store.getCachedState().entries.set("a.md", {
+      conflictBase: { ...emptyFileInfo(), path: "a.md" },
+      siblings: [{ ...emptyFileInfo(), path: "a.md", timeLabel: T1, deviceLabel: "Phone" }],
+    });
+    await clean();
+    expect(exists(copy("a.md", "Phone", T1))).toBe(true);
+  });
+
+  it("🔑 the file changed after the verdict, before the removal → re-checked, kept", async () => {
+    put("a.md", "same\n");
+    put(copy("a.md", "Phone", T1), "same\n");
+    let calls = 0;
+    await cleanSyntheticConflicts({
+      ...cleanDeps(),
+      // The model hashes the copy, then the base; right after that the
+      // user edits the base (same size, so only the bytes can tell).
+      computeSha: async (b) => {
+        const r = await calculateGitBlobSHA(b);
+        if (++calls === 2) put("a.md", "SAME\n");
+        return r;
+      },
+    });
+    expect(exists(copy("a.md", "Phone", T1))).toBe(true);
+  });
+
+  it("🔑 the surviving twin changed after the verdict → the duplicate is re-checked, kept", async () => {
+    put("a.md", "ours\n");
+    put(copy("a.md", "Phone", T1), "theirs\n");
+    put(copy("a.md", "Laptop", T2), "theirs\n");
+    let calls = 0;
+    await cleanSyntheticConflicts({
+      ...cleanDeps(),
+      computeSha: async (b) => {
+        const r = await calculateGitBlobSHA(b);
+        if (++calls === 2) put(copy("a.md", "Laptop", T2), "THEIRS\n"); // the user edits the survivor
+        return r;
+      },
+    });
+    expect(exists(copy("a.md", "Phone", T1))).toBe(true);
+  });
+
+  it("a staging file of an atomic write (…ges-tmp / …ges-bak) is never a candidate", async () => {
+    put("a.md", "same\n");
+    const tmp = copy("a.md", "Phone", T1).replace(/\.md$/, ".ges-tmp.md");
+    put(tmp, "same\n");
+    const r = await clean();
+    expect(exists(tmp)).toBe(true);
+    expect(r.survivors.map((c) => c.path)).not.toContain(tmp);
+  });
+
+  it("a copy removed by someone else meanwhile ([←]) does not break the cleanup", async () => {
+    put("a.md", "same\n");
+    put(copy("a.md", "Phone", T1), "same\n");
+    const v = vault as unknown as { adapter: { remove(p: string): Promise<void> } };
+    const adapter = v.adapter;
+    Object.defineProperty(vault, "adapter", { get: () => adapter, configurable: true });
+    const orig = adapter.remove.bind(adapter);
+    adapter.remove = async (p: string) => {
+      await orig(p);
+      throw new Error("already gone"); // as if [←] removed it first
+    };
+    const r = await clean();
     expect(r.removed).toEqual([]);
   });
 

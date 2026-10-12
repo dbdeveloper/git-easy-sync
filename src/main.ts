@@ -753,14 +753,13 @@ export default class GitHubSyncPlugin extends Plugin {
           this.startupSyncTimer = null;
           this.startSyncInterval();
           this.logger.info("Plugin onload: interval scheduler started");
-          const startup =
-            this.settings.syncOnStartup && this.isConfigured()
-              ? this.runStartupSync()
-              : Promise.resolve();
-          // Leftover synthetic conflict copies are cleaned once per start,
-          // AFTER the startup sync (owner, 2026-10-12) — a drain in flight
-          // would only let it look.
-          void startup.finally(() => void this.cleanSyntheticCopies());
+          if (this.settings.syncOnStartup && this.isConfigured()) {
+            void this.runStartupSync();
+          }
+          // Leftover synthetic conflict copies are cleaned once per start, as
+          // a process of its own alongside the startup sync (owner,
+          // 2026-10-12) — safe beside a drain: see synthetic-conflicts.ts.
+          void this.cleanSyntheticCopies();
         }, STARTUP_SYNC_DELAY_MS);
       });
 
@@ -4268,7 +4267,6 @@ export default class GitHubSyncPlugin extends Plugin {
         vault: this.app.vault,
         store: this.conflictStoreV2,
         scope: this.dotSpaceScope(),
-        drainRunning: () => this.sync2Manager?.isDrainRunning() ?? false,
         computeSha: (bytes: ArrayBuffer) => this.workerClient.computeGitBlobSHA(bytes),
         logger: this.logger,
       });
