@@ -931,6 +931,21 @@ conflict never stops the rest of your vault from syncing. Only an
 unresolved `.gitignore` conflict stops every sync, automatic ones
 included.
 
+The Diff-Panel and the diff editor always show the files as they are
+now. Every time you switch to one of their tabs it looks at the disk
+again — the same as pressing `Ctrl/Cmd+R` in it — so a conflict you
+resolved in another program, or in a hidden folder Obsidian does not
+watch, leaves the list at once, and an editor whose conflict is
+already resolved tells you so and takes you back to the panel. Leaving
+a conflict's editor with `[←]` always returns to the Diff-Panel.
+
+Leftover copies that belong to no open conflict (after a reset, a
+repository switch or a folder move) are cleaned up too: a copy that is
+identical to its note, or to another copy, is removed when you switch
+to the Diff-Panel and once each time the plugin starts. A copy that
+still differs is never removed — it stays in the list for you to
+decide. Each removal is written to the log.
+
 Sibling files never sync: the `*.conflict-from-*` pattern sits in
 the plugin's **final** `.gitignore` block, which is restored to
 canonical on every sync, so removing the line does not make them

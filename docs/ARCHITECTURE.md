@@ -207,11 +207,13 @@ src/
     ├── queue-sha-index.ts           # findChanges dedup reference over the queue (DELETED sentinel)
     ├── batch-history-source.ts      # History's local versions over the new queue format
     ├── conflict-store-v2.ts         # .runtime/conflicts.json: Map<path,{conflictBase,siblings[]}>
-    │                                #  + cached view (hasBase / getBySiblingPath) for the sync UI
-    ├── process-conflicts.ts         # §III reconciler: tracked>synthetic dedup, transition-only
-    │                                #  prune, confirmResolved seam
+    │                                #  — the DRAIN's ledger + cached view; isTrackedCopy (saved ∪
+    │                                #  in-memory ∪ ANNOUNCED), announceCopy, removeIfUntracked
+    ├── process-conflicts.ts         # §III reconciler, DRAIN ONLY: tracked>synthetic dedup
+    │                                #  (survivorOf), copy==base prune, transition-only record prune
     ├── sibling-tx.ts                # §II.11 crash-safe sibling replace (mark transaction)
-    ├── conflict-siblings.ts         # buildSiblingFilePath / scan / extensionOf (the ONE naming truth)
+    ├── conflict-siblings.ts         # buildSiblingFilePath / parseSiblingFilename / isConflictPair /
+    │                                #  scan (the ONE naming truth); saveConflictSiblingFile ANNOUNCES
     ├── vault-file-reader.ts         # The drain's live vault surface: stat/readBinary/atomicWriteFile
     │                                #  (+ pull-side canonicalize, and the same canonicalize the drain's
     │                                #  samePulledForm compares with — §II.20) / bin-capturing remove
@@ -229,7 +231,8 @@ src/
     │                                #  readRootGitignore, walkDotDir. Shared by the change
     │                                #  scan and diff2's conflicts panel. SYNC2 §13.3
     ├── cross-platform.ts            # sanitizeFilename (12 forbidden ASCII → Unicode),
-    │                                #  encodePathForGithub, safeRename. SYNC2 §3.
+    │                                #  encodePathForGithub, safeRename, removeIfPresent (three
+    │                                #  deleters of copies: "already gone" = done). SYNC2 §3.
     ├── semver.ts                    # THE single semver comparison (§28 + PLUGIN-UPDATE-COMPAT).
     │                                #  Returns `null`, never 0, for anything unparseable — a tie
     │                                #  and "I cannot tell" must not share a value, because every
@@ -297,8 +300,17 @@ src/
     ├── commit-message.ts            # Hardcoded format* helpers (Sync/Conflict/Merge/Init at …)
     ├── atomic-write.ts              # 5-step atomicWriteFile + stagingPathFor + AtomicWriteRecovery
     │                                #  (modify-in-place fast path preserves editor cursor/scroll)
-    ├── conflict-watcher.ts          # vault.on listener; READ-ONLY counter.markDirty()
-    ├── conflict-counter.ts          # UI count formula + debounced recompute + subscribe
+    ├── conflict-watcher.ts          # vault.on listener; READ-ONLY analyzer.invalidate()
+    ├── conflict-analyzer.ts         # ConflictAnalyzer (was ConflictCounter): THE in-memory model
+    │                                #  of TRACKED conflicts — invalidate (O(1)) / refresh (await) /
+    │                                #  getModel / subscribe; the commit pass refresh()es it
+    ├── conflict-model.ts            # buildConflictModel: copy states live/gone/equals-base/duplicate
+    │                                #  over ledger + disk; survivorOf = the ONE twin order (drain too)
+    ├── conflict-live.ts             # baseFacts / copyAtPathMatchesBase: "copy equal to its base?"
+    │                                #  (size → cache → sha), one answer for everyone
+    ├── synthetic-conflicts.ts       # Finder of UNTRACKED copies (index + opted-in dot-space) and
+    │                                #  cleanSyntheticConflicts — runs on every Diff-Panel focus and at
+    │                                #  plugin start, alongside the drain (safe: re-check + announce)
     ├── conflict-branch.ts           # buildConflictBranchName + CONFLICT_BRANCH_PREFIX
     ├── plugin-js.ts                 # isAtomicPluginFile, readPluginVersion, pluginUpdatedText
     ├── three-way-merge.ts           # mergeText (diff3-style, restores local's own EOL)
