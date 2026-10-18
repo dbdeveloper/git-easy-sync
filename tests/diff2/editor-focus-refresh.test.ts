@@ -247,6 +247,8 @@ describe("diff-editor — files changed outside the editor", () => {
     ed.state = { origin: "conflict", basePath: BASE, siblingPath: COPY };
     ed.leaf = { detach: vi.fn() };
     ed.app = { workspace: { activeLeaf: ed.leaf } };
+    let osFocus = true;
+    ed.containerEl = { ownerDocument: { hasFocus: () => osFocus } };
     ed.mounted = true;
     ed.seenDisk = null;
     ed.tryMount = tryMount;
@@ -266,8 +268,59 @@ describe("diff-editor — files changed outside the editor", () => {
       discardSession,
       tryMount,
       setCommitting: (v: boolean) => (committing = v),
+      setOsFocus: (v: boolean) => (osFocus = v),
     };
   }
+
+  // Owner, 2026-10-18: "in focus" = this tab is Obsidian's active tab AND
+  // Obsidian's window has the OS input focus. Files changed from another
+  // program ask NOTHING while the user is there — the window comes when
+  // they return to Obsidian.
+  it("🔑 a file event while Obsidian is not the OS-focused window → nothing", async () => {
+    const t = await editorWithDisk("continue");
+    const check = vi.fn(async () => {});
+    t.ed.onActivated = check;
+    t.setOsFocus(false);
+    try {
+      t.ed.onVaultChange(BASE);
+      expect(check).not.toHaveBeenCalled();
+    } finally {
+      t.prompt.mockRestore();
+    }
+  });
+
+  it("🔑 Obsidian's window gets the OS focus back with this tab active → check", async () => {
+    const t = await editorWithDisk("continue");
+    const check = vi.fn(async () => {});
+    t.ed.onActivated = check;
+    const ed = t.ed as unknown as { onWindowFocus(): void; app: { workspace: { activeLeaf: unknown } } };
+    try {
+      ed.onWindowFocus();
+      expect(check).toHaveBeenCalledTimes(1);
+      ed.app.workspace.activeLeaf = { other: true }; // another tab is active
+      ed.onWindowFocus();
+      expect(check).toHaveBeenCalledTimes(1);
+    } finally {
+      t.prompt.mockRestore();
+    }
+  });
+
+  it("this tab becomes active while Obsidian is in the background → nothing until the user is back", async () => {
+    const t = await editorWithDisk("continue");
+    const check = vi.fn(async () => {});
+    t.ed.onActivated = check;
+    const ed = t.ed as unknown as { onLeafActivated(): void };
+    t.setOsFocus(false);
+    try {
+      ed.onLeafActivated();
+      expect(check).not.toHaveBeenCalled();
+      t.setOsFocus(true);
+      ed.onLeafActivated();
+      expect(check).toHaveBeenCalledTimes(1);
+    } finally {
+      t.prompt.mockRestore();
+    }
+  });
 
   it("🔑 [Continue]: asked once for this disk; asked again when it changes again", async () => {
     const t = await editorWithDisk("continue");

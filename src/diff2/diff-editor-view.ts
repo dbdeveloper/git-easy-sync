@@ -165,11 +165,16 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
         // this for MarkdownView but not a custom ItemView).
         if (leaf === this.leaf) {
           this.controller.getView()?.focus();
-          void this.onActivated();
+          this.onLeafActivated();
         }
       }),
     );
     this.syncEscScope(this.app.workspace.activeLeaf ?? null);
+
+    // Obsidian's window gets the OS focus back (owner, 2026-10-18): the user
+    // returns from another program — check what changed meanwhile.
+    const win = this.containerEl.ownerDocument?.defaultView;
+    if (win) this.registerDomEvent(win, "focus", () => this.onWindowFocus());
 
     // A change to one of this editor's files (owner, 2026-10-18) — see
     // onVaultChange. Dot-paths send no events; the focus check covers them.
@@ -186,7 +191,9 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     void this.tryMount();
   }
 
-  // Every focus of this tab works as Ctrl/Cmd+R (owner, 2026-10-12). One
+  // Every focus of this tab works as Ctrl/Cmd+R (owner, 2026-10-12) — a focus
+  // with the OS input on it (owner, 2026-10-18: onLeafActivated /
+  // onWindowFocus). One
   // check at a time: the windows it may show move the focus, and that is not
   // a second check; nothing runs before the editor is mounted.
   private activating = false;
@@ -265,9 +272,31 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   onVaultChange(path: string): void {
     const entry = this.entry;
     if (!entry || (path !== entry.basePath && path !== entry.siblingPath)) return;
-    if (this.app.workspace.activeLeaf !== this.leaf) return;
+    if (!this.hasInputFocus()) return;
     if (this.controller?.isCommitting()) return;
     void this.onActivated();
+  }
+
+  // "In focus" (owner, 2026-10-18): this tab is Obsidian's active tab AND
+  // its window has the OS input focus — the user is typing/clicking here
+  // right now. A change made in another program is asked about only when
+  // the user comes back (onWindowFocus).
+  private hasInputFocus(): boolean {
+    return this.app.workspace.activeLeaf === this.leaf && this.osHasFocus();
+  }
+
+  private osHasFocus(): boolean {
+    return this.containerEl?.ownerDocument?.hasFocus() ?? false;
+  }
+
+  // This tab just became the active tab (the caller checked the leaf).
+  onLeafActivated(): void {
+    if (this.osHasFocus()) void this.onActivated();
+  }
+
+  // Obsidian's window got the OS focus back.
+  onWindowFocus(): void {
+    if (this.app.workspace.activeLeaf === this.leaf) void this.onActivated();
   }
 
   // TODO #8 — push the ESC scope iff this leaf is active; pop otherwise. Idempotent.
