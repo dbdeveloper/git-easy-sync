@@ -528,7 +528,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           "newline — both on pull (after fetching from GitHub) and on " +
           "commit (before snapshotting your edits into the queue). " +
           "Applies ONLY to files you edit; Obsidian's own config under " +
-          ".obsidian/ is left byte-exact. " +
+          `${this.app.vault.configDir}/ is left byte-exact. ` +
           "Turn OFF to preserve byte-exact text round-trips (e.g., for " +
           "a Windows-shared repo that expects CRLF, or files whose " +
           "exact trailing-newline matters).",
@@ -587,7 +587,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     let drivingDataJsonToggle = false;
 
     new Setting(containerEl)
-      .setName("Sync configs (.obsidian/ folder)")
+      .setName(`Sync configs (${this.app.vault.configDir}/ folder)`)
       .setDesc(
         "Sync everything under your vault's config folder (Obsidian settings, " +
           "installed plugins, snippets). This setting is per-device and never " +

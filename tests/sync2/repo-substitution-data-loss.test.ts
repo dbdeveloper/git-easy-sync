@@ -113,6 +113,7 @@ describe("🔴 repo substitution is indistinguishable from a force-push", () => 
         maxAutoMergeFileSize: () => 1_000_000,
         mergeBlobs: async () => ({ kind: "conflict" }) as never,
         computeSha: async () => "x",
+        configDir: ".obsidian",
       } as never,
       {
         base,

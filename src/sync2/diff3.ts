@@ -119,9 +119,22 @@ export interface Diff3Deps {
     theirs: ArrayBuffer,
   ): Promise<{ kind: "clean"; merged: ArrayBuffer } | { kind: "conflict" }>;
   computeSha(bytes: ArrayBuffer): Promise<string>;
+  // The vault's config folder (vault.configDir) — NOT the literal
+  // ".obsidian": Obsidian lets a vault rename it (owner, 2026-10-18: the
+  // literal sent a renamed folder's files to MANUAL_CONFLICT).
+  configDir: string;
 }
 
-const PLUGIN_CORE_FILE = /^\.obsidian\/plugins\/[^/]+\/(manifest\.json|main\.js|styles\.css)$/;
+// Under the config folder at ANY depth: the §II.1 п.3 branch.
+function inConfigDir(path: string, configDir: string): boolean {
+  return path.startsWith(`${configDir}/`);
+}
+
+// <configDir>/plugins/<id>/{manifest.json,main.js,styles.css}
+const PLUGIN_CORE_TAIL = /^plugins\/[^/]+\/(manifest\.json|main\.js|styles\.css)$/;
+function isPluginCoreFile(path: string, configDir: string): boolean {
+  return inConfigDir(path, configDir) && PLUGIN_CORE_TAIL.test(path.slice(configDir.length + 1));
+}
 
 // The §II.1 п.3.b branch conditions, named once and used by _diff3
 // below AND by needsObsidianMtimeTiebreak at the bottom of this file.
@@ -139,9 +152,10 @@ function isPluginCoreCollision(
   base: FileInfo,
   local: FileInfo,
   remote: FileInfo,
+  configDir: string,
 ): boolean {
   return (
-    PLUGIN_CORE_FILE.test(path) &&
+    isPluginCoreFile(path, configDir) &&
     local.sha !== null &&
     remote.sha !== null &&
     // ⚠️ BOTH sides must have MOVED from the base. Existing-and-differing
@@ -244,8 +258,8 @@ export async function _diff3(
   }
 
   // ── §II.1 п.3 — the .obsidian/ special branch ───────────────────
-  if (path.startsWith(".obsidian/")) {
-    if (isPluginCoreCollision(path, base, local, remote)) {
+  if (inConfigDir(path, deps.configDir)) {
+    if (isPluginCoreCollision(path, base, local, remote, deps.configDir)) {
       // 3.a — plugin core files route to their own rules
       // (SYNC2-PLUGIN-UPDATE-COMPAT). ⚠️ NARROWED at THE SWITCH gate
       // (2026-08-31, gate finding): the seam fires ONLY on a genuine
@@ -519,6 +533,7 @@ export async function _diff3(
 export function needsObsidianMtimeTiebreak(
   tracked: { base: FileInfo; remote: FileInfo } | null,
   localIn: FileInfo | null,
+  configDir: string,
 ): boolean {
   const base: FileInfo = { ...(tracked?.base ?? emptyFileInfo()) };
   const remote: FileInfo = { ...(tracked?.remote ?? emptyFileInfo()) };
@@ -527,13 +542,13 @@ export function needsObsidianMtimeTiebreak(
   if (remote.mode === DELETED) remote.sha = DELETED_SHA_HASH;
 
   const path = base.path ?? local.path ?? remote.path;
-  if (path === null || !path.startsWith(".obsidian/")) return false;
+  if (path === null || !inConfigDir(path, configDir)) return false;
   // 2.a / 2.b — decided before the .obsidian branch is entered.
   if (local.sha !== null && remote.sha !== null && local.sha === remote.sha) {
     return false;
   }
   if (local.sha === null && remote.sha === null) return false;
-  if (isPluginCoreCollision(path, base, local, remote)) return false; // 3.a
+  if (isPluginCoreCollision(path, base, local, remote, configDir)) return false; // 3.a
   if (remoteUnmovedLocalLive(base, local, remote)) return false; // 3.b.1.a
   if (localUnmovedRemoteLive(base, local, remote)) return false; // 3.b.1.b
   // delete-vs-edit (3.b.*.c/d) — the LIVE side wins, no mtime involved.

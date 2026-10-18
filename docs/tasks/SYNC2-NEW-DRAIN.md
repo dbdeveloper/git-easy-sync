@@ -149,6 +149,13 @@ f. Після закінчення всіх обробок, актуальні �
 
 3. Особливі конфлікти в `.obsidian/` та `.obsidian/plugins/**/`
 
+   ⚠️ **`.obsidian` тут і нижче = config-папка СХОВИЩА, `vault.configDir`, а не літерал (власник,
+   2026-10-18).** Obsidian дозволяє перейменувати її; код мав літерал `".obsidian/"` — у сховищі з
+   іншою назвою папки її файли йшли в MANUAL_CONFLICT, а звичайна папка з назвою `.obsidian` отримувала
+   автоматичне вирішення. Тепер `Diff3Deps.configDir`, `needsObsidianMtimeTiebreak(…, configDir)` і
+   перевірка файлів плагінів (`<configDir>/plugins/<id>/…`) беруть її з `vault.configDir`. Гілка діє на
+   БУДЬ-ЯКІЙ глибині під config-папкою — конфліктних копій там не буває.
+
 a. Якщо файли знаходяться в `.obsidian/plugins/**/`, тобто належать даним `plugins/`, вони розв'язуються згідно власних
 правил, описаних в SYNC2.md та SYNC2-PLUGIN-UPDATE-COMPAT.md. ЦЕ СТОСУЄТЬСЯ базових файлів плагінів, таких як:
 `manifest.json`, `main.js`, `styles.css`). Інші файли, які опиняться в каталогах `.obsidian/plugins/**/`

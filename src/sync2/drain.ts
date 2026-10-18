@@ -1037,6 +1037,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     maxAutoMergeFileSize: deps.maxAutoMergeFileSize,
     mergeBlobs: deps.mergeBlobs,
     computeSha: deps.computeSha,
+    configDir: deps.vault.configDir,
   };
 
   // ── §II.16 progress counters (run-scoped) ────────────────────────
@@ -1869,7 +1870,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         if (s2.abort !== null) return s2.abort;
         if (s2.same) tracked.base = { ...tracked.remote, blob: null };
       }
-      if (needsObsidianMtimeTiebreak(tracked, local)) {
+      if (needsObsidianMtimeTiebreak(tracked, local, deps.vault.configDir)) {
         const abort = await fillRemoteMtime(entry.path, tracked);
         if (abort !== null) return abort;
       }

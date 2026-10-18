@@ -73,6 +73,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
     maxAutoMergeFileSize: () => 10_000_000,
     mergeBlobs: mergeBlobsWithMainThreadDiff3,
     computeSha: calculateGitBlobSHA,
+    configDir: ".obsidian",
     ...over,
   });
 
@@ -520,7 +521,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
 
   it("A1.5b: base=null needs NO remote mtime — no network fill is asked for", () => {
     expect(
-      needsObsidianMtimeTiebreak(t(emptyFileInfo(), side(OB, "R", { mtime: null })), side(OB, "L", { mtime: 2000 })),
+      needsObsidianMtimeTiebreak(t(emptyFileInfo(), side(OB, "R", { mtime: null })), side(OB, "L", { mtime: 2000 }), ".obsidian"),
     ).toBe(false);
   });
 
@@ -616,6 +617,39 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
     );
     expect(r2.kind).toBe("file");
     expect((r2 as { file: FileInfo }).file.sha).toBe(base.sha);
+  });
+
+  // Owner, 2026-10-18: the config folder is the VAULT's (vault.configDir),
+  // not the literal ".obsidian" — Obsidian lets a vault rename it. The
+  // auto-resolve branch, the plugin-core seam and the mtime gate follow it;
+  // a folder merely NAMED ".obsidian" in such a vault is an ordinary one.
+  it("A1 🔑 a renamed config folder gets the auto-resolve branch; '.obsidian/' there is ordinary", async () => {
+    const CFG = ".obsidian-mobile";
+    const deps = makeDeps({
+      configDir: CFG,
+      mergeBlobs: async () => ({ kind: "conflict" }),
+    });
+    const p = `${CFG}/hotkeys.json`;
+    const newerLocal = side(p, "B", { mtime: 2000 });
+    expect(await _diff3(deps, t(side(p, "A"), side(p, "C", { mtime: 1000 })), newerLocal, HEAD)).toEqual({
+      kind: "file",
+      file: newerLocal,
+    });
+    expect(
+      needsObsidianMtimeTiebreak(t(side(p, "A"), side(p, "C", { mtime: 1000 })), newerLocal, CFG),
+    ).toBe(true);
+
+    const plugin = `${CFG}/plugins/some-plugin/main.js`;
+    expect(
+      await _diff3(deps, t(side(plugin, "A"), side(plugin, "R", { mtime: 9 })), side(plugin, "L", { mtime: 1 }), HEAD),
+    ).toEqual({ kind: "plugin-dispatch" });
+
+    const plain = ".obsidian/hotkeys.json"; // NOT the config folder in this vault
+    const r = await _diff3(deps, t(side(plain, "A\n"), side(plain, "C\n")), side(plain, "B\n"), HEAD);
+    expect(r.kind).not.toBe("file");
+    expect(
+      needsObsidianMtimeTiebreak(t(side(plain, "A"), side(plain, "C")), side(plain, "B"), CFG),
+    ).toBe(false);
   });
 
   it("A1.17/A1.18: plugins/<id>/{manifest.json,main.js,styles.css} → plugin-dispatch stub, NOT mtime-tiebreak, NOT standard rules", async () => {
@@ -944,6 +978,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
                     }),
                   },
                   fi({ path: p, sha: localSha, mode: localMode, mtime: 2000 }),
+                  ".obsidian",
                 );
                 expect(asked, label).toBe(mtimeSensitive);
                 if (mtimeSensitive) sensitiveCases += 1;
@@ -966,6 +1001,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
       needsObsidianMtimeTiebreak(
         { base: fi({ path: "note.md", sha: "BASE" }), remote: side("note.md", "R") },
         side("note.md", "L"),
+        ".obsidian",
       ),
     ).toBe(false);
   });
@@ -983,6 +1019,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
           remote: side(OB, "R", { mtime: 777 }),
         },
         side(OB, "L", { mtime: 888 }),
+        ".obsidian",
       ),
     ).toBe(true);
   });
@@ -1137,6 +1174,7 @@ describe("_diff3 totality — every (base, local, remote) combination", () => {
                 maxAutoMergeFileSize: () => 10_000_000,
                 mergeBlobs: mergeBlobsWithMainThreadDiff3,
                 computeSha: calculateGitBlobSHA,
+                configDir: ".obsidian",
               };
               const baseF = mk(p, b);
               const remF = mk(p, r);
