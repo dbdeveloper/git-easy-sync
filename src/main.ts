@@ -1829,7 +1829,7 @@ export default class GitHubSyncPlugin extends Plugin {
                 const st = l.getViewState()?.state as { siblingPath?: unknown } | undefined;
                 return {
                   siblingPath: typeof st?.siblingPath === "string" ? st.siblingPath : null,
-                  isActive: l === this.app.workspace.activeLeaf,
+                  isActive: this.isTabInUse(l),
                   detach: () => l.detach(),
                 };
               }),
@@ -2126,6 +2126,14 @@ export default class GitHubSyncPlugin extends Plugin {
     await this.closeVanishedCopyEditors();
   }
 
+  // The tab the user works in — for every focus/window decision about diff
+  // editor tabs here: the most recent MAIN-AREA leaf (field, 2026-10-18 — a
+  // copy deleted in the file explorer made the explorer the active leaf, and
+  // the editor closed as if it were in the background).
+  private isTabInUse(leaf: WorkspaceLeaf): boolean {
+    return leaf === this.app?.workspace?.getMostRecentLeaf?.();
+  }
+
   // True from onload until the first editor-tab cleaner pass after the
   // layout is ready — no "copy replaced" window in that window.
   private startingUp = true;
@@ -2207,11 +2215,7 @@ export default class GitHubSyncPlugin extends Plugin {
               basePath,
               siblingPath,
               detach: () => l.detach(),
-              // The tab the user works in: the most recent MAIN-AREA leaf
-              // (field, 2026-10-18 — a copy deleted in the file explorer
-              // made the explorer the active leaf, and the editor closed as
-              // if it were in the background).
-              isActive: l === this.app.workspace.getMostRecentLeaf?.(),
+              isActive: this.isTabInUse(l),
             };
           }),
         adapter: this.app.vault.adapter,

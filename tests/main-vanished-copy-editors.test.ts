@@ -265,3 +265,20 @@ describe("main.ts closes the editors of vanished conflict copies", () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 });
+
+// Owner, 2026-10-18: "the tab the user works in" is ONE definition for every
+// window/focus decision in main.ts (the tab cleaner AND the drain's
+// "copy was replaced"): the most recent MAIN-AREA leaf — a sidebar such as
+// the file explorer being the active leaf does not hide it.
+describe("main.ts — the tab the user works in", () => {
+  it("🔑 the most recent main-area leaf, even while a sidebar is the active leaf", () => {
+    const p = Object.create(GitHubSyncPlugin.prototype) as unknown as {
+      app: unknown;
+      isTabInUse(leaf: unknown): boolean;
+    };
+    const editor = {};
+    p.app = { workspace: { activeLeaf: { explorer: true }, getMostRecentLeaf: () => editor } };
+    expect(p.isTabInUse(editor)).toBe(true);
+    expect(p.isTabInUse({})).toBe(false);
+  });
+});
