@@ -2140,8 +2140,16 @@ export default class GitHubSyncPlugin extends Plugin {
       computeSha: (bytes: ArrayBuffer) => this.workerClient.computeGitBlobSHA(bytes),
     };
     const cache = this.conflictStoreV2?.getBySiblingPath(copyPath)?.sibling ?? null;
-    const verdict = await copyAtPathMatchesBase(deps, copyPath, await baseFacts(deps, basePath), cache);
-    return verdict !== false;
+    try {
+      const verdict = await copyAtPathMatchesBase(deps, copyPath, await baseFacts(deps, basePath), cache);
+      return verdict !== false;
+    } catch (err) {
+      // The copy was there at its stat and gone at its read (field,
+      // 2026-10-18: [←] or the drain removed it in between) — gone is
+      // resolved, not an error.
+      if (!(await deps.adapter.exists(copyPath))) return true;
+      throw err;
+    }
   }
 
   // A conflict whose COPY is gone is resolved, and its open diff-editor
@@ -2214,6 +2222,11 @@ export default class GitHubSyncPlugin extends Plugin {
           await new ConflictResolvedModal(this.app, basePath, "focus").prompt();
         },
         onFocusedClosed: () => void this.activateDiffEditView(),
+        onCheckFailed: (copyPath, err) =>
+          this.logger.warn("Could not check a conflict editor's copy — left for the next pass", {
+            copy: copyPath,
+            err: `${err}`,
+          }),
       });
       if (r.closedTabs > 0) {
         this.logger.info("Editors of resolved conflicts closed (the copy is gone or identical to its file)", r);

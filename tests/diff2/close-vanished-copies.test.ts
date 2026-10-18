@@ -129,4 +129,22 @@ describe("closeEditorsOfVanishedCopies", () => {
     await closeEditorsOfVanishedCopies(s.deps);
     expect(s.closed).toEqual([]);
   });
+  // Field, 2026-10-18: one tab's check failing (a copy vanishing between its
+  // stat and its read) used to abort the whole pass — no other tab was looked
+  // at. A failed check leaves THAT tab for the next pass; the rest go on.
+  it("🔑 one tab's check throws → that tab stays, the other tabs are still checked", async () => {
+    const s = setup([conflictTab(), conflictTab(OTHER_BASE, OTHER_COPY)], [BASE, COPY, OTHER_BASE]);
+    const failed: string[] = [];
+    const deps = {
+      ...s.deps,
+      isResolved: async (base: string, copy: string) => {
+        if (copy === COPY) throw new Error("ENOENT: no such file or directory");
+        return s.deps.isResolved(base, copy);
+      },
+      onCheckFailed: (copy: string) => failed.push(copy),
+    };
+    await closeEditorsOfVanishedCopies(deps);
+    expect(s.closed).toEqual([1]);
+    expect(failed).toEqual([COPY]);
+  });
 });

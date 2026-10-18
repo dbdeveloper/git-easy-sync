@@ -43,6 +43,8 @@ export interface VanishedCopyDeps {
   notifyResolved?: (basePath: string) => Promise<void>;
   // After the FOCUSED tab closed: back to the Diff Panel (owner, 2026-10-12).
   onFocusedClosed?: () => void;
+  // One tab's check threw: that tab is left for the next pass, the rest go on.
+  onCheckFailed?: (copyPath: string, err: unknown) => void;
   adapter: {
     exists(path: string): Promise<boolean>;
     rmdir(path: string, recursive: boolean): Promise<void>;
@@ -59,9 +61,16 @@ export async function closeEditorsOfVanishedCopies(
     // Not a conflict copy of its base (two ordinary files) — not ours.
     if (!isConflictPair(tab.basePath, tab.siblingPath)) continue;
     if (!tab.siblingPath || tab.siblingPath === tab.basePath) continue;
-    const resolved = deps.isResolved
-      ? await deps.isResolved(tab.basePath, tab.siblingPath)
-      : !(await deps.adapter.exists(tab.siblingPath));
+    // A check that throws used to abort the whole pass (field, 2026-10-18).
+    let resolved: boolean;
+    try {
+      resolved = deps.isResolved
+        ? await deps.isResolved(tab.basePath, tab.siblingPath)
+        : !(await deps.adapter.exists(tab.siblingPath));
+    } catch (err) {
+      deps.onCheckFailed?.(tab.siblingPath, err);
+      continue;
+    }
     if (!resolved) continue;
     if (tab.isActive && deps.notifyResolved) await deps.notifyResolved(tab.basePath);
     tab.detach();

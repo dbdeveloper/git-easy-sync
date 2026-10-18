@@ -147,6 +147,26 @@ describe("main.ts closes the editors of vanished conflict copies", () => {
     }
   });
 
+  // Field, 2026-10-18: the copy was there at stat and gone at read (removed
+  // in between). A copy that is gone is resolved — not an error.
+  it("🔑 the copy vanishes between its stat and its read → resolved, its tab is detached", async () => {
+    const { p, detach } = pluginWithEditorTab(true);
+    const adapter = (p.app as { vault: { adapter: Record<string, unknown> } }).vault.adapter;
+    let copyThere = true;
+    adapter.stat = async (path: string) =>
+      path === BASE || (copyThere && path === COPY) ? { size: 5, mtime: 7 } : null;
+    adapter.exists = async (path: string) => path === BASE || (copyThere && path === COPY);
+    adapter.readBinary = async (path: string) => {
+      if (path === COPY) {
+        copyThere = false;
+        throw new Error(`ENOENT: no such file or directory, open '${path}'`);
+      }
+      return new TextEncoder().encode("same\n").buffer;
+    };
+    await p.closeVanishedCopyEditors();
+    expect(detach).toHaveBeenCalledTimes(1);
+  });
+
   it("a tab whose copy is still there stays", async () => {
     const { p, detach } = pluginWithEditorTab(true);
     await p.closeVanishedCopyEditors();
