@@ -496,6 +496,9 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     }
     this.escScope = null;
     this.controller?.dispose();
+    // Closed: an answer still pending in a window (e.g. "files changed" →
+    // Reload) must not mount into this leaf any more.
+    this.mounted = false;
     // UI reconcile site 3 of 3 (§III "ЗАУВАЖЕННЯ"): leaving the editor
     // is where resolutions land on disk (base rewritten, sibling
     // deleted) — reconcile conflicts.json with that reality so the

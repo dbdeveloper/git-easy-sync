@@ -368,3 +368,40 @@ describe("'One of the files is gone' window", () => {
     expect(Array.from(content.querySelectorAll("button"), (b) => b.textContent)).toEqual(["Close"]);
   });
 });
+
+// A tab closed while the "files changed" window was open must not reload
+// into a dead leaf: closing it marks it unmounted, and the window's answer
+// is then dropped.
+describe("diff-editor — closed under the 'files changed' window", () => {
+  it("🔑 onClose marks the tab unmounted; [Reload] after it does nothing", async () => {
+    const { FilesChangedModal } = await import("../../src/diff2/recovery-dialog");
+    const ed = Object.create(DiffEditorView.prototype) as unknown as Record<string, unknown> & {
+      refreshFromDisk(): Promise<void>;
+      onClose(): Promise<void>;
+    };
+    const discardSession = vi.fn(async () => {});
+    const tryMount = vi.fn(async () => {});
+    ed.entry = null;
+    ed.escScope = null;
+    ed.mounted = true;
+    ed.seenDisk = null;
+    ed.tryMount = tryMount;
+    ed.controller = { diskVersusStart: async () => ({ start: "S", now: "N" }), discardSession, dispose: vi.fn() };
+    ed.state = { origin: "conflict" };
+    ed.deps = { vault: { adapter: { exists: async () => true } }, isCopyResolved: async () => false };
+    ed.app = {};
+    const prompt = vi.spyOn(FilesChangedModal.prototype, "prompt").mockImplementation(async () => {
+      await ed.onClose(); // the tab closes while the window is open
+      return "reload";
+    });
+    try {
+      ed.entry = { basePath: "notes/a.md", siblingPath: "notes/a.conflict-from-Phone-2026-06-05T09-19-10Z.md" };
+      await ed.refreshFromDisk();
+      expect(ed.mounted).toBe(false);
+      expect(discardSession).not.toHaveBeenCalled();
+      expect(tryMount).not.toHaveBeenCalled();
+    } finally {
+      prompt.mockRestore();
+    }
+  });
+});
