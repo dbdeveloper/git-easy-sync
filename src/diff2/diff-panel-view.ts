@@ -26,6 +26,7 @@ import type { ConflictAnalyzer } from "../sync2/conflict-analyzer";
 import type ConflictStoreV2 from "../sync2/conflict-store-v2";
 import {
   conflictKey,
+  nextSurvivingKey,
   renderConflictsList,
   type ConflictRowRef,
 } from "./conflicts-list";
@@ -172,6 +173,9 @@ export class DiffPanelView extends ItemView {
   // The conflict LAST OPENED from this list (the "launch position"). [←] returns the cursor
   // here even if the list was navigated elsewhere while the editor was open. See the history view.
   private conflictLaunchedKey: string | null = null;
+  // The list's order when that conflict was launched: if [←] finds it gone,
+  // the cursor goes to the next one after it (owner, 2026-10-18).
+  private conflictLaunchedOrder: string[] = [];
   private conflictListEl: HTMLElement | null = null;
 
   constructor(leaf: WorkspaceLeaf, deps: DiffEditViewDeps) {
@@ -456,6 +460,7 @@ export class DiffPanelView extends ItemView {
 
     if (tab === "conflicts") {
       const { entries } = assembleResult(this.conflictEntries);
+      const shownBefore = (this.conflictRefs ?? []).map((r) => conflictKey(r.entry));
       this.conflictRefs = renderConflictsList(
         body,
         entries,
@@ -471,6 +476,7 @@ export class DiffPanelView extends ItemView {
             if (i >= 0) this.conflictSelectedIndex = i;
             this.conflictSelectedKey = key;
             this.conflictLaunchedKey = key; // launch position for [←]
+            this.conflictLaunchedOrder = this.conflictRefs.map((r) => conflictKey(r.entry));
             this.applyConflictSelection();
             void this.launchEntry(entry, toRight);
           },
@@ -478,12 +484,14 @@ export class DiffPanelView extends ItemView {
         this.conflictSelectedKey,
       );
       // Keyboard-driven, header-skipping (nav walks conflictRefs, not the DOM). Restore the
-      // selected index from the persisted key; default to the first row.
-      const restored = this.conflictSelectedKey
-        ? this.conflictRefs.findIndex(
-            (r) => conflictKey(r.entry) === this.conflictSelectedKey,
-          )
-        : -1;
+      // selected index from the persisted key; a selected row that left the list hands
+      // the cursor to the next one after it (owner, 2026-10-18); default to the first row.
+      const shownNow = this.conflictRefs.map((r) => conflictKey(r.entry));
+      let restored = this.conflictSelectedKey ? shownNow.indexOf(this.conflictSelectedKey) : -1;
+      if (restored < 0 && this.conflictSelectedKey) {
+        const next = nextSurvivingKey(shownBefore, this.conflictSelectedKey, shownNow);
+        restored = next === null ? -1 : shownNow.indexOf(next);
+      }
       this.conflictSelectedIndex = restored >= 0 ? restored : 0;
       if (this.conflictRefs.length > 0) {
         this.conflictSelectedKey = conflictKey(
@@ -552,6 +560,7 @@ export class DiffPanelView extends ItemView {
     if (!ref) return;
     this.conflictSelectedKey = conflictKey(ref.entry);
     this.conflictLaunchedKey = this.conflictSelectedKey; // launch position for [←]
+    this.conflictLaunchedOrder = this.conflictRefs.map((r) => conflictKey(r.entry));
     void this.launchEntry(ref.entry, toRight);
   }
 
@@ -582,13 +591,16 @@ export class DiffPanelView extends ItemView {
   // navigated since), scroll it into view, and take keyboard focus. Public — called from main.ts.
   restoreLaunchedConflict(): void {
     if (this.conflictLaunchedKey) {
-      const i = this.conflictRefs.findIndex(
-        (r) => conflictKey(r.entry) === this.conflictLaunchedKey,
-      );
+      const shown = this.conflictRefs.map((r) => conflictKey(r.entry));
+      // Resolved and gone → the next one after it, or the new last (owner, 2026-10-18).
+      const key = shown.includes(this.conflictLaunchedKey)
+        ? this.conflictLaunchedKey
+        : nextSurvivingKey(this.conflictLaunchedOrder, this.conflictLaunchedKey, shown);
+      const i = key === null ? -1 : shown.indexOf(key);
       if (i >= 0) {
         this.conflictSelectedIndex = i;
-        this.conflictSelectedKey = this.conflictLaunchedKey;
-        this.applyConflictSelection(); // scrolls the launched row into view
+        this.conflictSelectedKey = key;
+        this.applyConflictSelection(); // scrolls the row into view
       }
     }
     this.focusConflictList();

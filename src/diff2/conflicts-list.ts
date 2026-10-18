@@ -39,6 +39,24 @@ export function conflictKey(e: ConflictEntry): string {
   return e.siblingPath;
 }
 
+// Where the cursor goes when its conflict left the list (owner, 2026-10-18):
+// the first key AFTER it in the order the user saw that is still listed; if
+// none is, the new last one. By the old order, not by row number — rows above
+// it may have gone too. null only for an empty list.
+export function nextSurvivingKey(
+  oldOrder: string[],
+  goneKey: string,
+  newOrder: string[],
+): string | null {
+  if (newOrder.length === 0) return null;
+  const alive = new Set(newOrder);
+  const at = oldOrder.indexOf(goneKey);
+  if (at >= 0) {
+    for (const k of oldOrder.slice(at + 1)) if (alive.has(k)) return k;
+  }
+  return newOrder[newOrder.length - 1];
+}
+
 // Render the conflicts list into the supplied container. Idempotent:
 // clears the container first so this can be called on every refresh
 // (e.g. after a ConflictAnalyzer notify) without leaking stale DOM.
