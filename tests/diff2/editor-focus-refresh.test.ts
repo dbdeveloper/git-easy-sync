@@ -252,10 +252,12 @@ describe("diff-editor — files changed outside the editor", () => {
     ed.mounted = true;
     ed.seenDisk = null;
     ed.tryMount = tryMount;
+    let dirty = true;
     ed.controller = {
       diskVersusStart: async () => ({ ...disk }),
       discardSession,
       isCommitting: () => committing,
+      hasUnsavedChanges: async () => dirty,
     };
     ed.deps = {
       vault: { adapter: { exists: async () => true } },
@@ -269,8 +271,24 @@ describe("diff-editor — files changed outside the editor", () => {
       tryMount,
       setCommitting: (v: boolean) => (committing = v),
       setOsFocus: (v: boolean) => (osFocus = v),
+      setDirty: (v: boolean) => (dirty = v),
     };
   }
+
+  // Owner, 2026-10-18: nothing edited yet → the editor follows the disk
+  // silently; the window is only for a user who already started resolving.
+  it("🔑 no edits in the editor → silent reload, no window", async () => {
+    const t = await editorWithDisk("continue");
+    t.setDirty(false);
+    try {
+      await t.ed.refreshFromDisk();
+      expect(t.prompt).not.toHaveBeenCalled();
+      expect(t.discardSession).toHaveBeenCalledTimes(1);
+      expect(t.tryMount).toHaveBeenCalledTimes(1);
+    } finally {
+      t.prompt.mockRestore();
+    }
+  });
 
   // Owner, 2026-10-18: "in focus" = this tab is Obsidian's active tab AND
   // Obsidian's window has the OS input focus. Files changed from another
@@ -439,7 +457,12 @@ describe("diff-editor — closed under the 'files changed' window", () => {
     ed.mounted = true;
     ed.seenDisk = null;
     ed.tryMount = tryMount;
-    ed.controller = { diskVersusStart: async () => ({ start: "S", now: "N" }), discardSession, dispose: vi.fn() };
+    ed.controller = {
+      diskVersusStart: async () => ({ start: "S", now: "N" }),
+      discardSession,
+      dispose: vi.fn(),
+      hasUnsavedChanges: async () => true,
+    };
     ed.state = { origin: "conflict" };
     ed.deps = { vault: { adapter: { exists: async () => true } }, isCopyResolved: async () => false };
     ed.app = {};

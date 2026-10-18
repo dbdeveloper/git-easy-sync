@@ -247,13 +247,18 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       await new ConflictResolvedModal(this.app, gonePath!, "gone").prompt();
       this.leaf.detach();
     } else if (decision === "ask-changed" && disk) {
-      const choice = await new FilesChangedModal(this.app, entry.basePath).prompt();
-      if (!this.mounted) return; // the tab went while the window was open
-      if (choice === "continue") {
-        this.seenDisk = disk.now; // ask again only when the disk moves on from here
-        return;
+      // Nothing edited yet (owner, 2026-10-18): follow the disk silently —
+      // the window is only for a user who already started resolving.
+      const edited = await this.controller.hasUnsavedChanges();
+      if (edited) {
+        const choice = await new FilesChangedModal(this.app, entry.basePath).prompt();
+        if (!this.mounted) return; // the tab went while the window was open
+        if (choice === "continue") {
+          this.seenDisk = disk.now; // ask again only when the disk moves on from here
+          return;
+        }
       }
-      // Reload and start over: a fresh session from the disk as it is now.
+      // Reload (asked or silent): a fresh session from the disk as it is now.
       await this.controller.discardSession();
       this.mounted = false;
       this.seenDisk = null;
