@@ -82,16 +82,22 @@ function entryFor(basePath: string, siblingPath: string): ConflictEntry {
 
 // A host that records which navigation callback fired. isStillTargeting always true (one
 // pair, no concurrent re-mount in these tests).
-function recordingHost(): DiffDetailHost & { leaveCount: number; commitCount: number } {
+function recordingHost(): DiffDetailHost & {
+  leaveCount: number;
+  commitCount: number;
+  copyRemoved: boolean | undefined;
+} {
   return {
     leaveCount: 0,
     commitCount: 0,
+    copyRemoved: undefined,
     isStillTargeting: () => true,
     onLeaveDetail() {
       this.leaveCount++;
     },
-    onCommitExit() {
+    onCommitExit(_entry, opts) {
       this.commitCount++;
+      this.copyRemoved = opts?.copyRemoved;
     },
   };
 }
@@ -196,6 +202,39 @@ describe("DiffDetailController host seam (S2)", () => {
     // The committed base reflects the edit, and the autosave dir is gone (commit7Step rmdir).
     expect(dec(await fx.vault.adapter.readBinary(basePath))).toContain("x");
     expect(await fx.vault.adapter.exists(autosaveDir(conflictId))).toBe(false);
+    ctl.dispose();
+  });
+
+  // Owner, 2026-10-18: the Diff Panel drops the row of a copy that [←]
+  // removed BEFORE it is shown again — so the editor's host must learn that
+  // the commit removed the copy (step 6.5), and only then.
+  it("🔑 [←] that removes the copy tells the host: copyRemoved", async () => {
+    const { siblingPath, entry } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+    const host = recordingHost();
+    const ctl = new DiffDetailController({} as unknown as App, deps(), host);
+    await ctl.mount(container, entry);
+    const owner = (ctl as unknown as { owner: { applyResolveAll(k: string): boolean } }).owner;
+    expect(owner.applyResolveAll("keep1")).toBe(true); // both sides converge
+
+    await ctl.exit(entry);
+
+    expect(await fx.vault.adapter.exists(siblingPath)).toBe(false);
+    expect(host.commitCount).toBe(1);
+    expect(host.copyRemoved).toBe(true);
+    ctl.dispose();
+  });
+
+  it("[←] that saves with conflicts left does not claim the copy is gone", async () => {
+    const { entry } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+    const host = recordingHost();
+    const ctl = new DiffDetailController({} as unknown as App, deps(), host);
+    await ctl.mount(container, entry);
+    ctl.getView()!.dispatch({ changes: { from: 0, insert: "x" }, userEvent: "input.type" });
+
+    await ctl.exit(entry);
+
+    expect(host.commitCount).toBe(1);
+    expect(host.copyRemoved).not.toBe(true);
     ctl.dispose();
   });
 

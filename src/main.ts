@@ -4699,6 +4699,15 @@ export default class GitHubSyncPlugin extends Plugin {
     }
   }
 
+  // The editor's [←] removed a conflict copy (owner, 2026-10-18): every open
+  // Diff Panel drops its row now, before the editor tab closes and the panel
+  // comes back on screen.
+  private forgetRemovedCopy(siblingPath: string): void {
+    for (const leaf of this.app?.workspace?.getLeavesOfType(DIFF2_PANEL_VIEW_TYPE) ?? []) {
+      if (leaf.view instanceof DiffPanelView) leaf.view.forgetCopy(siblingPath);
+    }
+  }
+
   // S5 — the editor's `[←]` committed: navigate back to the singleton panel and scroll
   // to the resolved base group (R-D). `baseHasConflicts` is read AFTER the commit, so a
   // base whose last sibling was just resolved → no scroll (planBackNav returns null).
@@ -4783,6 +4792,7 @@ export default class GitHubSyncPlugin extends Plugin {
       openEditor: (entry, toRight) => void this.openEditorForPair(entry, toRight),
       // S5 — the editor's `[←]` routes here to navigate back to the panel.
       onEditorCommitted: (origin, anchorPath) => void this.onEditorCommitted(origin, anchorPath),
+      onCopyRemoved: (siblingPath) => this.forgetRemovedCopy(siblingPath),
       // 7a.3 — lazy version-bytes fetch for a history editor's fresh mount.
       fetchHistoryVersionBytes: (path, version) =>
         this.fetchHistoryVersionBytes(path, version),

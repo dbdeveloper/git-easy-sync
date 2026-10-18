@@ -83,8 +83,10 @@ export interface DiffDetailHost {
   // new host → leaf.detach().
   onLeaveDetail(): void;
   // `[←]` committed successfully: old host → render(list); new host → detach +
-  // reveal panel + scroll (S5).
-  onCommitExit(entry: ConflictEntry): void;
+  // reveal panel + scroll (S5). `copyRemoved`: this commit removed the
+  // conflict copy (step 6.5) — the panel drops its row at once (owner,
+  // 2026-10-18).
+  onCommitExit(entry: ConflictEntry, opts?: { copyRemoved?: boolean }): void;
 }
 
 export class DiffDetailController {
@@ -900,6 +902,7 @@ export class DiffDetailController {
         return;
       }
 
+      let copyRemoved = false;
       try {
         // TODO(perf) — [←] commit-chain instrumentation. A 2 MB file froze the UI ~1-2 min
         // on save with 0 conflicts left (so NOT the diff — base==sibling is a trivial
@@ -967,6 +970,7 @@ export class DiffDetailController {
           if (!proceed) return;
         } else if (outcome.kind === "committed") {
           const { basePath, baseDeleted } = outcome.result;
+          copyRemoved = outcome.result.siblingRemoved;
           const prefix = baseDeleted ? "Deleted" : "Saved";
           new Notice(`${prefix} ${basePath}`);
         }
@@ -984,7 +988,7 @@ export class DiffDetailController {
       // dispose() (via render()/onClose) sees no session and skips the abandon-wipe (the
       // commit already removed the dir); dispose() destroys the owner's CM6 view.
       this.activeSession = null;
-      this.host.onCommitExit(entry);
+      this.host.onCommitExit(entry, { copyRemoved });
     } finally {
       this.committing = false;
     }

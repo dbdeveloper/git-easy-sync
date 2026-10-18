@@ -102,17 +102,35 @@ describe("diff-editor — [←] after a save", () => {
     leaf: { detach: () => void };
     state: unknown;
     deps: unknown;
-    onCommitExit(entry: unknown): void;
+    onCommitExit(entry: unknown, opts?: { copyRemoved?: boolean }): void;
   }
   const setup = (siblingPath: string) => {
     const ed = Object.create(DiffEditorView.prototype) as Exit;
     const detach = vi.fn();
     const onEditorCommitted = vi.fn();
+    const onCopyRemoved = vi.fn();
     ed.leaf = { detach };
     ed.state = { origin: "conflict", basePath: "notes/a.md", siblingPath, openMode: "user" };
-    ed.deps = { onEditorCommitted };
-    return { ed, detach, onEditorCommitted, entry: { basePath: "notes/a.md", siblingPath } };
+    ed.deps = { onEditorCommitted, onCopyRemoved };
+    return { ed, detach, onEditorCommitted, onCopyRemoved, entry: { basePath: "notes/a.md", siblingPath } };
   };
+
+  // Owner, 2026-10-18: the panel must not show the row of a copy this [←]
+  // removed, not even for a moment — it is told BEFORE this tab closes
+  // (closing it is what brings the panel back on screen).
+  it("🔑 the copy removed → the panel is told BEFORE the tab closes", () => {
+    const copy = "notes/a.conflict-from-Phone-2026-06-05T09-19-10Z.md";
+    const { ed, detach, onCopyRemoved, entry } = setup(copy);
+    ed.onCommitExit(entry, { copyRemoved: true });
+    expect(onCopyRemoved).toHaveBeenCalledWith(copy);
+    expect(onCopyRemoved.mock.invocationCallOrder[0]).toBeLessThan(detach.mock.invocationCallOrder[0]);
+  });
+
+  it("the copy still there → the panel is not told anything", () => {
+    const { ed, onCopyRemoved, entry } = setup("notes/a.conflict-from-Phone-2026-06-05T09-19-10Z.md");
+    ed.onCommitExit(entry);
+    expect(onCopyRemoved).not.toHaveBeenCalled();
+  });
 
   it("a conflict → the Diff Panel", () => {
     const { ed, onEditorCommitted, entry } = setup("notes/a.conflict-from-Phone-2026-06-05T09-19-10Z.md");

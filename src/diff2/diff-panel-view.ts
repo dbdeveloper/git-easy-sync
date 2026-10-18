@@ -107,6 +107,9 @@ export interface DiffEditViewDeps {
   // navigate back: reveal the singleton panel + scroll to the base group (R-D). origin
   // routes the destination; anchorPath = base for a conflict.
   onEditorCommitted?: (origin: DiffEditorOrigin, anchorPath: string) => void;
+  // The editor's [←] removed this conflict copy (owner, 2026-10-18): main.ts
+  // has every open panel drop its row at once, before the editor tab closes.
+  onCopyRemoved?: (siblingPath: string) => void;
   // 7a.3 (History) — fetch a version's RAW bytes (commit-sha → getContentsAtRef; local
   // batchId → queue.readFile). Called LAZILY by the controller's fresh path only (a
   // resume reads snapshots). Lives in main.ts (has client + queue). Optional (conflict-
@@ -262,6 +265,17 @@ export class DiffPanelView extends ItemView {
     if (alive.length === this.conflictEntries.length) return false;
     this.conflictEntries = alive;
     return true;
+  }
+
+  // A copy the editor's [←] just removed (owner, 2026-10-18): its row goes
+  // from the list NOW, without reading the disk, so the panel never shows
+  // it again. The next refresh from disk confirms it. Only this one case —
+  // any other change reaches the list through a refresh.
+  forgetCopy(siblingPath: string): void {
+    const kept = this.conflictEntries.filter((e) => e.siblingPath !== siblingPath);
+    if (kept.length === this.conflictEntries.length) return;
+    this.conflictEntries = kept;
+    this.render();
   }
 
   // Every time this tab gets the focus it works as Ctrl/Cmd+R (owner,

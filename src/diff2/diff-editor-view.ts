@@ -561,7 +561,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   // scrolls to the base group. For a conflict the anchor is the base just committed.
   // The controller already nulled its activeSession before calling this, so
   // detach → onClose → dispose skips the §4.1 abandon-wipe (the commit removed the dir).
-  onCommitExit(entry: ConflictEntry): void {
+  onCommitExit(entry: ConflictEntry, opts?: { copyRemoved?: boolean }): void {
     const origin = this.state?.origin ?? "conflict";
     const src = this.leaf;
     if (origin === "history") {
@@ -578,7 +578,11 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       // now; the future "Diff with…" mode opens the first file's tab, TODO п.58).
       src.detach();
     } else {
-      // Conflict: unchanged — the panel is a singleton with its own spot.
+      // Conflict: the panel is a singleton with its own spot. A copy this
+      // [←] removed leaves the panel's list FIRST (owner, 2026-10-18):
+      // closing this tab brings the panel back on screen, and its row must
+      // not be there even for a moment.
+      if (opts?.copyRemoved) this.deps.onCopyRemoved?.(entry.siblingPath);
       src.detach();
       this.deps.onEditorCommitted?.(origin, entry.basePath);
     }

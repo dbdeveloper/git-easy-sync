@@ -20,6 +20,7 @@ interface PanelHandle {
   conflictEntries: ConflictEntry[];
   render: () => void;
   scrollToBase: (p: string) => void;
+  forgetCopy(siblingPath: string): void;
   applyBackNav(nav: {
     kind: "panel";
     tab: "conflicts";
@@ -116,5 +117,29 @@ describe("panel [←] back-nav", () => {
     });
 
     expect(render).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Owner, 2026-10-18: after [←] removed a copy, its row must not flash in the
+// panel and vanish a moment later — the editor tells the panel first, and the
+// panel drops that row from its list at once, without reading the disk.
+describe("panel forgets a copy [←] removed", () => {
+  it("🔑 the row goes from the list and the panel repaints", () => {
+    const { panel, render } = makePanel([]);
+    const gone = entry("notes/a.conflict-from-Phone-2026-10-18T10-00-00Z.md", "notes/a.md");
+    const kept = entry("notes/b.conflict-from-Phone-2026-10-18T10-00-00Z.md", "notes/b.md");
+    panel.conflictEntries = [gone, kept];
+    panel.forgetCopy(gone.siblingPath);
+    expect(panel.conflictEntries).toEqual([kept]);
+    expect(render).toHaveBeenCalledTimes(1);
+  });
+
+  it("a copy the panel does not list → nothing repaints", () => {
+    const { panel, render } = makePanel([]);
+    const kept = entry("notes/b.conflict-from-Phone-2026-10-18T10-00-00Z.md", "notes/b.md");
+    panel.conflictEntries = [kept];
+    panel.forgetCopy("notes/x.conflict-from-Phone-2026-10-18T10-00-00Z.md");
+    expect(panel.conflictEntries).toEqual([kept]);
+    expect(render).not.toHaveBeenCalled();
   });
 });
