@@ -359,6 +359,11 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     } catch (err) {
       this.deps.logger?.error("diff2 editor tryMount failed — detaching", { err: String(err) });
       this.leaf.detach();
+    } finally {
+      // The mount decision is made — `mounted` guards from here on. Left set,
+      // it blocked every later remount of this tab (empty editor; field,
+      // 2026-10-18).
+      this.mounting = false;
     }
   }
 
@@ -441,6 +446,8 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
         err: String(err),
       });
       this.leaf.detach();
+    } finally {
+      this.mounting = false; // see tryMount
     }
   }
 

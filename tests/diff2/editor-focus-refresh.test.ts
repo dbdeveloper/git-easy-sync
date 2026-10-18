@@ -178,3 +178,47 @@ describe("diff-editor — focus finds the conflict resolved outside", () => {
     }
   });
 });
+
+// Field, 2026-10-18: the "remount" path left an EMPTY editor — tryMount's
+// `mounting` flag was set on the first mount and never reset, so a second
+// mount of the same tab (after the controller was disposed) returned at once.
+describe("diff-editor — a tab can be mounted again", () => {
+  it("🔑 dispose, then tryMount → the controller mounts a second time", async () => {
+    const proto = HTMLElement.prototype as unknown as Record<string, unknown>;
+    proto.empty ??= function (this: HTMLElement) {
+      this.replaceChildren();
+    };
+    proto.addClass ??= function (this: HTMLElement, c: string) {
+      this.classList.add(c);
+    };
+    const ed = Object.create(DiffEditorView.prototype) as unknown as Record<string, unknown> & {
+      tryMount(): Promise<void>;
+    };
+    const mount = vi.fn(async () => {});
+    ed.controller = { mount, dispose: vi.fn(), getView: () => null };
+    ed.state = {
+      origin: "conflict",
+      basePath: "notes/a.md",
+      siblingPath: "notes/a.conflict-from-Phone-2026-06-05T09-19-10Z.md",
+    };
+    ed.deps = {
+      conflictStore: { getBySiblingPath: () => null },
+      vault: { adapter: { exists: async () => true } },
+      isCopyResolved: async () => false,
+    };
+    ed.app = { workspace: { getLeavesOfType: () => [], getMostRecentLeaf: () => null } };
+    ed.leaf = { detach: vi.fn() };
+    ed.contentEl = document.createElement("div");
+    ed.refreshHeader = () => {};
+    ed.register = () => {};
+    ed.mounted = false;
+    ed.mounting = false;
+
+    await ed.tryMount();
+    expect(mount).toHaveBeenCalledTimes(1);
+
+    ed.mounted = false; // what the remount does after controller.dispose()
+    await ed.tryMount();
+    expect(mount).toHaveBeenCalledTimes(2);
+  });
+});
