@@ -593,7 +593,8 @@ function vertical(view: EditorView, forward: boolean): boolean {
   const cur = view.state.selection.main;
   const native = view.moveVertically(cur, forward);
   const target = cursorVertTarget(readStructure(view.state), cur.head, native.head, forward);
-  view.dispatch({ selection: EditorSelection.cursor(target), scrollIntoView: true });
+  // userEvent "select": a keyboard move (docEdgeRevealListener reads it).
+  view.dispatch({ selection: EditorSelection.cursor(target), scrollIntoView: true, userEvent: "select" });
   return true;
 }
 
@@ -791,6 +792,50 @@ export const caretOffTerminalListener: Extension = EditorView.updateListener.of(
   if (target !== sel.head) {
     u.view.dispatch({ selection: { anchor: target }, annotations: Transaction.addToHistory.of(false) });
   }
+});
+
+// Owner, 2026-10-18: a diff group at the very start/end of a long document has
+// its [keep][remove] marker ABOVE the first line and [apply][remove] BELOW the
+// last. A keyboard move onto that line scrolled only the LINE into view, so the
+// buttons stayed off-screen (reachable by mouse only). A KEYBOARD move (Ctrl/
+// Cmd+Home/End, PgUp/PgDn, Up/Down — incl. Up on the first line / Down on the
+// last, where the caret cannot move any more) that lands on the first (last)
+// VISIBLE line scrolls to the very top (bottom). Mouse clicks do not scroll.
+// `visible(n)`: line n has height (a ver-block's hidden terminal does not).
+export function docEdgeForLine(
+  headLine: number,
+  lineCount: number,
+  visible: (n: number) => boolean,
+): "top" | "bottom" | null {
+  let first = 1;
+  while (first < lineCount && !visible(first)) first++;
+  if (headLine <= first) return "top";
+  let last = lineCount;
+  while (last > 1 && !visible(last)) last--;
+  if (headLine >= last) return "bottom";
+  return null;
+}
+
+const docEdgeRevealKey = {};
+export const docEdgeRevealListener: Extension = EditorView.updateListener.of((u) => {
+  const keyboard = u.transactions.some(
+    (tr) => tr.selection !== undefined && tr.isUserEvent("select") && !tr.isUserEvent("select.pointer"),
+  );
+  if (!keyboard) return;
+  u.view.requestMeasure({
+    key: docEdgeRevealKey,
+    // Heights are read in the measure phase — after layout, so lines just
+    // brought into view are measured.
+    read: (view) => {
+      const doc = view.state.doc;
+      const headLine = doc.lineAt(view.state.selection.main.head).number;
+      return docEdgeForLine(headLine, doc.lines, (n) => view.lineBlockAt(doc.line(n).from).height > 0);
+    },
+    write: (edge, view) => {
+      if (edge === "top") view.scrollDOM.scrollTop = 0;
+      else if (edge === "bottom") view.scrollDOM.scrollTop = view.scrollDOM.scrollHeight;
+    },
+  });
 });
 
 // marker-panel rebuild — the layout controller. Measures the CONSTANT marker widths ONCE
@@ -1029,6 +1074,7 @@ export function createDiffPaneState(base: string, sibling: string, hooks?: DiffP
       cursorHistory, // §2.2.9 carry the resolveCaret marker across undo/redo
       cursorRestoreListener, // §2.2.9 apply before/after caret on undo/redo
       caretOffTerminalListener, // §2.2.4(9) caret never rests on a hidden terminal line
+      docEdgeRevealListener, // keyboard onto the first/last line → the edge markers show
       decorationsField,
       terminalProtectionFilter,
       externalGuardFilter, // §2.2.5(1) — changeFilter (runs before transactionFilters)
