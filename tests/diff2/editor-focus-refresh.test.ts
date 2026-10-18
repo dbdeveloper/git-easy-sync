@@ -7,7 +7,8 @@ import { describe, it, expect, vi } from "vitest";
 import { DiffEditorView } from "../../src/diff2/diff-editor-view";
 
 // Owner, 2026-10-12: EVERY time a diff-editor tab gets the focus it works as
-// Ctrl/Cmd+R — a resolved conflict closes (window, then the Diff Panel), one
+// Ctrl/Cmd+R — a resolved conflict closes (no window since 2026-10-18, then
+// the Diff Panel), one
 // of two separate files gone closes ("One of the files is gone"), files
 // changed on disk reopen through the recovery window. One check per focus: a
 // focus arriving while one runs (its own window moves the focus) is not a
@@ -143,5 +144,37 @@ describe("diff-editor — [←] after a save", () => {
     ed.onCommitExit(entry);
     expect(detach).toHaveBeenCalled();
     expect(onEditorCommitted).not.toHaveBeenCalled();
+  });
+});
+
+// Owner, 2026-10-18: a conflict resolved outside the editor is too late for
+// any window — on focus / Ctrl+Cmd+R the tab just closes and the user lands
+// in the Diff Panel.
+describe("diff-editor — focus finds the conflict resolved outside", () => {
+  it("🔑 no window: the tab closes, then the Diff Panel", async () => {
+    const { ConflictResolvedModal } = await import("../../src/diff2/recovery-dialog");
+    const prompt = vi.spyOn(ConflictResolvedModal.prototype, "prompt").mockResolvedValue(undefined as never);
+    try {
+      const ed = Object.create(DiffEditorView.prototype) as unknown as Record<string, unknown> & {
+        refreshFromDisk(): Promise<void>;
+      };
+      const detach = vi.fn();
+      const showDiffPanel = vi.fn();
+      ed.entry = { basePath: "notes/a.md", siblingPath: "notes/a.conflict-from-Phone-2026-06-05T09-19-10Z.md" };
+      ed.state = { origin: "conflict" };
+      ed.leaf = { detach };
+      ed.app = {};
+      ed.deps = {
+        vault: { adapter: { exists: async () => true } },
+        isCopyResolved: async () => true,
+        showDiffPanel,
+      };
+      await ed.refreshFromDisk();
+      expect(prompt).not.toHaveBeenCalled();
+      expect(detach).toHaveBeenCalledTimes(1);
+      expect(showDiffPanel).toHaveBeenCalledTimes(1);
+    } finally {
+      prompt.mockRestore();
+    }
   });
 });

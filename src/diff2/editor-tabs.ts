@@ -277,22 +277,20 @@ export function overlapAction(dirty: boolean): "reload" | "modal" {
 export type EditorOpenDecision =
   | "mount"
   | "notify-already-resolved" // the user opened it: "already resolved" [Continue]
-  | "notify-resolved-outside" // restored, and in focus: "resolved outside" [Close]
-  | "close-to-panel" // restored, in focus, plugin STARTING: no window, then the Diff Panel
+  | "close-to-panel" // restored, in focus: no window, then the Diff Panel
   | "close-silently"; // restored, not in focus
 
 export function editorOpenDecision(o: {
   resolved: boolean;
   userOpened: boolean;
   focused: boolean;
-  startingUp?: boolean;
 }): EditorOpenDecision {
   if (!o.resolved) return "mount";
   if (o.userOpened) return "notify-already-resolved";
   if (!o.focused) return "close-silently";
-  // Owner, 2026-10-12: at plugin start no window, but the user still lands
-  // in the Diff Panel.
-  return o.startingUp ? "close-to-panel" : "notify-resolved-outside";
+  // Owner, 2026-10-18: resolved outside the editor is too late for any
+  // window — the tab closes and the user lands in the Diff Panel.
+  return "close-to-panel";
 }
 
 // Ctrl/Cmd+R inside a diff editor (owner, 2026-10-12): look at the disk again.
@@ -301,7 +299,7 @@ export function editorOpenDecision(o: {
 // SEPARATE files: nothing about them is "resolved", and if one is gone the
 // comparison cannot go on.
 export type EditorRefreshDecision =
-  | "close-resolved" // conflict resolved outside: "resolved outside" [Close], tab closes
+  | "close-resolved" // conflict resolved outside: the tab closes, no window, then the Diff Panel
   | "close-file-gone" // separate files, one is gone: "One of the files is gone" [Exit]
   | "reopen" // changed on disk: remount as a user open → the recovery window decides
   | "nothing";

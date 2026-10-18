@@ -339,13 +339,14 @@ export class SaveToAltModal extends Modal {
 // gone or byte-equal to its base — the file system is the ground truth. One
 // button, no choice: the editor's work on it is moot.
 //   "open"  — the user tried to open it: "already resolved" [Continue];
-//   "focus" — the tab the user is looking at: "resolved outside" [Close].
+//   (No window for a tab whose conflict was resolved outside — owner,
+//   2026-10-18: too late for one; the tab closes, the Diff Panel shows.)
 export class ConflictResolvedModal extends Modal {
   constructor(
     app: App,
     private readonly basePath: string,
     // "gone": two SEPARATE files compared, and the one named here vanished.
-    private readonly when: "open" | "focus" | "replaced" | "gone",
+    private readonly when: "open" | "replaced" | "gone",
   ) {
     super(app);
   }
@@ -358,11 +359,6 @@ export class ConflictResolvedModal extends Modal {
           title: "This conflict is already resolved",
           body: `"${this.basePath}" has no conflict copy left that differs from it, so there is nothing to resolve. The next sync finishes the clean-up.`,
           button: "Continue",
-        },
-        focus: {
-          title: "This conflict was resolved outside the editor",
-          body: `"${this.basePath}" no longer has a conflict copy that differs from it — it was deleted, renamed, or made identical outside this editor. Your changes here are discarded.`,
-          button: "Close",
         },
         // The drain replaced the copy being edited with a newer server version.
         replaced: {

@@ -65,11 +65,9 @@ export interface DiffEditViewDeps {
   isCopyResolved?: (basePath: string, copyPath: string) => Promise<boolean>;
   // The hash the conflict model uses (production: the worker's).
   computeSha?: (bytes: ArrayBuffer) => Promise<string>;
-  // Back to the Diff Panel after a focused editor closes through a window
-  // (owner, 2026-10-12: the user must land in the panel again).
+  // Back to the Diff Panel after a focused editor closes (owner,
+  // 2026-10-12: the user must land in the panel again).
   showDiffPanel?: () => void;
-  // True while the plugin is starting (owner: no windows then).
-  isStartingUp?: () => boolean;
   // DOT-FILES §4.3 — the SLOW half of the conflicts list: siblings that
   // live in permitted dot-space, which Obsidian's index cannot see.
   // Injected as a thunk so the panel never has to know about configDir

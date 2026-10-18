@@ -218,7 +218,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       changedOnDisk: resolved || fileGone ? false : await this.controller.changedOnDiskSinceStart(),
     });
     if (decision === "close-resolved") {
-      await new ConflictResolvedModal(this.app, entry.basePath, "focus").prompt();
+      // No window (owner, 2026-10-18): resolved outside is too late for one.
       this.leaf.detach();
       this.deps.showDiffPanel?.();
     } else if (decision === "close-file-gone") {
@@ -291,27 +291,25 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       // "resolved → gone".)
       // Owner, 2026-10-12: a conflict resolved OUTSIDE the editor (its copy
       // gone, or byte-equal to its base) does not open. The user who opened
-      // it is told it is already resolved; a restored tab in focus is told it
-      // was resolved outside; any other restored tab closes silently.
+      // it is told it is already resolved; a restored tab in focus closes
+      // without a window and the Diff Panel shows (owner, 2026-10-18); any
+      // other restored tab closes silently.
       const resolved = this.deps.isCopyResolved
         ? await this.deps.isCopyResolved(entry.basePath, siblingPath)
         : !(await this.deps.vault.adapter.exists(siblingPath));
       const decision = editorOpenDecision({
         resolved,
         userOpened: this.state.openMode === "user",
-        focused: this.leaf === this.app.workspace.activeLeaf,
-        startingUp: this.deps.isStartingUp?.() ?? false,
+        // The tab the user works in: the most recent MAIN-AREA leaf — the
+        // file explorer being Obsidian's active leaf does not hide it.
+        focused: this.leaf === this.app.workspace.getMostRecentLeaf(),
       });
       if (decision !== "mount") {
-        if (decision !== "close-silently") {
-          await new ConflictResolvedModal(
-            this.app,
-            entry.basePath,
-            decision === "notify-already-resolved" ? "open" : "focus",
-          ).prompt();
+        if (decision === "notify-already-resolved") {
+          await new ConflictResolvedModal(this.app, entry.basePath, "open").prompt();
         }
         this.leaf.detach();
-        // Back to the panel in every case with a window or at start-up — and
+        // Back to the panel unless the tab was in the background — and
         // the panel's focus re-reads its list, so the row of a conflict found
         // resolved here goes too (owner, 2026-10-12).
         if (decision !== "close-silently") this.deps.showDiffPanel?.();

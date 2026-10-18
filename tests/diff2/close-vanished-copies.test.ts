@@ -24,7 +24,6 @@ function setup(tabs: Tab[], files: string[], dirs: string[] = [], equalToBase: s
   const existing = new Set([...files, ...dirs]);
   const closed: number[] = [];
   const wiped: string[] = [];
-  const notified: string[] = [];
   const order: string[] = [];
   const deps = {
     editorTabs: () =>
@@ -39,10 +38,6 @@ function setup(tabs: Tab[], files: string[], dirs: string[] = [], equalToBase: s
     // Resolved = the copy is gone, or byte-equal to its base (the model's rule).
     isResolved: async (_base: string, copy: string) =>
       !existing.has(copy) || equalToBase.includes(copy),
-    notifyResolved: async (basePath: string) => {
-      notified.push(basePath);
-      order.push(`notify:${basePath}`);
-    },
     onFocusedClosed: () => order.push("panel"),
     adapter: {
       exists: async (p: string) => existing.has(p),
@@ -52,7 +47,7 @@ function setup(tabs: Tab[], files: string[], dirs: string[] = [], equalToBase: s
       },
     },
   };
-  return { deps, closed, wiped, notified, order };
+  return { deps, closed, wiped, order };
 }
 
 const conflictTab = (basePath = BASE, siblingPath = COPY): Tab => ({
@@ -97,24 +92,23 @@ describe("closeEditorsOfVanishedCopies", () => {
   });
 
   // Owner, 2026-10-12: the cleaner follows the conflict MODEL — a copy that
-  // still exists but is byte-equal to its base is resolved too; and the tab
-  // the user is looking at is not closed under them: they get a window
-  // first ("resolved outside the editor" [Close]). Others close silently.
+  // still exists but is byte-equal to its base is resolved too.
   it("🔑 a copy that still EXISTS but equals its base → its tab closes too", async () => {
     const s = setup([conflictTab()], [BASE, COPY], [], [COPY]);
     await closeEditorsOfVanishedCopies(s.deps);
     expect(s.closed).toEqual([0]);
   });
 
-  it("🔑 the tab in FOCUS: the user is told first, then it closes; others close silently", async () => {
+  // Owner, 2026-10-18: resolved outside the editor = too late for any window.
+  // The tab in focus closes silently too — and the user lands in the Diff
+  // Panel; a background tab closes and nothing moves.
+  it("🔑 the tab in FOCUS closes without a window, then the Diff Panel; others close silently", async () => {
     const s = setup(
       [{ ...conflictTab(), active: true }, conflictTab(OTHER_BASE, OTHER_COPY)],
       [BASE, OTHER_BASE],
     );
     await closeEditorsOfVanishedCopies(s.deps);
-    expect(s.notified).toEqual([BASE]);
-    // …and the user lands in the Diff Panel again (owner).
-    expect(s.order).toEqual([`notify:${BASE}`, "close:0", "panel", "close:1"]);
+    expect(s.order).toEqual(["close:0", "panel", "close:1"]);
   });
 
   it("History / Deleted / Compare tabs are never touched — they show no conflict copy", async () => {

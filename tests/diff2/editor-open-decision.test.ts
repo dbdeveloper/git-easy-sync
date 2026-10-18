@@ -8,8 +8,9 @@ import { editorOpenDecision } from "../../src/diff2/editor-tabs";
 // Opening a diff editor for a conflict already resolved outside it (owner,
 // 2026-10-12) — its copy gone or byte-equal to its base:
 //   the USER opened it        → no editor; "already resolved" [Continue];
-//   Obsidian restored it, and it is the tab in FOCUS → "resolved outside"
-//                               [Close], then it closes;
+//   Obsidian restored it, and it is the tab in FOCUS → closes WITHOUT a
+//                               window, then the Diff Panel (owner, 2026-10-18:
+//                               resolved outside = too late for any window);
 //   restored, not in focus    → closes silently.
 // An unresolved conflict always mounts.
 describe("editorOpenDecision", () => {
@@ -22,17 +23,8 @@ describe("editorOpenDecision", () => {
     expect(editorOpenDecision({ resolved: true, userOpened: true, focused: true })).toBe("notify-already-resolved");
   });
 
-  it("🔑 resolved + restored + in focus → tell them, then close", () => {
-    expect(editorOpenDecision({ resolved: true, userOpened: false, focused: true })).toBe("notify-resolved-outside");
-  });
-
-  // Owner, 2026-10-12: at PLUGIN START even the focused restored tab closes
-  // without a window — but the user still lands in the Diff Panel (opened if
-  // it was closed). Outside start-up the focused tab gets the window.
-  it("🔑 resolved + restored + in focus + plugin STARTING → close silently, then the Diff Panel", () => {
-    expect(editorOpenDecision({ resolved: true, userOpened: false, focused: true, startingUp: true })).toBe(
-      "close-to-panel",
-    );
+  it("🔑 resolved + restored + in focus → close without a window, then the Diff Panel", () => {
+    expect(editorOpenDecision({ resolved: true, userOpened: false, focused: true })).toBe("close-to-panel");
   });
 
   it("resolved + restored + not in focus → close silently", () => {

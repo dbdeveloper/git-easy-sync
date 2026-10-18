@@ -696,9 +696,8 @@ export default class GitHubSyncPlugin extends Plugin {
 
       this.app.workspace.onLayoutReady(() => {
         // Start-up ends once the restored layout has had one pass of the
-        // editor-tab cleaner (owner, 2026-10-12): until then a focused editor
-        // whose conflict is resolved closes WITHOUT a window, and the user
-        // lands in the Diff Panel.
+        // editor-tab cleaner (owner, 2026-10-12): until then no window about
+        // a replaced conflict copy.
         void (async () => {
           try {
             await this.closeVanishedCopyEditors();
@@ -2128,7 +2127,7 @@ export default class GitHubSyncPlugin extends Plugin {
   }
 
   // True from onload until the first editor-tab cleaner pass after the
-  // layout is ready — no windows about resolved conflicts in that window.
+  // layout is ready — no "copy replaced" window in that window.
   private startingUp = true;
 
   // Is this conflict copy resolved — gone, or byte-equal to its base? The
@@ -2160,10 +2159,10 @@ export default class GitHubSyncPlugin extends Plugin {
   // vault events (after a reconcile, after every drain), because Obsidian
   // sends none for dot-paths; the delete/rename events in onload are only a
   // shortcut. The editor also checks its own copy when it becomes active.
-  // ONE pass at a time (owner's windows, 2026-10-12): a pass may wait on the
-  // focused tab's window, and that tab is still open meanwhile — an
-  // overlapping pass would show a SECOND window for it. Later triggers
-  // coalesce into one more pass after the current one.
+  // The tab the user works in closes WITHOUT a window too (owner,
+  // 2026-10-18: resolved outside = too late for any), and the Diff Panel
+  // shows. ONE pass at a time: later triggers coalesce into one more pass
+  // after the current one.
   private cleaningEditors: Promise<void> | null = null;
   private cleanEditorsAgain = false;
 
@@ -2208,19 +2207,17 @@ export default class GitHubSyncPlugin extends Plugin {
               basePath,
               siblingPath,
               detach: () => l.detach(),
-              isActive: l === this.app.workspace.activeLeaf,
+              // The tab the user works in: the most recent MAIN-AREA leaf
+              // (field, 2026-10-18 — a copy deleted in the file explorer
+              // made the explorer the active leaf, and the editor closed as
+              // if it were in the background).
+              isActive: l === this.app.workspace.getMostRecentLeaf?.(),
             };
           }),
         adapter: this.app.vault.adapter,
         // The conflict model's rule (owner, 2026-10-12): resolved when the
         // copy is gone OR byte-equal to its base.
         isResolved: (basePath, copyPath) => this.isCopyResolved(basePath, copyPath),
-        // No window while the plugin starts (owner, 2026-10-12) — but the
-        // user still lands in the Diff Panel.
-        notifyResolved: async (basePath) => {
-          if (this.startingUp) return;
-          await new ConflictResolvedModal(this.app, basePath, "focus").prompt();
-        },
         onFocusedClosed: () => void this.activateDiffEditView(),
         onCheckFailed: (copyPath, err) =>
           this.logger.warn("Could not check a conflict editor's copy — left for the next pass", {
@@ -4768,7 +4765,6 @@ export default class GitHubSyncPlugin extends Plugin {
       isCopyResolved: (basePath: string, copyPath: string) => this.isCopyResolved(basePath, copyPath),
       computeSha: (bytes: ArrayBuffer) => this.workerClient.computeGitBlobSHA(bytes),
       showDiffPanel: () => void this.activateDiffEditView(),
-      isStartingUp: () => this.startingUp,
       // DOT-FILES §4.3 — bound here because this is where configDir and
       // the per-device toggle live; the panel stays ignorant of both.
       scanDotSpaceConflicts: async (clean: boolean) =>

@@ -167,6 +167,45 @@ describe("main.ts closes the editors of vanished conflict copies", () => {
     expect(detach).toHaveBeenCalledTimes(1);
   });
 
+  // Field, 2026-10-18: the copy was deleted in the FILE EXPLORER — so the
+  // explorer, not the editor, was Obsidian's active leaf. The editor was
+  // still the tab the user was working in (the most recent main-area leaf):
+  // it closes WITHOUT a window (resolved outside = too late for one) and the
+  // user lands in the Diff Panel.
+  it("🔑 the most recent main-area tab (explorer active) → no window, then the Diff Panel", async () => {
+    const { p, detach } = pluginWithEditorTab(false);
+    const ws = (p.app as { workspace: Record<string, unknown> }).workspace;
+    const leaf = {
+      getViewState: () => ({ state: { origin: "conflict", basePath: BASE, siblingPath: COPY } }),
+      detach,
+    };
+    ws.activeLeaf = { explorer: true };
+    ws.getMostRecentLeaf = () => leaf;
+    ws.getLeavesOfType = (type: string) => (type === DIFF2_EDITOR_VIEW_TYPE ? [leaf] : []);
+    const panel = vi.fn(async () => ({}));
+    (p as unknown as { activateDiffEditView: unknown }).activateDiffEditView = panel;
+    const prompt = vi.spyOn(ConflictResolvedModal.prototype, "prompt").mockResolvedValue(undefined as never);
+    try {
+      await p.closeVanishedCopyEditors();
+      expect(prompt).not.toHaveBeenCalled();
+      expect(detach).toHaveBeenCalledTimes(1);
+      expect(panel).toHaveBeenCalledTimes(1);
+    } finally {
+      prompt.mockRestore();
+    }
+  });
+
+  it("a background tab (another tab is the most recent) → closes, the focus stays put", async () => {
+    const { p, detach } = pluginWithEditorTab(false);
+    const ws = (p.app as { workspace: Record<string, unknown> }).workspace;
+    ws.getMostRecentLeaf = () => ({ other: true });
+    const panel = vi.fn(async () => ({}));
+    (p as unknown as { activateDiffEditView: unknown }).activateDiffEditView = panel;
+    await p.closeVanishedCopyEditors();
+    expect(detach).toHaveBeenCalledTimes(1);
+    expect(panel).not.toHaveBeenCalled();
+  });
+
   it("a tab whose copy is still there stays", async () => {
     const { p, detach } = pluginWithEditorTab(true);
     await p.closeVanishedCopyEditors();

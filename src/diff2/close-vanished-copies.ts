@@ -31,16 +31,13 @@ export interface VanishedCopyDeps {
     origin: string;
     basePath: string;
     siblingPath: string;
-    // The tab the user is looking at (owner, 2026-10-12): not closed under
-    // them — they are told first.
+    // The tab the user works in: after it closes, the Diff Panel shows.
     isActive?: boolean;
     detach(): void;
   }>;
   // The conflict model's verdict for this copy (owner, 2026-10-12): resolved
   // when the copy is gone OR byte-equal to its base. Default: gone only.
   isResolved?: (basePath: string, copyPath: string) => Promise<boolean>;
-  // Shown before the FOCUSED tab closes ("resolved outside the editor").
-  notifyResolved?: (basePath: string) => Promise<void>;
   // After the FOCUSED tab closed: back to the Diff Panel (owner, 2026-10-12).
   onFocusedClosed?: () => void;
   // One tab's check threw: that tab is left for the next pass, the rest go on.
@@ -72,7 +69,6 @@ export async function closeEditorsOfVanishedCopies(
       continue;
     }
     if (!resolved) continue;
-    if (tab.isActive && deps.notifyResolved) await deps.notifyResolved(tab.basePath);
     tab.detach();
     if (tab.isActive) deps.onFocusedClosed?.();
     closedTabs++;
