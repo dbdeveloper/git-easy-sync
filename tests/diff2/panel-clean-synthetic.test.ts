@@ -134,3 +134,69 @@ describe("Diff Panel — a click on an already resolved conflict", () => {
     expect(showResolved).not.toHaveBeenCalled();
   });
 });
+
+// Owner, 2026-10-18: a conflict in a dot-folder blinked several times on
+// every refresh — the fast half (store + Obsidian's index, which never lists
+// dot-paths) REPLACED the list without it, and the slow dot-space scan put it
+// back a moment later. A dot-space row the panel already shows is carried
+// over while its copy is still live on disk; the scan then has the last word.
+describe("Diff Panel — a dot-folder conflict does not blink on refresh", () => {
+  const DOT_BASE = ".test/test.md";
+  const DOT_COPY = ".test/test.conflict-from-Phone-2026-10-18T10-00-00Z.md";
+  const dotRow = {
+    basePath: DOT_BASE,
+    siblingPath: DOT_COPY,
+    deviceLabel: "Phone",
+    isoTimestamp: "2026-10-18T10-00-00Z",
+    kind: "synthetic" as const,
+  };
+
+  function panelWithDotRow(copyOnDisk: boolean) {
+    const { panel, scan } = makePanel();
+    const deps = panel.deps as { vault: { adapter: Record<string, unknown> } };
+    // A live copy: on disk, a different size from its base.
+    deps.vault.adapter.stat = async (p: string) =>
+      p === DOT_BASE ? { size: 5, mtime: 1 } : copyOnDisk && p === DOT_COPY ? { size: 9, mtime: 1 } : null;
+    deps.vault.adapter.exists = async (p: string) => p === DOT_BASE || (copyOnDisk && p === DOT_COPY);
+    panel.conflictEntries = [dotRow];
+    const painted: string[][] = [];
+    panel.render = vi.fn(() =>
+      painted.push((panel.conflictEntries as Array<{ siblingPath: string }>).map((e) => e.siblingPath)),
+    );
+    return { panel, scan, painted };
+  }
+
+  it("🔑 the row is in EVERY paint of the refresh, not only after the scan", async () => {
+    const { panel, scan, painted } = panelWithDotRow(true);
+    scan.mockResolvedValue([dotRow] as never);
+    await panel.refreshConflicts({ clean: true });
+    expect(painted.length).toBeGreaterThan(0);
+    for (const p of painted) expect(p).toEqual([DOT_COPY]);
+  });
+
+  it("its copy gone from disk → it leaves at the fast half already", async () => {
+    const { panel, scan, painted } = panelWithDotRow(false);
+    scan.mockResolvedValue([] as never);
+    await panel.refreshConflicts({ clean: true });
+    expect(painted[0]).toEqual([]);
+    expect(panel.conflictEntries).toEqual([]);
+  });
+
+  it("the scan no longer finds it (e.g. out of scope now) → it leaves after the scan", async () => {
+    const { panel, scan } = panelWithDotRow(true);
+    scan.mockResolvedValue([] as never);
+    await panel.refreshConflicts({ clean: true });
+    expect(panel.conflictEntries).toEqual([]);
+  });
+
+  it("an ordinary-path synthetic row is NOT carried — the index decides for those", async () => {
+    const { panel, scan, painted } = panelWithDotRow(true);
+    const plain = { ...dotRow, basePath: "notes/a.md", siblingPath: "notes/a.conflict-from-Phone-2026-10-18T10-00-00Z.md" };
+    const deps = panel.deps as { vault: { adapter: Record<string, unknown> } };
+    deps.vault.adapter.stat = async () => ({ size: 9, mtime: 1 });
+    panel.conflictEntries = [plain];
+    scan.mockResolvedValue([] as never);
+    await panel.refreshConflicts({ clean: true });
+    expect(painted[0]).toEqual([]);
+  });
+});

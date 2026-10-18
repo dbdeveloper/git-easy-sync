@@ -42,6 +42,7 @@ import {
 import type { BackNav, DiffEditorOrigin } from "./editor-tabs";
 import type { HistoryVersion } from "./history-versions";
 import { isConflictPair } from "../sync2/conflict-siblings";
+import { isDotPath } from "../sync2/change-detector";
 import { ConflictResolvedModal } from "./recovery-dialog";
 
 export const DIFF2_PANEL_VIEW_TYPE = "diff2-panel-view";
@@ -314,13 +315,23 @@ export class DiffPanelView extends ItemView {
           this.deps.vault,
           this.deps.conflictStore,
         );
+        // The fast half never sees dot-paths (Obsidian's index hides them),
+        // so a dot-space row the panel already shows is CARRIED over until
+        // the scan below speaks (owner, 2026-10-18 — replacing the list
+        // without it made that row vanish and come back on every refresh).
+        // keepLiveEntries below still drops it if its copy is gone or equal
+        // to its base.
+        const fast = new Set(entries.map((e) => e.siblingPath));
+        const carried = this.conflictEntries.filter(
+          (e) => e.kind === "synthetic" && isDotPath(e.siblingPath) && !fast.has(e.siblingPath),
+        );
         // Only LIVE copies (the conflict model, owner 2026-10-12): one the
         // user made equal to its base, or a duplicate, leaves the list at
         // once; the drain removes the file on the next sync.
         this.conflictEntries = await keepLiveEntries(
           this.deps.vault,
           this.deps.conflictStore,
-          entries,
+          carried.length > 0 ? assembleResult([...entries, ...carried]).entries : entries,
           this.deps.computeSha,
         );
         this.render();
@@ -330,11 +341,15 @@ export class DiffPanelView extends ItemView {
         // accepted (§4.3): open the panel, see 10 rows, then 11. The
         // alternative is blocking the view on a directory walk.
         const fromDotSpace = await this.deps.scanDotSpaceConflicts?.(clean);
-        if (fromDotSpace && fromDotSpace.length > 0) {
-          const merged = mergeDotSpaceFindings(
-            this.conflictEntries,
-            fromDotSpace,
+        if (fromDotSpace) {
+          // The scan has the last word on the dot-space rows: a carried row
+          // it no longer finds (out of scope now, say) goes.
+          const found = new Set(fromDotSpace.map((e) => e.siblingPath));
+          const dropped = new Set(
+            carried.filter((e) => !found.has(e.siblingPath)).map((e) => e.siblingPath),
           );
+          const kept = this.conflictEntries.filter((e) => !dropped.has(e.siblingPath));
+          const merged = mergeDotSpaceFindings(kept, fromDotSpace);
           if (merged.added > 0) {
             this.conflictEntries = await keepLiveEntries(
               this.deps.vault,
@@ -342,6 +357,9 @@ export class DiffPanelView extends ItemView {
               merged.entries,
               this.deps.computeSha,
             );
+            this.render();
+          } else if (kept.length !== this.conflictEntries.length) {
+            this.conflictEntries = kept;
             this.render();
           }
         }
