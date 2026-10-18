@@ -522,6 +522,11 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     requestAnimationFrame(() => this.controller?.getView()?.focus());
   }
 
+  // This tab's own [←] is saving — read by the editor-tab cleaner in main.ts.
+  isCommitting(): boolean {
+    return this.controller?.isCommitting() ?? false;
+  }
+
   // ── DiffDetailHost — the navigation seam ──────────────────────────────────
 
   // One pair per leaf, so this is effectively always true; the explicit compare is a

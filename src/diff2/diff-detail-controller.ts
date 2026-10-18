@@ -173,6 +173,13 @@ export class DiffDetailController {
     private readonly host: DiffDetailHost,
   ) {}
 
+  // The [←] in flight (incl. its modals). The editor-tab cleaner in main.ts
+  // leaves such a tab alone (field, 2026-10-18): the disk changes it sees are
+  // this editor's own commit, not a resolution "outside the editor".
+  isCommitting(): boolean {
+    return this.committing;
+  }
+
   // gap-1 — the view-host Mod+F handler reads the live EditorView through the
   // controller (the owner is private). Null when no detail editor is mounted.
   getView(): EditorView | null {

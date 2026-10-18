@@ -13,6 +13,7 @@ import GitHubSyncPlugin from "../src/main";
 import { clearRecordedNotices, recordedNotices } from "../mock-obsidian";
 import { autosaveDir, deriveAutosaveId } from "../src/diff2/autosave-store";
 import { DIFF2_EDITOR_VIEW_TYPE } from "../src/diff2/diff-editor-view";
+import { ConflictResolvedModal } from "../src/diff2/recovery-dialog";
 
 const BASE = "notes/a.md";
 const COPY = "notes/a.conflict-from-Mac-2026-10-11T20-25-53Z.md";
@@ -119,6 +120,31 @@ describe("main.ts closes the editors of vanished conflict copies", () => {
     ]);
     expect(maxRunning).toBe(1);
     expect(passes).toBe(2);
+  });
+
+  // Field, 2026-10-18: the tab's OWN [←] writes the base, writes the copy
+  // equal to it, then removes the copy — each step an event that starts a
+  // pass while the tab is still open and focused. That change is not
+  // "outside the editor": the pass leaves a tab that is saving alone — no
+  // window, no detach; its [←] closes it.
+  it("🔑 a tab in the middle of its own [←] is skipped: no window, no detach", async () => {
+    const { p, detach } = pluginWithEditorTab(false);
+    const ws = (p.app as { workspace: Record<string, unknown> }).workspace;
+    const leaf = {
+      getViewState: () => ({ state: { origin: "conflict", basePath: BASE, siblingPath: COPY } }),
+      detach,
+      view: { isCommitting: () => true },
+    };
+    ws.activeLeaf = leaf;
+    ws.getLeavesOfType = (type: string) => (type === DIFF2_EDITOR_VIEW_TYPE ? [leaf] : []);
+    const prompt = vi.spyOn(ConflictResolvedModal.prototype, "prompt").mockResolvedValue(undefined as never);
+    try {
+      await p.closeVanishedCopyEditors();
+      expect(prompt).not.toHaveBeenCalled();
+      expect(detach).not.toHaveBeenCalled();
+    } finally {
+      prompt.mockRestore();
+    }
   });
 
   it("a tab whose copy is still there stays", async () => {

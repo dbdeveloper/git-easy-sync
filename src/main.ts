@@ -2181,7 +2181,15 @@ export default class GitHubSyncPlugin extends Plugin {
     try {
       const r = await closeEditorsOfVanishedCopies({
         editorTabs: () =>
-          (this.app?.workspace?.getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE) ?? []).map((l) => {
+          (this.app?.workspace?.getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE) ?? [])
+            // A tab in the middle of its own [←] is not ours to judge (field,
+            // 2026-10-18): that commit writes the base, writes the copy equal
+            // to it and removes it — each an event that lands here while the
+            // tab is still focused, and read as "resolved outside the editor"
+            // it showed that window. The [←] closes the tab itself; a failed
+            // one stays, and the next pass checks it.
+            .filter((l) => !(l.view as { isCommitting?: () => boolean } | undefined)?.isCommitting?.())
+            .map((l) => {
             const st = l.getViewState()?.state as
               | { origin?: unknown; basePath?: unknown; siblingPath?: unknown }
               | undefined;
