@@ -216,7 +216,12 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   // Two SEPARATE files (not a file and its own conflict copy — two ordinary
   // files, or two copies of one file; owner, 2026-10-12): if one of them is
   // gone, "One of the files is gone" [Exit] and the tab closes.
-  private async refreshFromDisk(): Promise<void> {
+  //
+  // `quiet` (a file event while this tab is not in focus — owner, 2026-10-18):
+  // only an UNEDITED editor follows the disk, silently; no window, no focus
+  // move — everything else waits for the focus (the tab cleaner closes a
+  // resolved conflict's tab on its own).
+  private async refreshFromDisk(opts: { quiet?: boolean } = {}): Promise<void> {
     const entry = this.entry;
     if (!entry || !this.state || this.state.origin === "history") return;
     const pair = isConflictPair(entry.basePath, entry.siblingPath);
@@ -239,6 +244,11 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       fileGone,
       changedOnDisk: disk !== null && diskChangedSinceSeen({ ...disk, seen: this.seenDisk }),
     });
+    if (opts.quiet) {
+      if (decision !== "ask-changed" || !disk || (await this.controller.hasUnsavedChanges())) return;
+      await this.reloadFromDisk();
+      return;
+    }
     if (decision === "close-resolved") {
       // No window (owner, 2026-10-18): resolved outside is too late for one.
       this.leaf.detach();
@@ -258,12 +268,16 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
           return;
         }
       }
-      // Reload (asked or silent): a fresh session from the disk as it is now.
-      await this.controller.discardSession();
-      this.mounted = false;
-      this.seenDisk = null;
-      await this.tryMount();
+      await this.reloadFromDisk();
     }
+  }
+
+  // Reload (asked or silent): a fresh session from the disk as it is now.
+  private async reloadFromDisk(): Promise<void> {
+    await this.controller.discardSession();
+    this.mounted = false;
+    this.seenDisk = null;
+    await this.tryMount();
   }
 
   // The disk state the user answered about last in the "files changed"
@@ -277,9 +291,23 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   onVaultChange(path: string): void {
     const entry = this.entry;
     if (!entry || (path !== entry.basePath && path !== entry.siblingPath)) return;
-    if (!this.hasInputFocus()) return;
     if (this.controller?.isCommitting()) return;
-    void this.onActivated();
+    if (this.hasInputFocus()) {
+      void this.onActivated();
+      return;
+    }
+    // Not in focus: an unedited editor still follows the disk, quietly.
+    void this.checkQuietly();
+  }
+
+  private async checkQuietly(): Promise<void> {
+    if (!this.mounted || this.activating) return;
+    this.activating = true;
+    try {
+      await this.refreshFromDisk({ quiet: true });
+    } finally {
+      this.activating = false;
+    }
   }
 
   // "In focus" (owner, 2026-10-18): this tab is Obsidian's active tab AND

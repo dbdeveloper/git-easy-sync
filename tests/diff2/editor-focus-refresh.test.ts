@@ -290,6 +290,52 @@ describe("diff-editor — files changed outside the editor", () => {
     }
   });
 
+  // Owner, 2026-10-18: an UNEDITED editor follows the disk at once, even in
+  // the background — quietly, as often as the files change. An edited one
+  // waits for the focus (the window must not be missed among many).
+  it("🔑 background + unedited → reloads at once, no window", async () => {
+    const t = await editorWithDisk("continue");
+    t.setOsFocus(false);
+    t.setDirty(false);
+    try {
+      t.ed.onVaultChange(BASE);
+      await vi.waitFor(() => expect(t.tryMount).toHaveBeenCalledTimes(1));
+      expect(t.discardSession).toHaveBeenCalledTimes(1);
+      expect(t.prompt).not.toHaveBeenCalled();
+    } finally {
+      t.prompt.mockRestore();
+    }
+  });
+
+  it("🔑 background + edited → nothing now (asked on focus)", async () => {
+    const t = await editorWithDisk("continue");
+    t.setOsFocus(false);
+    try {
+      t.ed.onVaultChange(BASE);
+      await new Promise((r) => setTimeout(r, 10));
+      expect(t.prompt).not.toHaveBeenCalled();
+      expect(t.discardSession).not.toHaveBeenCalled();
+    } finally {
+      t.prompt.mockRestore();
+    }
+  });
+
+  it("background + the conflict resolved → the editor leaves it to the tab cleaner (no focus move)", async () => {
+    const t = await editorWithDisk("continue");
+    t.setOsFocus(false);
+    t.setDirty(false);
+    const showDiffPanel = vi.fn();
+    Object.assign(t.ed.deps as object, { isCopyResolved: async () => true, showDiffPanel });
+    try {
+      t.ed.onVaultChange(COPY);
+      await new Promise((r) => setTimeout(r, 10));
+      expect((t.ed.leaf as { detach: ReturnType<typeof vi.fn> }).detach).not.toHaveBeenCalled();
+      expect(showDiffPanel).not.toHaveBeenCalled();
+    } finally {
+      t.prompt.mockRestore();
+    }
+  });
+
   // Owner, 2026-10-18: "in focus" = this tab is Obsidian's active tab AND
   // Obsidian's window has the OS input focus. Files changed from another
   // program ask NOTHING while the user is there — the window comes when
