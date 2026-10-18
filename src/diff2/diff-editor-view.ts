@@ -28,7 +28,7 @@ import {
 } from "./diff-detail-controller";
 import type { DiffEditViewDeps } from "./diff-panel-view";
 import { installMobileHeaderClamp } from "./mobile-header-clamp";
-import { ConflictResolvedModal } from "./recovery-dialog";
+import { ConflictResolvedModal, FilesChangedModal } from "./recovery-dialog";
 import {
   openDescFor,
   persistedEditorState,
@@ -36,6 +36,7 @@ import {
   type EditorTabState,
   type OpenEditorDesc,
   editorOpenDecision,
+  diskChangedSinceSeen,
   editorRefreshDecision,
 } from "./editor-tabs";
 import {
@@ -170,6 +171,18 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     );
     this.syncEscScope(this.app.workspace.activeLeaf ?? null);
 
+    // A change to one of this editor's files (owner, 2026-10-18) — see
+    // onVaultChange. Dot-paths send no events; the focus check covers them.
+    this.registerEvent(this.app.vault.on("modify", (f) => this.onVaultChange(f.path)));
+    this.registerEvent(this.app.vault.on("delete", (f) => this.onVaultChange(f.path)));
+    this.registerEvent(this.app.vault.on("create", (f) => this.onVaultChange(f.path)));
+    this.registerEvent(
+      this.app.vault.on("rename", (f, oldPath) => {
+        this.onVaultChange(f.path);
+        this.onVaultChange(oldPath);
+      }),
+    );
+
     void this.tryMount();
   }
 
@@ -187,10 +200,11 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     }
   }
 
-  // Ctrl/Cmd+R (owner, 2026-10-12): look at the disk again. Resolved outside →
-  // the window, then back to the Diff Panel; changed on disk → remount as a
-  // user open, so the existing recovery window asks whether to continue the
-  // saved edits or start over; nothing changed → nothing.
+  // Ctrl/Cmd+R, a focus, or a file event (owner, 2026-10-12 / 2026-10-18):
+  // look at the disk again. Resolved outside → the tab closes, no window,
+  // back to the Diff Panel; changed on disk since the user last saw it →
+  // "Files changed outside the editor" [Reload and start over] / [Continue];
+  // nothing new → nothing.
   //
   // Two SEPARATE files (not a file and its own conflict copy — two ordinary
   // files, or two copies of one file; owner, 2026-10-12): if one of them is
@@ -211,11 +225,12 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
       else if (!(await adapter.exists(entry.siblingPath))) gonePath = entry.siblingPath;
     }
     const fileGone = gonePath !== null;
+    const disk = resolved || fileGone ? null : await this.controller.diskVersusStart();
     const decision = editorRefreshDecision({
       pair,
       resolved,
       fileGone,
-      changedOnDisk: resolved || fileGone ? false : await this.controller.changedOnDiskSinceStart(),
+      changedOnDisk: disk !== null && diskChangedSinceSeen({ ...disk, seen: this.seenDisk }),
     });
     if (decision === "close-resolved") {
       // No window (owner, 2026-10-18): resolved outside is too late for one.
@@ -224,12 +239,35 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     } else if (decision === "close-file-gone") {
       await new ConflictResolvedModal(this.app, gonePath!, "gone").prompt();
       this.leaf.detach();
-    } else if (decision === "reopen" && this.state) {
-      this.controller.dispose();
+    } else if (decision === "ask-changed" && disk) {
+      const choice = await new FilesChangedModal(this.app, entry.basePath).prompt();
+      if (!this.mounted) return; // the tab went while the window was open
+      if (choice === "continue") {
+        this.seenDisk = disk.now; // ask again only when the disk moves on from here
+        return;
+      }
+      // Reload and start over: a fresh session from the disk as it is now.
+      await this.controller.discardSession();
       this.mounted = false;
-      this.state = { ...this.state, openMode: "user" };
+      this.seenDisk = null;
       await this.tryMount();
     }
+  }
+
+  // The disk state the user answered about last in the "files changed"
+  // window (null: none yet in this session).
+  private seenDisk: string | null = null;
+
+  // A vault event for one of this editor's two files (owner, 2026-10-18):
+  // check only while this editor IS the active tab — a change made in the
+  // file explorer is asked about when the user comes back here (the focus
+  // check). This editor's own [←] writes are not a change outside it.
+  onVaultChange(path: string): void {
+    const entry = this.entry;
+    if (!entry || (path !== entry.basePath && path !== entry.siblingPath)) return;
+    if (this.app.workspace.activeLeaf !== this.leaf) return;
+    if (this.controller?.isCommitting()) return;
+    void this.onActivated();
   }
 
   // TODO #8 — push the ESC scope iff this leaf is active; pop otherwise. Idempotent.

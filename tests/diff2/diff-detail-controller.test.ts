@@ -238,6 +238,29 @@ describe("DiffDetailController host seam (S2)", () => {
     ctl.dispose();
   });
 
+  // Owner, 2026-10-18: "Files changed outside the editor". The controller
+  // reports both files at session start vs on disk, and [Reload and start
+  // over] drops the session — edits AND autosave dir — without touching the
+  // files.
+  it("🔑 diskVersusStart sees a change; discardSession wipes the edits, not the files", async () => {
+    const { basePath, siblingPath, entry, conflictId } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+    const ctl = new DiffDetailController({} as unknown as App, deps(), recordingHost());
+    await ctl.mount(container, entry);
+    ctl.getView()!.dispatch({ changes: { from: 0, insert: "x" }, userEvent: "input.type" });
+
+    const before = await ctl.diskVersusStart();
+    expect(before!.now).toBe(before!.start);
+    await fx.vault.adapter.writeBinary(basePath, enc("changed outside\n"));
+    const after = await ctl.diskVersusStart();
+    expect(after!.now).not.toBe(after!.start);
+
+    await ctl.discardSession();
+    expect(ctl.getView()).toBeNull();
+    expect(await fx.vault.adapter.exists(autosaveDir(conflictId))).toBe(false);
+    expect(dec(await fx.vault.adapter.readBinary(basePath))).toBe("changed outside\n");
+    expect(dec(await fx.vault.adapter.readBinary(siblingPath))).toBe("a\nTHEIRS\nc\n");
+  });
+
   it("fresh mount → edit → undo → exit() discards: onCommitExit fires, inputs untouched, dir wiped", async () => {
     const base = "a\nMINE\nc\n";
     const sibling = "a\nTHEIRS\nc\n";

@@ -293,24 +293,33 @@ export function editorOpenDecision(o: {
   return "close-to-panel";
 }
 
-// Ctrl/Cmd+R inside a diff editor (owner, 2026-10-12): look at the disk again.
+// Ctrl/Cmd+R, a focus, or a file event inside a diff editor (owner,
+// 2026-10-12 / 2026-10-18): look at the disk again.
 // `pair` = the second file is a conflict copy of the first (isConflictPair).
 // Anything else — two ordinary files, two copies of one file — is two
 // SEPARATE files: nothing about them is "resolved", and if one is gone the
 // comparison cannot go on.
 export type EditorRefreshDecision =
   | "close-resolved" // conflict resolved outside: the tab closes, no window, then the Diff Panel
-  | "close-file-gone" // separate files, one is gone: "One of the files is gone" [Exit]
-  | "reopen" // changed on disk: remount as a user open → the recovery window decides
+  | "close-file-gone" // separate files, one is gone: "One of the files is gone" [Close]
+  | "ask-changed" // changed on disk since the user last saw it: [Reload and start over] / [Continue]
   | "nothing";
 
 export function editorRefreshDecision(o: {
   pair: boolean;
   resolved: boolean; // pair only: copy gone or equal to its base
   fileGone: boolean; // separate files only: either of them is missing
-  changedOnDisk: boolean;
+  changedOnDisk: boolean; // since the user last saw it — diskChangedSinceSeen
 }): EditorRefreshDecision {
   if (o.pair && o.resolved) return "close-resolved";
   if (!o.pair && o.fileGone) return "close-file-gone";
-  return o.changedOnDisk ? "reopen" : "nothing";
+  return o.changedOnDisk ? "ask-changed" : "nothing";
+}
+
+// Is the disk new to the user (owner, 2026-10-18)? `start` = both files at
+// the session start, `now` = both on disk, `seen` = the disk at the user's
+// last answer in the "files changed" window (null: none yet). Back at the
+// session-start bytes there is nothing to reload.
+export function diskChangedSinceSeen(o: { start: string; now: string; seen: string | null }): boolean {
+  return o.now !== o.start && o.now !== (o.seen ?? o.start);
 }

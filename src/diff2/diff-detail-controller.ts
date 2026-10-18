@@ -92,10 +92,24 @@ export interface DiffDetailHost {
 export class DiffDetailController {
   // Ctrl/Cmd+R (owner, 2026-10-12): did the base or the copy change on disk
   // since this session started? The same check [←] runs (TOCTOU).
-  async changedOnDiskSinceStart(): Promise<boolean> {
+  // Both files at the session start vs on disk now, each as one comparable
+  // string (owner, 2026-10-18: the "files changed" window asks once per disk
+  // state). null: no conflict session (History, or nothing mounted).
+  async diskVersusStart(): Promise<{ start: string; now: string } | null> {
     const s = this.activeSession;
-    if (!s || s.isHistory) return false;
-    return (await classifyToctou(this.deps.vault, s.meta)).kind === "mismatch";
+    if (!s || s.isHistory) return null;
+    const start = `${s.meta.baseShaAtStart}:${s.meta.siblingShaAtStart}`;
+    const t = await classifyToctou(this.deps.vault, s.meta);
+    return { start, now: t.kind === "ok" ? start : `${t.currentBaseSha}:${t.currentSiblingSha}` };
+  }
+
+  // [Reload and start over] (owner, 2026-10-18): drop this session's edits —
+  // the CM6 view and the whole autosave dir — so the next mount starts fresh
+  // from the disk. The files themselves are not touched.
+  async discardSession(): Promise<void> {
+    const session = this.activeSession;
+    this.dispose(true); // a replace: no abandon-wipe racing the explicit one below
+    if (session) await this.deps.vault.adapter.rmdir(autosaveDir(session.conflictId), true).catch(() => {});
   }
 
   // A failed mount whose conflict copy is no longer on disk is not an error: the

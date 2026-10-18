@@ -251,6 +251,51 @@ export class ResumeRecoveryModal extends Modal {
   }
 }
 
+// A LIVE conflict's files changed on disk while its editor was open (owner,
+// 2026-10-18). The editor keeps its own copies until the user decides.
+// Closing the window without a choice = Continue.
+export type FilesChangedChoice = "reload" | "continue";
+
+export class FilesChangedModal extends Modal {
+  private choice: FilesChangedChoice = "continue";
+
+  constructor(
+    app: App,
+    private readonly basePath: string,
+  ) {
+    super(app);
+  }
+
+  prompt(): Promise<FilesChangedChoice> {
+    return new Promise((resolve) => {
+      this.onClose = () => resolve(this.choice);
+      const c = this.contentEl;
+      this.titleEl.setText("Files changed outside the editor");
+      c.empty();
+      c.createEl("p").setText(
+        `"${this.basePath}" or the file it is compared with changed on disk while this editor was open.`,
+      );
+      c.createEl("p").setText(
+        "Reload to discard your edits here and start over from the files as they are now. " +
+          "Continue to keep editing — when you leave with [←], only a file that did not change is saved; " +
+          "if both changed, you will be asked where to save your result.",
+      );
+      const row = c.createDiv({ cls: "modal-button-container" });
+      const reload = row.createEl("button", { text: "Reload and start over" });
+      reload.addEventListener("click", () => {
+        this.choice = "reload";
+        this.close();
+      });
+      const cont = row.createEl("button", { text: "Continue", cls: "mod-cta" });
+      cont.addEventListener("click", () => {
+        this.choice = "continue";
+        this.close();
+      });
+      this.open();
+    });
+  }
+}
+
 export interface SaveAltInfo {
   // Prefill for the name box. §5.0.e seeds it with the conflict's base path so
   // the user has a sensible starting point to edit.
@@ -369,7 +414,7 @@ export class ConflictResolvedModal extends Modal {
         gone: {
           title: "One of the files is gone",
           body: `"${this.basePath}" no longer exists, so this comparison cannot continue. Your changes here are discarded.`,
-          button: "Exit",
+          button: "Close",
         },
       }[this.when];
       this.titleEl.setText(text.title);
