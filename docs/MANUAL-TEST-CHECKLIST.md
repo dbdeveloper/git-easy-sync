@@ -98,7 +98,7 @@ Use it, and note which runs you did.
       pulls (the resume replayed the progress log — `lines: 4` — and fetched the rest). End state checked on the
       files themselves: the synced content of both vaults byte-identical, no 0-byte files, no `.ges-tmp`/`.ges-bak`
       leftovers, queues empty, no conflicts.
-- [x] 📱 **Battery death** (let the device power off below 1% mid-sync) → on relaunch, no corruption and no 0-byte files.
+- [x] 📱 **Battery death** (let the device power off below 1% mid-sync) → on relaunch, no corruption, and no 0-byte files.
       Closed without a literal battery run (owner, 2026-10-11): on a phone whose battery cannot be pulled, hitting
       the milliseconds of an actual write is practically impossible, and the outcome a power cut can add over a
       process kill (unflushed OS writes) lands in the same two states the design already handles — a half-written
@@ -106,14 +106,14 @@ Use it, and note which runs you did.
       Covered by: the kill runs above, the atomic-write recovery unit suites, and the drain's "POWER LOSS"
       before/after-write tests. A precise kill-during-write on the phone is possible via DevTools (a breakpoint in
       `atomicWriteFile`, then force-stop) if it is ever needed.
-- [ ] 📱 **Touch:** ribbon, settings, and the conflict list respond to taps as they do to clicks on desktop.
+- [x] 📱 **Touch:** ribbon, settings and the conflict list respond to taps as they do to clicks on desktop.
 
 **Installing a build on a device (BRAT).** There is no public-store build, so use [BRAT](https://github.com/TfTHacker/obsidian42-brat): *Add Beta Plugin* → this repo's URL → BRAT pulls `main.js` + `manifest.json` from the latest release tag. To test an unreleased branch, push an `X.Y.Z-beta` tag (the `release.yml` workflow cuts the artifact BRAT can fetch). Then run the 📱 / 🖥️📱 items here plus sections 2, 4, 6, 7, 8 on the device. "Pass" means the desktop contract holds identically on mobile.
 
 **Known platform limitations (behaviours, not plugin bugs — surface in the README so users know what to expect):**
 
 - **Android background-throttled timer.** Backgrounding Obsidian suspends the JS runtime within seconds; `Window.setInterval` stops firing, and a dozing phone also cuts the app's network. The interval / watchdog tick resumes on foreground; a sync interrupted mid-flight resumes on the next one from what is on disk — the queued batch, the drain journal, the per-file progress log (`.runtime/vault-step-progress.jsonl`) and the record of already-uploaded blobs (field-verified 2026-10-11: kills on both desktops and a phone — the Low-memory kill / Battery death items above).
-- **Android — no file watcher for external deletions.** Files removed via Android's Files app (not Obsidian) don't fire `vault.on("delete")`, so the conflict counter can lag mid-session. The conflict reconcile that runs at plugin start, at every drain start and when the panel opens catches it. The same holds for files pushed in over adb: Obsidian indexes them only after a restart.
+- **Android — no file watcher for external deletions.** Files removed via Android's Files app (not Obsidian) don't fire `vault.on("delete")`, so the conflict counter can lag mid-session. The conflict reconcile that runs at plugin start, at every drain start, and when the panel opens catches it. The same holds for files pushed in over adb: Obsidian indexes them only after a restart.
 - **Android Storage Access Framework.** Vaults under `/Android/data/md.obsidian/` work; arbitrary external paths may need user-granted access on each launch.
 - **Files of 40 MB and more never sync** — GitHub's REST API refuses a blob of 40 MiB (measured 2026-10-11; the documented 100 MB is not the real limit). The commit keeps such files out (`MAX_SYNC_FILE_BYTES` = 40 000 000) and says so: a notice per file on a manual Commit/Sync and on the startup sync, silence on the periodic sync, one log WARN per session. Below the limit, size is no longer a memory problem: base64 uses the WebView's native `Uint8Array.toBase64` (100 MB in 0.06 s on a Pixel 6 Pro; Obsidian's own encoder failed above 128 MiB), and a crash or Cancel mid-upload resumes without re-sending blobs that already reached GitHub.
 - **iOS background suspension** is more aggressive than Android (~30 s typical). iOS fires `delete` reliably for in-Obsidian operations; external Files.app operations are inconsistent.
@@ -123,7 +123,7 @@ Use it, and note which runs you did.
 - [x] 🖥️📱 Two devices edit the same file → a conflict sibling `*.conflict-from-<device>-<timestamp>.*` is created.
 - [x] 🖥️ The conflict counter (🔀) in the status bar updates as siblings appear and clear.
 - [x] 🖥️ **File tree click while our tab is active (new 2026-10-10).** Open a note in a tab, then make
-      the Diff Panel (or a History / conflict editor / log viewer tab) active and click that note in
+      the Diff Panel (or a History / conflict editor / log viewer tab) active, and click that note in
       the file tree: the tab that already shows it comes to the front. A note open nowhere opens as
       usual; Ctrl/Cmd+click still opens a new tab; with an ordinary tab active nothing changes.
 - [x] 🖥️ **Files in conflict, everywhere (new 2026-10-09).** One file with TWO conflict copies: the
@@ -131,7 +131,7 @@ Use it, and note which runs you did.
       done … 1 in conflict". In the Diff Panel that file's name is RED (light AND dark theme) and
       listed first; its tracked copies come first under it, then synthetic ones, each newest first;
       a file with only synthetic copies is listed after the red ones in the normal colour.
-- [ ] 🖥️ **Auto-merge:** non-overlapping edits merge cleanly (3-way); overlapping edits produce a sibling.
+- [x] 🖥️ **Auto-merge:** non-overlapping edits merge cleanly (3-way); overlapping edits produce a sibling.
 - [x] 🖥️ **One Sync at a time (new 2026-10-09).** Double-click Sync (or click + hotkey): only ONE
       sync runs; a second click (commit part or drain) shows the Cancel/Keep window. [Cancel sync]
       during the COMMIT part: the commit finishes, nothing is pulled/pushed, the box says "Sync
@@ -150,25 +150,28 @@ Use it, and note which runs you did.
       With the Diff Panel OPEN during that second sync: its row switches to the new copy's name
       by itself (the count stayed 1), and clicking it opens the editor on the new copy.
 - [x] 🖥️ The pre-sync conflict dialog shows the count and lets you confirm.
-- [ ] 🖥️ When a sibling is reconciled to match the base (identical content), the sibling is cleared on the next sync.
+- [x] 🖥️ When a sibling is reconciled to match the base (identical content), the sibling is cleared on the next sync.
       (Fixed 2026-10-11, `9f134fa`: the copy's bytes on disk decide — editing the copy by hand until it
       matches the base closes the conflict; the old code compared the copy as it first arrived.)
-- [ ] 🖥️ **Copy renamed onto the base (new 2026-10-11).** With the copy's diff-editor tab open (and some
+- [x] 🖥️ **Copy renamed onto the base (new 2026-10-11).** With the copy's diff-editor tab open (and some
       unsaved edits in it), delete the base and rename the copy onto it in the file tree. The editor tab
       closes by itself; the base holds the copy's content (NOT the editor's half-done merge); no
       "Saved files changed" window. Same if `[←]` is pressed before the tab closes.
-- [ ] 🖥️ **Copy deleted while its editor has unsaved edits (new 2026-10-11).** Make a few resolutions in
+- [x] 🖥️ **Copy deleted while its editor has unsaved edits (new 2026-10-11).** Make a few resolutions in
       the diff editor without `[←]`, then delete the copy from the file tree: the tab closes silently, no
-      notice, the base is untouched, and reopening the conflict list shows the conflict gone.
-- [ ] 🖥️ **Two conflict copies made identical (new 2026-10-11).** One note with TWO copies (from two
+      notice, the base is untouched, and the Diff Panel comes to the front without the conflict (2026-10-18:
+      the editor was the tab you worked in, even though the file tree was the active pane).
+- [x] 🖥️ **Two conflict copies made identical (new 2026-10-11).** One note with TWO copies (from two
       devices or two rounds). Edit the copies until both hold the same text → after the next Sync (or on
       opening the Diff Panel) only the NEWER copy (later time in its name) remains. Then the guard: two
       copies that arrived IDENTICAL — edit only the OLDER one → both copies stay, your edit intact.
-- [ ] 🖥️ **A conflict in `.obsidian/` — its tab closes when you turn to it (new 2026-10-11).** Open the
-      diff editor of a conflict inside a dot-folder (no file-tree events there), resolve it outside the
-      editor (delete or rename the copy from a terminal / file manager), switch to another tab and back:
-      the editor tab closes.
-- [ ] 🖥️ **Multi-device rotation:** run a realistic round-trip across 2+ devices.
+- [x] 🖥️ **A conflict in a dot-folder — its tab closes when you turn to it (new 2026-10-11).** Use a
+      synced dot-folder OUTSIDE the config folder (e.g. `.test/`; Obsidian sends no file-tree events
+      there). NOT `.obsidian/`: there — at any depth, plugins/themes/snippets included — every collision
+      is resolved automatically and no conflict copy is ever made. Open the diff editor of the conflict,
+      resolve it outside the editor (delete or rename the copy from a terminal / file manager), switch
+      to another tab and back: the editor tab closes without a window and the Diff Panel shows.
+- [x] 🖥️ **Multi-device rotation:** run a realistic round-trip across 2+ devices.
 
 ## 5. Diff-editor widget
 
@@ -177,32 +180,31 @@ Use it, and note which runs you did.
 
 **Layout / geometry (Playwright or a real device):**
 
-- [ ] **Wrapping:** a 200-character line in a narrow editor (~30 columns) wraps; the `↵` glyph appears **only** at real newlines, and wrapped continuation rows have an empty gutter (one line number for the whole logical line).
-- [ ] **Vertical arrows** within a wrapped long line move row by row (they do not jump over the line).
-- [ ] **Page Up / Page Down** over large change blocks (10+ lines) scroll and position the caret correctly.
-- [ ] **Ctrl/Cmd-Home / Ctrl/Cmd-End** jump to the first/last line — verify the case where the first line is a **hidden empty "local" block** and the last is a **hidden empty "remote" block** (they reveal/activate correctly).
-- [ ] **Home / End** on a wrapped line behave sensibly (visual vs logical line start/end).
-- [ ] **Entering an empty change block:** pressing Down from a normal line above an empty block reveals a temporary blank line; pressing Down again without typing collapses it and moves on. Up from below is the mirror.
-- [ ] **Markers:** the `<<<<<` / `=====` / `>>>>>` rows render as block widgets; the action buttons are clickable; the device label shows on the top/bottom markers.
-- [ ] **Button labels (TODO §6.3/§6.4):** top (ours) = `[Keep ↓] [Remove ↓]`; middle = `[Apply Both ↓↑] [Remove Both ↓↑] [Join (<remote>)]`; bottom (theirs) = `[Apply ↑] [Remove ↑]` — all Capitalized, Join label in parens.
-- [ ] **Focus on open (TODO §6.1):** opening a conflict shows the blinking caret immediately and Ctrl/Cmd+Z works WITHOUT clicking into the text first.
-- [ ] **Cursor restore (TODO §6.2):** edit deep in a long conflict, force-quit, reopen → the editor scrolls to roughly where you left off (caret visible, focused).
-- [ ] **Gutter glyphs + colour (TODO §6.5/§6.7):** ours lines show `−` and a red-tinted gutter cell; theirs lines show `+` and a green-tinted cell; wrapped continuation rows keep the colour (no repeated number/glyph). The gutter band also covers the `<<<<<` / `=====` / `>>>>>` marker rows.
-- [ ] **`↵` only in ver-blocks (TODO §6.8):** the `↵` newline glyph appears ONLY inside ver1/ver2 lines (red/green), NOT on normal/common lines.
-- [ ] **Separator colour (TODO §6.6):** the `=====` row is split top-red / bottom-green (not a blank white strip).
-- [ ] **Light AND dark themes:** switch Obsidian theme — the ours/theirs backgrounds, gutter, and numbers stay readable in both (light: light bg + dark numbers; dark: dark bg + bright numbers).
-- [ ] **Colours:** the local side is red, the remote side green, and intra-line word differences get a yellow overlay (blending to orange / olive).
-- [ ] **No-trailing-newline edge:** a whole-file single-line difference (e.g. local `"abc"` vs remote `"XYZ"`) renders without errors and without a marker landing mid-line.
+- [x] **Wrapping:** a 200-character line in a narrow editor (~30 columns) wraps; the `↵` glyph appears **only** at real newlines, and wrapped continuation rows have an empty gutter (one line number for the whole logical line).
+- [x] **Vertical arrows** within a wrapped long line move row by row (they do not jump over the line).
+- [x] **Page Up / Page Down** over large change blocks (10+ lines) scroll and position the caret correctly.
+- [x] **Ctrl/Cmd-Home / Ctrl/Cmd-End** jump to the first/last line — verify the case where the first line is a **hidden empty "local" block** and the last is a **hidden empty "remote" block** (they reveal/activate correctly).
+- [x] **Home / End** on a wrapped line behave sensibly (visual vs logical line start/end).
+- [x] **Entering an empty change block:** pressing Down from a normal line above an empty block reveals a temporary blank line; pressing Down again without typing collapses it and moves on. Up from below is the mirror.
+- [x] **Markers:** the `<<<<<` / `=====` / `>>>>>` rows render as block widgets; the action buttons are clickable; the device label shows on the top/bottom markers.
+- [x] **Button labels (TODO §6.3/§6.4):** top (ours) = `[Keep ↓] [Remove ↓]`; middle = `[Apply Both ↓↑] [Remove Both ↓↑] [Join (<remote>)]`; bottom (theirs) = `[Apply ↑] [Remove ↑]` — all Capitalized, Join label in parens.
+- [x] **Focus on open (TODO §6.1):** opening a conflict shows the blinking caret immediately and Ctrl/Cmd+Z works WITHOUT clicking into the text first.
+- [x] **Cursor restore (TODO §6.2):** edit deep in a long conflict, force-quit, reopen → the editor scrolls to roughly where you left off (caret visible, focused).
+- [x] **Gutter glyphs + colour (TODO §6.5/§6.7):** ours lines show `−` and a red-tinted gutter cell; theirs lines show `+` and a green-tinted cell; wrapped continuation rows keep the colour (no repeated number/glyph). The gutter band also covers the `<<<<<` / `=====` / `>>>>>` marker rows.
+- [x] **`↵` only in ver-blocks (TODO §6.8):** the `↵` newline glyph appears ONLY inside ver1/ver2 lines (red/green), NOT on normal/common lines.
+- [x] **Separator colour (TODO §6.6):** the `=====` row is split top-red / bottom-green (not a blank white strip).
+- [x] **Light AND dark themes:** switch Obsidian theme — the ours/theirs backgrounds, gutter, and numbers stay readable in both (light: light bg + dark numbers; dark: dark bg + bright numbers).
+- [x] **Colours:** the local side is red, the remote side green, and intra-line word differences get a yellow overlay (blending to orange / olive).
+- [x] **No-trailing-newline edge:** a whole-file single-line difference (e.g. local `"abc"` vs remote `"XYZ"`) renders without errors and without a marker landing mid-line.
 
 **End-to-end UX:**
 
-- [ ] Opening the editor from each entry point (file menu *Resolve conflict*, the diff ribbon icon, the post-sync summary modal).
+- [x] Opening the editor from each entry point (file menu *Resolve conflict*, the diff ribbon icon, the post-sync summary modal).
 - [ ] Resolving via the buttons and via the hotkeys (`Ctrl+Enter` / `Ctrl+Backspace` / `Ctrl+Shift+Enter` / `Ctrl+Shift+Backspace` / `Ctrl+Shift+.`).
 - [ ] **Undo/redo after a BUTTON action (TODO §4):** click a marker `[apply]`/`[remove]`/… or a toolbar `[Keep all local]` / `[Apply all remote]` / `[Join all changes]`, then press **Ctrl/Cmd+Z** — it must undo the action (and Ctrl/Cmd+Shift+Z redo it). Previously a button click stole focus and Ctrl+Z did nothing.
-- [ ] **Undo shrinks the recovery log (TODO §5):** make 3 changes, press Ctrl/Cmd+Z twice, then force-quit Obsidian and reopen the conflict → the recovery replays **only the 1 surviving change** (not all 3). Make N changes then N undos → reopening offers a *fresh* session (the log is empty, nothing to resume). This needs a force-quit (the log is discarded on a clean `[← back]`).
+- [ ] **Undo shrinks the recovery log (TODO §5):** make 3 changes, press Ctrl/Cmd+Z twice, then force-quit Obsidian, and reopen the conflict → the recovery replays **only the 1 surviving change** (not all 3). Make N changes then N undos → reopening offers a *fresh* session (the log is empty, nothing to resume). This needs a force-quit (the log is discarded on a clean `[← back]`).
 - [ ] **`[← Back]`** writes the resolved file, removes a now-redundant sibling, and returns to the list.
-- [ ] **⚠️ Open editor survives `[← Back]` (bug3):** open the conflict's base file (e.g. `test.md`) in a NORMAL markdown tab FIRST, then resolve that conflict in the diff-editor and press `[← Back]`. The markdown tab must STAY OPEN (not close/reopen), and its cursor + scroll position should be preserved (the write goes through `modifyBinary` in place, not a rename swap). Try with the sibling open too.
-- [ ] **Config-dir conflict:** if a conflict ever lands on a `.obsidian/…` file, `[← Back]` still commits it correctly (those files aren't opened in tabs, so they take the rename path — no tab to preserve).
+- [ ] **⚠️ Open editor survives `[← Back]` (bug3):** open the conflict's base file (e.g. `test.md`) in a NORMAL markdown tab FIRST, then resolve that conflict in the diff-editor, and press `[← Back]`. The markdown tab must STAY OPEN (not close/reopen), and its cursor + scroll position should be preserved (the write goes through `modifyBinary` in place, not a rename swap). Try with the sibling open too.
 - [ ] **⚠️ Resolve via BUTTONS ONLY (no typing)** — click *Keep all local* / per-chunk `[apply]`, then `[← Back]`: the inputs **are written** (Notice "Saved…", redundant sibling cleaned if converged). They must NOT be silently discarded. *(This is the data-loss-critical seam: a button resolve must count as a recorded edit — §4.1.a `recordCount > 0`.)*
 - [ ] **`[×]`** (tab close) **with edits** keeps the session for recovery; **with zero edits** silently discards it. The vault is left as it was before editing in both cases.
 - [ ] **One editor at a time:** clicking another conflict during an active edit shows a *"close the current edit first"* notice instead of losing work.
@@ -506,7 +508,7 @@ Use it, and note which runs you did.
 - [ ] **Mobile autosave benchmark** (Settings → *Run mobile autosave benchmark*): run on a mid-tier Android and on iOS; collect the p50/p95/p99 figures and send the log so the autosave timing can be tuned.
 - [ ] A large conflict (hundreds of change blocks) in the diff editor stays responsive on mobile.
 - [ ] 📱🖥️ **The FIRST sync after a large pull — the self-heal pass.** Pull several
-      hundred files from another device, then sync again and time the commit phase (the
+      hundred files from another device, then sync again, and time the commit phase (the
       "Checking N of M files" line; exact numbers in the log's `Sync2 commit pass timing`). ⚠️ It is EXPECTED to be slow once, and the second sync after it must be
       fast again — that pair is the pass condition, not any single number.
 
