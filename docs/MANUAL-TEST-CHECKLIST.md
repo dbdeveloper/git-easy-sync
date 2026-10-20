@@ -200,22 +200,22 @@ Use it, and note which runs you did.
 **End-to-end UX:**
 
 - [x] Opening the editor from each entry point (file menu *Resolve conflict*, the diff ribbon icon, the post-sync summary modal).
-- [ ] Resolving via the buttons and via the hotkeys (`Ctrl+Enter` / `Ctrl+Backspace` / `Ctrl+Shift+Enter` / `Ctrl+Shift+Backspace` / `Ctrl+Shift+.`).
-- [ ] **Undo/redo after a BUTTON action (TODO §4):** click a marker `[apply]`/`[remove]`/… or a toolbar `[Keep all local]` / `[Apply all remote]` / `[Join all changes]`, then press **Ctrl/Cmd+Z** — it must undo the action (and Ctrl/Cmd+Shift+Z redo it). Previously a button click stole focus and Ctrl+Z did nothing.
-- [ ] **Undo shrinks the recovery log (TODO §5):** make 3 changes, press Ctrl/Cmd+Z twice, then force-quit Obsidian, and reopen the conflict → the recovery replays **only the 1 surviving change** (not all 3). Make N changes then N undos → reopening offers a *fresh* session (the log is empty, nothing to resume). This needs a force-quit (the log is discarded on a clean `[← back]`).
-- [ ] **`[← Back]`** writes the resolved file, removes a now-redundant sibling, and returns to the list.
-- [ ] **⚠️ Open editor survives `[← Back]` (bug3):** open the conflict's base file (e.g. `test.md`) in a NORMAL markdown tab FIRST, then resolve that conflict in the diff-editor, and press `[← Back]`. The markdown tab must STAY OPEN (not close/reopen), and its cursor + scroll position should be preserved (the write goes through `modifyBinary` in place, not a rename swap). Try with the sibling open too.
-- [ ] **⚠️ Resolve via BUTTONS ONLY (no typing)** — click *Keep all local* / per-chunk `[apply]`, then `[← Back]`: the inputs **are written** (Notice "Saved…", redundant sibling cleaned if converged). They must NOT be silently discarded. *(This is the data-loss-critical seam: a button resolve must count as a recorded edit — §4.1.a `recordCount > 0`.)*
-- [ ] **`[×]`** (tab close) **with edits** keeps the session for recovery; **with zero edits** silently discards it. The vault is left as it was before editing in both cases.
-- [ ] **One editor at a time:** clicking another conflict during an active edit shows a *"close the current edit first"* notice instead of losing work.
-- [ ] **Select all + delete** then `[← Back]` saves a single newline (not a 0-byte file).
-- [ ] **Standard editing commands** (delete line, delete word, Home/End, Page Up/Down) behave normally and never corrupt the merged view. (Note: *delete to end of line* / Ctrl+K is not bound yet — verify if/when added.)
+- [x] Resolving via the buttons and via the hotkeys (`Ctrl+Enter` / `Ctrl+Backspace` / `Ctrl+Shift+Enter` / `Ctrl+Shift+Backspace` / `Ctrl+Shift+.`).
+- [x] **Undo/redo after a BUTTON action (TODO §4):** click a marker `[apply]`/`[remove]`/… or a toolbar `[Keep all local]` / `[Apply all remote]` / `[Join all changes]`, then press **Ctrl/Cmd+Z** — it must undo the action (and Ctrl/Cmd+Shift+Z redo it). Previously a button click stole focus and Ctrl+Z did nothing.
+- [x] **Undo shrinks the recovery log (TODO §5):** make 3 changes, press Ctrl/Cmd+Z twice, then force-quit Obsidian, and reopen the conflict → the recovery replays **only the 1 surviving change** (not all 3). Make N changes then N undos → reopening offers a *fresh* session (the log is empty, nothing to resume). This needs a force-quit (the log is discarded on a clean `[← back]`).
+- [x] **`[← Back]`** writes the resolved file, removes a now-redundant sibling, and returns to the list.
+- [x] **⚠️ Open editor survives `[← Back]` (bug3):** open the conflict's base file (e.g. `test.md`) in a NORMAL markdown tab FIRST, then resolve that conflict in the diff-editor, and press `[← Back]`. The markdown tab must STAY OPEN (not close/reopen), and its cursor + scroll position should be preserved (the write goes through `modifyBinary` in place, not a rename swap). Try with the sibling open too.
+- [x] **⚠️ Resolve via BUTTONS ONLY (no typing)** — click *Keep all local* / per-chunk `[apply]`, then `[← Back]`: the inputs **are written** (Notice "Saved…", redundant sibling cleaned if converged). They must NOT be silently discarded. *(This is the data-loss-critical seam: a button resolve must count as a recorded edit — §4.1.a `recordCount > 0`.)*
+- [x] **`[×]`** (tab close) **with edits** keeps the session for recovery; **with zero edits** silently discards it. The vault is left as it was before editing in both cases.
+- [x] **One editor at a time:** clicking another conflict during an active edit shows a *"close the current edit first"* notice instead of losing work.
+- [x] **Select all + delete** then `[← Back]` saves a single newline (not a 0-byte file). Tester: Now the modal window is shown: "File is empty: You emptied <filename>. Delete the file, or keep it as an empty file? [Delete] [Keep empty] [Cancel]"
+- [x] **Standard editing commands** (delete line, delete word, Home/End, Page Up/Down) behave normally and never corrupt the merged view. (Note: *delete to end of line* / Ctrl+K is not bound yet — verify if/when added.)
 
 **Autosave & recovery:**
 
-- [ ] **Zero-edit invariant (§4.1.a):** open a conflict, change **nothing**, leave (via `[← Back]`, a sub-tab switch, or closing the view). Reopening the SAME conflict must NOT show a *"Resume previous edit session · 0 edits saved"* dialog — it opens fresh. (The `.diff2-autosave/<id>/` dir is wiped on the zero-edit exit; a crash-survivor empty dir is swept on the next plugin load.)
-- [ ] **No spurious re-mount:** while editing a conflict, trigger a background sync that adds/removes another conflict → the editor you're in keeps its state (it does NOT re-mount or pop a resume dialog mid-edit).
-- [ ] Edit, force-quit Obsidian, reopen the conflict → a recovery dialog offers *Continue editing*, which restores the in-progress state with the caret roughly where it was; Undo steps back through the edits.
+- [x] **Zero-edit invariant (§4.1.a):** open a conflict, change **nothing**, leave (via `[← Back]`, a sub-tab switch, or closing the view). Reopening the SAME conflict must NOT show a *"Resume previous edit session · 0 edits saved"* dialog — it opens fresh. (The `.diff2-autosave/<id>/` dir is wiped on the zero-edit exit; a crash-survivor empty dir is swept on the next plugin load.)
+- [x] **No spurious re-mount:** while editing a conflict, trigger a background sync that adds/removes another conflict → the editor you're in keeps its state (it does NOT re-mount or pop a resume dialog mid-edit).
+- [ ] **Edit, then force-quit Obsidian** → on relaunch the restored diff-editor tab resumes the in-progress state **silently** (no dialog), caret roughly where it was; Undo steps back through the edits. **Edit, then close the tab (×) and reopen the same conflict from the Diff Panel** → the recovery dialog offers *Continue editing* (same restored state) / *Start over*. (Owner, 2026-10-20: a restored tab resumes silently, a reopen by the user asks.)
 - [ ] *Start over* discards the session and starts fresh from the current files.
 - [ ] If the underlying files changed during the session (a sync pulled new content), a dialog offers *restore the previous version / discard / cancel*.
 - [ ] If the files changed by the time you press `[← Back]`, a dialog offers *save to alternative paths / overwrite / cancel*.
@@ -377,13 +377,13 @@ Use it, and note which runs you did.
 
 - [ ] Token / owner / repo / branch fields trim input; invalid values produce a clear error (not a silent 404).
 - [ ] The settings connection test works and does not disturb sync state.
-- [ ] **Reset** (type the confirmation phrase) wipes the token, repo settings, sync history, pending local commits, conflicts, unsaved conflict-editor edits, and the plugin trash (the whole `.runtime/`); vault files are NOT touched — conflict-copy files stay in place and are re-detected as conflicts on re-enable. A `.reset-in-progress` marker in the plugin dir makes an interrupted reset finish on the next load.
+- [x] **Reset** (type the confirmation phrase) wipes the token, repo settings, sync history, pending local commits, conflicts, unsaved conflict-editor edits, and the plugin trash (the whole `.runtime/`); vault files are NOT touched — conflict-copy files stay in place and are re-detected as conflicts on re-enable. A `.reset-in-progress` marker in the plugin dir makes an interrupted reset finish on the next load.
 - [ ] Toggling **"sync config folder"** includes/excludes `.obsidian/*` accordingly.
-- [ ] **"Clean logs" shows the live log size (new 2026-10-07, TODO п.36).** With logging on,
+- [x] **"Clean logs" shows the live log size (new 2026-10-07, TODO п.36).** With logging on,
       the row reads `Truncate the log. Current log size is 1.2 MB (1 234 567 bytes).`; the
       number grows while the plugin logs (run a Sync with the page open), and right after
       **[Clean]** it shows `0 bytes`. Deleting the log file by hand also shows `0 bytes`.
-- [ ] **Log viewer (LOG-VIEWER, new 2026-10-08)** — Settings → Logging → **View log** → **Open**
+- [x] **Log viewer (LOG-VIEWER, new 2026-10-08)** — Settings → Logging → **View log** → **Open**
       (the row exists only while logging is on; there is NO command for it):
       - 🖥️ it opens in its OWN window, in front of Settings; closing it leaves Settings open;
         its tab can be dragged into the main window's tab bar and stays there; pressing
@@ -440,7 +440,7 @@ Use it, and note which runs you did.
         "too large" becomes an empty live log the same way. Turn **Enable logging** off — every
         viewer (tab, window, 📱 modal) closes.
 - [ ] **Changing a switch never scrolls the page (new 2026-10-07).** Scroll down to *Logging* and toggle **Enable logging** on and off: the page stays where it is, and the *Clean logs* row appears/disappears in place. (Tab/Shift-Tab between fields is not expected to work — Obsidian's settings behave that way for every plugin.)
-- [ ] Changing the **device label** makes new commits carry the new `(label)` suffix.
+- [x] Changing the **device label** makes new commits carry the new `(label)` suffix.
 - [ ] Switching repositories resets state correctly. ⚠️ **Change it in the SETTINGS UI,
       not by editing `data.json`.** A hand edit while Obsidian runs does nothing: the
       plugin holds its settings in memory and never re-reads that file, so the sync goes
