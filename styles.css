@@ -1483,3 +1483,10 @@ body.is-mobile .diff2-edit-view-root.diff2-kbd-open .cm-content {
   background-size: 100% max(1px, 0.085em);
   background-position: 0 50%;
 }
+
+/* Resume dialog: a file that changed since the editing session — its "*" and
+ * the footnote in red, so they are not missed (owner, 2026-10-21). */
+.diff2-recovery-changed,
+.diff2-recovery-footnote {
+    color: var(--text-error);
+}

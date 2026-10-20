@@ -205,14 +205,16 @@ export class ResumeRecoveryModal extends Modal {
       c.empty();
 
       c.createEl("p").setText("Unfinished edit session for:");
-      const star = (changed?: boolean) => (changed ? "* " : "");
       const ul = c.createEl("ul");
-      ul.createEl("li").setText(
-        `${star(this.info.baseChanged)}base: ${this.info.basePath}`,
-      );
-      ul.createEl("li").setText(
-        `${star(this.info.siblingChanged)}sibling: ${this.info.siblingPath}`,
-      );
+      // A file changed since the session: its "*" in red (owner, 2026-10-21 —
+      // the plain star was easy to miss).
+      const fileItem = (label: string, path: string, changed?: boolean) => {
+        const li = ul.createEl("li");
+        if (changed) li.createSpan({ cls: "diff2-recovery-changed", text: "* " });
+        li.appendText(`${label}: ${path}`);
+      };
+      fileItem("base", this.info.basePath, this.info.baseChanged);
+      fileItem("sibling", this.info.siblingPath, this.info.siblingChanged);
       const meta =
         `Started ${relativeTimeFromIso(this.info.startedAtIso, this.info.nowMs)}` +
         ` · ${this.info.editCount} edit${this.info.editCount === 1 ? "" : "s"} saved` +
@@ -222,7 +224,7 @@ export class ResumeRecoveryModal extends Modal {
       c.createEl("p").setText(meta);
       if (this.info.baseChanged || this.info.siblingChanged) {
         c.createEl("p", { cls: "diff2-recovery-footnote" }).setText(
-          "* this file changed in the vault since the last editing session.",
+          "* this file changed in the vault since the last editing session!",
         );
       }
 
