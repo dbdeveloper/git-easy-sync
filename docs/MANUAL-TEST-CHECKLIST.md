@@ -213,11 +213,23 @@ Use it, and note which runs you did.
 
 **Autosave & recovery:**
 
-- [x] **Zero-edit invariant (§4.1.a):** open a conflict, change **nothing**, leave (via `[← Back]`, a sub-tab switch, or closing the view). Reopening the SAME conflict must NOT show a *"Resume previous edit session · 0 edits saved"* dialog — it opens fresh. (The `.diff2-autosave/<id>/` dir is wiped on the zero-edit exit; a crash-survivor empty dir is swept on the next plugin load.)
-- [x] **No spurious re-mount:** while editing a conflict, trigger a background sync that adds/removes another conflict → the editor you're in keeps its state (it does NOT re-mount or pop a resume dialog mid-edit).
-- [ ] **Edit, then force-quit Obsidian** → on relaunch the restored diff-editor tab resumes the in-progress state **silently** (no dialog), caret roughly where it was; Undo steps back through the edits. **Edit, then close the tab (×) and reopen the same conflict from the Diff Panel** → the recovery dialog offers *Continue editing* (same restored state) / *Start over*. (Owner, 2026-10-20: a restored tab resumes silently, a reopen by the user asks.)
-- [ ] *Start over* discards the session and starts fresh from the current files.
-- [ ] If the underlying files changed during the session (a sync pulled new content), a dialog offers *restore the previous version / discard / cancel*.
+- [x] **Zero-edit invariant (§4.1.a):** open a conflict, change **nothing**, leave (via `[← Back]`, a sub-tab switch, 
+      or closing the view). Reopening the SAME conflict must NOT show a *"Resume previous edit session · 0 edits saved"* 
+      dialog — it opens fresh. (The `.diff2-autosave/<id>/` dir is wiped on the zero-edit exit; a crash-survivor empty 
+      dir is swept on the next plugin load.)
+- [x] **No spurious re-mount:** while editing a conflict, trigger a background sync that adds/removes another conflict → 
+      the editor you're in keeps its state (it does NOT re-mount or pop a resume dialog mid-edit).
+- [x] **Edit, then force-quit Obsidian** → on relaunch the restored diff-editor tab resumes the in-progress state 
+      **silently** (no dialog), caret roughly where it was; Undo steps back through the edits. **Edit, then close the 
+      tab (×) and reopen the same conflict from the Diff Panel** → the recovery dialog offers *Continue editing* 
+      (same restored state) / *Start over*. (Owner, 2026-10-20: a restored tab resumes silently, a reopen by the user 
+      asks.)
+- [x] *Start over* discards the session and starts fresh from the current files.
+- [ ] **Files changed under a saved session:** edit in the diff editor, close the tab (×), change the base or the 
+      copy on disk (a sync pulls new content, or edit it), then reopen the conflict from the Diff Panel → the resume 
+      dialog lists *base* / *sibling* with a **red `*`** before each file that changed and a **red footnote** 
+      "* this file changed in the vault since the last editing session!"; buttons *Continue editing* / *Start over* / 
+      *Cancel*.
 - [ ] If the files changed by the time you press `[← Back]`, a dialog offers *save to alternative paths / overwrite / cancel*.
 
 ## 5b. Managed `.gitignore` — the dot-space rules (🖥️📱🌐 · DOT-FILES)
