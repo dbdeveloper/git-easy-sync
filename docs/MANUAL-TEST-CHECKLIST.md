@@ -225,12 +225,25 @@ Use it, and note which runs you did.
       (same restored state) / *Start over*. (Owner, 2026-10-20: a restored tab resumes silently, a reopen by the user 
       asks.)
 - [x] *Start over* discards the session and starts fresh from the current files.
-- [ ] **Files changed under a saved session:** edit in the diff editor, close the tab (×), change the base or the 
+- [x] **Files changed under a saved session:** edit in the diff editor, close the tab (×), change the base or the 
       copy on disk (a sync pulls new content, or edit it), then reopen the conflict from the Diff Panel → the resume 
       dialog lists *base* / *sibling* with a **red `*`** before each file that changed and a **red footnote** 
       "* this file changed in the vault since the last editing session!"; buttons *Continue editing* / *Start over* / 
       *Cancel*.
-- [ ] If the files changed by the time you press `[← Back]`, a dialog offers *save to alternative paths / overwrite / cancel*.
+- [ ] **Files changed while the editor is open (new 2026-10-18):** open a conflict, then change the base or the copy
+      outside the editor (another program, or a Sync pulling a new version). Checked only while the editor has the
+      focus — the tab is active AND Obsidian's window has the OS focus: on returning to the tab or to Obsidian, on
+      Ctrl/Cmd+R, and on a file event while focused. **With your edits** → the window "Files changed outside the
+      editor": *Reload and start over* (your edits gone, the editor shows the files as they are now; a deleted base
+      = an empty left side) / *Continue* (nothing changes; asked again only when the disk changes again). **Without
+      edits** → no window, the editor quietly shows the new version — at once, even in the background. While you work
+      in another program nothing pops up in Obsidian.
+- [ ] **`[← Back]` when the files changed since the session started:** reach it either by answering *Continue* above,
+      or with a conflict in a dot-folder (e.g. `.test/`, no file events there) where a Sync pulls a new version while
+      you stay in the editor. Then `[← Back]`: **one file changed** → no window; only the UNCHANGED file gets your
+      result, the changed one keeps its new content, the conflict stays in the Diff Panel. **Both changed** → the
+      window "Saved files changed — keep your resolution?": *Save* under another name (a new conflict to resolve
+      later) / *Discard* / *Cancel* (stay in the editor).
 
 ## 5b. Managed `.gitignore` — the dot-space rules (🖥️📱🌐 · DOT-FILES)
 
