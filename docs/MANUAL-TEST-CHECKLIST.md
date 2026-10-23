@@ -230,7 +230,7 @@ Use it, and note which runs you did.
       dialog lists *base* / *sibling* with a **red `*`** before each file that changed and a **red footnote** 
       "* this file changed in the vault since the last editing session!"; buttons *Continue editing* / *Start over* / 
       *Cancel*.
-- [ ] **Files changed while the editor is open (new 2026-10-18):** open a conflict, then change the base or the copy
+- [x] **Files changed while the editor is open (new 2026-10-18):** open a conflict, then change the base or the copy
       outside the editor (another program, or a Sync pulling a new version). Checked only while the editor has the
       focus — the tab is active AND Obsidian's window has the OS focus: on returning to the tab or to Obsidian, on
       Ctrl/Cmd+R, and on a file event while focused. **With your edits** → the window "Files changed outside the
@@ -238,7 +238,7 @@ Use it, and note which runs you did.
       = an empty left side) / *Continue* (nothing changes; asked again only when the disk changes again). **Without
       edits** → no window, the editor quietly shows the new version — at once, even in the background. While you work
       in another program nothing pops up in Obsidian.
-- [ ] **`[← Back]` when the files changed since the session started:** reach it either by answering *Continue* above,
+- [x] **`[← Back]` when the files changed since the session started:** reach it either by answering *Continue* above,
       or with a conflict in a dot-folder (e.g. `.test/`, no file events there) where a Sync pulls a new version while
       you stay in the editor. Then `[← Back]`: **one file changed** → no window; only the UNCHANGED file gets your
       result, the changed one keeps its new content, the conflict stays in the Diff Panel. **Both changed** → the
@@ -251,14 +251,33 @@ Use it, and note which runs you did.
 > does with a block the first one wrote, and the whole mechanism exists to stop two
 > plugin versions fighting over it.
 
-- [ ] **The blocks appear and carry a version.** After a sync, `<vault>/.gitignore`,
-      `<configDir>/.gitignore` and `<configDir>/plugins/.gitignore` each hold a managed
-      block whose header reads `# ===== git-easy-sync invariants v<X.Y.Z> - DO NOT EDIT =====`
-      (and a `final` one at the bottom). The version is the BUILD's, not the file's.
-- [ ] **⚠️ Two devices, two versions — the ping-pong guard.** Sync a vault from a device
-      running an OLDER build after a newer one wrote these blocks. The older build must
-      leave them **untouched** — no rewrite, no commit. This is the whole reason the
-      version sits in the marker, and one device cannot test it.
+- [ ] **The blocks appear and carry a version.** (`<configDir>` = `.obsidian` unless you renamed it.)
+      1. Press **Sync**.
+      2. Open `<vault>/.gitignore`. At the top: `# ===== git-easy-sync invariants v2.0.2-beta - DO NOT EDIT =====`;
+         at the bottom: `# ===== git-easy-sync final v2.0.2-beta - DO NOT EDIT =====`.
+      3. Open `<configDir>/.gitignore`. It has ONE block: `# ===== git-easy-sync final v2.0.2-beta - DO NOT EDIT =====`.
+      4. Open `<configDir>/plugins/git-easy-sync/.gitignore`. First line:
+         `# ===== git-easy-sync v2.0.2-beta - managed file, DO NOT EDIT =====`.
+      5. The version in all three = the version of the installed build (Settings → Community plugins).
+      6. Check that the version comes from the BUILD, not from the file on disk: in
+         `<configDir>/plugins/git-easy-sync/manifest.json` change `"version"` to `"9.9.9"`, press **Sync** →
+         the three lines above still say `v2.0.2-beta`. Put the old version back afterwards.
+      (`<configDir>/plugins/.gitignore` is a different, unversioned file — the "Sync plugins data.json"
+      switch — nothing to check there.)
+- [ ] **⚠️ Two devices, two versions — the ping-pong guard (one device is enough).** An OLDER build must never
+      rewrite blocks a NEWER build wrote. Pretend a newer build was here:
+      1. In each of the three files from the item above, change `v2.0.2-beta` to `v9.9.9` in every
+         git-easy-sync marker line (in `<vault>/.gitignore`: both `invariants` and `final`).
+      2. In `<vault>/.gitignore`, add one line INSIDE the `invariants` block, e.g. `# tester was here`.
+      3. Press **Sync**. Your edit is committed like any change of yours — that is expected.
+      4. Open the files again: they still say `v9.9.9`, and `# tester was here` is still there. The plugin did
+         NOT put its own version back.
+      5. Open the log (Settings → log viewer) → there are lines `gitignore section anomaly` with
+         `yielded-to-newer`.
+      6. Press **Sync** again → NO new commit touches a `.gitignore` (check the commit list on GitHub).
+         Without this guard every Sync would flip the versions back and forth.
+      7. Clean up: change `v9.9.9` back to `v2.0.2-beta` (or delete the line `# tester was here` and the
+         `v9.9.9` markers) and press **Sync** → the plugin writes its blocks again with `v2.0.2-beta`.
 - [ ] **Your edits inside `invariants` survive; `final` is absolute.** Add a line to the
       top block → it stays after the next sync. The bottom block is restored verbatim if
       you edit it.
