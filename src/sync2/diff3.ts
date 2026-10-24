@@ -339,7 +339,8 @@ export async function _diff3(
       return { kind: "plugin-dispatch" };
     }
     // 3.b — MANUAL_CONFLICT never happens here; every collision
-    // resolves silently. No separate base=null case needed: when
+    // resolves silently. (The .gitignore files people write never reach
+    // this branch — see takesConfigBranch.) No separate base=null case needed: when
     // base.sha==null, (remote.sha == base.sha) narrows to
     // (remote.sha == null) by itself.
     if (remoteUnmovedLocalLive(base, local, remote)) {

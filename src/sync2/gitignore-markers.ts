@@ -51,24 +51,35 @@ export function beginPattern(kind: SectionKind): RegExp {
 // difference is not a conflict, the newer version wins. These three are
 // what the drain needs for it.
 
-// Every version line replaced by ONE placeholder, so two texts that differ
+// Is line `i` one of OUR version lines — a version line right under one of
+// our BEGIN markers? A version line anywhere else is the user's text (pasted,
+// or left over from an old file): it is neither normalised, nor counted, nor
+// restamped — the three must agree, or a stray line would come out of a
+// merge as the placeholder.
+function isOurVersionLine(lines: string[], i: number): boolean {
+  return i > 0 && parseVersionLine(lines[i]) !== null && parseBeginMarker(lines[i - 1]) !== null;
+}
+
+// Our version lines replaced by ONE placeholder, so two texts that differ
 // only in versions (or padding) compare equal and merge cleanly.
 const VERSION_PLACEHOLDER = "# ===== plugin version: 0.0.0 =====";
 export function withoutVersionLines(text: string): string {
-  return text
-    .split("\n")
-    .map((l) => (parseVersionLine(l) === null ? l : `${VERSION_PLACEHOLDER}${l.endsWith("\r") ? "\r" : ""}`))
+  const lines = text.split("\n");
+  return lines
+    .map((l, i) => (isOurVersionLine(lines, i) ? `${VERSION_PLACEHOLDER}${l.endsWith("\r") ? "\r" : ""}` : l))
     .join("\n");
 }
 
-// The highest readable version in any version line of the given texts;
+// The highest readable version among our version lines in the given texts;
 // null when there is none (a stamp that is not a version never wins).
 export function highestVersionIn(...texts: string[]): string | null {
   let best: string | null = null;
   for (const text of texts) {
-    for (const line of text.split("\n")) {
-      const v = parseVersionLine(line);
-      if (v === null || compareSemver(v, v) === null) continue;
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (!isOurVersionLine(lines, i)) continue;
+      const v = parseVersionLine(lines[i])!;
+      if (compareSemver(v, v) === null) continue;
       if (best === null || compareSemver(v, best) === 1) best = v;
     }
   }
@@ -80,10 +91,9 @@ export function highestVersionIn(...texts: string[]): string | null {
 export function restampVersionLines(text: string, version: string): string {
   const lines = text.split("\n");
   for (let i = 1; i < lines.length; i++) {
-    if (parseVersionLine(lines[i]) === null) continue;
-    const begin = parseBeginMarker(lines[i - 1]);
-    if (begin === null) continue;
-    lines[i] = `${versionLine(begin.kind, version)}${lines[i].endsWith("\r") ? "\r" : ""}`;
+    if (!isOurVersionLine(lines, i)) continue;
+    const kind = parseBeginMarker(lines[i - 1])!.kind;
+    lines[i] = `${versionLine(kind, version)}${lines[i].endsWith("\r") ? "\r" : ""}`;
   }
   return lines.join("\n");
 }

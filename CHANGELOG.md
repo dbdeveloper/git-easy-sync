@@ -60,6 +60,14 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   "Recommended defaults" comments stay where they were — delete them
   if you like. Devices still on an older version leave the new block
   alone (they yield to the newer version stamp).
+- **`.obsidian/.gitignore` and a plugin's own `.gitignore` can now
+  produce a conflict copy** (2.0.3-beta+). Everything else in
+  `.obsidian/` still resolves on its own, but these files are written by
+  people, and the automatic choice could silently drop a rule you added
+  on another device. They merge like ordinary files; a real conflict
+  pauses Sync until you resolve it, exactly like a conflict in the
+  vault's root `.gitignore`. A difference only in the plugin's own
+  version lines is never a conflict.
 - **Root dot-files other than `.gitignore` stop syncing.** Earlier
   versions picked up every dot-file at the vault root
   (`.gitattributes`, `.editorconfig`, …) whether or not you asked

@@ -167,8 +167,10 @@ Use it, and note which runs you did.
       copies that arrived IDENTICAL — edit only the OLDER one → both copies stay, your edit intact.
 - [x] 🖥️ **A conflict in a dot-folder — its tab closes when you turn to it (new 2026-10-11).** Use a
       synced dot-folder OUTSIDE the config folder (e.g. `.test/`; Obsidian sends no file-tree events
-      there). NOT `.obsidian/`: there — at any depth, plugins/themes/snippets included — every collision
-      is resolved automatically and no conflict copy is ever made. Open the diff editor of the conflict,
+      there). NOT a settings file in `.obsidian/`: there — at any depth — a collision is resolved
+      automatically and no conflict copy is made. (Exception since 2026-10-24: `.obsidian/.gitignore` and a
+      plugin's `.gitignore` DO conflict like ordinary files, and such a conflict pauses Sync.) Open the diff
+      editor of the conflict,
       resolve it outside the editor (delete or rename the copy from a terminal / file manager), switch
       to another tab and back: the editor tab closes without a window and the Diff Panel shows.
 - [x] 🖥️ **Multi-device rotation:** run a realistic round-trip across 2+ devices.

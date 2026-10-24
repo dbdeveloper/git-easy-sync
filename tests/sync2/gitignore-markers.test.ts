@@ -266,3 +266,26 @@ describe("comparing / merging across version lines", () => {
     expect(restampVersionLines(versionLine("final", "1.0.0"), "2.0.0")).toBe(versionLine("final", "1.0.0"));
   });
 });
+
+describe("a STRAY version line (not right under a BEGIN) is the user's text", () => {
+  it("🔑 normalise → restamp leaves it exactly as it was; only the real ones change", () => {
+    const stray = versionLine("final", "1.0.0");
+    const text = [
+      beginMarker("final"),
+      versionLine("final", "2.0.3-beta"),
+      "*.x",
+      endMarker("final"),
+      "",
+      stray, // pasted by a user, or litter from an old file
+    ].join("\n");
+    const out = restampVersionLines(withoutVersionLines(text), "2.0.9-beta");
+    expect(out).toContain(stray);
+    expect(out).not.toContain("0.0.0");
+    expect(out).toContain(versionLine("final", "2.0.9-beta"));
+  });
+
+  it("does not count toward the highest version", () => {
+    const text = [beginMarker("final"), versionLine("final", "2.0.3-beta"), "", versionLine("final", "9.9.9")].join("\n");
+    expect(highestVersionIn(text)).toBe("2.0.3-beta");
+  });
+});
