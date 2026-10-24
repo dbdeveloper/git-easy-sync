@@ -320,8 +320,10 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       the five rules are inside the top block, the old comments are still there, `*.mytest` sits between the blocks,
       the copied comment line exists only ONCE (inside the block), the markers say `v2.0.3-beta`; one commit.
 - [ ] **T3. The old build yields to the newer one (B, desktop).** Press **Sync** in B → B downloads
-      `<vault>/.gitignore` with `v2.0.3-beta`. B's file keeps `v2.0.3-beta`; B's log has `gitignore section anomaly`
-      with `yielded-to-newer` for `.gitignore`; NO commit from B touches a `.gitignore`. **Sync** B again → nothing.
+      `<vault>/.gitignore` with `v2.0.3-beta`, and sends nothing. **Sync** B again — the `.gitignore` check runs at
+      the START of a Sync (before the download), so only now does the old build meet the newer marker → B's log has
+      `gitignore section anomaly` with `yielded-to-newer` and `"version":"2.0.3-beta"` for `.gitignore`; the file
+      keeps `v2.0.3-beta`; NO commit from B touches a `.gitignore`.
 - [ ] **T4. A clean merge of `<vault>/.gitignore` (C, phone).** Press **Sync** in C (its unsynced `*.phone-test`
       meets the new `v2.0.3-beta` markers) → C's file has BOTH `*.phone-test` and `v2.0.3-beta`; NO
       `.gitignore.conflict-from-*` file appears anywhere; no line is lost; C pushes the file with its line.
