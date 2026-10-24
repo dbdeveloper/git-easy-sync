@@ -709,6 +709,8 @@ export async function requestUrl(options: RequestUrlParam) {
 // Obsidian draws a Lucide icon into the element; tests only need the call
 // not to fail.
 export function setIcon(_el: unknown, _icon: string): void {}
+// Registers a custom SVG icon in Obsidian; nothing to draw in tests.
+export function addIcon(_id: string, _svg: string): void {}
 // Obsidian's setTooltip puts the text in aria-label (its tooltip reads it).
 export function setTooltip(el: HTMLElement, text: string): void {
   el.setAttribute?.("aria-label", text);

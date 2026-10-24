@@ -154,6 +154,51 @@ describe("formatTable — the whole log", () => {
   });
 
   it("an empty log is empty text", () => {
-    expect(formatTable([], UTC)).toEqual({ text: "", marks: [] });
+    expect(formatTable([], UTC)).toEqual({ text: "", marks: [], starts: [] });
+  });
+});
+
+// Owner, 2026-10-24: a COMPACT mode — one entry, one line, no separators,
+// the data as one-line JSON after the message, line breaks in the message
+// shown as ⏎. The columns stay (owner: option a).
+describe("compact mode", () => {
+  const C = { ...UTC, compact: true };
+
+  it("🔑 one entry is one line: columns, message, then the data as one-line JSON", () => {
+    const b = formatEntryBlock(entry({ data: { pushedCommits: 0, pulled: 1, nested: { a: [1, 2] } } }), C);
+    expect(b.text).toBe(
+      '2026-10-07 | 11:42:03.120 | INFO  | Sync2 drain done {"pushedCommits":0,"pulled":1,"nested":{"a":[1,2]}}',
+    );
+    expect(b.text.slice(b.marks[0].from, b.marks[0].to)).toBe("INFO");
+  });
+
+  it("an entry without data: no trailing space", () => {
+    expect(formatEntryBlock(entry(), C).text).toBe("2026-10-07 | 11:42:03.120 | INFO  | Sync2 drain done");
+  });
+
+  it("🔑 line breaks in the message become ⏎; in the data JSON keeps them escaped", () => {
+    const b = formatEntryBlock(entry({ message: "a\nb", data: { stack: "x\ny" } }), C);
+    expect(b.text).toBe('2026-10-07 | 11:42:03.120 | INFO  | a⏎b {"stack":"x\\ny"}');
+    expect(b.text.split("\n")).toHaveLength(1);
+  });
+
+  it("🔑 the table has NO separators; a line that is not a record stays as is", () => {
+    const t = formatTable([entry({ message: "a" }), { kind: "raw", raw: "plain" }, entry({ level: "WARN", message: "b" })], C);
+    const lines = t.text.split("\n");
+    expect(lines).toHaveLength(3);
+    expect(lines).not.toContain(SEPARATOR);
+    expect(lines[0]).toContain("| INFO  | a");
+    expect(lines[1]).toBe("plain");
+    expect(lines[2]).toContain("| WARN  | b");
+    expect(t.marks.map((m) => t.text.slice(m.from, m.to))).toEqual(["INFO", "WARN"]);
+  });
+
+  // For keeping the same entry at the top of the screen when the mode is
+  // switched: the line each shown item starts on.
+  it("🔑 the table reports the line each item starts on, in both modes", () => {
+    const items = [entry({ message: "a", data: { x: 1 } }), GAP, entry({ message: "b" })];
+    expect(formatTable(items, C).starts).toEqual([0, 1, 2]);
+    // expanded: separator(0) a(1) {(2) "x": 1(3) }(4) …(5) separator(6) b(7)
+    expect(formatTable(items, UTC).starts).toEqual([0, 5, 6]);
   });
 });

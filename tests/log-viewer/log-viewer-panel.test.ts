@@ -8,9 +8,9 @@
 // the logger subscription — also when it is closed before the file read
 // has finished, which must then draw nothing.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EditorView } from "@codemirror/view";
-import { LogViewerPanel, isLastLineVisible } from "../../src/log-viewer/log-viewer-panel";
+import { LogViewerPanel, isLastLineVisible, LOG_VIEW_MODE_KEY } from "../../src/log-viewer/log-viewer-panel";
 import type { RecentLine } from "../../src/log-viewer/log-parse";
 
 // Obsidian's HTMLElement helpers, the subset the panel uses (happy-dom has none).
@@ -96,6 +96,8 @@ function deps(text: string, readGate?: Promise<void>, size?: number) {
 const status = (root: HTMLElement) => root.querySelector(".ges-log-status")?.textContent;
 
 describe("LogViewerPanel", () => {
+  beforeEach(() => localStorage.clear());
+
   it("mounts, shows the entries, and takes live ones", async () => {
     const d = deps(`${line(1)}\n${line(2)}\n`);
     const root = document.createElement("div");
@@ -382,6 +384,7 @@ describe("LogViewerPanel", () => {
   });
 
   it("separator lines carry the class that draws the full-width rule", async () => {
+    localStorage.setItem(LOG_VIEW_MODE_KEY, "expanded");
     const d = deps(`${line(1)}\n${line(2)}\n`);
     const root = document.createElement("div");
     document.body.appendChild(root);
@@ -391,6 +394,70 @@ describe("LogViewerPanel", () => {
     expect(seps.length).toBe(2);
     expect(seps[0].textContent).toMatch(/^[ |]+$/);
     panel.destroy();
+  });
+
+  // Owner, 2026-10-24: a compact mode — one entry per line, no separators
+  // — the DEFAULT; a button in front of the filter switches it, and the
+  // choice is remembered on this device (localStorage, not data.json:
+  // it must not travel with sync).
+  describe("compact / expanded mode", () => {
+    const lineD = (n: number) =>
+      JSON.stringify({ t: "2026-10-07T10:00:00.000Z", l: "INFO", m: `m${n}`, d: { n } });
+    async function open() {
+      const d = deps(`${lineD(1)}\n${lineD(2)}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const panel = new LogViewerPanel(d.deps);
+      await panel.mount(root);
+      const btn = root.querySelector<HTMLButtonElement>(".ges-log-mode-toggle")!;
+      const text = () => (panel as unknown as { editor: EditorView }).editor.state.doc.toString();
+      return { d, root, panel, btn, text };
+    }
+
+    it("🔑 compact is the default: one line per entry, no separators", async () => {
+      const w = await open();
+      expect(w.text().split("\n")).toHaveLength(2);
+      expect(w.text()).toContain('| m1 {"n":1}');
+      expect(w.root.querySelectorAll(".cm-line.ges-log-sep")).toHaveLength(0);
+      w.panel.destroy();
+    });
+
+    it("🔑 the button is the FIRST control, before the filter; its hint names the other mode", async () => {
+      const w = await open();
+      expect(w.root.querySelector(".ges-log-toolbar")!.firstElementChild).toBe(w.btn);
+      expect(w.btn.getAttribute("aria-label")).toBe("Switch to expanded mode");
+      w.btn.click();
+      expect(w.btn.getAttribute("aria-label")).toBe("Switch to compact mode");
+      w.panel.destroy();
+    });
+
+    it("🔑 a click switches the view, and back", async () => {
+      const w = await open();
+      w.btn.click();
+      expect(w.text().split("\n").length).toBeGreaterThan(2);
+      expect(w.root.querySelectorAll(".cm-line.ges-log-sep").length).toBe(2);
+      w.btn.click();
+      expect(w.text().split("\n")).toHaveLength(2);
+      w.panel.destroy();
+    });
+
+    it("🔑 the mode is remembered on this device for the next viewer", async () => {
+      const a = await open();
+      a.btn.click(); // → expanded
+      a.panel.destroy();
+      expect(localStorage.getItem(LOG_VIEW_MODE_KEY)).toBe("expanded");
+      const b = await open();
+      expect(b.btn.getAttribute("aria-label")).toBe("Switch to compact mode");
+      expect(b.root.querySelectorAll(".cm-line.ges-log-sep").length).toBe(2);
+      b.panel.destroy();
+    });
+
+    it("live entries follow the mode: compact appends one line, no separator", async () => {
+      const w = await open();
+      w.d.subs.forEach((fn) => fn({ seq: 1, line: lineD(3) }));
+      expect(w.text().split("\n")).toHaveLength(3);
+      w.panel.destroy();
+    });
   });
 
   // Owner, 2026-10-08: Settings → Logging acts on EVERY open viewer.

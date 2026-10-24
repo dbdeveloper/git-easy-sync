@@ -64,6 +64,10 @@ export interface LevelMark {
 export interface FormatOptions {
   // "local" (default) = the user's own clock; "utc" for tests.
   timeZone?: "local" | "utc";
+  // COMPACT mode (owner, 2026-10-24): one entry, one line — the data as
+  // one-line JSON after the message, a line break in the message as ⏎,
+  // no separators between entries. The columns stay.
+  compact?: boolean;
 }
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -84,6 +88,16 @@ function dateTime(iso: string, utc: boolean): { date: string; time: string } {
   };
 }
 
+// The data as ONE line (compact mode). JSON escapes line breaks inside
+// strings, so the result never spans lines.
+function dataInline(data: unknown): string {
+  try {
+    return JSON.stringify(data) ?? String(data);
+  } catch {
+    return String(data);
+  }
+}
+
 function dataLines(data: unknown): string[] {
   if (data === undefined) return [];
   let json: string;
@@ -102,8 +116,16 @@ function dataLines(data: unknown): string[] {
 export function entryColumns(e: LogEntry, opts: FormatOptions = {}): string[] {
   if (e.kind === "raw") return [e.raw];
   const { date, time } = dateTime(e.timestamp, opts.timeZone === "utc");
+  if (opts.compact) return [date, time, e.level, compactMessage(e)];
   const data = dataLines(e.data);
   return [date, time, e.level, [e.message, ...data].join("\n")];
+}
+
+// The message column of a compact line: the message with ⏎ for its line
+// breaks, then the data as one-line JSON.
+function compactMessage(e: Extract<LogEntry, { kind: "entry" }>): string {
+  const message = e.message.replace(/\r?\n/g, "⏎");
+  return e.data === undefined ? message : `${message} ${dataInline(e.data)}`;
 }
 
 const BLANK_PREFIX =
@@ -122,6 +144,8 @@ export function formatEntryBlock(
   const { level, message, data } = e;
   const head = `${date.padEnd(DATE_W)} | ${time.padEnd(TIME_W)} | `;
   const levelCell = level.slice(0, LEVEL_W).padEnd(LEVEL_W);
+  const mark = { from: head.length, to: head.length + Math.min(level.length, LEVEL_W), level };
+  if (opts.compact) return { text: `${head}${levelCell} | ${compactMessage(e)}`, marks: [mark] };
   const [first, ...more] = message.split("\n");
   const lines = [
     `${head}${levelCell} | ${first}`,
@@ -140,23 +164,29 @@ export function formatEntryBlock(
 export function formatTable(
   items: Array<LogEntry | GapItem>,
   opts: FormatOptions = {},
-): { text: string; marks: LevelMark[] } {
+): { text: string; marks: LevelMark[]; starts: number[] } {
   const parts: string[] = [];
   const marks: LevelMark[] = [];
+  // The line each item starts on (its separator, if it has one) — lets
+  // the view keep the same entry at the top when the mode is switched.
+  const starts: number[] = [];
   let offset = 0;
+  let line = 0;
   const push = (s: string) => {
     parts.push(s);
     offset += s.length + 1; // + the "\n" that joins it to the next
+    line += s.split("\n").length;
   };
   for (const item of items) {
+    starts.push(line);
     if (item.kind === "gap") {
       push("…");
       continue;
     }
-    if (item.kind === "entry") push(SEPARATOR);
+    if (item.kind === "entry" && !opts.compact) push(SEPARATOR);
     const b = formatEntryBlock(item, opts);
     for (const m of b.marks) marks.push({ ...m, from: m.from + offset, to: m.to + offset });
     push(b.text);
   }
-  return { text: parts.join("\n"), marks };
+  return { text: parts.join("\n"), marks, starts };
 }

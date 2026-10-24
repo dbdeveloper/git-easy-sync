@@ -57,6 +57,10 @@ export interface RenderResult {
   shown: number; // entries after the filter (gap markers not counted)
   total: number;
   error: string | null; // "invalid expression: …" — everything is shown then
+  // The line each shown item (gap markers included) starts on, and the
+  // items themselves — to keep the same entry at the top across a mode switch.
+  starts: number[];
+  items: LogItem[];
 }
 
 export function renderLog(
@@ -91,6 +95,8 @@ export function renderLog(
     shown: tidy.filter((i) => i.kind !== "gap").length,
     total,
     error: f.ok ? null : f.error,
+    starts: table.starts,
+    items: tidy,
   };
 }
 
@@ -158,10 +164,22 @@ export function renderAppend(
   if (!passes(entry)) return null;
   const lead = docLength === 0 ? "" : "\n";
   const block = formatEntryBlock(entry, format);
-  const head = entry.kind === "entry" ? `${lead}${SEPARATOR}\n` : lead;
+  const head = entry.kind === "entry" && !format.compact ? `${lead}${SEPARATOR}\n` : lead;
   const start = docLength + head.length;
   return {
     insert: head + block.text,
     marks: block.marks.map((m) => ({ ...m, from: m.from + start, to: m.to + start })),
   };
+}
+
+// Switching compact / expanded keeps the entry that was at the top of the
+// screen at the top (owner, 2026-10-24). `oldStarts` / `newStarts` are the
+// lines each shown item starts on before and after (renderLog's `starts`,
+// same items in the same order); `topLine` is the first line in view.
+// Returns the line to put at the top.
+export function sameItemLine(oldStarts: number[], newStarts: number[], topLine: number): number {
+  let k = -1;
+  for (let i = 0; i < oldStarts.length && oldStarts[i] <= topLine; i++) k = i;
+  if (k < 0 || k >= newStarts.length) return 0;
+  return newStarts[k];
 }

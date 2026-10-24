@@ -15,7 +15,7 @@
 // so the columns stay aligned. Opened ONLY from Settings → Logging
 // (spec §2.16).
 
-import { Notice, setIcon } from "obsidian";
+import { Notice, addIcon, setIcon } from "obsidian";
 import { EditorState, StateEffect, StateField } from "@codemirror/state";
 import {
   Decoration,
@@ -32,9 +32,9 @@ import {
   searchKeymap,
   searchPanelOpen,
 } from "@codemirror/search";
-import { LiveFeed, openLog, renderAppend, renderLog, type LogItem } from "./log-model";
+import { LiveFeed, openLog, renderAppend, renderLog, sameItemLine, type LogItem } from "./log-model";
 import { makeFilter } from "./log-filter";
-import { SEPARATOR, separatorsAsDashes, type LevelMark } from "./log-format";
+import { SEPARATOR, separatorsAsDashes, type FormatOptions, type LevelMark } from "./log-format";
 import type { LogFileAdapter } from "./log-load";
 import { parseLogLine, type LogEntry, type RecentLine } from "./log-parse";
 import { formatLogSize } from "../settings/log-size";
@@ -150,11 +150,52 @@ const copyWithDashes = EditorView.domEventHandlers({
   },
 });
 
+// Compact / expanded (owner, 2026-10-24). Compact — one entry per line —
+// is the default. The choice is remembered on THIS device: localStorage,
+// not data.json, which travels with sync. Storage can be missing or throw
+// (private window, cleared site data): then the default holds.
+export const LOG_VIEW_MODE_KEY = "git-easy-sync-log-viewer-mode";
+
+function readCompact(): boolean {
+  try {
+    return window.localStorage.getItem(LOG_VIEW_MODE_KEY) !== "expanded";
+  } catch {
+    return true;
+  }
+}
+
+function saveCompact(compact: boolean): void {
+  try {
+    window.localStorage.setItem(LOG_VIEW_MODE_KEY, compact ? "compact" : "expanded");
+  } catch {
+    // not remembered — the view still switches
+  }
+}
+
+// The button shows the mode a click switches TO (owner): many dense
+// lines = "compact", three loose ones = "expanded". Drawn here because
+// no Lucide icon shows exactly that.
+const ICON_COMPACT = "ges-log-compact";
+const ICON_EXPANDED = "ges-log-expanded";
+let iconsAdded = false;
+function addModeIcons(): void {
+  if (iconsAdded) return;
+  iconsAdded = true;
+  const lines = (ys: number[]) =>
+    ys.map((y) => `<line x1="15" y1="${y}" x2="85" y2="${y}" stroke="currentColor" stroke-width="7" stroke-linecap="round"/>`).join("");
+  addIcon(ICON_COMPACT, lines([18, 31, 44, 57, 70, 83]));
+  addIcon(ICON_EXPANDED, lines([22, 50, 78]));
+}
+
 export class LogViewerPanel {
   private editor: EditorView | null = null;
   private items: LogItem[] = [];
   private query = "";
   private switches = { caseSensitive: false, wholeWord: false, regexp: false };
+  private compact = readCompact();
+  private modeBtn: HTMLElement | null = null;
+  // The line each shown item starts on in the current text (renderLog).
+  private starts: number[] = [];
   private statusEl!: HTMLElement;
   private errorEl!: HTMLElement;
   private bodyEl!: HTMLElement;
@@ -269,7 +310,18 @@ export class LogViewerPanel {
     this.editor = null;
   }
 
+  private format(): FormatOptions {
+    return { compact: this.compact };
+  }
+
   private buildToolbar(bar: HTMLElement): void {
+    // First, before the filter (owner, 2026-10-24).
+    addModeIcons();
+    const modeBtn = bar.createEl("button", { cls: "ges-log-action ges-log-mode-toggle" });
+    modeBtn.addEventListener("click", () => this.switchMode());
+    this.modeBtn = modeBtn;
+    this.showMode();
+
     const input = bar.createEl("input", {
       cls: "ges-log-filter",
       attr: {
@@ -332,6 +384,34 @@ export class LogViewerPanel {
 
     this.statusEl = bar.createSpan("ges-log-status");
     this.errorEl = bar.createSpan("ges-log-error");
+  }
+
+  private showMode(): void {
+    if (!this.modeBtn) return;
+    setIcon(this.modeBtn, this.compact ? ICON_EXPANDED : ICON_COMPACT);
+    this.modeBtn.setAttr("aria-label", this.compact ? "Switch to expanded mode" : "Switch to compact mode");
+  }
+
+  // Compact ⇄ expanded. Following the end → stay at the end; otherwise
+  // the entry at the top of the screen stays at the top (owner, 2026-10-24).
+  private switchMode(): void {
+    this.compact = !this.compact;
+    saveCompact(this.compact);
+    this.showMode();
+    const ed = this.editor;
+    if (!ed) return;
+    const oldStarts = this.starts;
+    const top = ed.state.doc.lineAt(ed.lineBlockAtHeight(ed.scrollDOM.scrollTop).from).number - 1;
+    this.render(false);
+    if (this.following) {
+      this.scrollToBottom();
+      return;
+    }
+    const line = sameItemLine(oldStarts, this.starts, top);
+    const doc = ed.state.doc;
+    ed.dispatch({
+      effects: EditorView.scrollIntoView(doc.line(Math.min(line + 1, doc.lines)).from, { y: "start" }),
+    });
   }
 
   // Open (or re-open after a gap). A gap triggers ONE background re-read:
@@ -406,7 +486,7 @@ export class LogViewerPanel {
     this.total += 1;
     const ed = this.editor;
     if (ed) {
-      const add = renderAppend(entry, this.passes, ed.state.doc.length);
+      const add = renderAppend(entry, this.passes, ed.state.doc.length, this.format());
       if (add) {
         const end = ed.state.doc.length;
         ed.dispatch({
@@ -415,6 +495,9 @@ export class LogViewerPanel {
         });
         this.shownText += add.insert;
         this.shown += 1;
+        // The new item starts on the line after the separator-less lead
+        // "\n" (compact) or on its separator (expanded).
+        this.starts.push(ed.state.doc.lineAt(end).number - (end === 0 ? 1 : 0));
         if (this.following) this.scrollToBottom();
       }
     }
@@ -466,9 +549,10 @@ export class LogViewerPanel {
   }
 
   private render(scrollToEnd: boolean): void {
-    const f = makeFilter(this.query, this.switches);
+    const f = makeFilter(this.query, this.switches, this.format());
     this.passes = f.ok ? f.test : () => true;
-    const v = renderLog(this.items, this.query, this.switches);
+    const v = renderLog(this.items, this.query, this.switches, this.format());
+    this.starts = v.starts;
     this.shownText = v.text;
     this.shown = v.shown;
     this.total = v.total;

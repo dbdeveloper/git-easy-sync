@@ -659,7 +659,9 @@ Three buttons live in Settings under **.gitignore**:
   `<vault>/git-easy-sync-crash-<device label>.log` (`…-crash-unknown.log`
   when it failed before reading its settings).
 - **View log** — opens the log as a table: filter by column (`|`
-  separates the pieces, left to right), search, copy. New entries
+  separates the pieces, left to right), search, copy. Compact by
+  default (one entry per line); the first button switches to the
+  expanded view with the data laid out under each message. New entries
   appear as they are written. Its own window on desktop, full screen
   on a phone. Shown only while logging is on.
 - **Clean logs** — empties the log; the description shows its live

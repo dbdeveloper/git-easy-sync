@@ -185,6 +185,9 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   new entries appear live. Its own window on desktop, full screen on
   a phone. *Clean logs* shows the live log size. A line that is not a
   log record is shown as plain text, as is.
+  Compact mode by default — one entry per line, the data as one-line
+  JSON; the first button switches to the expanded table and back, and
+  the choice is remembered on the device.
 - **A proper editor for the root `.gitignore`** (Settings →
   .gitignore → *Open*), behind a short warning shown every time. It
   saves only a real change and refuses to overwrite a version a sync

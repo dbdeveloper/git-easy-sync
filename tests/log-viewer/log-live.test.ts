@@ -3,7 +3,7 @@
 // AGPL-3.0 — see LICENSE.
 
 import { describe, it, expect } from "vitest";
-import { LiveFeed, renderAppend, renderLog } from "../../src/log-viewer/log-model";
+import { LiveFeed, renderAppend, renderLog, sameItemLine } from "../../src/log-viewer/log-model";
 import { makeFilter } from "../../src/log-viewer/log-filter";
 import type { RecentLine } from "../../src/log-viewer/log-parse";
 import type { LogEntry } from "../../src/log-viewer/log-parse";
@@ -118,7 +118,33 @@ describe("renderAppend", () => {
     expect(base.text + add.insert).toBe(renderLog([a, raw], "", none, UTC).text);
   });
 
+  it("🔑 compact mode: appending gives the same text as rendering everything, no separator", () => {
+    const C = { ...UTC, compact: true };
+    const a = entry("INFO", "first");
+    const b = entry("ERROR", "second");
+    const base = renderLog([a], "", none, C);
+    const add = renderAppend(b, pass(""), base.text.length, C)!;
+    expect(add.insert).toBe("\n" + renderLog([b], "", none, C).text);
+    expect(base.text + add.insert).toBe(renderLog([a, b], "", none, C).text);
+  });
+
   it("🔑 an entry the filter rejects is not appended", () => {
     expect(renderAppend(entry("INFO", "x"), pass("error"), 10, UTC)).toBeNull();
+  });
+});
+
+// Owner, 2026-10-24: switching compact/expanded keeps the entry that was
+// at the top of the screen at the top.
+describe("sameItemLine — the entry at the top stays at the top", () => {
+  it("🔑 the line of the item that contained the old top line", () => {
+    // expanded: items start on lines 0, 5, 6; compact: 0, 1, 2
+    expect(sameItemLine([0, 5, 6], [0, 1, 2], 3)).toBe(0); // inside item 0
+    expect(sameItemLine([0, 5, 6], [0, 1, 2], 5)).toBe(1);
+    expect(sameItemLine([0, 5, 6], [0, 1, 2], 7)).toBe(2);
+    expect(sameItemLine([0, 1, 2], [0, 5, 6], 2)).toBe(6); // and back
+  });
+
+  it("an empty table → line 0", () => {
+    expect(sameItemLine([], [], 4)).toBe(0);
   });
 });

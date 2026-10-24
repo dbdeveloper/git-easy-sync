@@ -106,6 +106,15 @@ describe("makeFilter — switches", () => {
     if (!f.ok) expect(f.error).toMatch(/invalid/i);
   });
 
+  // The filter matches the text AS DRAWN — in compact mode the data is
+  // one-line JSON, so what the user sees is what the filter finds.
+  it("🔑 compact mode: the message column is the message + one-line JSON", () => {
+    const f = makeFilter('"pulled":453', plain, { ...UTC, compact: true });
+    expect(f.ok && f.test(DRAIN)).toBe(true);
+    const g = makeFilter('"pulled":453', plain, UTC); // expanded prints "pulled": 453
+    expect(g.ok && g.test(DRAIN)).toBe(false);
+  });
+
   it("a regexp special character in PLAIN mode is just a character", () => {
     expect(ok("(", e("INFO", "a (b) c"))).toBe(true);
     expect(ok("a.c", e("INFO", "abc"))).toBe(false);
