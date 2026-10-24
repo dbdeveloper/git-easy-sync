@@ -11,12 +11,13 @@ import {
   writeRemoteFile,
 } from "../../../helpers";
 import { createSync2Client, Sync2TestClient } from "../helpers";
-import { beginMarker } from "../../../../../src/sync2/gitignore-markers";
+import { beginMarker, versionLine } from "../../../../../src/sync2/gitignore-markers";
 import { HARNESS_PLUGIN_VERSION } from "../helpers";
 
 // §5.11 — the BEGIN line carries the writer's version, so what lands on
 // disk here is the HARNESS's stamp, not the unversioned constant.
-const INVARIANTS_BEGIN = beginMarker("invariants", HARNESS_PLUGIN_VERSION);
+// The constant BEGIN and the version line under it (2026-10-24).
+const INVARIANTS_BEGIN = `${beginMarker("invariants")}\n${versionLine("invariants", HARNESS_PLUGIN_VERSION)}`;
 
 // DOT-FILES §8.0 — the end-to-end half the unit tests cannot give.
 //

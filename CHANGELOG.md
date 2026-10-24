@@ -41,12 +41,15 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   `# ===== git-easy-sync invariants — DO NOT EDIT =====` (with a
   long dash) and `# ===== end of invariants =====`. Do this in
   `<vault>/.gitignore` and in `<vault>/.obsidian/.gitignore`.
-- **Expect one `.gitignore` commit after every upgrade.** The
-  first line of each managed block now carries the version of the
-  plugin that wrote it (`# ===== git-easy-sync invariants
-  v<version> - DO NOT EDIT =====`), so the first sync after an
-  upgrade rewrites those files. That is what lets an older device
-  leave alone the rules a newer one wrote — it is not a defect.
+- **Expect one `.gitignore` commit after every upgrade.** Each
+  managed block carries the version of the plugin that wrote it, in
+  its own line right under the block's first line:
+  `# ===== plugin version: <version> =====`. The first sync after an
+  upgrade rewrites those lines. That is what lets an older device
+  leave alone the rules a newer one wrote — it is not a defect. The
+  first line of a block never changes, so your own rules right above
+  it merge cleanly with such an update instead of producing a
+  conflict copy.
 - **`.obsidian/.gitignore` now has two managed blocks (2.0.3-beta).**
   The plugin-folder allowlist (`plugins/*/*` and the `!` lines for
   `main.js`, `manifest.json`, `styles.css`) used to be "Recommended

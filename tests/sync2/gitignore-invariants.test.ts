@@ -29,6 +29,7 @@ import {
   beginMarker,
   foreignSilencerComment,
   ownedFileHeader,
+  versionLine,
 } from "../../src/sync2/gitignore-markers";
 import { isUnhonouredGitignore } from "../../src/sync2/change-detector";
 import { calculateGitBlobSHA } from "../../src/utils";
@@ -43,8 +44,10 @@ const TEST_VERSION = "2.1.0";
 // `FINAL_BEGIN` constants still name the same sections and are still
 // recognised — they are used below wherever a fixture stands in for a
 // file an OLDER build left behind.
-const I_BEGIN = beginMarker("invariants", TEST_VERSION);
-const F_BEGIN = beginMarker("final", TEST_VERSION);
+// Since 2026-10-24 that is TWO lines: the constant BEGIN and the version
+// line under it (PLUGIN-UPDATE-COMPAT §5.11).
+const I_BEGIN = `${beginMarker("invariants")}\n${versionLine("invariants", TEST_VERSION)}`;
+const F_BEGIN = `${beginMarker("final")}\n${versionLine("final", TEST_VERSION)}`;
 
 function fixture(syncConfigDir = true, pushDataJson = false) {
   const root = path.join(
@@ -678,7 +681,8 @@ describe("§5.11 the yield: a section stamped by a NEWER plugin is left alone", 
 
   const newerRootFile = () =>
     [
-      beginMarker("invariants", "9.9.9"),
+      beginMarker("invariants"),
+      versionLine("invariants", "9.9.9"),
       "# rules this build has never heard of",
       ".*",
       "!/.future-thing",
@@ -765,7 +769,8 @@ describe("§5.11 the yield: a section stamped by a NEWER plugin is left alone", 
     fs.writeFileSync(
       rootPath,
       [
-        beginMarker("invariants", "1.0.0"),
+        beginMarker("invariants"),
+        versionLine("invariants", "1.0.0"),
         "ancient-rule",
         INVARIANTS_END,
         "",

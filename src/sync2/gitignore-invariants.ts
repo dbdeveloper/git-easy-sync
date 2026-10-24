@@ -17,6 +17,8 @@ import {
   endMarker,
   foreignSilencerComment,
   newerVersionIn,
+  versionLine,
+  versionLinePattern,
   ownedFileHeader,
   parseForeignSilencer,
 } from "./gitignore-markers";
@@ -38,15 +40,11 @@ import {
 // sections already on disk are NOT recognised and are removed by hand; no
 // legacy-marker list lives in this code, by decision.
 //
-// ⚙️ 2026-09-30 (PLUGIN-UPDATE-COMPAT §5.11): the BEGIN line we WRITE now
-// carries this build's version, and recognition moved to a frozen regexp
-// whose version part is optional. The constants below are the
-// UNVERSIONED form — the identity of the section, byte-identical to what
-// every existing install already holds. What goes on disk comes from
-// `beginMarker(kind, version)`; what is recognised comes from
-// `beginPattern(kind)`. Both live in gitignore-markers.ts, now the one
-// place that knows the shape of a marker.
-export const INVARIANTS_BEGIN = beginMarker("invariants", null);
+// ⚙️ PLUGIN-UPDATE-COMPAT §5.11: the version this build writes lives in
+// the VERSION LINE right under BEGIN (since 2026-10-24; before that it
+// was inside BEGIN). BEGIN and END are constants, matched exactly. The
+// shapes live in gitignore-markers.ts, the one place that knows them.
+export const INVARIANTS_BEGIN = beginMarker("invariants");
 export const INVARIANTS_END = endMarker("invariants");
 
 // Markers of the managed `final` section — the one nothing may override.
@@ -60,7 +58,7 @@ export const INVARIANTS_END = endMarker("invariants");
 // version lives in the owned-file HEADER instead (§5.11), which is what
 // the yield rule reads there. Two stamps in one file would be two
 // answers to one question.
-export const FINAL_BEGIN = beginMarker("final", null);
+export const FINAL_BEGIN = beginMarker("final");
 export const FINAL_END = endMarker("final");
 
 // Markers + body are DELIBERATELY separate values (DOT-FILES §3.1.3). The
@@ -806,14 +804,16 @@ export default class GitignoreInvariants {
     if (path === this.rootGitignorePath) {
       return {
         invariants: {
-          begin: beginMarker("invariants", this.pluginVersion),
+          begin: beginMarker("invariants"),
           beginPattern: beginPattern("invariants"),
+          version: { line: versionLine("invariants", this.pluginVersion), pattern: versionLinePattern() },
           end: INVARIANTS_END,
           body: ROOT_INVARIANTS_BODY,
         },
         final: {
-          begin: beginMarker("final", this.pluginVersion),
+          begin: beginMarker("final"),
           beginPattern: beginPattern("final"),
+          version: { line: versionLine("final", this.pluginVersion), pattern: versionLinePattern() },
           end: FINAL_END,
           body: rootFinalBody(this.configDir),
         },
@@ -825,14 +825,16 @@ export default class GitignoreInvariants {
       // rules at the bottom (absolute).
       return {
         invariants: {
-          begin: beginMarker("invariants", this.pluginVersion),
+          begin: beginMarker("invariants"),
           beginPattern: beginPattern("invariants"),
+          version: { line: versionLine("invariants", this.pluginVersion), pattern: versionLinePattern() },
           end: INVARIANTS_END,
           body: CONFIG_DIR_INVARIANTS_BODY,
         },
         final: {
-          begin: beginMarker("final", this.pluginVersion),
+          begin: beginMarker("final"),
           beginPattern: beginPattern("final"),
+          version: { line: versionLine("final", this.pluginVersion), pattern: versionLinePattern() },
           end: FINAL_END,
           body: configDirFinalBody({ syncConfigDir: this.syncConfigDir() }),
         },

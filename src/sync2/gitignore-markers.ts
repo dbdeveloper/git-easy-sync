@@ -15,65 +15,82 @@
 // code, never observed — the plugin rename accidentally shielded us,
 // because two DIFFERENT marker texts simply coexist.
 //
-// THE FIX. The BEGIN marker carries the plugin version, and a plugin
-// leaves alone any section stamped NEWER than itself. The cycle then has
-// nowhere to go: the older device writes nothing, the newer one is
-// already canonical.
+// THE FIX. Each section carries the plugin version, and a plugin leaves
+// alone any file stamped NEWER than itself. The cycle then has nowhere to
+// go: the older device writes nothing, the newer one is already canonical.
 //
-// 🔒 WHAT IS FROZEN IS THE RECOGNIZER, NOT THE LINE. This is the same
-// compatibility contract DOT-FILES §3.1.3 states for the literal text,
-// moved up one level: the regexp must keep matching BOTH the pre-stamp
-// form (everything already on disk and in every repo) and the stamped
-// one. Narrowing it later has exactly the consequence the frozen literal
-// had — an existing section stops being recognised, a second one is
-// appended, and the stale block can override the fresh one by
-// last-match-wins.
-//
-// ⚠️ END IS NOT VERSIONED, deliberately. Two carriers of one value would
-// need a rule for what happens when they disagree (a hand edit, a torn
-// write, a merged foreign tail) and there is nothing to derive that rule
-// from. A versioned END would also have to be matched loosely, or a
-// section whose BEGIN is new and whose END is old would never pair and
-// would orphan. Unversioned, the END line is byte-identical across all
-// versions — it is the one part that always pairs.
+// ⚙️ 2026-10-24 (owner): the version is NOT in the BEGIN marker any more —
+// it is the line right under it (see "The VERSION LINE" below). BEGIN and
+// END are now both CONSTANT, byte-identical in every version, and are
+// recognised by exact text only. No public release ever had a version in
+// BEGIN (the last release, 2.0.2-beta, predates the stamp), so the old
+// stamped spelling is not recognised at all: on a dev vault it is left in
+// the user's zone as plain text (owner: acceptable).
 
 import { compareSemver } from "./semver";
 
 export type SectionKind = "invariants" | "final";
 
-// The line we WRITE. `version === null` produces the pre-stamp spelling
-// byte for byte — that is what makes the change backward-compatible in
-// the only direction that matters: what is already on disk.
-export function beginMarker(kind: SectionKind, version: string | null): string {
-  const stamp = version === null ? "" : `v${version} `;
-  return `# ===== git-easy-sync ${kind} ${stamp}- DO NOT EDIT =====`;
+export function beginMarker(kind: SectionKind): string {
+  return `# ===== git-easy-sync ${kind} - DO NOT EDIT =====`;
 }
 
 export function endMarker(kind: SectionKind): string {
   return `# ===== end of git-easy-sync ${kind} =====`;
 }
 
-// 🔒 THE FROZEN RECOGNIZER. The version group is optional; anything else
-// is exact. `[^\s]+` rather than a semver shape on purpose: a stamp we
-// cannot parse must still be RECOGNISED as our marker (so the section is
-// replaced rather than duplicated) — judging whether it is a usable
-// version is a separate question, answered in `newerSectionVersion`.
-const BEGIN_RE =
-  /^# ===== git-easy-sync (invariants|final) (?:v([^\s]+) )?- DO NOT EDIT =====$/;
+// Exact BEGIN, trailing whitespace aside (git ignores it too).
+const BEGIN_RE = /^# ===== git-easy-sync (invariants|final) - DO NOT EDIT =====$/;
 
 export function beginPattern(kind: SectionKind): RegExp {
-  return new RegExp(
-    `^# ===== git-easy-sync ${kind} (?:v[^\\s]+ )?- DO NOT EDIT =====$`,
-  );
+  return new RegExp(`^# ===== git-easy-sync ${kind} - DO NOT EDIT =====$`);
 }
 
-export function parseBeginMarker(
-  line: string,
-): { kind: SectionKind; version: string | null } | null {
+export function parseBeginMarker(line: string): { kind: SectionKind } | null {
   const m = BEGIN_RE.exec(line.replace(/\s+$/, ""));
-  if (m === null) return null;
-  return { kind: m[1] as SectionKind, version: m[2] ?? null };
+  return m === null ? null : { kind: m[1] as SectionKind };
 }
+
+// ── The VERSION LINE (owner, 2026-10-24) ────────────────────────────
+//
+// Since 2026-10-24 the BEGIN marker is written WITHOUT a version, and the
+// version sits in its own line right under it:
+//
+//   # ===== git-easy-sync final - DO NOT EDIT =====
+//   # ===== plugin version: 2.0.9-beta        =====
+//
+// Field finding (three vaults, one repo): a user rule added right above
+// `final` on one device and a version bump of that very BEGIN line on
+// another are changes to ADJACENT lines, and the drain's line merge made a
+// `.gitignore.conflict-from-*` — after every release, for any device with
+// an unsynced edit near a marker. A BEGIN line that never changes is a
+// constant between the user's zone and the line that does.
+//
+// Aligned: the closing `=====` sits under the BEGIN marker's (owner); a
+// version too long for that keeps one space. Recognised by PATTERN, any
+// version and any padding, so another version's line is REPLACED, not
+// duplicated — the same reason BEGIN is matched by pattern.
+const VERSION_LINE_RE = /^# ===== plugin version: ([^\s]+) +=====$/;
+
+export function versionLine(kind: SectionKind, version: string): string {
+  const width = beginMarker(kind).length;
+  const head = `# ===== plugin version: ${version} `;
+  const tail = "=====";
+  return head.length + tail.length >= width
+    ? `${head}${tail}`
+    : `${head}${" ".repeat(width - head.length - tail.length)}${tail}`;
+}
+
+export function versionLinePattern(): RegExp {
+  return VERSION_LINE_RE;
+}
+
+// The version in a version line, or null when the line is not one.
+export function parseVersionLine(line: string): string | null {
+  const m = VERSION_LINE_RE.exec(line.replace(/\s+$/, ""));
+  return m === null ? null : m[1];
+}
+
 
 // ── Files that are OURS OUTRIGHT ────────────────────────────────────
 //
@@ -176,7 +193,7 @@ export function parseForeignSilencer(
 //     §7.1.1 applies to a corrupt manifest); overwriting it restores a
 //     canonical stamp on the spot.
 // ONE function for every managed file, whichever way it is stamped: a
-// section's BEGIN marker or an owned file's header. The caller does not
+// section's version line or an owned file's header. The caller does not
 // have to know which kind of file it holds, and a new kind of stamp is
 // added here rather than at each call site.
 export function newerVersionIn(
@@ -185,7 +202,8 @@ export function newerVersionIn(
 ): string | null {
   let newest: string | null = null;
   for (const line of content.split("\n")) {
-    const version = parseBeginMarker(line)?.version ?? parseOwnedFileHeader(line);
+    // A section's version line, or an owned file's header.
+    const version = parseVersionLine(line) ?? parseOwnedFileHeader(line);
     if (version === null) continue;
     if (compareSemver(version, ownVersion) !== 1) continue;
     if (newest === null || compareSemver(version, newest) === 1) {

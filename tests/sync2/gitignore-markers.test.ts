@@ -1,12 +1,16 @@
-// PLUGIN-UPDATE-COMPAT §5.11 — the version stamp in the BEGIN marker,
+// PLUGIN-UPDATE-COMPAT §5.11 — the version stamp of a managed section,
 // and the rule that stops two plugin versions from overwriting each
 // other's managed sections forever.
 //
-// The defect being closed: markers are identical across versions, so a
-// device running v1 sees v2's body, finds it "not canonical", rewrites
-// it, pushes — and v2's device does the same in reverse, on every sync,
-// with no user-visible cause. `.obsidian/` resolves silently, so nobody
-// is ever told.
+// The defect being closed: with identical markers, a device running v1
+// sees v2's body, finds it "not canonical", rewrites it, pushes — and
+// v2's device does the same in reverse, on every sync, with no
+// user-visible cause.
+//
+// ⚙️ 2026-10-24 (owner): the stamp lives in its own VERSION LINE right
+// under BEGIN; BEGIN and END are constants. A version inside BEGIN made a
+// user rule right above it and a version bump two changes to ADJACENT
+// lines — a merge conflict after every release (field, three vaults).
 
 import { describe, it, expect } from "vitest";
 import {
@@ -17,112 +21,79 @@ import {
   newerVersionIn,
   ownedFileHeader,
   parseOwnedFileHeader,
+  versionLine,
+  versionLinePattern,
 } from "../../src/sync2/gitignore-markers";
 import {
   assembleManagedSections,
   ManagedSection,
 } from "../../src/sync2/gitignore-assemble";
 
-describe("the BEGIN marker carries the version (§5.11)", () => {
-  it("writes the version, and the unversioned form is still the same line as before", () => {
-    expect(beginMarker("invariants", "2.1.0")).toBe(
-      "# ===== git-easy-sync invariants v2.1.0 - DO NOT EDIT =====",
-    );
-    // 🔒 The pre-stamp spelling, byte for byte. Everything already on
-    // disk and in every repo is written this way.
-    expect(beginMarker("invariants", null)).toBe(
-      "# ===== git-easy-sync invariants - DO NOT EDIT =====",
-    );
-    expect(beginMarker("final", "2.1.0")).toBe(
-      "# ===== git-easy-sync final v2.1.0 - DO NOT EDIT =====",
-    );
+describe("BEGIN and END are constants (2026-10-24)", () => {
+  it("the BEGIN line carries no version", () => {
+    expect(beginMarker("invariants")).toBe("# ===== git-easy-sync invariants - DO NOT EDIT =====");
+    expect(beginMarker("final")).toBe("# ===== git-easy-sync final - DO NOT EDIT =====");
   });
 
-  it("END is NOT versioned — one carrier of the value, by decision", () => {
-    expect(endMarker("invariants")).toBe(
-      "# ===== end of git-easy-sync invariants =====",
-    );
+  it("END is not versioned either", () => {
+    expect(endMarker("invariants")).toBe("# ===== end of git-easy-sync invariants =====");
     expect(endMarker("final")).toBe("# ===== end of git-easy-sync final =====");
   });
 
-  it("🔒 the recognizer accepts BOTH forms — that is the whole contract", () => {
+  it("🔑 BEGIN is recognised by EXACT text only — a version inside it is not ours", () => {
     for (const kind of ["invariants", "final"] as const) {
-      expect(parseBeginMarker(beginMarker(kind, null))).toEqual({
-        kind,
-        version: null,
-      });
-      expect(parseBeginMarker(beginMarker(kind, "2.1.0"))).toEqual({
-        kind,
-        version: "2.1.0",
-      });
-      // ...and a version this build has never heard of, which is the
-      // case the rule exists for.
-      expect(parseBeginMarker(beginMarker(kind, "99.0.0-beta7"))).toEqual({
-        kind,
-        version: "99.0.0-beta7",
-      });
-      expect(beginPattern(kind).test(beginMarker(kind, "2.1.0"))).toBe(true);
+      expect(parseBeginMarker(beginMarker(kind))).toEqual({ kind });
+      expect(beginPattern(kind).test(beginMarker(kind))).toBe(true);
+      // The dev-only spelling of 2026-09-30..10-24 — never released.
+      expect(parseBeginMarker(`# ===== git-easy-sync ${kind} v2.1.0 - DO NOT EDIT =====`)).toBeNull();
     }
   });
 
   it("does not recognise someone else's marker, or a near miss", () => {
-    expect(
-      parseBeginMarker("# ===== github-easy-sync invariants - DO NOT EDIT ====="),
-    ).toBeNull();
-    expect(
-      parseBeginMarker("# ===== git-easy-sync invariants — DO NOT EDIT ====="),
-    ).toBeNull(); // em dash: the pre-2026-09-21 form, deliberately foreign
+    expect(parseBeginMarker("# ===== github-easy-sync invariants - DO NOT EDIT =====")).toBeNull();
+    expect(parseBeginMarker("# ===== git-easy-sync invariants — DO NOT EDIT =====")).toBeNull(); // em dash
     expect(parseBeginMarker("# ===== git-easy-sync invariants =====")).toBeNull();
     expect(parseBeginMarker(".*")).toBeNull();
   });
 
   it("the two kinds do not answer for each other", () => {
-    expect(beginPattern("final").test(beginMarker("invariants", "2.1.0"))).toBe(
-      false,
-    );
+    expect(beginPattern("final").test(beginMarker("invariants"))).toBe(false);
   });
 });
 
 // §5.11 — a file that is OURS OUTRIGHT (no sections, no user content:
-// <self>/.gitignore) has nowhere to put a section marker, but it has
-// exactly the same problem: two plugin versions with different
-// constants would rewrite it for each other forever. It gets a HEADER
-// instead — one that says what the file is for, and carries the stamp.
+// <self>/.gitignore) has nowhere to put a section, but the same problem:
+// two versions with different constants would rewrite it for each other
+// forever. It gets a HEADER instead, carrying the stamp.
 describe("the owned-file header (§5.11)", () => {
   it("says what the file is, and stamps who wrote it", () => {
     const header = ownedFileHeader("2.1.0");
-    expect(header[0]).toBe(
-      "# ===== git-easy-sync v2.1.0 - managed file, DO NOT EDIT =====",
-    );
-    // The point of the owner's request: a reader who opens this file
-    // must be able to tell what it does without going looking.
+    expect(header[0]).toBe("# ===== git-easy-sync v2.1.0 - managed file, DO NOT EDIT =====");
     expect(header.join("\n")).toContain("plugin's own folder");
   });
 
   it("is recognised whatever version wrote it — and NOT when it is someone else's line", () => {
     expect(parseOwnedFileHeader(ownedFileHeader("9.9.9")[0])).toBe("9.9.9");
     expect(parseOwnedFileHeader("# just a comment")).toBeNull();
-    expect(
-      parseOwnedFileHeader("# ===== git-easy-sync invariants - DO NOT EDIT ====="),
-    ).toBeNull();
+    expect(parseOwnedFileHeader(beginMarker("invariants"))).toBeNull();
   });
 
   it("🔑 the SAME yield rule covers it — an older build leaves the file alone", () => {
     const newer = [...ownedFileHeader("9.9.9"), "*", "!main.js"].join("\n");
     expect(newerVersionIn(newer, "2.1.0")).toBe("9.9.9");
     expect(newerVersionIn(newer, "9.9.9")).toBeNull();
-    // A file from before the header existed carries no stamp at all →
-    // v0 → we write, which is how the header gets there in the first
-    // place.
     expect(newerVersionIn("*\n!main.js\n", "2.1.0")).toBeNull();
   });
 });
 
 describe("the yield rule — an older plugin does not touch a newer section", () => {
   const fileAt = (version: string | null): string =>
-    [beginMarker("invariants", version), ".*", endMarker("invariants")].join(
-      "\n",
-    );
+    [
+      beginMarker("invariants"),
+      ...(version === null ? [] : [versionLine("invariants", version)]),
+      ".*",
+      endMarker("invariants"),
+    ].join("\n");
 
   it("a NEWER stamp in the file wins — we report it and write nothing", () => {
     expect(newerVersionIn(fileAt("2.2.0"), "2.1.0")).toBe("2.2.0");
@@ -133,9 +104,7 @@ describe("the yield rule — an older plugin does not touch a newer section", ()
     expect(newerVersionIn(fileAt("2.0.0"), "2.1.0")).toBeNull();
   });
 
-  it("🔑 NO stamp reads as v0 — we win, and the pre-stamp body gets updated", () => {
-    // The opposite choice ("unknown → leave alone") would freeze every
-    // file written before the stamp existed, forever.
+  it("🔑 NO version line reads as v0 — we win", () => {
     expect(newerVersionIn(fileAt(null), "2.1.0")).toBeNull();
     expect(newerVersionIn("just user rules\n.*\n", "2.1.0")).toBeNull();
   });
@@ -146,19 +115,18 @@ describe("the yield rule — an older plugin does not touch a newer section", ()
   });
 
   it("🔑 a GARBAGE stamp does not win — it would have no way out", () => {
-    // Yielding to an unreadable version freezes the file until someone
-    // edits it by hand; writing over it restores a canonical stamp on
-    // the spot. Same direction as §7.1.1 for a corrupt manifest.
     expect(newerVersionIn(fileAt("not-a-version"), "2.1.0")).toBeNull();
   });
 
   it("the HIGHEST stamp in the file decides, whichever section carries it", () => {
     const mixed = [
-      beginMarker("invariants", "2.1.0"),
+      beginMarker("invariants"),
+      versionLine("invariants", "2.1.0"),
       ".*",
       endMarker("invariants"),
       "",
-      beginMarker("final", "3.0.0"),
+      beginMarker("final"),
+      versionLine("final", "3.0.0"),
       "!.obsidian/",
       endMarker("final"),
     ].join("\n");
@@ -166,36 +134,29 @@ describe("the yield rule — an older plugin does not touch a newer section", ()
   });
 });
 
-// ── The reason all of the above exists ──────────────────────────────
-//
-// Two plugin versions with DIFFERENT bodies, alternating over one file.
-// This is the ping-pong of §5.11 reproduced end to end at the pure
-// layer: without the rule it never settles, and every round is a commit
-// nobody asked for.
-describe("🔴 alternating enforce between two plugin versions CONVERGES", () => {
-  const sectionAt = (version: string, body: string): ManagedSection => ({
-    begin: beginMarker("invariants", version),
-    beginPattern: beginPattern("invariants"),
-    end: endMarker("invariants"),
-    body,
-  });
+const sectionAt = (version: string, body: string): ManagedSection => ({
+  begin: beginMarker("invariants"),
+  beginPattern: beginPattern("invariants"),
+  version: { line: versionLine("invariants", version), pattern: versionLinePattern() },
+  end: endMarker("invariants"),
+  body,
+});
 
+// ── The reason all of the above exists ──────────────────────────────
+describe("🔴 alternating enforce between two plugin versions CONVERGES", () => {
   const OLD = { version: "2.0.0", body: ".*\n!/.gitignore" };
   const NEW = { version: "2.1.0", body: ".*\n!/.gitignore\n!/.editorconfig" };
 
   // One device's pass: yield if the file is newer, otherwise assemble.
   const pass = (content: string, v: { version: string; body: string }) => {
     if (newerVersionIn(content, v.version) !== null) return content;
-    return assembleManagedSections(content, {
-      invariants: sectionAt(v.version, v.body),
-    }).content;
+    return assembleManagedSections(content, { invariants: sectionAt(v.version, v.body) }).content;
   };
 
   it("settles after the newer version has written once, and stays settled", () => {
     let c = pass("user.md\n", OLD);
     c = pass(c, NEW);
     const settled = c;
-    // Now hammer it: old, new, old, new... nothing may move again.
     for (let i = 0; i < 4; i++) {
       c = pass(c, OLD);
       expect(c).toBe(settled);
@@ -203,7 +164,7 @@ describe("🔴 alternating enforce between two plugin versions CONVERGES", () =>
       expect(c).toBe(settled);
     }
     expect(settled).toContain("!/.editorconfig");
-    expect(settled).toContain(beginMarker("invariants", "2.1.0"));
+    expect(settled).toContain(versionLine("invariants", "2.1.0"));
   });
 
   it("the older device leaves the newer section EXACTLY as it found it", () => {
@@ -211,18 +172,15 @@ describe("🔴 alternating enforce between two plugin versions CONVERGES", () =>
     expect(pass(newerFile, OLD)).toBe(newerFile);
   });
 
-  it("🔑 without the version stamp the same pair never settles", () => {
-    // The defect itself, pinned: same markers, different bodies, no
-    // stamp to arbitrate — each pass undoes the other, forever.
+  it("🔑 without the version line the same pair never settles", () => {
     const unstamped = (body: string): ManagedSection => ({
-      begin: beginMarker("invariants", null),
+      begin: beginMarker("invariants"),
       beginPattern: beginPattern("invariants"),
       end: endMarker("invariants"),
       body,
     });
     const blind = (content: string, body: string) =>
       assembleManagedSections(content, { invariants: unstamped(body) }).content;
-
     let c = blind("user.md\n", OLD.body);
     const afterOld = c;
     c = blind(c, NEW.body);
@@ -232,61 +190,50 @@ describe("🔴 alternating enforce between two plugin versions CONVERGES", () =>
   });
 });
 
-describe("a STRAY marker from another version is removed AND reported", () => {
-  // Found by a mutation probe: counting duplicates by exact text rather
-  // than by the pattern left this case silent. The line still
-  // disappeared — the purge matches by pattern — but nothing said so,
-  // and "we deleted a line and told no one" is the defect class §4.2
-  // exists to prevent. Our own stale marker is not the user's line, but
-  // a marker with no section is precisely what a reader would puzzle
-  // over, so its removal belongs in the report too.
-  it("an extra BEGIN of another version counts as a duplicate of ours", () => {
-    const section: ManagedSection = {
-      begin: beginMarker("invariants", "2.1.0"),
-      beginPattern: beginPattern("invariants"),
-      end: endMarker("invariants"),
-      body: ".*",
-    };
-    const input = [
-      beginMarker("invariants", "2.1.0"),
-      ".*",
-      endMarker("invariants"),
-      "",
-      "user.md",
-      beginMarker("invariants", "1.0.0"), // stray: a lone marker, no pair
-    ].join("\n");
-    const r = assembleManagedSections(input, { invariants: section });
-    expect(r.content).not.toContain(beginMarker("invariants", "1.0.0"));
-    expect(r.removed).toEqual([beginMarker("invariants", "2.1.0")]);
-    expect(r.content).toContain("user.md");
-  });
-});
-
-describe("an older version's section is REPLACED, not left behind", () => {
-  it("the stale BEGIN line does not survive as litter", () => {
-    // Before the recognizer this was the failure mode: the old BEGIN
-    // matched nothing, so the new one was inserted above it and the old
-    // line stayed in user space — a marker with no section, able to
-    // confuse the next pass and every reader.
+describe("another version's VERSION LINE is replaced, never duplicated", () => {
+  it("🔑 an older section is rewritten: one version line, ours", () => {
     const stale = [
-      beginMarker("invariants", "2.0.0"),
+      beginMarker("invariants"),
+      versionLine("invariants", "2.0.0"),
       "old-rule",
       endMarker("invariants"),
       "user.md",
     ].join("\n");
-    const r = assembleManagedSections(stale, {
-      invariants: {
-        begin: beginMarker("invariants", "2.1.0"),
-        beginPattern: beginPattern("invariants"),
-        end: endMarker("invariants"),
-        body: ".*",
-      },
-    });
-    expect(r.content).not.toContain(beginMarker("invariants", "2.0.0"));
-    expect(r.content).toContain(beginMarker("invariants", "2.1.0"));
+    const r = assembleManagedSections(stale, { invariants: sectionAt("2.1.0", ".*") });
+    expect(r.content).not.toContain(versionLine("invariants", "2.0.0"));
+    expect(r.content).toContain(versionLine("invariants", "2.1.0"));
     expect(r.content).not.toContain("old-rule");
     expect(r.content).toContain("user.md");
-    // The pair was found, so the interior was dropped as a unit.
-    expect(r.replacedSections).toEqual([beginMarker("invariants", "2.1.0")]);
+    expect(r.content.split("\n").filter((l) => versionLinePattern().test(l))).toHaveLength(1);
+  });
+
+  it("a STRAY version line elsewhere is removed AND reported", () => {
+    const input = [
+      beginMarker("invariants"),
+      versionLine("invariants", "2.1.0"),
+      ".*",
+      endMarker("invariants"),
+      "",
+      "user.md",
+      versionLine("invariants", "1.0.0"), // stray
+    ].join("\n");
+    const r = assembleManagedSections(input, { invariants: sectionAt("2.1.0", ".*") });
+    expect(r.content).not.toContain(versionLine("invariants", "1.0.0"));
+    expect(r.removed).toEqual([versionLine("invariants", "2.1.0")]);
+    expect(r.content).toContain("user.md");
+  });
+
+  it("both sections' version lines count TOGETHER — no false 'removed' report", () => {
+    const final: ManagedSection = {
+      begin: beginMarker("final"),
+      beginPattern: beginPattern("final"),
+      version: { line: versionLine("final", "2.1.0"), pattern: versionLinePattern() },
+      end: endMarker("final"),
+      body: "*.conflict-from-*",
+    };
+    const once = assembleManagedSections("user.md\n", { invariants: sectionAt("2.1.0", ".*"), final });
+    const twice = assembleManagedSections(once.content, { invariants: sectionAt("2.1.0", ".*"), final });
+    expect(twice.content).toBe(once.content);
+    expect(twice.removed).toEqual([]);
   });
 });

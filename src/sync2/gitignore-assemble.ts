@@ -42,6 +42,11 @@ export interface ManagedSection {
   // pattern is frozen forever; see gitignore-markers.ts.
   beginPattern: RegExp;
   end: string;
+  // The VERSION LINE right under BEGIN (owner, 2026-10-24 — PLUGIN-UPDATE-
+  // COMPAT §5.11): the line we write, and how a version line of ANY
+  // version is recognised. Optional: a section without one (a guest's
+  // file, a section named for removal) simply has no such line.
+  version?: { line: string; pattern: RegExp };
   // The lines between the markers. May contain blank lines; they are
   // CONSTRUCTED from this template, never searched for (see below).
   body: string;
@@ -55,14 +60,29 @@ export interface ManagedSection {
 interface TemplateLine {
   text: string;
   matches: (line: string) => boolean;
+  // How copies of this line are COUNTED across sections (countExtras).
+  // Text for ordinary lines; one shared key for the version line, which
+  // both sections carry in differently padded spellings and which the
+  // shared pattern matches in either place.
+  countKey: string;
 }
+
+const VERSION_LINE_KEY = "\u0000version-line";
 
 function templateOf(section: ManagedSection): TemplateLine[] {
   const exact = (text: string) => (line: string) => norm(line) === norm(text);
+  const version = section.version;
   return [
-    { text: section.begin, matches: (l) => section.beginPattern.test(norm(l)) },
-    ...section.body.split("\n").map((text) => ({ text, matches: exact(text) })),
-    { text: section.end, matches: exact(section.end) },
+    {
+      text: section.begin,
+      matches: (l) => section.beginPattern.test(norm(l)),
+      countKey: norm(section.begin),
+    },
+    ...(version
+      ? [{ text: version.line, matches: (l: string) => version.pattern.test(norm(l)), countKey: VERSION_LINE_KEY }]
+      : []),
+    ...section.body.split("\n").map((text) => ({ text, matches: exact(text), countKey: norm(text) })),
+    { text: section.end, matches: exact(section.end), countKey: norm(section.end) },
   ];
 }
 
@@ -280,22 +300,21 @@ function separateAbove(lines: string[], at: number): void {
 function countExtras(lines: string[], sections: ManagedSection[]): string[] {
   const need = new Map<
     string,
-    { want: number; matches: (line: string) => boolean }
+    { want: number; matches: (line: string) => boolean; text: string }
   >();
   for (const s of sections) {
-    for (const { text, matches } of templateOf(s)) {
+    for (const { text, matches, countKey } of templateOf(s)) {
       if (text.trim() === "") continue;
-      const key = norm(text);
-      const seen = need.get(key);
-      need.set(key, { want: (seen?.want ?? 0) + 1, matches });
+      const seen = need.get(countKey);
+      // `text` is what the report shows: the first section's spelling.
+      need.set(countKey, { want: (seen?.want ?? 0) + 1, matches, text: seen?.text ?? norm(text) });
     }
   }
   const extras: string[] = [];
-  for (const [text, { want, matches }] of need) {
-    // ⚠️ Counted with the SAME matcher the assembly uses. For BEGIN that
-    // means an older version's stamp counts as a copy of ours — which is
-    // right: two of our markers in one file is one too many whichever
-    // version wrote them, and exactly one survives the assembly.
+  for (const { want, matches, text } of need.values()) {
+    // ⚠️ Counted with the SAME matcher the assembly uses. For the version
+    // line that means another version's line counts as a copy of ours —
+    // which is right: one per section, whichever version wrote it.
     const have = lines.filter(matches).length;
     for (let i = 0; i < have - want; i++) extras.push(text);
   }
@@ -360,7 +379,7 @@ export function assembleManagedSections(
   }
   if (sections.final) {
     const height =
-      2 + sections.final.body.split("\n").length;
+      2 + (sections.final.version ? 1 : 0) + sections.final.body.split("\n").length;
     placeBottom(lines, sections.final, lowerBound);
     separateAbove(lines, lines.length - height);
   }
