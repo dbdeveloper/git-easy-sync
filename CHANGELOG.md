@@ -47,6 +47,16 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   v<version> - DO NOT EDIT =====`), so the first sync after an
   upgrade rewrites those files. That is what lets an older device
   leave alone the rules a newer one wrote — it is not a defect.
+- **`.obsidian/.gitignore` now has two managed blocks (2.0.3-beta).**
+  The plugin-folder allowlist (`plugins/*/*` and the `!` lines for
+  `main.js`, `manifest.json`, `styles.css`) used to be "Recommended
+  defaults" you could delete. It is now a block at the TOP of the
+  file, marked `DO NOT EDIT`, so the rules stay in sight. To bend
+  them, write your own rules BELOW that block — they win. In an
+  existing file those five lines move into the block; the old
+  "Recommended defaults" comments stay where they were — delete them
+  if you like. Devices still on an older version leave the new block
+  alone (they yield to the newer version stamp).
 - **Root dot-files other than `.gitignore` stop syncing.** Earlier
   versions picked up every dot-file at the vault root
   (`.gitattributes`, `.editorconfig`, …) whether or not you asked
