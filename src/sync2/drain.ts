@@ -675,7 +675,40 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       const record = held[id];
       // Offline, every drain, costs nothing: the condition is a string
       // comparison against the running app's version (§5.6).
-      if (!requireApiVersion(record.minAppVersion)) continue;
+      if (!requireApiVersion(record.minAppVersion)) {
+        // ...or the repo no longer asks for it (owner, 2026-10-24 — §5.6):
+        // the held folder is ignored, so a later, relaxed or corrected
+        // manifest is never seen by discovery. Read the CURRENT one at
+        // head; without this a withdrawn requirement freezes the plugin
+        // on this device forever.
+        if (headHash === null) continue;
+        const manifestPath = `${configDir}/plugins/${id}/manifest.json`;
+        const meta = await deps.retry.run(() =>
+          deps.client.getContentsMetadataAtRef(manifestPath, headHash!),
+        );
+        if (meta.error !== null) return statusFromError(meta.error, result);
+        if (meta.result === null) continue; // no manifest at head — keep waiting
+        const blob = await deps.retry.run(() => deps.client.getBlobFromRepo(meta.result!.sha));
+        if (blob.error !== null) return statusFromError(blob.error, result);
+        if (blob.result === null) continue;
+        const decision = decideHold(new TextDecoder().decode(blob.result));
+        if (decision.hold) {
+          // Still too new — the record follows the repo's CURRENT ask.
+          if (
+            decision.minAppVersion !== record.minAppVersion ||
+            decision.heldVersion !== record.heldVersion
+          ) {
+            held[id] = { ...record, minAppVersion: decision.minAppVersion, heldVersion: decision.heldVersion };
+            await deps.hot.update({ heldPluginUpdates: { ...held } });
+          }
+          continue;
+        }
+        deps.logger?.info("plugin update hold: the repo's current manifest no longer needs a newer Obsidian", {
+          id,
+          heldFor: record.minAppVersion,
+          reason: decision.reason,
+        });
+      }
       if (headHash === null) {
         // Empty repo — nothing to lift from. The record stays; there
         // is no state to reach and no harm in waiting.

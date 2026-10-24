@@ -448,6 +448,60 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       expect(baselines.get(MAIN)!.baselineSha).toBe(await sha(newMain));
     });
 
+    // Owner, 2026-10-24 (field: a manifest with minAppVersion 9.9.9 was
+    // pushed by mistake, then corrected — the device stayed frozen, because
+    // the held folder is ignored and nobody read the corrected manifest).
+    // The CURRENT manifest at head is read on every drain: a requirement
+    // this Obsidian now satisfies lifts the hold without an Obsidian update.
+    it("🔑 a LATER, relaxed manifest lifts the hold — no Obsidian update needed", async () => {
+      await seedInstalled();
+      await world.commitFiles({
+        [MAIN]: "NEW BUNDLE THAT NEEDS 1.13",
+        [MANIFEST]: manifestAt("2.24.3", "1.13.0"),
+      });
+      await drainOnce(makeDeps());
+      expect(heldState[ID]).toBeDefined();
+      baseCommit = world.head;
+
+      // The author withdraws the requirement in the next release.
+      await world.commitFiles({
+        [MAIN]: "RELAXED BUNDLE",
+        [MANIFEST]: manifestAt("2.24.4", "1.10.0"),
+      });
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(heldState[ID]).toBeUndefined();
+      expect(vaultFiles.files.get(MAIN)!.content).toBe("RELAXED BUNDLE");
+      expect(baselines.get(MAIN)!.baselineSha).toBe(await sha("RELAXED BUNDLE"));
+    });
+
+    it("a later manifest that still needs a newer Obsidian keeps the hold — and the record follows it", async () => {
+      await seedInstalled();
+      await world.commitFiles({
+        [MAIN]: "NEEDS 1.13",
+        [MANIFEST]: manifestAt("2.24.3", "1.13.0"),
+      });
+      await drainOnce(makeDeps());
+      baseCommit = world.head;
+      await world.commitFiles({
+        [MAIN]: "NEEDS 1.14",
+        [MANIFEST]: manifestAt("2.25.0", "1.14.0"),
+      });
+      // As in production: discovery is filtered by checkSyncable, which
+      // hides a held folder (change-detector → isHeldPath). The harness's
+      // honest discovery has no such filter.
+      discoveryOverride = async (b, h) => {
+        const r = await honestDiscovery(b, h);
+        return { ...r, changes: r.changes.filter((c) => !c.path.startsWith(`${DIR}/`)) };
+      };
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      const held = heldState[ID] as { minAppVersion: string; heldVersion: string };
+      expect(held.minAppVersion).toBe("1.14.0");
+      expect(held.heldVersion).toBe("2.25.0");
+      expect(vaultFiles.files.get(MAIN)!.content).toBe("OLD BUNDLE");
+    });
+
     it("🔴 §7.1.2 a file deleted in the repo while held is deleted at the lift, not before", async () => {
       await seedInstalled();
       const styles = `${DIR}/styles.css`;
