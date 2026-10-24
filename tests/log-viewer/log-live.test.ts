@@ -3,7 +3,7 @@
 // AGPL-3.0 — see LICENSE.
 
 import { describe, it, expect } from "vitest";
-import { LiveFeed, renderAppend, renderLog, sameItemLine } from "../../src/log-viewer/log-model";
+import { LiveFeed, cursorItemLines, renderAppend, renderLog, sameItemLine } from "../../src/log-viewer/log-model";
 import { makeFilter } from "../../src/log-viewer/log-filter";
 import type { RecentLine } from "../../src/log-viewer/log-parse";
 import type { LogEntry } from "../../src/log-viewer/log-parse";
@@ -146,5 +146,40 @@ describe("sameItemLine — the entry at the top stays at the top", () => {
 
   it("an empty table → line 0", () => {
     expect(sameItemLine([], [], 4)).toBe(0);
+  });
+});
+
+// Owner, 2026-10-24: the entry with the cursor (or the start of the
+// selection) is the anchor of a mode switch — its FIRST line stays at the
+// same height on screen and the cursor lands on that line, so an expanded
+// entry "opens downwards" and a compacted one "pulls the rest up".
+describe("cursorItemLines — where the cursor's entry is before and after", () => {
+  const e = { kind: "entry" } as const;
+  const raw = { kind: "raw" } as const;
+  const gap = { kind: "gap" } as const;
+  // items: entry(3 data lines), raw, gap, entry
+  const items = [e, raw, gap, e];
+  const compact = { starts: [0, 1, 2, 3], compact: true };
+  // expanded: sep0 head1 d2 d3 d4 | raw5 | …6 | sep7 head8
+  const expanded = { starts: [0, 5, 6, 7], compact: false };
+
+  it("🔑 compact → expanded: the anchor is the entry's head line, below its separator", () => {
+    expect(cursorItemLines(compact, expanded, items, 0)).toEqual({ oldLine: 0, newLine: 1 });
+    expect(cursorItemLines(compact, expanded, items, 3)).toEqual({ oldLine: 3, newLine: 8 });
+  });
+
+  it("🔑 expanded → compact from ANY line of the entry: the old anchor is its head line", () => {
+    for (const l of [0, 1, 2, 3, 4]) {
+      expect(cursorItemLines(expanded, compact, items, l)).toEqual({ oldLine: 1, newLine: 0 });
+    }
+  });
+
+  it("a line that is not a record has no separator in either mode", () => {
+    expect(cursorItemLines(compact, expanded, items, 1)).toEqual({ oldLine: 1, newLine: 5 });
+    expect(cursorItemLines(expanded, compact, items, 5)).toEqual({ oldLine: 5, newLine: 1 });
+  });
+
+  it("an empty view → null", () => {
+    expect(cursorItemLines({ starts: [], compact: true }, { starts: [], compact: false }, [], 0)).toBeNull();
   });
 });

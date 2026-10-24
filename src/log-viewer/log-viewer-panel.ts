@@ -32,7 +32,7 @@ import {
   searchKeymap,
   searchPanelOpen,
 } from "@codemirror/search";
-import { LiveFeed, openLog, renderAppend, renderLog, sameItemLine, type LogItem } from "./log-model";
+import { LiveFeed, cursorItemLines, openLog, renderAppend, renderLog, sameItemLine, type LogItem } from "./log-model";
 import { makeFilter } from "./log-filter";
 import { SEPARATOR, separatorsAsDashes, type FormatOptions, type LevelMark } from "./log-format";
 import type { LogFileAdapter } from "./log-load";
@@ -195,8 +195,14 @@ export class LogViewerPanel {
   private switches = { caseSensitive: false, wholeWord: false, regexp: false };
   private compact = readCompact();
   private modeBtn: HTMLElement | null = null;
-  // The line each shown item starts on in the current text (renderLog).
+  // The line each shown item starts on in the current text, and the shown
+  // items themselves (renderLog) — the layout a mode switch maps from.
   private starts: number[] = [];
+  private shownItems: Array<{ kind: string }> = [];
+  // A scroll position WE set while placing the anchor of a mode switch:
+  // its scroll event must not be judged as the user's (it could turn
+  // auto-scroll on and jump to the end).
+  private placedScrollTop: number | null = null;
   private statusEl!: HTMLElement;
   private errorEl!: HTMLElement;
   private bodyEl!: HTMLElement;
@@ -319,6 +325,8 @@ export class LogViewerPanel {
     // First, before the filter (owner, 2026-10-24).
     addModeIcons();
     const modeBtn = bar.createEl("button", { cls: "ges-log-action ges-log-mode-toggle" });
+    // The editor keeps the focus — and with it the visible cursor.
+    modeBtn.addEventListener("mousedown", (e) => e.preventDefault());
     modeBtn.addEventListener("click", () => this.switchMode());
     this.modeBtn = modeBtn;
     this.showMode();
@@ -393,17 +401,52 @@ export class LogViewerPanel {
     this.modeBtn.setAttr("aria-label", this.compact ? "Switch to expanded mode" : "Switch to compact mode");
   }
 
-  // Compact ⇄ expanded. Following the end → stay at the end; otherwise
-  // the entry at the top of the screen stays at the top (owner, 2026-10-24).
+  // Compact ⇄ expanded (owner, 2026-10-24), in this order:
+  //   1. the cursor (or the start of the selection) is in view → its
+  //      entry is the anchor: the entry's FIRST line keeps its height on
+  //      screen, the cursor goes to that line (same column, or the line's
+  //      end), the selection is dropped. An expanded entry opens
+  //      downwards; a compacted one pulls the lines below up to it;
+  //   2. following the end → stay at the end;
+  //   3. otherwise the entry at the top of the screen stays at the top.
   private switchMode(): void {
     this.compact = !this.compact;
     saveCompact(this.compact);
     this.showMode();
     const ed = this.editor;
     if (!ed) return;
+    const sc = ed.scrollDOM;
+    const before = { starts: this.starts, compact: !this.compact };
+    const items = this.shownItems;
+    const doc0 = ed.state.doc;
+    const cursorPos = ed.state.selection.main.from;
+    const cursorLine = doc0.lineAt(cursorPos);
+    const column = cursorPos - cursorLine.from;
+    const cb = ed.lineBlockAt(cursorPos);
+    const inView = cb.bottom > sc.scrollTop && cb.top < sc.scrollTop + sc.clientHeight;
+    const oldHead = inView ? cursorItemLines(before, before, items, cursorLine.number - 1) : null;
+    const offset = oldHead === null ? 0 : ed.lineBlockAt(doc0.line(oldHead.oldLine + 1).from).top - sc.scrollTop;
     const oldStarts = this.starts;
-    const top = ed.state.doc.lineAt(ed.lineBlockAtHeight(ed.scrollDOM.scrollTop).from).number - 1;
+    const top = doc0.lineAt(ed.lineBlockAtHeight(sc.scrollTop).from).number - 1;
     this.render(false);
+    const anchor = oldHead === null
+      ? null
+      : cursorItemLines(before, { starts: this.starts, compact: this.compact }, items, cursorLine.number - 1);
+    if (anchor !== null) {
+      const head = ed.state.doc.line(anchor.newLine + 1);
+      ed.dispatch({ selection: { anchor: head.from + Math.min(column, head.length) } });
+      ed.requestMeasure({
+        read: () => null,
+        write: () => {
+          const target = Math.max(0, ed.lineBlockAt(head.from).top - offset);
+          sc.scrollTop = target;
+          this.placedScrollTop = sc.scrollTop;
+          this.lastScrollTop = sc.scrollTop;
+          this.following = isLastLineVisible(sc, ed.defaultLineHeight);
+        },
+      });
+      return;
+    }
     if (this.following) {
       this.scrollToBottom();
       return;
@@ -499,6 +542,7 @@ export class LogViewerPanel {
         // The new item starts on the line after the separator-less lead
         // "\n" (compact) or on its separator (expanded).
         this.starts.push(ed.state.doc.lineAt(end).number - (end === 0 ? 1 : 0));
+        this.shownItems.push(entry);
         if (this.following) this.scrollToBottom();
       }
     }
@@ -554,6 +598,7 @@ export class LogViewerPanel {
     this.passes = f.ok ? f.test : () => true;
     const v = renderLog(this.items, this.query, this.switches, this.format());
     this.starts = v.starts;
+    this.shownItems = v.items;
     this.shownText = v.text;
     this.shown = v.shown;
     this.total = v.total;
@@ -601,6 +646,15 @@ export class LogViewerPanel {
         // Detached (mid-move between windows): nothing measurable, and a
         // reset to 0 here must not overwrite the position to restore.
         if (sc.clientHeight === 0) return;
+        if (this.placedScrollTop !== null) {
+          const ours = sc.scrollTop === this.placedScrollTop;
+          this.placedScrollTop = null;
+          if (ours) {
+            this.lastScrollLeft = sc.scrollLeft;
+            this.lastScrollTop = sc.scrollTop;
+            return;
+          }
+        }
         const dx = sc.scrollLeft - this.lastScrollLeft;
         const dy = sc.scrollTop - this.lastScrollTop;
         this.lastScrollLeft = sc.scrollLeft;

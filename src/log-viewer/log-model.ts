@@ -183,3 +183,28 @@ export function sameItemLine(oldStarts: number[], newStarts: number[], topLine: 
   if (k < 0 || k >= newStarts.length) return 0;
   return newStarts[k];
 }
+
+// The anchor of a mode switch when the cursor (or the start of the
+// selection) is in view (owner, 2026-10-24): the item that holds
+// `cursorLine`. Returns its FIRST content line before (`oldLine`) and
+// after (`newLine`) the switch — for a log record in expanded mode that
+// is the line under its separator. The view keeps oldLine's height on
+// screen for newLine and puts the cursor there, so an expanded entry
+// opens downwards and a compacted one pulls the lines below up to it.
+export interface ViewLayout {
+  starts: number[];
+  compact: boolean;
+}
+
+export function cursorItemLines(
+  before: ViewLayout,
+  after: ViewLayout,
+  items: Array<{ kind: string }>,
+  cursorLine: number,
+): { oldLine: number; newLine: number } | null {
+  let k = -1;
+  for (let i = 0; i < before.starts.length && before.starts[i] <= cursorLine; i++) k = i;
+  if (k < 0 || k >= after.starts.length || k >= items.length) return null;
+  const head = (l: ViewLayout) => l.starts[k] + (items[k].kind === "entry" && !l.compact ? 1 : 0);
+  return { oldLine: head(before), newLine: head(after) };
+}
