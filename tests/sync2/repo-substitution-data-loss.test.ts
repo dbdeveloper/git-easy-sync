@@ -114,6 +114,7 @@ describe("🔴 repo substitution is indistinguishable from a force-push", () => 
         mergeBlobs: async () => ({ kind: "conflict" }) as never,
         computeSha: async () => "x",
         configDir: ".obsidian",
+        selfPluginId: "git-easy-sync",
       } as never,
       {
         base,

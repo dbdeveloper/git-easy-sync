@@ -74,6 +74,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
     mergeBlobs: mergeBlobsWithMainThreadDiff3,
     computeSha: calculateGitBlobSHA,
     configDir: ".obsidian",
+    selfPluginId: PLUGIN_ID,
     ...over,
   });
 
@@ -521,7 +522,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
 
   it("A1.5b: base=null needs NO remote mtime — no network fill is asked for", () => {
     expect(
-      needsObsidianMtimeTiebreak(t(emptyFileInfo(), side(OB, "R", { mtime: null })), side(OB, "L", { mtime: 2000 }), ".obsidian"),
+      needsObsidianMtimeTiebreak(t(emptyFileInfo(), side(OB, "R", { mtime: null })), side(OB, "L", { mtime: 2000 }), ".obsidian", PLUGIN_ID),
     ).toBe(false);
   });
 
@@ -623,6 +624,61 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
   // not the literal ".obsidian" — Obsidian lets a vault rename it. The
   // auto-resolve branch, the plugin-core seam and the mtime gate follow it;
   // a folder merely NAMED ".obsidian" in such a vault is an ordinary one.
+  // Owner, 2026-10-24: `.gitignore` files under the config folder follow the
+  // STANDARD rules (merge / conflict copy) — people write them, and the
+  // config branch's "no base -> repository wins" made a user's rule vanish
+  // silently (field, three vaults). Everything else in the folder, and OUR
+  // plugin's own constant .gitignore, keep the config branch.
+  describe("A1 — .gitignore files under the config folder follow the standard rules", () => {
+    const CD = ".obsidian/.gitignore";
+    const OTHER = ".obsidian/plugins/some-plugin/.gitignore";
+    const SELF_GI = `.obsidian/plugins/${PLUGIN_ID}/.gitignore`;
+
+    it("🔑 no base, both sides different → a CONFLICT, not 'the repository wins'", async () => {
+      for (const p of [CD, OTHER]) {
+        const r = await _diff3(makeDeps(), t(emptyFileInfo(), side(p, "R\n")), side(p, "L\n"), HEAD);
+        expect(r, p).toEqual({ kind: "manual-conflict" });
+      }
+    });
+
+    it("🔑 both changed, apart → a clean line merge", async () => {
+      for (const p of [CD, OTHER]) {
+        const base = side(p, "a\nb\nc\nd\ne\n");
+        const r = await _diff3(
+          makeDeps(),
+          t(base, side(p, "a\nb\nc\nd\nE\n")),
+          side(p, "A\nb\nc\nd\ne\n"),
+          HEAD,
+        );
+        expect(r.kind, p).toBe("file");
+        expect(new TextDecoder().decode((r as { file: FileInfo }).file.blob!), p).toBe("A\nb\nc\nd\nE\n");
+      }
+    });
+
+    it("both changed the same line → a conflict", async () => {
+      const base = side(CD, "a\n");
+      const r = await _diff3(makeDeps(), t(base, side(CD, "R\n", { mtime: 9 })), side(CD, "L\n", { mtime: 1 }), HEAD);
+      expect(r).toEqual({ kind: "manual-conflict" });
+    });
+
+    it("our OWN plugin .gitignore and other config files keep the config branch (newest wins)", async () => {
+      for (const p of [SELF_GI, ".obsidian/app.json"]) {
+        const newerLocal = side(p, "B", { mtime: 2000 });
+        const r = await _diff3(makeDeps(), t(side(p, "A"), side(p, "C", { mtime: 1000 })), newerLocal, HEAD);
+        expect(r, p).toEqual({ kind: "file", file: newerLocal });
+      }
+    });
+
+    it("needsObsidianMtimeTiebreak is false for them, true for the rest", () => {
+      const both = (p: string) =>
+        needsObsidianMtimeTiebreak(t(side(p, "A"), side(p, "C", { mtime: null })), side(p, "B"), ".obsidian", PLUGIN_ID);
+      expect(both(CD)).toBe(false);
+      expect(both(OTHER)).toBe(false);
+      expect(both(SELF_GI)).toBe(true);
+      expect(both(".obsidian/app.json")).toBe(true);
+    });
+  });
+
   it("A1 🔑 a renamed config folder gets the auto-resolve branch; '.obsidian/' there is ordinary", async () => {
     const CFG = ".obsidian-mobile";
     const deps = makeDeps({
@@ -636,7 +692,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
       file: newerLocal,
     });
     expect(
-      needsObsidianMtimeTiebreak(t(side(p, "A"), side(p, "C", { mtime: 1000 })), newerLocal, CFG),
+      needsObsidianMtimeTiebreak(t(side(p, "A"), side(p, "C", { mtime: 1000 })), newerLocal, CFG, PLUGIN_ID),
     ).toBe(true);
 
     const plugin = `${CFG}/plugins/some-plugin/main.js`;
@@ -648,7 +704,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
     const r = await _diff3(deps, t(side(plain, "A\n"), side(plain, "C\n")), side(plain, "B\n"), HEAD);
     expect(r.kind).not.toBe("file");
     expect(
-      needsObsidianMtimeTiebreak(t(side(plain, "A"), side(plain, "C")), side(plain, "B"), CFG),
+      needsObsidianMtimeTiebreak(t(side(plain, "A"), side(plain, "C")), side(plain, "B"), CFG, PLUGIN_ID),
     ).toBe(false);
   });
 
@@ -979,6 +1035,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
                   },
                   fi({ path: p, sha: localSha, mode: localMode, mtime: 2000 }),
                   ".obsidian",
+                  PLUGIN_ID,
                 );
                 expect(asked, label).toBe(mtimeSensitive);
                 if (mtimeSensitive) sensitiveCases += 1;
@@ -1002,6 +1059,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
         { base: fi({ path: "note.md", sha: "BASE" }), remote: side("note.md", "R") },
         side("note.md", "L"),
         ".obsidian",
+        PLUGIN_ID,
       ),
     ).toBe(false);
   });
@@ -1020,6 +1078,7 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
         },
         side(OB, "L", { mtime: 888 }),
         ".obsidian",
+        PLUGIN_ID,
       ),
     ).toBe(true);
   });
@@ -1175,6 +1234,7 @@ describe("_diff3 totality — every (base, local, remote) combination", () => {
                 mergeBlobs: mergeBlobsWithMainThreadDiff3,
                 computeSha: calculateGitBlobSHA,
                 configDir: ".obsidian",
+                selfPluginId: PLUGIN_ID,
               };
               const baseF = mk(p, b);
               const remF = mk(p, r);

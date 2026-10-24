@@ -866,6 +866,21 @@ describe("§8.1.5a findGitignoreDisputes — the pre-sync gate's check", () => {
     expect(found.map((d) => d.basePath)).toEqual([".gitignore"]);
   });
 
+  // Owner, 2026-10-24: `.gitignore` files under the config folder now get
+  // ordinary conflicts; such a conflict blocks the sync exactly like the
+  // root file's — "nothing new".
+  it("🔑 a TRACKED conflict on .obsidian/.gitignore or a plugin's .gitignore blocks too", async () => {
+    writeFile(fx.root, `${CONFIG_DIR}/.gitignore`, "plugins/*/*\n");
+    await track(fx, `${CONFIG_DIR}/.gitignore`, "Phone", 1_700_000_000_000);
+    fs.mkdirSync(path.join(fx.root, CONFIG_DIR, "plugins", "cmdr"), { recursive: true });
+    writeFile(fx.root, `${CONFIG_DIR}/plugins/cmdr/.gitignore`, "*\n");
+    await track(fx, `${CONFIG_DIR}/plugins/cmdr/.gitignore`, "Phone", 1_700_000_000_000);
+    const found = await find();
+    expect(found.map((d) => d.basePath).sort()).toEqual(
+      [`${CONFIG_DIR}/.gitignore`, `${CONFIG_DIR}/plugins/cmdr/.gitignore`].sort(),
+    );
+  });
+
   it("a STAGED proposal is not yet a dispute", async () => {
     // Mid-write, not a conflict. Blocking on it would block during the
     // migration's own run.

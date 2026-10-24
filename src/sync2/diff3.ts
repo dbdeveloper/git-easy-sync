@@ -123,11 +123,35 @@ export interface Diff3Deps {
   // ".obsidian": Obsidian lets a vault rename it (owner, 2026-10-18: the
   // literal sent a renamed folder's files to MANUAL_CONFLICT).
   configDir: string;
+  // Our plugin id — its own `.gitignore` is a constant and stays in the
+  // config branch (see takesConfigBranch).
+  selfPluginId: string;
 }
 
-// Under the config folder at ANY depth: the §II.1 п.3 branch.
+// Under the config folder at ANY depth.
 function inConfigDir(path: string, configDir: string): boolean {
   return path.startsWith(`${configDir}/`);
+}
+
+// `.gitignore` files people write under the config folder:
+// <configDir>/.gitignore and <configDir>/plugins/<id>/.gitignore of any
+// plugin but ours. They follow the STANDARD rules (owner, 2026-10-24 —
+// NEW-DRAIN §II.1 п.3 exception): the config branch's "no base -> the
+// repository wins" made a user's rule vanish silently on a device that
+// had config sync off. Ours is the plugin's constant, rewritten whole.
+const PLUGIN_GITIGNORE = /^plugins\/([^/]+)\/\.gitignore$/;
+function isUserGitignoreInConfigDir(path: string, configDir: string, selfPluginId: string): boolean {
+  if (!inConfigDir(path, configDir)) return false;
+  const rest = path.slice(configDir.length + 1);
+  if (rest === ".gitignore") return true;
+  const m = PLUGIN_GITIGNORE.exec(rest);
+  return m !== null && m[1] !== selfPluginId;
+}
+
+// Does this path take the §II.1 п.3 config branch (no merge, never a
+// conflict copy)?
+function takesConfigBranch(path: string, configDir: string, selfPluginId: string): boolean {
+  return inConfigDir(path, configDir) && !isUserGitignoreInConfigDir(path, configDir, selfPluginId);
 }
 
 // <configDir>/plugins/<id>/{manifest.json,main.js,styles.css}
@@ -258,7 +282,7 @@ export async function _diff3(
   }
 
   // ── §II.1 п.3 — the .obsidian/ special branch ───────────────────
-  if (inConfigDir(path, deps.configDir)) {
+  if (takesConfigBranch(path, deps.configDir, deps.selfPluginId)) {
     if (isPluginCoreCollision(path, base, local, remote, deps.configDir)) {
       // 3.a — plugin core files route to their own rules
       // (SYNC2-PLUGIN-UPDATE-COMPAT). ⚠️ NARROWED at THE SWITCH gate
@@ -534,6 +558,7 @@ export function needsObsidianMtimeTiebreak(
   tracked: { base: FileInfo; remote: FileInfo } | null,
   localIn: FileInfo | null,
   configDir: string,
+  selfPluginId: string,
 ): boolean {
   const base: FileInfo = { ...(tracked?.base ?? emptyFileInfo()) };
   const remote: FileInfo = { ...(tracked?.remote ?? emptyFileInfo()) };
@@ -542,7 +567,7 @@ export function needsObsidianMtimeTiebreak(
   if (remote.mode === DELETED) remote.sha = DELETED_SHA_HASH;
 
   const path = base.path ?? local.path ?? remote.path;
-  if (path === null || !inConfigDir(path, configDir)) return false;
+  if (path === null || !takesConfigBranch(path, configDir, selfPluginId)) return false;
   // 2.a / 2.b — decided before the .obsidian branch is entered.
   if (local.sha !== null && remote.sha !== null && local.sha === remote.sha) {
     return false;
