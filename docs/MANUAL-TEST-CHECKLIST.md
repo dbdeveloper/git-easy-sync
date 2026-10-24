@@ -260,9 +260,12 @@ Use it, and note which runs you did.
       and the same for `final`. `<configDir>/plugins/git-easy-sync/.gitignore` starts with
       `# ===== git-easy-sync vX - managed file, DO NOT EDIT =====`. X = the installed build's version.
       *(Field 2026-10-24: seen on three vaults through 2.0.3 → 2.0.7-beta.)*
-- [ ] **The version comes from the BUILD, not from the file on disk.** In `<configDir>/plugins/git-easy-sync/manifest.json`
+- [x] **The version comes from the BUILD, not from the file on disk.** In `<configDir>/plugins/git-easy-sync/manifest.json`
       change `"version"` to `"9.9.9"`, press **Sync** → the version lines still show the build's version. Put the old
       value back afterwards. (`<configDir>/plugins/.gitignore` is the unversioned "Sync plugins data.json" switch.)
+      *(Field 2026-10-24: `"version": "9.9.9-beta"` in the installed manifest on three vaults — the version lines
+      stayed `2.0.7-beta`. A slip into `minAppVersion` instead froze our own plugin on one vault — fixed in
+      5649928: a hold now lifts once the repo's CURRENT manifest no longer needs a newer Obsidian.)*
 - [x] **⚠️ Two devices, two versions — the ping-pong guard.** An OLDER build never rewrites blocks a NEWER build
       wrote: its log has `gitignore section anomaly` / `yielded-to-newer`, the file keeps the newer version lines, and a
       second Sync makes NO `.gitignore` commit. *(Field 2026-10-24: verified with REAL builds — T3 below, and again
