@@ -172,8 +172,9 @@ function saveCompact(compact: boolean): void {
   }
 }
 
-// The button shows the mode a click switches TO (owner): many dense
-// lines = "compact", three loose ones = "expanded". Drawn here because
+// The button shows the mode a click switches TO (owner): five dense
+// lines = "compact", three loose ones = "expanded", both spanning the
+// icon box almost edge to edge (owner: no wide empty margins). Drawn here because
 // no Lucide icon shows exactly that.
 const ICON_COMPACT = "ges-log-compact";
 const ICON_EXPANDED = "ges-log-expanded";
@@ -182,9 +183,9 @@ function addModeIcons(): void {
   if (iconsAdded) return;
   iconsAdded = true;
   const lines = (ys: number[]) =>
-    ys.map((y) => `<line x1="15" y1="${y}" x2="85" y2="${y}" stroke="currentColor" stroke-width="7" stroke-linecap="round"/>`).join("");
-  addIcon(ICON_COMPACT, lines([18, 31, 44, 57, 70, 83]));
-  addIcon(ICON_EXPANDED, lines([22, 50, 78]));
+    ys.map((y) => `<line x1="10" y1="${y}" x2="90" y2="${y}" stroke="currentColor" stroke-width="8" stroke-linecap="round"/>`).join("");
+  addIcon(ICON_COMPACT, lines([10, 30, 50, 70, 90]));
+  addIcon(ICON_EXPANDED, lines([12, 50, 88]));
 }
 
 export class LogViewerPanel {
