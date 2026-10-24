@@ -948,14 +948,13 @@ describe("*.log in the root file's top (overridable) section", () => {
     expect(gi.ignored("notes/debug.log")).toBe(true);
   });
 
-  // Owner, 2026-10-24: the log name carries the device label, so the
-  // advice in the block names the per-device pattern — and says the cost:
-  // the log changes during every sync, so every sync commits it.
-  it("🔑 the block's advice names the per-device log pattern and its cost", async () => {
+  // Owner, 2026-10-24: the advice is short and names OUR log by its real
+  // name — not a general-looking "<plugin-id>-<device label>.log" rule.
+  it("🔑 the block's advice is short and names the plugin's logs plainly", async () => {
     await f.inv.enforce();
     const top = topSection(fs.readFileSync(rootPath(), "utf8"));
-    expect(top).toContain("!/<plugin-id>-*.log");
-    expect(top).toMatch(/every sync/i);
+    expect(top).toContain("!/git-easy-sync-*.log");
+    expect(top).not.toContain("<plugin-id>");
   });
 
   it("a NEW file: *.log is in the top section, not repeated among the recommended defaults", async () => {

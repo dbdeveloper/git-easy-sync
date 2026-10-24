@@ -25,8 +25,10 @@ export class LogViewerView extends ItemView {
     return LOG_VIEWER_VIEW_TYPE;
   }
 
+  // The log's file name (owner, 2026-10-24): it carries the device label,
+  // so the tab says which device's log this is.
   getDisplayText(): string {
-    return "git-easy-sync log";
+    return this.deps.logPath;
   }
 
   getIcon(): string {
