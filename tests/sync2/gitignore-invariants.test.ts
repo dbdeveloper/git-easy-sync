@@ -97,30 +97,66 @@ describe("GitignoreInvariants.enforce", () => {
     fs.rmSync(f.root, { recursive: true, force: true });
   });
 
-  it("creates configDir/.gitignore with recommended defaults ABOVE the final section when absent", async () => {
+  // Owner, 2026-10-24: <configDir>/.gitignore carries BOTH managed blocks —
+  // the plugin-folder allowlist on top (`invariants`, overridable by rules the
+  // user writes below it), the data-protection rules at the bottom (`final`).
+  // No recommended defaults in the user's zone any more.
+  it("🔑 creates configDir/.gitignore as two blocks: the allowlist on top, final at the bottom", async () => {
     expect(fs.existsSync(cdGitignore(f.root))).toBe(false);
     await f.inv.enforce();
     const content = fs.readFileSync(cdGitignore(f.root), "utf8");
-    // Only a `final` section here — nothing we write into configDir is
-    // a default the user may overrule (DOT-FILES §3.1.1).
+    expect(content).toContain(I_BEGIN);
     expect(content).toContain(F_BEGIN);
-    expect(content).toContain(FINAL_END);
-    // Recognizer, not literal: "no invariants section" must hold for a
-    // marker stamped by ANY version, including the unversioned form.
-    expect(findBeginLine(content, "invariants")).toBeNull();
+    const top = content.slice(content.indexOf(I_BEGIN), content.indexOf(INVARIANTS_END));
+    for (const rule of ["plugins/*/*", "!plugins/*/", "!plugins/*/main.js", "!plugins/*/manifest.json", "!plugins/*/styles.css"]) {
+      expect(top.split("\n"), rule).toContain(rule);
+    }
+    expect(top).toContain("Write your own rules BELOW this block");
+    expect(content.indexOf(INVARIANTS_END)).toBeLessThan(content.indexOf(F_BEGIN));
     expect(content).toContain("workspace.json");
-    expect(content).toContain("Recommended defaults");
-    expect(content).toContain("plugins/*/*");
-    // ...and it is LAST, which is what makes the data.json line outrank
-    // the catch-all in those defaults. This ordering is the whole fix
-    // for the two formerly-pinned toggle defects (§3.4.1).
-    expect(content.indexOf("plugins/*/*")).toBeLessThan(
-      content.indexOf(F_BEGIN),
-    );
-    // `*.log` rule moved from configDir to root .gitignore — the
-    // plugin's log lives at the vault root now, so the matching
-    // gitignore rule lives there too.
+    expect(content).not.toContain("Recommended defaults");
+    // `*.log` lives in the root file.
     expect(content).not.toContain("*.log");
+  });
+
+  // Owner, 2026-10-24, option (b): an existing file seeded by an older
+  // version has the allowlist as "Recommended defaults" in the user's zone.
+  // Those RULES become a second copy of ours and go (§3.1.5); the comments
+  // above them stay — the user removes them.
+  it("🔑 an old seeded file: the duplicate allowlist rules leave the user's zone, comments stay", async () => {
+    const cdPath = cdGitignore(f.root);
+    fs.writeFileSync(
+      cdPath,
+      [
+        "# Recommended defaults - feel free to edit.",
+        "",
+        "# Plugin folder allowlist - old comment.",
+        "plugins/*/*",
+        "!plugins/*/",
+        "!plugins/*/main.js",
+        "!plugins/*/manifest.json",
+        "!plugins/*/styles.css",
+        "*.user-rule",
+        "",
+        F_BEGIN,
+        "workspace.json",
+        FINAL_END,
+        "",
+      ].join("\n"),
+    );
+    await f.inv.enforce();
+    const content = fs.readFileSync(cdPath, "utf8");
+    const lines = content.split("\n");
+    expect(lines.filter((l) => l === "plugins/*/*")).toHaveLength(1); // ours, in the block
+    expect(lines.indexOf("plugins/*/*")).toBeLessThan(lines.indexOf(INVARIANTS_END));
+    expect(content).toContain("# Recommended defaults - feel free to edit.");
+    expect(content).toContain("# Plugin folder allowlist - old comment.");
+    expect(content).toContain("*.user-rule");
+    expect(content.indexOf("*.user-rule")).toBeGreaterThan(content.indexOf(INVARIANTS_END));
+    expect(content.indexOf("*.user-rule")).toBeLessThan(content.indexOf(F_BEGIN));
+    // One copy before, one after: the rule MOVED into the block — not
+    // reported as a removal (same as `*.log` in the root file, §3.1).
+    expect(f.anomalies.filter((a) => a.anomaly === "duplicate-removed")).toEqual([]);
   });
 
   it("creates root .gitignore with conflict-sibling + atomic-write artifact invariants + *.log default when absent", async () => {
@@ -169,15 +205,7 @@ describe("GitignoreInvariants.enforce", () => {
     expect(content).not.toContain("tampered");
   });
 
-  it("🔑 an `invariants` section left here by an OLDER version is REMOVED, not just outranked", async () => {
-    // <configDir>/.gitignore carries a `final` section and no
-    // `invariants` one by design (§3.1.1). An older version did put one
-    // here, and leaving it would keep its per-device lines in force
-    // ABOVE the section meant to be this file's only authority.
-    //
-    // Probed 2026-09-26 while replacing the splice machinery: dropping
-    // the removal left the whole suite green. The old code did it via
-    // `spliceOne(path, content, null)` and nothing ever pinned it.
+  it("an `invariants` section with a stale body is rewritten to the canonical allowlist (no longer removed)", async () => {
     const cdPath = cdGitignore(f.root);
     fs.writeFileSync(
       cdPath,
@@ -185,18 +213,21 @@ describe("GitignoreInvariants.enforce", () => {
     );
     await f.inv.enforce();
     const content = fs.readFileSync(cdPath, "utf8");
-    expect(findBeginLine(content, "invariants")).toBeNull();
+    expect(content).toContain(I_BEGIN);
     expect(content).not.toContain("stale-per-device-rule");
+    expect(content).toContain("!plugins/*/main.js");
     expect(content).toContain("*.user-rule"); // the user's own line stays
-    expect(content).toContain(F_BEGIN); // and ours is in place
+    expect(content).toContain(F_BEGIN);
   });
 
-  it("appends the final section BELOW a pre-existing user file", async () => {
+  it("puts the blocks AROUND a pre-existing user file: allowlist above, final below", async () => {
     const cdPath = cdGitignore(f.root);
     fs.writeFileSync(cdPath, "*.user-rule\n");
     await f.inv.enforce();
     const content = fs.readFileSync(cdPath, "utf8");
     expect(content).toContain(F_BEGIN);
+    expect(content).toContain(I_BEGIN);
+    expect(content.indexOf(I_BEGIN)).toBeLessThan(content.indexOf("*.user-rule"));
     expect(content).toContain("*.user-rule");
     expect(content.indexOf("*.user-rule")).toBeLessThan(
       content.indexOf(F_BEGIN),

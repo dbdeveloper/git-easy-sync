@@ -507,6 +507,36 @@ describe("L2/L5 — the configDir default for OTHER plugins is a user-flippable 
     expect(plugins.match(/^!?\*\/data\.json$/gm)).toEqual(["*/data.json"]);
   });
 
+  // Owner, 2026-10-24: the plugin-folder allowlist moved into the TOP
+  // (`invariants`) block of <configDir>/.gitignore. It must still decide
+  // exactly as before, a rule the user writes BELOW it must win (that is
+  // the point of the top block), and the bottom `final` must still
+  // re-admit a plugin's own .gitignore over the catch-all.
+  it("🔑 the allowlist in the top block: same verdicts; a user rule below overrides it", async () => {
+    const f = makeFixture();
+    await f.inv.enforce();
+    expect(f.read(`${CONFIG_DIR}/.gitignore`)).toMatch(/git-easy-sync invariants/);
+    expect(await f.syncable(`${CONFIG_DIR}/plugins/${OTHER}/main.js`)).toBe(true);
+    expect(await f.syncable(`${CONFIG_DIR}/plugins/${OTHER}/notes.txt`)).toBe(false);
+    expect(await f.syncable(`${CONFIG_DIR}/plugins/${OTHER}/data.json`)).toBe(false);
+
+    // The user's own override, written between the blocks.
+    const cd = f.read(`${CONFIG_DIR}/.gitignore`);
+    const finalAt = cd.indexOf("# ===== git-easy-sync final");
+    f.write(
+      `${CONFIG_DIR}/.gitignore`,
+      `${cd.slice(0, finalAt)}!plugins/${OTHER}/notes.txt\n\n${cd.slice(finalAt)}`,
+    );
+    await f.inv.enforce();
+    expect(f.read(`${CONFIG_DIR}/.gitignore`)).toContain(`!plugins/${OTHER}/notes.txt`);
+    expect(await f.syncable(`${CONFIG_DIR}/plugins/${OTHER}/notes.txt`)).toBe(true);
+    // ...and it cannot reach what `final` protects.
+    expect(await f.syncable(`${CONFIG_DIR}/workspace.json`)).toBe(false);
+    // A plugin's own .gitignore: `final` re-admits it over the catch-all.
+    f.write(`${CONFIG_DIR}/plugins/${OTHER}/.gitignore`, "*\n!main.js\n!.gitignore\n");
+    expect(await f.syncable(`${CONFIG_DIR}/plugins/${OTHER}/.gitignore`)).toBe(true);
+  });
+
   it("per-device configDir state never syncs", async () => {
     const f = makeFixture();
     await f.inv.enforce();

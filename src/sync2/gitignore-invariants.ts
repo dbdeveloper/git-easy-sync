@@ -202,15 +202,23 @@ function foreignPluginFinalBodyFor(syncConfigDir: boolean): string | null {
   return `${FOREIGN_SILENCER_COMMENT}\n*`;
 }
 
-// Recommended defaults seeded ONLY when sync2 first creates
-// <configDir>/.gitignore. Pre-existing files keep the user's content
-// untouched; our managed section goes at the END, below all of it.
-const CONFIG_DIR_RECOMMENDED_DEFAULTS = `# Recommended defaults - feel free to edit.
-
-# Plugin folder allowlist - by default sync only the four canonical
-# files (main.js, manifest.json, styles.css; data.json is governed
-# by the settings-tab toggle "Push plugins data.json to GitHub",
-# which lives in the managed block at the END of this file).
+// BODY of the `invariants` section at the TOP of <configDir>/.gitignore
+// (owner, 2026-10-24 — DOT-FILES §3.1.1): the plugin-folder allowlist.
+// These are the plugin's safety rules and stay in sight; a user who wants
+// to bend them writes rules BELOW this block (last-match), instead of
+// deleting ours without a trace. Overridable on purpose — the same class
+// as `.*` at the top of the root file. The data-protection rules stay in
+// `final` at the bottom: `!/plugins/*/.gitignore` there outranks the
+// catch-all `plugins/*/*` here, which is why this order works where the
+// 2026-09-21 one (the catch-all BELOW a top block) did not.
+//
+// Until 2026-10-24 these lines were "recommended defaults" seeded into the
+// user's zone of a NEW file only. In existing files they are now a second
+// copy of our rules and leave the user's zone (§3.1.5); the comments above
+// them stay — the user removes those.
+const CONFIG_DIR_INVARIANTS_BODY = `# Plugin folder allowlist - sync only main.js, manifest.json, styles.css of each plugin.
+# data.json follows the per-device switch "Sync plugins data.json" (Settings).
+# Write your own rules BELOW this block to override it.
 plugins/*/*
 !plugins/*/
 !plugins/*/main.js
@@ -812,26 +820,22 @@ export default class GitignoreInvariants {
       };
     }
     if (path === this.configDirGitignorePath) {
-      // No `invariants` here BY DESIGN: nothing we write into the
-      // config subtree is a default the user may overrule (§3.1.1).
-      // An older version DID put one here, so it is named for removal —
-      // left in place its per-device lines would still be in force,
-      // above the section meant to be the only authority in this file.
+      // Both sections since 2026-10-24 (owner, §3.1.1): the plugin-folder
+      // allowlist on top (overridable from below), the data-protection
+      // rules at the bottom (absolute).
       return {
+        invariants: {
+          begin: beginMarker("invariants", this.pluginVersion),
+          beginPattern: beginPattern("invariants"),
+          end: INVARIANTS_END,
+          body: CONFIG_DIR_INVARIANTS_BODY,
+        },
         final: {
           begin: beginMarker("final", this.pluginVersion),
           beginPattern: beginPattern("final"),
           end: FINAL_END,
           body: configDirFinalBody({ syncConfigDir: this.syncConfigDir() }),
         },
-        remove: [
-          {
-            begin: INVARIANTS_BEGIN,
-            beginPattern: beginPattern("invariants"),
-            end: INVARIANTS_END,
-            body: "",
-          },
-        ],
       };
     }
     return null;
@@ -846,9 +850,8 @@ export default class GitignoreInvariants {
   // path, which adds our sections and nothing else (owner, 2026-09-26).
   private defaultUserSpaceFor(path: string): string {
     if (path === this.rootGitignorePath) return ROOT_RECOMMENDED_DEFAULTS;
-    if (path === this.configDirGitignorePath) {
-      return CONFIG_DIR_RECOMMENDED_DEFAULTS;
-    }
+    // <configDir>/.gitignore: none since 2026-10-24 — the allowlist that
+    // was offered here is the file's `invariants` section now.
     return "";
   }
 
