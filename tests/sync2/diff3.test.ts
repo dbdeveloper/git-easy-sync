@@ -747,6 +747,44 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
     });
   });
 
+  // Owner, 2026-10-24: "the natural course of events is no conflicts at
+  // all" — an AUTOMATIC resolution of a real collision (both sides moved)
+  // is reported, so the WARN filter of the log viewer finds it. Ordinary
+  // one-sided changes are not.
+  describe("onAutoResolve — every automatic resolution of a collision is reported", () => {
+    const calls: Array<[string, string]> = [];
+    const deps = () => makeDeps({ onAutoResolve: (p: string, how: string) => calls.push([p, how]) });
+    beforeEach(() => calls.splice(0));
+
+    it("🔑 a clean 3-way merge", async () => {
+      const p = "n.md";
+      await _diff3(deps(), t(side(p, "a\nb\nc\nd\ne\n"), side(p, "a\nb\nc\nd\nE\n")), side(p, "A\nb\nc\nd\ne\n"), HEAD);
+      expect(calls).toEqual([[p, "merged"]]);
+    });
+
+    it("🔑 config folder: both changed → the newer file won", async () => {
+      await _diff3(deps(), t(side(HK, "A"), side(HK, "C", { mtime: 1000 })), side(HK, "B", { mtime: 2000 }), HEAD);
+      expect(calls).toEqual([[HK, "newer-local"]]);
+    });
+
+    it("config folder: no base, both created → the repository won", async () => {
+      await _diff3(deps(), t(emptyFileInfo(), side(OB, "R")), side(OB, "L"), HEAD);
+      expect(calls).toEqual([[OB, "repository-without-base"]]);
+    });
+
+    it("an edit beats a deletion (standard rule 4.6.a)", async () => {
+      const p = "n.md";
+      await _diff3(deps(), t(side(p, "A"), deletedSide(p)), side(p, "B"), HEAD);
+      expect(calls).toEqual([[p, "edit-beats-delete"]]);
+    });
+
+    it("a one-sided change is NOT reported", async () => {
+      const p = "n.md";
+      await _diff3(deps(), t(side(p, "A"), side(p, "B")), side(p, "A"), HEAD);
+      expect(calls).toEqual([]);
+    });
+  });
+
   it("A1 🔑 a renamed config folder gets the auto-resolve branch; '.obsidian/' there is ordinary", async () => {
     const CFG = ".obsidian-mobile";
     const deps = makeDeps({

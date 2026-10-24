@@ -145,7 +145,7 @@ export interface CleanSyntheticDeps {
   store: ConflictStoreV2;
   scope: DotSpaceScope;
   computeSha?: (bytes: ArrayBuffer) => Promise<string>;
-  logger?: { info(message: string, data?: unknown): void };
+  logger?: { info(message: string, data?: unknown): void; warn?(message: string, data?: unknown): void };
   now?: () => number;
 }
 
@@ -196,12 +196,12 @@ export async function cleanSyntheticConflicts(
       });
       if (!done || !gone) continue;
       if (c.state === "equals-base") {
-        deps.logger?.info("Conflict copy removed: identical to the file — the conflict is resolved", {
+        deps.logger?.warn?.("Conflict copy removed: identical to the file — the conflict is resolved", {
           path: entry.basePath,
           copy: c.path,
         });
       } else {
-        deps.logger?.info("Conflict copy removed: identical to another copy", {
+        deps.logger?.warn?.("Conflict copy removed: identical to another copy", {
           path: entry.basePath,
           copy: c.path,
           kept: c.duplicateOf,

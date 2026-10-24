@@ -947,7 +947,7 @@ export default class GithubClient {
     // documented behavior (https://docs.github.com/en/rest/repos/contents).
     // `encoding` is "none" in this case. Fall back to Blobs API to fetch
     // the actual bytes (base64-encoded) via the file's blob SHA.
-    this.logger.info(
+    this.logger.warn(
       "getContentsAtRef: Contents API returned empty content for >1MB file; falling back to Blobs API",
       {
         path: filePath,

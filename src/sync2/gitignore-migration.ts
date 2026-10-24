@@ -287,7 +287,7 @@ export async function runMigrationResume(
     const inProgress = inProgressPath(deps);
     if (await deps.vault.adapter.exists(inProgress)) {
       await deps.vault.adapter.remove(inProgress);
-      deps.logger?.info("gitignore migration: stale in-progress marker cleared");
+      deps.logger?.warn("gitignore migration: stale in-progress marker cleared");
     }
     return { kind: "already-done", ...none };
   }

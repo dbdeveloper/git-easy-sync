@@ -138,7 +138,7 @@ export class DiffDetailController {
   private async copyIsGone(entry: ConflictEntry): Promise<boolean> {
     if (entry.historyVersionSha !== undefined || !isConflictPair(entry.basePath, entry.siblingPath)) return false;
     if (await this.deps.vault.adapter.exists(entry.siblingPath)) return false;
-    this.deps.logger?.info("diff2: the conflict copy is gone (resolved) — closing its editor", {
+    this.deps.logger?.warn("diff2: the conflict copy is gone (resolved) — closing its editor", {
       base: entry.basePath,
       siblingPath: entry.siblingPath,
     });
@@ -574,7 +574,7 @@ export class DiffDetailController {
           // §2.2.15 recovery monitoring — a diverging history stopped at a safe prefix
           // (the user re-resolves the rest). Permanent log: catch recurrences + their
           // signature.
-          this.deps.logger?.info("diff2 replay STOPPED (divergence)", {
+          this.deps.logger?.warn("diff2 replay STOPPED (divergence)", {
             base: entry.basePath,
             ...replayRes.stoppedAtError,
             replayed: replayRes.replayed,
@@ -906,7 +906,7 @@ export class DiffDetailController {
       // writes nothing and asks nothing: the TOCTOU writers below and their "Saved
       // files changed" modal are for a conflict that is still ALIVE. Silent.
       if (await this.resolvedOutside(session.meta)) {
-        this.deps.logger?.info("diff2 [←]: the conflict was resolved outside the editor — closing without saving", {
+        this.deps.logger?.warn("diff2 [←]: the conflict was resolved outside the editor — closing without saving", {
           base: session.meta.basePath,
           sibling: session.meta.siblingPath,
         });
@@ -1133,7 +1133,7 @@ export class DiffDetailController {
         resolved,
         changedSide,
       );
-      this.deps.logger?.info(
+      this.deps.logger?.warn(
         "diff2 [←] exit: one input changed externally; wrote resolved " +
           "unchanged side, conflict continues",
         { changedSide, writtenPath },
@@ -1170,7 +1170,7 @@ export class DiffDetailController {
     }
     // discard
     await this.deps.vault.adapter.rmdir(autosaveDir(session.conflictId), true);
-    this.deps.logger?.info(
+    this.deps.logger?.warn(
       "diff2 [←] exit: both inputs changed externally; user discarded resolution",
       { base: session.meta.basePath, sibling: session.meta.siblingPath },
     );

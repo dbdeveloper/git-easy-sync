@@ -352,10 +352,11 @@ describe("process_conflicts (§VIII I)", () => {
   describe("every removed copy is logged with its reason", () => {
     const logged = () => {
       const lines: Array<{ message: string; data: Record<string, unknown> }> = [];
-      const logger = {
-        info: (message: string, data?: unknown) =>
-          lines.push({ message, data: (data ?? {}) as Record<string, unknown> }),
-      };
+      // Removals are WARN since 2026-10-24 (every conflict event is); the
+      // reason text is what these tests pin, whatever the level.
+      const push = (message: string, data?: unknown) =>
+        lines.push({ message, data: (data ?? {}) as Record<string, unknown> });
+      const logger = { info: push, warn: push };
       return { lines, deps: { ...deps(), logger } };
     };
 

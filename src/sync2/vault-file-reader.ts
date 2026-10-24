@@ -174,6 +174,12 @@ export function makeVaultFileReader(
       // passed raw on the other would re-sync forever.
       const out = canonicalize(normalized, bytes);
       await atomicWriteFile(deps.vault, normalized, out);
+      if (out !== bytes && !sameBytes(out, bytes)) {
+        // WARN (ARCHITECTURE "Log levels"): written not as it came from the server.
+        deps.logger?.warn("Pulled text file stored canonicalized (line endings / BOM / final newline)", {
+          path: normalized,
+        });
+      }
     },
 
     async remove(path) {
@@ -247,4 +253,12 @@ export function makeVaultFileReader(
       await deps.vault.adapter.remove(normalized);
     },
   };
+}
+
+function sameBytes(a: ArrayBuffer, b: ArrayBuffer): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  const x = new Uint8Array(a);
+  const y = new Uint8Array(b);
+  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+  return true;
 }

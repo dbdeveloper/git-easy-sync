@@ -58,7 +58,11 @@ describe("cleanSyntheticConflicts", () => {
     vault: vault as unknown as import("obsidian").Vault,
     store,
     scope: { configDir: CONFIG_DIR, syncConfigDir: () => true },
-    logger: { info: (message: string, data?: unknown) => logs.push({ message, data }) },
+    // Removals are WARN since 2026-10-24; the tests pin the reason text.
+    logger: {
+      info: (message: string, data?: unknown) => logs.push({ message, data }),
+      warn: (message: string, data?: unknown) => logs.push({ message, data }),
+    },
   });
   const clean = () => cleanSyntheticConflicts(cleanDeps());
 

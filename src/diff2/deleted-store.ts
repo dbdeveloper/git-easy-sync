@@ -288,7 +288,7 @@ export default class DeletedStore {
     for (const r of this.records) {
       const live = await this.vault.adapter.exists(r.path);
       if (live) {
-        this.logger?.info("deleted-bin: path is live again — record dropped", {
+        this.logger?.warn("deleted-bin: path is live again — record dropped", {
           path: r.path,
         });
         continue;

@@ -712,7 +712,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       if (headHash === null) {
         // Empty repo — nothing to lift from. The record stays; there
         // is no state to reach and no harm in waiting.
-        deps.logger?.info("hold not lifted: empty repo", { id });
+        deps.logger?.warn("hold not lifted: empty repo", { id });
         continue;
       }
       const folder = `${configDir}/plugins/${id}`;
@@ -951,7 +951,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // E4).
       const abort = await fillRemoteMtime(path, tracked);
       if (abort !== null) return { abort };
-      deps.logger?.info("plugin-core collision resolved by mtime", {
+      deps.logger?.warn("plugin-core collision resolved by mtime", {
         path,
         reason,
       });
@@ -1003,7 +1003,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       return byClock(`same version on both sides (${localVersion})`);
     }
     const winner = cmp > 0 ? "remote" : "local";
-    deps.logger?.info("plugin-core collision resolved by VERSION", {
+    deps.logger?.warn("plugin-core collision resolved by VERSION", {
       path,
       localVersion,
       remoteVersion,
@@ -1075,6 +1075,9 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     computeSha: deps.computeSha,
     configDir: deps.vault.configDir,
     selfPluginId: deps.selfPluginId,
+    // WARN (owner, 2026-10-24): a rule, not the user, settled a collision.
+    // The user may not have wanted it — the WARN filter must find it.
+    onAutoResolve: (path, how) => deps.logger?.warn("Conflict resolved automatically", { path, how }),
   };
 
   // ── §II.16 progress counters (run-scoped) ────────────────────────
@@ -1691,7 +1694,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // the update back on every healthy device. The batch still
       // completes — the entry counts as disposed of.
       if (isHeldPath(entry.path, configDir, held)) {
-        deps.logger?.info("batch entry skipped: plugin update held", {
+        deps.logger?.warn("batch entry skipped: plugin update held", {
           path: entry.path,
         });
         continue;
@@ -2548,7 +2551,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
               { ...previousSibling, originSha: tracked.remote.sha },
             ],
           });
-          deps.logger?.info("Conflict copy already holds the newer server version — left as is", {
+          deps.logger?.warn("Conflict copy already holds the newer server version — left as is", {
             path,
             server: tracked.remote.sha?.slice(0, 7),
           });
@@ -2616,7 +2619,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           { ...prevWithBlob, blob: null, originSha: foldAncestor.sha },
           merged,
         );
-        deps.logger?.info("Conflict copy updated to the newer server version (old copy replaced)", {
+        deps.logger?.warn("Conflict copy updated to the newer server version (old copy replaced)", {
           path,
           from: foldAncestor.sha?.slice(0, 7),
           to: tracked.remote.sha?.slice(0, 7),
@@ -2958,7 +2961,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           { remote: path, taken: canonical, to: target },
         );
       } else {
-        deps.logger?.info("Vault-step: sanitized remote forbidden path", {
+        deps.logger?.warn("Vault-step: sanitized remote forbidden path", {
           from: path,
           to: canonical,
         });

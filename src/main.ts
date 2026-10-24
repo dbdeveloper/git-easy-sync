@@ -651,7 +651,7 @@ export default class GitHubSyncPlugin extends Plugin {
       // TODO(perf) diagnostic — a 693 KB history [←] write blocked ~28 s; time atomicWriteFile
       // sub-steps (shared by diff2 [←] AND sync) to confirm the cost is Obsidian's modifyBinary
       // re-index, not our staging I/O. Logs only slow writes (≥200 ms).
-      setAtomicWritePerfSink((p) => this.logger.info("atomicWrite slow", p));
+      setAtomicWritePerfSink((p) => this.logger.warn("atomicWrite slow", p));
       setCommitStepSink((p) => this.logger.info("diff2 commitStep", p));
       // The ONE place windows are touched: atomicWriteFile/promoteInPlace invoke this for the
       // rename branch (large existing file / new file). Closes any tab showing `path` → runs
@@ -1458,6 +1458,9 @@ export default class GitHubSyncPlugin extends Plugin {
       // stamp already in the file so an older build never rewrites a
       // newer build's rules.
       pluginVersion: manifest.version,
+      // WARN (ARCHITECTURE "Log levels"): a file changed without a person.
+      onWritten: (path) =>
+        this.logger.warn("Managed .gitignore written by the plugin (its blocks added, repaired or re-versioned)", { path }),
       // DOT-FILES §3.1.3. Everything here is logged; only the case we
       // cannot fix ourselves reaches the user, because only they can
       // finish it — we refuse to guess where a damaged section ended,
@@ -1843,7 +1846,7 @@ export default class GitHubSyncPlugin extends Plugin {
           path,
           oldSiblingPath,
         );
-        this.logger.info("Replaced conflict copy forgotten", { path, oldSiblingPath, ...r });
+        this.logger.warn("Replaced conflict copy forgotten", { path, oldSiblingPath, ...r });
         })().catch((err) =>
           this.logger.warn("Could not forget the replaced conflict copy (tabs / autosave)", { path, err: `${err}` }),
         );
@@ -1959,7 +1962,7 @@ export default class GitHubSyncPlugin extends Plugin {
     //     running drain; in the Sync's COMMIT part the commit finishes and
     //     the drain is not started (owner, 2026-10-09).
     if (this.sync2Manager.isSyncBusy() && background) {
-      this.logger.info("Background sync skipped: a sync is already running");
+      this.logger.warn("Background sync skipped: a sync is already running");
       return;
     }
     if (this.sync2Manager.isSyncBusy()) {
@@ -2230,7 +2233,7 @@ export default class GitHubSyncPlugin extends Plugin {
           }),
       });
       if (r.closedTabs > 0) {
-        this.logger.info("Editors of resolved conflicts closed (the copy is gone or identical to its file)", r);
+        this.logger.warn("Editors of resolved conflicts closed (the copy is gone or identical to its file)", r);
       }
     } catch (err) {
       this.logger.warn("closeVanishedCopyEditors failed", { err: `${err}` });
@@ -2656,7 +2659,7 @@ export default class GitHubSyncPlugin extends Plugin {
       // button. Joins the running one otherwise; never a second walk.
       const analysis = this.startMigrationAnalysis();
       if (origin === "auto") {
-        this.logger.info("sync skipped: initial vault analysis in progress");
+        this.logger.warn("sync skipped: initial vault analysis in progress");
         return false;
       }
       // ⚠️ Wait QUIETLY first. On desktop the whole walk is ~300 ms (P8),
@@ -2712,7 +2715,7 @@ export default class GitHubSyncPlugin extends Plugin {
       // existing conflict, and showing both would put two windows in front
       // of one event (owner, 2026-09-28).
       if (result?.conflictPath != null) {
-        this.logger.info("sync stopped: the analysis raised a proposal");
+        this.logger.warn("sync stopped: the analysis raised a proposal");
         return false;
       }
     }
@@ -3896,7 +3899,7 @@ export default class GitHubSyncPlugin extends Plugin {
     // The SAME guard as Sync (owner, 2026-10-09): a running Sync — its
     // commit part included — or drain means this drain is not started.
     if (this.sync2Manager.isSyncBusy()) {
-      this.logger?.info(
+      this.logger?.warn(
         "uploadOnly command: a sync is already running, ignoring",
       );
       return;
@@ -3985,7 +3988,7 @@ export default class GitHubSyncPlugin extends Plugin {
       // any other plugin: the new main.js is already on disk (the
       // marker swap completed), so disable+enable loads the new code.
       if (enabled !== undefined && !enabled.has(id)) {
-        this.logger?.info(
+        this.logger?.warn(
           "BRAT-style reload skipped: plugin not enabled",
           { id },
         );
@@ -4065,7 +4068,7 @@ export default class GitHubSyncPlugin extends Plugin {
         const unload = pm?.disablePluginAndSave ?? pm?.disablePlugin;
         try {
           await unload?.call(pm, id);
-          this.logger?.info("Plugin removed by sync: unloaded", { id });
+          this.logger?.warn("Plugin removed by sync: unloaded", { id });
           new Notice(`Plugin "${id}" removed`, 3000);
         } catch (err) {
           this.logger?.error("Plugin removed by sync: unload FAILED", {
@@ -4087,7 +4090,7 @@ export default class GitHubSyncPlugin extends Plugin {
       const manifestText = await this.readPluginManifest(id);
       const skip = reloadSkipReason(manifestText, Platform.isDesktopApp);
       if (skip !== null) {
-        this.logger?.info("BRAT-style reload skipped", { id, reason: skip });
+        this.logger?.warn("BRAT-style reload skipped", { id, reason: skip });
         continue;
       }
       // The RUNNING version, read before the reload replaces it.
@@ -4755,7 +4758,7 @@ export default class GitHubSyncPlugin extends Plugin {
           const restored = await enforceIfRootGitignore(normalizePath(path), async () => {
             await this.invariants?.enforce();
           });
-          if (restored) this.logger.info("History save over the root .gitignore — managed blocks restored");
+          if (restored) this.logger.warn("History save over the root .gitignore — managed blocks restored");
         } catch (err) {
           // The save itself succeeded — do not report it as failed; the next
           // Sync restores the blocks anyway.

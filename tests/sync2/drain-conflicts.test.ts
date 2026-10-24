@@ -739,7 +739,7 @@ describe("drain conflict lifecycle (§VIII C + E.1-E.5 + J.1/J.6 + L.3)", () => 
       expect(vaultHas(remoteSiblingName(sib1.timeLabel!))).toBe(false);
       // Our side moved on to 9 (the conflict branch's job — unchanged).
       expect(rec.conflictBase.sha).toBe(await sha(ver(9)));
-      expect(logged).toContainEqual({ level: "info", message: "Conflict copy updated to the newer server version (old copy replaced)" });
+      expect(logged).toContainEqual({ level: "warn", message: "Conflict copy updated to the newer server version (old copy replaced)" });
     });
 
     // Owner, 2026-10-09: when a copy is REPLACED, the OLD copy is forgotten

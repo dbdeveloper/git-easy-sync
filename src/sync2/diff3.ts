@@ -128,7 +128,21 @@ export interface Diff3Deps {
   // Our plugin id — its own `.gitignore` is a constant and stays in the
   // config branch (see takesConfigBranch).
   selfPluginId: string;
+  // Told about every AUTOMATIC resolution of a real collision — both
+  // sides moved and a rule, not the user, picked the result (owner,
+  // 2026-10-24: "the natural course is no conflicts at all", so the
+  // drain logs these as WARN). One-sided changes are not collisions and
+  // are not reported.
+  onAutoResolve?: (path: string, how: AutoResolution) => void;
 }
+
+export type AutoResolution =
+  | "merged" // 3-way line merge of both sides
+  | "newer-local" // config folder: both changed, the local file was newer
+  | "newer-remote" // config folder: both changed, the remote file was newer (or no usable mtime)
+  | "repository-without-base" // config folder: both created with no base — the repository won
+  | "live-beats-delete" // config folder: deleted on one side, edited on the other — the live file won
+  | "edit-beats-delete"; // standard rule 4.6.a
 
 // Under the config folder at ANY depth.
 function inConfigDir(path: string, configDir: string): boolean {
@@ -351,15 +365,24 @@ export async function _diff3(
     }
     // Real collision, delete-vs-edit → the LIVE side wins, mtime not
     // consulted (3.b.*.c/d) — deliberately NO 4.6.b asymmetry here.
-    if (local.mode === DELETED) return { kind: "file", file: remote };
-    if (remote.mode === DELETED) return { kind: "file", file: local };
+    if (local.mode === DELETED) {
+      deps.onAutoResolve?.(path, "live-beats-delete");
+      return { kind: "file", file: remote };
+    }
+    if (remote.mode === DELETED) {
+      deps.onAutoResolve?.(path, "live-beats-delete");
+      return { kind: "file", file: local };
+    }
     // 3.b.1.e with NO record to compare against (base=null — both sides
     // created the file on their own, e.g. a NEW device's default config on
     // its first Sync) → the REPOSITORY wins (owner, 2026-10-10). The
     // newer-mtime rule handed it to the freshly created local defaults: a
     // new phone vault overwrote the repo's .obsidian/core-plugins.json.
     // A new device adopts the vault's settings; it does not impose its own.
-    if (base.sha === null) return { kind: "file", file: remote };
+    if (base.sha === null) {
+      deps.onAutoResolve?.(path, "repository-without-base");
+      return { kind: "file", file: remote };
+    }
     // 3.b.*.e — THE ONLY place in the whole algorithm where mtimes
     // are compared ("зроблено СВІДОМО"). Fallback semantics (owner):
     // ambiguity → remote wins. local.mtime==0 (legacy batch, stat
@@ -367,7 +390,9 @@ export async function _diff3(
     // land in the remote branch — hence the explicit null guard: a
     // bare `>` would coerce null to 0 in JS and hand `5 > null` to
     // local, silently inverting the owner's fallback rule.
-    return { kind: "file", file: pickNewestForObsidian(local, remote) };
+    const winner = pickNewestForObsidian(local, remote);
+    deps.onAutoResolve?.(path, winner === local ? "newer-local" : "newer-remote");
+    return { kind: "file", file: winner };
   }
 
   // ── §II.1 п.4 — standard resolution ─────────────────────────────
@@ -436,6 +461,7 @@ export async function _diff3(
     return { kind: "file", file: remote }; // 4.5.d
   }
   if (local.sha !== base.sha && remote.mode === DELETED) {
+    deps.onAutoResolve?.(path, "edit-beats-delete");
     return { kind: "file", file: local }; // 4.6.a — edit beats delete
   }
   if (remote.sha !== base.sha && local.mode === DELETED) {
@@ -602,6 +628,7 @@ export async function _diff3(
   if (!(await deps.syncStore.existInSyncStore(mergedSha))) {
     await deps.syncStore.saveBlobToSyncStore(mergedSha, merged);
   }
+  deps.onAutoResolve?.(path, "merged");
   return { kind: "file", file: mergedFile };
 }
 

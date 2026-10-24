@@ -402,6 +402,9 @@ export interface GitignoreInvariantsDeps {
   // always yield or never yield — and the silence would look exactly
   // like the rule working.
   pluginVersion: string;
+  // Every managed .gitignore the plugin writes (owner, 2026-10-24: a file
+  // modified without a person's direct action is a WARN in the log).
+  onWritten?: (path: string) => void;
 }
 
 export interface GitignoreMatcherCache {
@@ -458,6 +461,7 @@ export default class GitignoreInvariants {
   private readonly configDir: string;
   private readonly pluginsDirGitignorePath: string;
   private readonly pluginVersion: string;
+  private readonly onWritten: ((path: string) => void) | undefined;
   // Last version we yielded to, per path — so the log records the STATE
   // CHANGE rather than one line per sync for as long as this device
   // stays behind. A yield is a normal, possibly long-lived condition,
@@ -473,6 +477,7 @@ export default class GitignoreInvariants {
     this.syncConfigDir = deps.syncConfigDir;
     this.pushPluginsDataJson = deps.pushPluginsDataJson;
     this.pluginVersion = deps.pluginVersion;
+    this.onWritten = deps.onWritten;
     this.configDir = deps.configDir;
     this.configDirGitignorePath = `${deps.configDir}/.gitignore`;
     this.pluginsDir = `${deps.configDir}/plugins`;
@@ -954,6 +959,7 @@ export default class GitignoreInvariants {
     // from what we replaced (gi.ts holds a level by mtime for 500 ms).
     const slash = path.lastIndexOf("/");
     this.gi.invalidate(slash <= 0 ? "" : path.substring(0, slash));
+    this.onWritten?.(path);
   }
 
   private async ensureParentDir(filePath: string): Promise<void> {

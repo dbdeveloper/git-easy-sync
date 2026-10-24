@@ -62,6 +62,22 @@ The log is for someone debugging alone, later — so the level says what kind of
   a timeout, no network.
 - **INFO** — the normal course.
 
+**WARN is also everything the plugin did ON ITS OWN that a person may later wonder about**
+(owner, 2026-10-24) — so that the log viewer filtered to WARN + ERROR answers "what happened?"
+without scrolling the whole log:
+- something **blocked, skipped, held, deferred or refused** (a sync not started because one is
+  running, a held plugin update, a batch entry skipped, a sync paused by a `.gitignore` conflict);
+- something **discarded or removed** (unsaved editor work dropped, a conflict copy removed, a
+  Deleted-bin record dropped, a plugin removed by sync);
+- something **replaced, renamed, rewritten or fallen back to a default** (a file name sanitized, a
+  conflict copy replaced, a fallback API path, a value replaced by its default);
+- **every conflict event** — a manual conflict appearing, and EVERY automatic resolution of a
+  collision (3-way merge, "newer file wins", "repository wins", edit beats delete, plugin files by
+  version): the natural course is no conflicts at all, and the user may not have wanted the rule's
+  choice (`Conflict resolved automatically` with `how`);
+- **a file modified without a person's direct action** — canonicalization (CRLF/BOM/trailing
+  newline) of a text file, our blocks written into or repaired in a `.gitignore`.
+
 The `HTTP <method> <what> … status=N` line of every GitHub request (`httpLogLevel` in
 `src/github/client.ts`): 2xx/3xx → INFO; 404, 409, 410, 422 and other 4xx → WARN; 429, or
 403 with the rate limit used up / a `Retry-After` → WARN; 401, 403 otherwise, 5xx → ERROR. A

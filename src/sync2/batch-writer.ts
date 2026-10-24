@@ -376,6 +376,8 @@ export default class BatchWriter {
     );
     if (canon.changed && writeBack) {
       await this.vault.adapter.write(path, canon.content as string);
+      // WARN (ARCHITECTURE "Log levels"): the file changed without a person.
+      this.logger?.warn("Text file canonicalized by the plugin (line endings / BOM / final newline)", { path });
     }
     return canon.bytes;
   }

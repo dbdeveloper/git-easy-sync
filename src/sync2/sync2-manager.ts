@@ -482,7 +482,7 @@ export class Sync2Manager {
 
   private claimSync(what: string): boolean {
     if (this.isSyncBusy()) {
-      this.deps.logger.info(`Sync2 ${what}: a sync is already running — not started`);
+      this.deps.logger.warn(`Sync2 ${what}: a sync is already running — not started`);
       return false;
     }
     this.syncBusy = true;
@@ -1252,7 +1252,7 @@ export class Sync2Manager {
         to,
       });
     } else {
-      this.deps.logger.info("Sync2 sanitize-filename: renaming", { from: path, to });
+      this.deps.logger.warn("Sync2 sanitize-filename: renaming", { from: path, to });
     }
     await this.deps.renameFile(path, to);
     return to;
