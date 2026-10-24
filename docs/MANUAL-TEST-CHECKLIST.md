@@ -287,6 +287,8 @@ Use it, and note which runs you did.
       1. Put the OLD build into BOTH vaults (`<vault>/.obsidian/plugins/git-easy-sync/`), reload the plugin, press
          **Sync** in A, then B, then A again until nothing changes. Open `.obsidian/.gitignore` in both: ONE block,
          `final v2.0.2-beta`, and above it "Recommended defaults" with the `plugins/*/*` lines.
+         (If a vault already had the NEW two-block file from a dev build stamped `v2.0.2-beta`, the OLD build
+         removes the top block on the first Sync — expected: same version, nothing to yield to. Let it settle.)
       2. Put the NEW build into **A** only, reload the plugin, press **Sync** in A. In A's `.obsidian/.gitignore`:
          - at the top `# ===== git-easy-sync invariants v2.0.3-beta - DO NOT EDIT =====` with the five allowlist
            lines and the comment "Write your own rules BELOW this block…";
