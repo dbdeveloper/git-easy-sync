@@ -32,7 +32,7 @@ import {
   searchKeymap,
   searchPanelOpen,
 } from "@codemirror/search";
-import { LiveFeed, cursorItemLines, openLog, renderAppend, renderLog, sameItemLine, type LogItem } from "./log-model";
+import { LiveFeed, cursorItemLines, openLog, placeExpanded, renderAppend, renderLog, sameItemLine, type LogItem } from "./log-model";
 import { makeFilter } from "./log-filter";
 import { SEPARATOR, separatorsAsDashes, type FormatOptions, type LevelMark } from "./log-format";
 import type { LogFileAdapter } from "./log-load";
@@ -424,7 +424,7 @@ export class LogViewerPanel {
     const column = cursorPos - cursorLine.from;
     const cb = ed.lineBlockAt(cursorPos);
     const inView = cb.bottom > sc.scrollTop && cb.top < sc.scrollTop + sc.clientHeight;
-    const oldHead = inView ? cursorItemLines(before, before, items, cursorLine.number - 1) : null;
+    const oldHead = inView ? cursorItemLines(before, before, items, cursorLine.number - 1, doc0.lines) : null;
     // The entry's first line may be ABOVE the window (an expanded entry
     // seen only by its last lines, the cursor clicked on one of them):
     // then it becomes the first visible line — the collapsed entry shows
@@ -437,15 +437,27 @@ export class LogViewerPanel {
     this.render(false);
     const anchor = oldHead === null
       ? null
-      : cursorItemLines(before, { starts: this.starts, compact: this.compact }, items, cursorLine.number - 1);
+      : cursorItemLines(
+          before,
+          { starts: this.starts, compact: this.compact },
+          items,
+          cursorLine.number - 1,
+          ed.state.doc.lines,
+        );
     if (anchor !== null) {
       const head = ed.state.doc.line(anchor.newLine + 1);
       ed.dispatch({ selection: { anchor: head.from + Math.min(column, head.length) } });
       ed.requestMeasure({
         read: () => null,
         write: () => {
-          const target = Math.max(0, ed.lineBlockAt(head.from).top - offset);
-          sc.scrollTop = target;
+          const headTop = ed.lineBlockAt(head.from).top;
+          const last = ed.state.doc.line(Math.min(anchor.newLast + 1, ed.state.doc.lines));
+          sc.scrollTop = placeExpanded({
+            wanted: headTop - offset,
+            headTop,
+            entryBottom: ed.lineBlockAt(last.from).bottom,
+            viewHeight: sc.clientHeight,
+          });
           this.placedScrollTop = sc.scrollTop;
           this.lastScrollTop = sc.scrollTop;
           this.following = isLastLineVisible(sc, ed.defaultLineHeight);

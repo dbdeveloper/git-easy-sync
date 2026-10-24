@@ -3,7 +3,7 @@
 // AGPL-3.0 — see LICENSE.
 
 import { describe, it, expect } from "vitest";
-import { LiveFeed, cursorItemLines, renderAppend, renderLog, sameItemLine } from "../../src/log-viewer/log-model";
+import { LiveFeed, cursorItemLines, placeExpanded, renderAppend, renderLog, sameItemLine } from "../../src/log-viewer/log-model";
 import { makeFilter } from "../../src/log-viewer/log-filter";
 import type { RecentLine } from "../../src/log-viewer/log-parse";
 import type { LogEntry } from "../../src/log-viewer/log-parse";
@@ -164,22 +164,40 @@ describe("cursorItemLines — where the cursor's entry is before and after", () 
   const expanded = { starts: [0, 5, 6, 7], compact: false };
 
   it("🔑 compact → expanded: the anchor is the entry's head line, below its separator", () => {
-    expect(cursorItemLines(compact, expanded, items, 0)).toEqual({ oldLine: 0, newLine: 1 });
-    expect(cursorItemLines(compact, expanded, items, 3)).toEqual({ oldLine: 3, newLine: 8 });
+    expect(cursorItemLines(compact, expanded, items, 0, 9)).toEqual({ oldLine: 0, newLine: 1, newLast: 4 });
+    expect(cursorItemLines(compact, expanded, items, 3, 9)).toEqual({ oldLine: 3, newLine: 8, newLast: 8 });
   });
 
   it("🔑 expanded → compact from ANY line of the entry: the old anchor is its head line", () => {
     for (const l of [0, 1, 2, 3, 4]) {
-      expect(cursorItemLines(expanded, compact, items, l)).toEqual({ oldLine: 1, newLine: 0 });
+      expect(cursorItemLines(expanded, compact, items, l, 4)).toEqual({ oldLine: 1, newLine: 0, newLast: 0 });
     }
   });
 
   it("a line that is not a record has no separator in either mode", () => {
-    expect(cursorItemLines(compact, expanded, items, 1)).toEqual({ oldLine: 1, newLine: 5 });
-    expect(cursorItemLines(expanded, compact, items, 5)).toEqual({ oldLine: 5, newLine: 1 });
+    expect(cursorItemLines(compact, expanded, items, 1, 9)).toEqual({ oldLine: 1, newLine: 5, newLast: 5 });
+    expect(cursorItemLines(expanded, compact, items, 5, 4)).toEqual({ oldLine: 5, newLine: 1, newLast: 1 });
   });
 
   it("an empty view → null", () => {
-    expect(cursorItemLines({ starts: [], compact: true }, { starts: [], compact: false }, [], 0)).toBeNull();
+    expect(cursorItemLines({ starts: [], compact: true }, { starts: [], compact: false }, [], 0, 0)).toBeNull();
+  });
+});
+
+// Owner, 2026-10-24: an entry expanded near the bottom is lifted so it
+// shows whole; one taller than the window starts at its top line.
+describe("placeExpanded — the scroll position that shows the anchored entry", () => {
+  // all in pixels: head = the entry's first line top, end = its last line bottom
+  it("fits where it is → stays (same distance from the window top)", () => {
+    expect(placeExpanded({ wanted: 100, headTop: 300, entryBottom: 500, viewHeight: 400 })).toBe(100);
+  });
+  it("🔑 runs off the bottom → lifted just enough to show its end", () => {
+    expect(placeExpanded({ wanted: 100, headTop: 450, entryBottom: 650, viewHeight: 400 })).toBe(250);
+  });
+  it("🔑 taller than the window → its first line is the first visible line", () => {
+    expect(placeExpanded({ wanted: 100, headTop: 450, entryBottom: 1450, viewHeight: 400 })).toBe(450);
+  });
+  it("never below 0", () => {
+    expect(placeExpanded({ wanted: -20, headTop: 0, entryBottom: 50, viewHeight: 400 })).toBe(0);
   });
 });

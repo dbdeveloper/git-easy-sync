@@ -188,7 +188,8 @@ export function sameItemLine(oldStarts: number[], newStarts: number[], topLine: 
 // selection) is in view (owner, 2026-10-24): the item that holds
 // `cursorLine`. Returns its FIRST content line before (`oldLine`) and
 // after (`newLine`) the switch — for a log record in expanded mode that
-// is the line under its separator. The view keeps oldLine's height on
+// is the line under its separator — and its LAST line after (`newLast`;
+// `afterLineCount` = lines in the new text). The view keeps oldLine's height on
 // screen for newLine and puts the cursor there, so an expanded entry
 // opens downwards and a compacted one pulls the lines below up to it.
 export interface ViewLayout {
@@ -201,10 +202,29 @@ export function cursorItemLines(
   after: ViewLayout,
   items: Array<{ kind: string }>,
   cursorLine: number,
-): { oldLine: number; newLine: number } | null {
+  afterLineCount: number,
+): { oldLine: number; newLine: number; newLast: number } | null {
   let k = -1;
   for (let i = 0; i < before.starts.length && before.starts[i] <= cursorLine; i++) k = i;
   if (k < 0 || k >= after.starts.length || k >= items.length) return null;
   const head = (l: ViewLayout) => l.starts[k] + (items[k].kind === "entry" && !l.compact ? 1 : 0);
-  return { oldLine: head(before), newLine: head(after) };
+  const next = k + 1 < after.starts.length ? after.starts[k + 1] : afterLineCount;
+  return { oldLine: head(before), newLine: head(after), newLast: next - 1 };
+}
+
+// The scroll position after a switch, in pixels (owner, 2026-10-24):
+// `wanted` keeps the entry's first line at its old distance from the
+// window's top. An entry that then runs off the bottom is lifted just
+// enough to show its end; one taller than the window starts at its first
+// line, and the user scrolls on from there.
+export function placeExpanded(p: {
+  wanted: number;
+  headTop: number;
+  entryBottom: number;
+  viewHeight: number;
+}): number {
+  let top = p.wanted;
+  if (p.entryBottom > top + p.viewHeight) top = p.entryBottom - p.viewHeight;
+  top = Math.min(top, p.headTop);
+  return Math.max(0, top);
 }
