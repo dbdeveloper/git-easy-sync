@@ -40,7 +40,7 @@ describe("parseLogText / parseLogLine", () => {
     expect(parseLogText(`${L1}\n\n${L2}\n`).entries).toHaveLength(2);
   });
 
-  it("a corrupt line in the middle is kept as RAW, marked — never dropped", () => {
+  it("a corrupt line in the middle is kept (shown as plain text) — never dropped", () => {
     const r = parseLogText(`${L1}\nnot json at all\n${L2}\n`);
     expect(r.entries.map((e) => e.kind)).toEqual(["entry", "raw", "entry"]);
     expect(r.entries[1]).toEqual({ kind: "raw", raw: "not json at all" });

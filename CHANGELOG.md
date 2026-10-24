@@ -172,7 +172,8 @@ that cannot break Obsidian, and GitHub's real file-size limit.
 - **A log viewer** (Settings → Logging → *View log*): the log as a
   table with a column filter (`|` between pieces), search and copy;
   new entries appear live. Its own window on desktop, full screen on
-  a phone. *Clean logs* shows the live log size.
+  a phone. *Clean logs* shows the live log size. A line that is not a
+  log record is shown as plain text, as is.
 - **A proper editor for the root `.gitignore`** (Settings →
   .gitignore → *Open*), behind a short warning shown every time. It
   saves only a real change and refuses to overwrite a version a sync

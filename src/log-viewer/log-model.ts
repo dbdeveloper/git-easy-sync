@@ -145,7 +145,8 @@ export class LiveFeed {
 }
 
 // One new entry for the end of the document — the same text renderLog
-// would give for the whole list (separator, block), or null when the
+// would give for the whole list (separator, block; no separator before
+// a line printed as is), or null when the
 // current filter rejects it. Marks are absolute in the document after
 // the insert.
 export function renderAppend(
@@ -157,7 +158,7 @@ export function renderAppend(
   if (!passes(entry)) return null;
   const lead = docLength === 0 ? "" : "\n";
   const block = formatEntryBlock(entry, format);
-  const head = `${lead}${SEPARATOR}\n`;
+  const head = entry.kind === "entry" ? `${lead}${SEPARATOR}\n` : lead;
   const start = docLength + head.length;
   return {
     insert: head + block.text,

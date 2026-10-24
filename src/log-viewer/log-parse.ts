@@ -22,7 +22,8 @@ export type LogEntry =
       data: unknown;
     }
   // A line that is not a log record (hand-edited, an old format,
-  // corruption). Shown as is, marked — never silently dropped.
+  // corruption, another program's log). Shown as is, as plain text —
+  // never silently dropped.
   | { kind: "raw"; raw: string };
 
 // One ring slot: the exact line the logger wrote (no trailing newline)

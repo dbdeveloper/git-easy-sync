@@ -111,8 +111,12 @@ describe("makeFilter — switches", () => {
     expect(ok("a.c", e("INFO", "abc"))).toBe(false);
   });
 
-  it("a raw line: its text is the message column, level RAW", () => {
+  // Owner, 2026-10-24: a line that is not a log record has no columns —
+  // its whole text is its one column.
+  it("🔑 a line that is not a log record: one column, its whole text", () => {
     const raw: LogEntry = { kind: "raw", raw: "garbage here" };
-    expect(ok("raw | garbage", raw)).toBe(true);
+    expect(ok("garbage", raw)).toBe(true);
+    expect(ok("raw", raw)).toBe(false); // no "RAW" level any more
+    expect(ok("garbage | here", raw)).toBe(false); // two columns asked, it has one
   });
 });

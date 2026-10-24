@@ -16,6 +16,11 @@
 // carries the empty columns on its left — line wrapping is off in the
 // viewer, so the columns can only stay aligned if we split lines here.
 // The level word is reported as a mark so the view can colour it.
+//
+// A line that is not a log record is printed AS IS — no columns, no
+// level, no separator before it (owner, 2026-10-24): a file in another
+// format reads like plain text, and a corrupt line in our log is just a
+// line between the entries.
 
 import type { LogEntry } from "./log-parse";
 
@@ -92,12 +97,10 @@ function dataLines(data: unknown): string[] {
 
 // The four columns as TEXT — what the filter (step 4) matches against,
 // exactly as drawn: the local date/time, the level, and the message
-// column, which holds the data under the message.
-export function entryColumns(
-  e: LogEntry,
-  opts: FormatOptions = {},
-): [date: string, time: string, level: string, message: string] {
-  if (e.kind === "raw") return ["", "", "RAW", e.raw];
+// column, which holds the data under the message. A line that is not a
+// log record has ONE column: its whole text.
+export function entryColumns(e: LogEntry, opts: FormatOptions = {}): string[] {
+  if (e.kind === "raw") return [e.raw];
   const { date, time } = dateTime(e.timestamp, opts.timeZone === "utc");
   const data = dataLines(e.data);
   return [date, time, e.level, [e.message, ...data].join("\n")];
@@ -113,11 +116,10 @@ export function formatEntryBlock(
   e: LogEntry,
   opts: FormatOptions = {},
 ): { text: string; marks: LevelMark[] } {
+  if (e.kind === "raw") return { text: e.raw, marks: [] };
   const utc = opts.timeZone === "utc";
-  const { date, time, level, message, data } =
-    e.kind === "entry"
-      ? { ...dateTime(e.timestamp, utc), level: e.level, message: e.message, data: e.data }
-      : { date: "", time: "", level: "RAW", message: e.raw, data: undefined };
+  const { date, time } = dateTime(e.timestamp, utc);
+  const { level, message, data } = e;
   const head = `${date.padEnd(DATE_W)} | ${time.padEnd(TIME_W)} | `;
   const levelCell = level.slice(0, LEVEL_W).padEnd(LEVEL_W);
   const [first, ...more] = message.split("\n");
@@ -133,8 +135,8 @@ export function formatEntryBlock(
   };
 }
 
-// The whole table: a separator before every entry; a GAP item is the
-// "…" line. Marks are shifted to their place in the full text.
+// The whole table: a separator before every log record (not before a
+// line printed as is); a GAP item is the "…" line. Marks are shifted to their place in the full text.
 export function formatTable(
   items: Array<LogEntry | GapItem>,
   opts: FormatOptions = {},
@@ -151,7 +153,7 @@ export function formatTable(
       push("…");
       continue;
     }
-    push(SEPARATOR);
+    if (item.kind === "entry") push(SEPARATOR);
     const b = formatEntryBlock(item, opts);
     for (const m of b.marks) marks.push({ ...m, from: m.from + offset, to: m.to + offset });
     push(b.text);

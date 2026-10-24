@@ -60,10 +60,13 @@ describe("formatEntryBlock — one entry", () => {
     }
   });
 
-  it("a raw (corrupt) line: empty date/time, level RAW, the text as the message", () => {
+  // Owner, 2026-10-24: a line the parser cannot read is printed as is —
+  // no columns, no "RAW" level, no colour — so a file in another format
+  // reads like plain text.
+  it("🔑 a line that is not a log record is printed as is: no columns, no level mark", () => {
     const b = formatEntryBlock({ kind: "raw", raw: "not json" }, UTC);
-    expect(b.text).toBe("           |              | RAW   | not json");
-    expect(b.marks[0].level).toBe("RAW");
+    expect(b.text).toBe("not json");
+    expect(b.marks).toEqual([]);
   });
 
   it("an unreadable timestamp is shown as is, never as NaN", () => {
@@ -131,6 +134,18 @@ describe("formatTable — the whole log", () => {
 
   it("copying text without separators changes nothing", () => {
     expect(separatorsAsDashes("just | text")).toBe("just | text");
+  });
+
+  it("🔑 no separator before a line that is not a log record — plain text stays plain", () => {
+    const raw = (s: string): LogEntry => ({ kind: "raw", raw: s });
+    const t = formatTable([raw("one"), raw("two"), entry({ message: "a" }), raw("three")], UTC);
+    const lines = t.text.split("\n");
+    expect(lines[0]).toBe("one");
+    expect(lines[1]).toBe("two");
+    expect(lines[2]).toBe(SEPARATOR);
+    expect(lines[3]).toContain("| INFO  | a");
+    expect(lines[4]).toBe("three");
+    expect(t.marks.map((m) => t.text.slice(m.from, m.to))).toEqual(["INFO"]);
   });
 
   it("a GAP item draws the gap marker line", () => {

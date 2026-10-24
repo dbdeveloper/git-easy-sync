@@ -108,6 +108,16 @@ describe("renderAppend", () => {
     expect(add.insert).toBe(renderLog([entry("INFO", "x")], "", none, UTC).text);
   });
 
+  it("🔑 a line that is not a log record is appended as is, without a separator", () => {
+    const a = entry("INFO", "first");
+    const raw: LogEntry = { kind: "raw", raw: "plain text" };
+    const base = renderLog([a], "", none, UTC);
+    const add = renderAppend(raw, pass(""), base.text.length, UTC)!;
+    expect(add.insert).toBe("\nplain text");
+    expect(add.marks).toEqual([]);
+    expect(base.text + add.insert).toBe(renderLog([a, raw], "", none, UTC).text);
+  });
+
   it("🔑 an entry the filter rejects is not appended", () => {
     expect(renderAppend(entry("INFO", "x"), pass("error"), 10, UTC)).toBeNull();
   });
