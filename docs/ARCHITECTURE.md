@@ -96,7 +96,7 @@ src/
 │                                    #  resetPluginState (calls renameVaultSiblingsToUnresolved
 │                                    #  before clearAll), pushPluginsDataJsonCached
 ├── gi.ts                            # GI (gitignore matcher) — path-browserify, mobile-safe
-├── logger.ts                        # JSONL log file (<vault>/<id>.log) + console mirror tagged [ges];
+├── logger.ts                        # JSONL log file (<vault>/<id>-<device label>.log) + console mirror tagged [ges];
 │                                    #  an in-memory ring of the last LOG_RING_SIZE exact lines with
 │                                    #  sequence numbers + subscribe() — the log viewer's live feed
 ├── log-viewer/                      # LOG-VIEWER (docs/tasks/LOG-VIEWER.md), opened ONLY from

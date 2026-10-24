@@ -646,12 +646,18 @@ Three buttons live in Settings under **.gitignore**:
 ### Logging
 
 - **Enable logging** — appends every operation to
-  `<vault>/git-easy-sync.log`. Off by default. Turning it off deletes
-  the file. Logs do not sync: `*.log` sits in the top managed block
-  of the root `.gitignore`. To sync this log anyway — handy for
-  reading a phone's log on a desktop, though several devices then
-  write the same file — add `!/git-easy-sync.log` among your own
-  rules.
+  `<vault>/git-easy-sync-<device label>.log` (characters a file name
+  cannot hold become `_`). Off by default. Turning it off deletes the
+  file. Changing the device label renames the log; if a file with the
+  new name is already there, logging continues in it and the old file
+  stays. Logs do not sync: `*.log` sits in the top managed block of
+  the root `.gitignore`. To collect every device's log in one place —
+  give each device its own label — add `!/git-easy-sync-*.log` among
+  your own rules. The log changes during the sync itself, so every
+  sync then commits it too.
+- If the plugin fails to start, it writes
+  `<vault>/git-easy-sync-crash-<device label>.log` (`…-crash-unknown.log`
+  when it failed before reading its settings).
 - **View log** — opens the log as a table: filter by column (`|`
   separates the pieces, left to right), search, copy. New entries
   appear as they are written. Its own window on desktop, full screen
@@ -998,7 +1004,7 @@ When something doesn't behave the way you expect:
 1. **Turn on logging** in plugin settings (`Enable logging`).
 2. **Reproduce** the issue.
 3. **Get the log**: Settings → Logging → *View log* lets you filter
-   and copy what matters, or attach `<vault>/git-easy-sync.log`
+   and copy what matters, or attach `<vault>/git-easy-sync-<device label>.log`
    itself.
 4. **Open an issue** at
    [github.com/dbdeveloper/git-easy-sync/issues](https://github.com/dbdeveloper/git-easy-sync/issues)

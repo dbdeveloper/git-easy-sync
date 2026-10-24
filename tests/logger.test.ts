@@ -166,7 +166,7 @@ describe("Logger", () => {
     await logger.init();
     logger.info("nope");
     await new Promise((r) => setTimeout(r, 10));
-    expect(fs.existsSync(path.join(tmp, `${PLUGIN_ID}.log`))).toBe(false);
+    expect(fs.existsSync(path.join(tmp, `${PLUGIN_ID}-unknown.log`))).toBe(false);
   });
 
   it("when enabled: log file is appended (async, but lands eventually)", async () => {
@@ -181,7 +181,7 @@ describe("Logger", () => {
     // microtask + adapter.append to complete.
     await new Promise((r) => setTimeout(r, 50));
     const contents = fs.readFileSync(
-      path.join(tmp, `${PLUGIN_ID}.log`),
+      path.join(tmp, `${PLUGIN_ID}-unknown.log`),
       "utf8",
     );
     expect(contents).toContain("hello world");
@@ -200,7 +200,7 @@ describe("Logger", () => {
     logger.error("boom", { err: new Error("kaboom") });
     await new Promise((r) => setTimeout(r, 50));
     const contents = fs.readFileSync(
-      path.join(tmp, `${PLUGIN_ID}.log`),
+      path.join(tmp, `${PLUGIN_ID}-unknown.log`),
       "utf8",
     );
     const lines = contents.trim().split("\n").filter(Boolean);
@@ -225,7 +225,7 @@ describe("Logger", () => {
     logger.info("cycle", cyclic);
     await new Promise((r) => setTimeout(r, 50));
     const contents = fs.readFileSync(
-      path.join(tmp, `${PLUGIN_ID}.log`),
+      path.join(tmp, `${PLUGIN_ID}-unknown.log`),
       "utf8",
     );
     const lines = contents.trim().split("\n").filter(Boolean);

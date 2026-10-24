@@ -25,7 +25,7 @@ describe("Logger ring + subscription (LOG-VIEWER step 2)", () => {
   let vault: Vault;
   const make = (enabled = true) =>
     new Logger(vault as unknown as import("obsidian").Vault, PLUGIN_ID, enabled);
-  const fileText = () => fs.readFileSync(path.join(tmp, `${PLUGIN_ID}.log`), "utf8");
+  const fileText = () => fs.readFileSync(path.join(tmp, `${PLUGIN_ID}-unknown.log`), "utf8");
 
   beforeEach(() => {
     tmp = mkdtempSync(path.join(tmpdir(), "logger-ring-"));

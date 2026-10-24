@@ -77,7 +77,7 @@ import { LogViewerView, LOG_VIEWER_VIEW_TYPE } from "./log-viewer/log-viewer-vie
 import { LogViewerModal } from "./log-viewer/log-viewer-modal";
 import type { LogViewerDeps } from "./log-viewer/log-viewer-panel";
 import { logViewerTarget } from "./log-viewer/log-open-target";
-import { logFileNameFor } from "./logger";
+import { crashLogFileNameFor } from "./logger";
 import { settleSelfUpdateBaselines } from "./sync2/self-update-applied";
 import DeletedStore from "./diff2/deleted-store";
 import { Sync2Manager, type DrainStatus } from "./sync2/sync2-manager";
@@ -641,6 +641,7 @@ export default class GitHubSyncPlugin extends Plugin {
         this.app.vault,
         manifest.id,
         this.settings.enableLogging,
+        this.settings.deviceLabel,
       );
       await this.logger.init();
       // TODO(perf) diagnostic — bridge the diff2 render layer's intra-chunk-diff timing to
@@ -931,8 +932,11 @@ export default class GitHubSyncPlugin extends Plugin {
         }
       } catch {}
       try {
+        // The device label is in the name like the log's (owner,
+        // 2026-10-24); "unknown" when the failure came before data.json
+        // was read (or while it was being read).
         await this.app.vault.adapter.append(
-          `${manifest.id}-crash.log`,
+          crashLogFileNameFor(manifest.id, this.settings?.deviceLabel || "unknown"),
           `[${new Date().toISOString()}] ${message}\n${stack}\n\n`,
         );
       } catch {}
@@ -1101,8 +1105,11 @@ export default class GitHubSyncPlugin extends Plugin {
     // toggle below is: the Settings field polices only what it witnessed,
     // and a hand-edited data.json carrying the reserved label would jam
     // the pre-sync gate on every sync.
+    // An empty label (or only spaces) is "Obsidian", like the Settings
+    // field makes it (owner, 2026-10-24): it names the log file, the
+    // commits and the conflict copies.
     this.settings.deviceLabel = deconflictDeviceLabel(
-      this.settings.deviceLabel ?? "Obsidian",
+      (this.settings.deviceLabel ?? "").trim() || "Obsidian",
     );
     this.settings.pushPluginsDataJson = pluginsDataJsonToggleState(
       this.settings.syncConfigDir ?? true,
@@ -4353,7 +4360,7 @@ export default class GitHubSyncPlugin extends Plugin {
   private logViewerDeps(): LogViewerDeps {
     return {
       adapter: this.app.vault.adapter,
-      logPath: normalizePath(logFileNameFor(manifest.id)),
+      logPath: this.logger.logPath,
       logger: () => this.logger,
     };
   }

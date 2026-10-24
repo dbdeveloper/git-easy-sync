@@ -34,7 +34,7 @@ Use a **test vault**, not a real one.
    plugin's `main.js` with `main-boom.js` and push it.
 5. On the first device, Sync.
 
-**Expected**, in `<vault>/git-easy-sync.log`:
+**Expected**, in `<vault>/git-easy-sync-<device label>.log`:
 
 ```
 BRAT-style reload scheduled   ids=["git-easy-sync-reload-probe"]
@@ -94,7 +94,7 @@ in the console, so a failure is visible rather than inferred.
    - `main.js` ← the contents of `main-v2.js`
 3. In Obsidian — **Sync**.
 
-**Expected**, in `<vault>/git-easy-sync.log`:
+**Expected**, in `<vault>/git-easy-sync-<device label>.log`:
 
 ```
 plugin update HELD for this Obsidian   id=... heldVersion=2.0.0 needs=99.0.0 files=2

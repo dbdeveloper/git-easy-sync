@@ -91,3 +91,22 @@ describe("loadSettings normalises persisted state it cannot trust", () => {
     expect(p.settings.githubBranch).toBe("main");
   });
 });
+
+// Owner, 2026-10-24: an empty device label becomes "Obsidian" — in memory
+// AND in data.json. It names the log file, the commits and the conflict
+// copies; an empty one would leave them all without a device.
+describe("loadSettings: an empty device label becomes Obsidian", () => {
+  it.each([[""], ["   "]])("🔑 %j → Obsidian, persisted", async (stored) => {
+    const { p, saves } = pluginWith({ deviceLabel: stored });
+    await p.loadSettings();
+    expect(p.settings.deviceLabel).toBe("Obsidian");
+    expect(saves).toHaveBeenCalled();
+  });
+
+  it("a real label is kept and nothing is written", async () => {
+    const { p, saves } = pluginWith({ deviceLabel: "test" });
+    await p.loadSettings();
+    expect(p.settings.deviceLabel).toBe("test");
+    expect(saves).not.toHaveBeenCalled();
+  });
+});

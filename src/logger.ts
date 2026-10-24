@@ -4,18 +4,38 @@
 
 import { Vault, normalizePath } from "obsidian";
 
-// Log file lives at the VAULT ROOT, named `<plugin-id>.log` — the
-// plugin id from manifest.json is the canonical machine-readable
-// name, so the log filename rides with it (rename the plugin →
-// rename the log automatically). Locating the file at the vault
-// root lets the user see it in Obsidian's file explorer, open it
-// directly, and read it without a clipboard round-trip. *.log is
-// in the root .gitignore by default so it doesn't accidentally
-// sync to GitHub — power users can drop the rule if they want logs
-// to travel between devices (with the obvious caveat that multi-
-// device writes will collide on the same filename).
-export function logFileNameFor(pluginId: string): string {
-  return `${pluginId}.log`;
+// Log file lives at the VAULT ROOT, named `<plugin-id>-<device label>.log`
+// — the plugin id from manifest.json is the canonical machine-readable
+// name, so the log filename rides with it (rename the plugin → rename
+// the log automatically). Locating the file at the vault root lets the
+// user see it in Obsidian's file explorer, open it directly, and read it
+// without a clipboard round-trip. *.log is in the root .gitignore by
+// default so it doesn't accidentally sync to GitHub.
+//
+// The device label is in the name (owner, 2026-10-24) so devices write
+// DIFFERENT files: a user who lets the logs sync collects every device's
+// log in one vault, side by side. Two devices with the same label share
+// a file — accepted (the user gives devices different labels).
+export function logFileNameFor(pluginId: string, deviceLabel: string): string {
+  return `${pluginId}-${fileSafeLabel(deviceLabel)}.log`;
+}
+
+// Written by onload when the plugin fails to start. Before data.json is
+// read the label is not known yet: the caller passes "unknown".
+export function crashLogFileNameFor(pluginId: string, deviceLabel: string): string {
+  return `${pluginId}-crash-${fileSafeLabel(deviceLabel)}.log`;
+}
+
+// The device label as a piece of a file name: characters no platform
+// allows in a name (/ \ : * ? " < > |, control characters) and a trailing
+// dot or space (Windows drops them) become "_". Everything else stays —
+// Cyrillic and emoji are valid on every platform Obsidian runs on.
+export function fileSafeLabel(label: string): string {
+  // eslint-disable-next-line no-control-regex
+  const safe = label.replace(/[/\\:*?"<>|\u0000-\u001f\u007f]/g, "_");
+  const end = safe.search(/[. ]+$/);
+  const out = end === -1 ? safe : safe.slice(0, end) + "_".repeat(safe.length - end);
+  return out === "" ? "unknown" : out;
 }
 
 // Max serialized size of `data` we'll write per log entry. Anything larger
@@ -58,12 +78,64 @@ export default class Logger {
   private readonly listeners = new Set<(l: LoggedLine) => void>();
   private readonly lifecycleListeners = new Set<(e: LogLifecycle) => void>();
 
+  // Every operation on the file runs here, one after another: an append
+  // must never race a rename, or a line logged during a label change
+  // would recreate the old file. A failed operation does not stop the
+  // ones after it.
+  private disk: Promise<void> = Promise.resolve();
+
   constructor(
     private vault: Vault,
-    pluginId: string,
+    private readonly pluginId: string,
     private enabled: boolean,
+    deviceLabel = "unknown",
   ) {
-    this.logFile = normalizePath(logFileNameFor(pluginId));
+    this.logFile = normalizePath(logFileNameFor(pluginId, deviceLabel));
+  }
+
+  // Where the log is written now (vault-relative).
+  get logPath(): string {
+    return this.logFile;
+  }
+
+  private onDisk(op: () => Promise<void>): Promise<void> {
+    const run = this.disk.then(op);
+    this.disk = run.catch(() => {});
+    return run;
+  }
+
+  // The device label changed: the log follows it under its new name
+  // (owner, 2026-10-24). When a file with the new name is already there
+  // (logs synced from another device with that label, or a label used
+  // before), nothing is renamed — the logger continues in that file and
+  // the old one stays where it is. With logging off there is no file;
+  // only the name changes.
+  async setDeviceLabel(deviceLabel: string): Promise<void> {
+    const next = normalizePath(logFileNameFor(this.pluginId, deviceLabel));
+    let moved: { from: string; renamed: boolean } | null = null;
+    await this.onDisk(async () => {
+      const prev = this.logFile;
+      if (next === prev) return;
+      this.logFile = next;
+      if (!this.enabled) return;
+      const adapter = this.vault.adapter;
+      if (!(await adapter.exists(prev))) return;
+      if (await adapter.exists(next)) {
+        moved = { from: prev, renamed: false };
+        return;
+      }
+      await adapter.rename(prev, next);
+      moved = { from: prev, renamed: true };
+    });
+    if (moved !== null) {
+      const m: { from: string; renamed: boolean } = moved;
+      this.info(
+        m.renamed
+          ? "Log file renamed after the device label"
+          : "Log continues in an existing file with the new device label; the old file stays",
+        { from: m.from, to: next },
+      );
+    }
   }
 
   // Read-only accessor for code paths that want to GUARD heavy
@@ -169,7 +241,7 @@ export default class Logger {
         // A broken subscriber must not break logging or the others.
       }
     }
-    await this.vault.adapter.append(this.logFile, line + "\n");
+    await this.onDisk(() => this.vault.adapter.append(this.logFile, line + "\n"));
   }
 
   // The newest lines, oldest first (a copy).
@@ -206,7 +278,11 @@ export default class Logger {
   }
 
   async read(): Promise<string> {
-    return await this.vault.adapter.read(this.logFile);
+    let text = "";
+    await this.onDisk(async () => {
+      text = await this.vault.adapter.read(this.logFile);
+    });
+    return text;
   }
 
   // Truncate the log to 0 bytes. Only meaningful while logging is
@@ -216,7 +292,7 @@ export default class Logger {
     // The ring goes with the file: the viewer's merge would otherwise
     // bring the cleaned lines back. Sequence numbers keep rising.
     this.ring = [];
-    await this.vault.adapter.write(this.logFile, "");
+    await this.onDisk(() => this.vault.adapter.write(this.logFile, ""));
     this.announce("cleaned");
   }
 
@@ -236,15 +312,19 @@ export default class Logger {
   // already on disk. No-op when the file exists (preserving any
   // accumulated lines).
   private async ensureFile(): Promise<void> {
-    if (await this.vault.adapter.exists(this.logFile)) return;
-    await this.vault.adapter.write(this.logFile, "");
+    await this.onDisk(async () => {
+      if (await this.vault.adapter.exists(this.logFile)) return;
+      await this.vault.adapter.write(this.logFile, "");
+    });
   }
 
   // Remove the log file from disk. No-op when the file is already
   // missing (user deleted it manually, previous disable already ran).
   private async removeFile(): Promise<void> {
-    if (!(await this.vault.adapter.exists(this.logFile))) return;
-    await this.vault.adapter.remove(this.logFile);
+    await this.onDisk(async () => {
+      if (!(await this.vault.adapter.exists(this.logFile))) return;
+      await this.vault.adapter.remove(this.logFile);
+    });
   }
 
   // PUBLIC SYNC API. Returns void — never blocks the caller. The

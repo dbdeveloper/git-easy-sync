@@ -288,10 +288,11 @@ const ROOT_INVARIANTS_BODY = `# Editing this block triggers a rewrite to canonic
 # ...except this file, the one that decides the rest.
 !/.gitignore
 
-# Logs, the plugin's own <plugin-id>.log at the vault root included.
-# To sync logs anyway, add below this block: !*.log (all) or
-# !/<plugin-id>.log (only the plugin's) - useful for reading a phone's
-# log on a desktop, but several devices will write the same file.
+# Logs, the plugin's own <plugin-id>-<device label>.log at the vault
+# root included. To sync logs anyway, add below this block: !*.log (all)
+# or !/<plugin-id>-*.log (the plugin's, one file per device label) -
+# useful for comparing devices' logs in one place. The log changes
+# during the sync itself, so every sync then commits it too.
 *.log`;
 
 // BODY of the `final` section at the END of <vault>/.gitignore: the

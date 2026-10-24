@@ -941,10 +941,21 @@ describe("*.log in the root file's top (overridable) section", () => {
   it("🔑 the user can still opt logs back in below the section", async () => {
     await f.inv.enforce();
     const c = fs.readFileSync(rootPath(), "utf8");
-    fs.writeFileSync(rootPath(), c.replace(F_BEGIN, `!/git-easy-sync.log\n\n${F_BEGIN}`));
+    fs.writeFileSync(rootPath(), c.replace(F_BEGIN, `!/git-easy-sync-*.log\n\n${F_BEGIN}`));
     const gi = new GI(f.root, undefined, whitelistedGitignoreDirs(CONFIG_DIR));
-    expect(gi.ignored("git-easy-sync.log")).toBe(false);
+    expect(gi.ignored("git-easy-sync-test.log")).toBe(false);
+    expect(gi.ignored("git-easy-sync-crash-Mobile.log")).toBe(false);
     expect(gi.ignored("notes/debug.log")).toBe(true);
+  });
+
+  // Owner, 2026-10-24: the log name carries the device label, so the
+  // advice in the block names the per-device pattern — and says the cost:
+  // the log changes during every sync, so every sync commits it.
+  it("🔑 the block's advice names the per-device log pattern and its cost", async () => {
+    await f.inv.enforce();
+    const top = topSection(fs.readFileSync(rootPath(), "utf8"));
+    expect(top).toContain("!/<plugin-id>-*.log");
+    expect(top).toMatch(/every sync/i);
   });
 
   it("a NEW file: *.log is in the top section, not repeated among the recommended defaults", async () => {

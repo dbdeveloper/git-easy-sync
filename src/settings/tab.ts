@@ -13,7 +13,6 @@ import {
   requestUrl,
 } from "obsidian";
 import GitHubSyncPlugin from "src/main";
-import { logFileNameFor } from "src/logger";
 import { formatSyncMessage } from "src/sync2/commit-message";
 import { renderTokenHelpBox } from "src/sync2/views/token-help";
 import { pluginsDataJsonToggleState } from "src/settings/toggle-rules";
@@ -72,6 +71,9 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       this.drainStatusTickTimer = null;
     }
     this.stopLogSizeTimer();
+    // The log follows the device label (see the field's "change" below);
+    // leaving the page with the field still focused fires no "change".
+    void this.plugin.logger?.setDeviceLabel(this.plugin.settings.deviceLabel ?? "Obsidian");
   }
 
   private stopLogSizeTimer(): void {
@@ -363,10 +365,18 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       .setName("Device label")
       .setDesc(
         "Label for this machine. Baked into commit messages as a trailing " +
-          '" (label)" suffix and into conflict-resolution sibling-file names. ',
+          '" (label)" suffix, into conflict-resolution sibling-file names and ' +
+          "into the log file name. Give each device its own label. ",
       )
-      .addText((text) =>
-        text
+      .addText((text) => {
+        // The log file is renamed when the edit is DONE (Enter, or the
+        // field loses focus), not on every keystroke: a half-typed label
+        // could name an existing file, and the logger would then continue
+        // in it and carry it along (owner's rule for an existing name).
+        text.inputEl.addEventListener("change", () => {
+          void this.plugin.logger.setDeviceLabel(this.plugin.settings.deviceLabel ?? "Obsidian");
+        });
+        return text
           .setPlaceholder("Obsidian")
           .setValue(this.plugin.settings.deviceLabel ?? "Obsidian")
           .onChange(async (value) => {
@@ -378,8 +388,8 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
             );
             await this.plugin.saveSettings();
             for (const refresh of previews) refresh();
-          }),
-      );
+          });
+      });
     const deviceLabelPreview = makePreviewElement(deviceLabelSetting.infoEl);
     const updateDeviceLabelPreview = (): void => {
       deviceLabelPreview.setText(`Sync commit example: "${renderDeviceLabelPreview()}"`);
@@ -943,7 +953,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       let size = 0;
       try {
         // A missing file (just enabled, or deleted by hand) reads as 0.
-        size = (await this.app.vault.adapter.stat(logFileNameFor(manifest.id)))?.size ?? 0;
+        size = (await this.app.vault.adapter.stat(this.plugin.logger.logPath))?.size ?? 0;
       } catch {
         // unreadable → 0; the next tick tries again
       }
@@ -952,7 +962,8 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Enable logging")
       .setDesc(
-        `Persist logs to <vault>/${logFileNameFor(manifest.id)}. Useful for bug reports. ` +
+        `Persist logs to <vault>/${this.plugin.logger.logPath} (the name carries the device label). ` +
+        "Useful for bug reports. " +
         "Turning logging off deletes the file from the vault.",
       )
       .addToggle((toggle) => {

@@ -78,6 +78,13 @@ that cannot break Obsidian, and GitHub's real file-size limit.
 
 ### Changed
 
+- **The log file name carries the device label**:
+  `git-easy-sync-<device label>.log` (and
+  `git-easy-sync-crash-<device label>.log`). Each device writes its
+  own file, so with `!/git-easy-sync-*.log` in your root `.gitignore`
+  every device's log can be collected in one vault. Changing the
+  label renames the log. The old `git-easy-sync.log` is left as is —
+  delete it by hand. An empty device label now becomes `Obsidian`.
 - **Everything starting with a dot is invisible to sync by
   default**, and becomes visible only through the root
   `.gitignore` (a `!`-rule naming a concrete path), the
