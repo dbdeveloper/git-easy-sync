@@ -1095,6 +1095,17 @@ export class Sync2Manager {
       }
       await this.fireQueueDepth();
 
+      // ERROR (owner, 2026-10-24): a file this drain could not write or
+      // apply — a disk error, a blob missing on GitHub. Its own line, for
+      // every outcome: inside the INFO summary it was invisible to the log
+      // viewer's WARN + ERROR filter.
+      if (r.vaultStepErrors.length > 0) {
+        this.deps.logger.error("Sync2: files that could not be applied (written to the vault)", {
+          count: r.vaultStepErrors.length,
+          errors: r.vaultStepErrors,
+        });
+      }
+
       switch (r.status) {
         case "ok": {
           this.emitDrainStatus({ lastError: null });

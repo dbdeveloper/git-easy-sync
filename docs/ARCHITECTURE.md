@@ -56,6 +56,10 @@ The log is for someone debugging alone, later — so the level says what kind of
 - **ERROR** — something failed. **Every error the user is SHOWN** (a Notice, red text in a
   pane, a tab that closes itself after a failure) is also logged as ERROR, with the
   reason. Also: a token that was there and is gone.
+  A Sync that STOPPED (network, timeout, auth, 3 failed pushes) is an ERROR at the place
+  that started it (`syncAll click failed`, `Interval drain failed`, `… command failed`); a
+  file the drain could not write or apply is its own ERROR line, `Sync2: files that could
+  not be applied` (owner, 2026-10-24) — never only a field of the INFO summary.
 - **WARN** — not a failure of the system, but **unexpected information that changes the
   normal course**: a file not found, a version that is a deletion, a conflict cancelled,
   a write refused because the file changed meanwhile, a command run while not configured,

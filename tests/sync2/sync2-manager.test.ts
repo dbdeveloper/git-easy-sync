@@ -1542,6 +1542,27 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect("conflicts" in done).toBe(false);
   });
 
+  // Owner, 2026-10-24: a file the drain could not write or apply (a disk
+  // error, a blob missing on GitHub) is an ERROR line of its own — it used
+  // to live only inside the INFO "Sync2 drain done" summary, invisible to
+  // the log viewer's WARN + ERROR filter. Also when the drain then failed.
+  it("🔑 files the drain could not apply → an ERROR line naming them, whatever the outcome", async () => {
+    for (const status of ["ok", "network-error"] as const) {
+      const errors: Array<{ m: string; d: unknown }> = [];
+      deps.logger = { info: () => {}, warn: () => {}, error: (m: string, d?: unknown) => errors.push({ m, d }) };
+      manager = new Sync2Manager(deps);
+      drainResult = okResult({
+        status: status as DrainOutcome,
+        vaultStepErrors: [{ path: "notes/x.md", error: "EACCES: permission denied" }],
+      });
+      await manager.syncAll().catch(() => {});
+      const line = errors.find((e) => e.m.startsWith("Sync2: files that could not be applied"));
+      expect(line, status).toBeDefined();
+      expect(JSON.stringify(line!.d)).toContain("notes/x.md");
+      expect(JSON.stringify(line!.d)).toContain("EACCES");
+    }
+  });
+
   describe("the drain's message: conflicts touched", () => {
     it("🔑 any conflict verdict → the message (also when the count stays the same)", async () => {
       drainResult = okResult({ conflictVerdicts: [{ path: "a.md", site: "vault-step" }] });
