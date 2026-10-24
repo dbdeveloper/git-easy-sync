@@ -891,7 +891,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // predicate keeps new work away, it does not retract work
       // already seeded this run.
       for (const path of paths) state.trackedFiles.delete(path);
-      deps.logger?.info("plugin update HELD for this Obsidian", {
+      // WARN (ARCHITECTURE "Log levels"): not a failure, but unexpected
+      // information that changes the normal course — an update is NOT
+      // applied and the folder goes silent in both directions.
+      deps.logger?.warn("plugin update HELD for this Obsidian", {
         id,
         heldVersion: decision.heldVersion,
         needs: decision.minAppVersion,
