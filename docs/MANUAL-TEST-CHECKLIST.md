@@ -283,10 +283,10 @@ Use it, and note which runs you did.
 Vaults (all connected to repo `obsidian8`):
 **A** = `~/Obsidian-test` — the NEW build (`pnpm dev` puts it there), **Sync configs ON**;
 **B** = `~/obsidian-test2` — the OLD build `2.0.2-beta`, **Sync configs OFF**;
-**C** = Android `/sdcard/Documents/Obsidian-test2/` — the OLD build `2.0.2-beta`, **Sync configs OFF**.
+**C** = Android `/sdcard/Documents/Obsidian-test/` — the OLD build `2.0.2-beta`, **Sync configs OFF**.
 With Sync configs OFF, B and C do not receive the new `main.js` (the whole `.obsidian/` is cut off, our plugin
 folder included) — that is what keeps them "old". Each vault's log: `<vault>/git-easy-sync.log` (phone:
-`adb pull /sdcard/Documents/Obsidian-test2/git-easy-sync.log`). **Keep the order T0 → T7.**
+`adb pull /sdcard/Documents/Obsidian-test/git-easy-sync.log`). **Keep the order T0 → T7.**
 If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost: stop and collect all three logs.
 
 - [ ] **T0. Preparation.** A shows `2.0.3-beta` in Settings → Community plugins; B and C show `2.0.2-beta`.
