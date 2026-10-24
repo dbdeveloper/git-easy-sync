@@ -17,6 +17,7 @@ import {
 } from "../../src/sync2/conflict-siblings";
 import { parseSiblingFilename } from "../../src/diff2/strip-conflict-suffix";
 import { FORBIDDEN_TO_CANONICAL } from "../../src/sync2/cross-platform";
+import { beginMarker, endMarker, versionLine } from "../../src/sync2/gitignore-markers";
 
 // Phase 2 sibling helpers (NEW-DRAIN §III допоміжні; §VIII C.7-family).
 // The disk-name format is a pre-existing invariant — the strongest
@@ -349,5 +350,72 @@ describe("the device label is part of a FILENAME and is sanitised", () => {
     expect(name).toMatch(
       /^note\.conflict-from-.+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.md$/,
     );
+  });
+});
+
+// Owner, 2026-10-24: a conflict on a managed .gitignore is about RULES; our
+// version lines are the plugin's business and must not show up as a
+// difference. When the copy is saved, the LOCAL file takes the copy's version
+// lines; the copy itself is untouched (its bytes are the server's version,
+// and the replace-transaction recovery checks them by SHA).
+describe("saveConflictSiblingFile — version lines of a managed .gitignore", () => {
+  let dir: string;
+  let vault: Vault;
+  const at = (v: string, rule: string) =>
+    [
+      beginMarker("invariants"),
+      versionLine("invariants", v),
+      "plugins/*/*",
+      endMarker("invariants"),
+      "",
+      rule,
+      "",
+      beginMarker("final"),
+      versionLine("final", v),
+      "workspace.json",
+      endMarker("final"),
+      "",
+    ].join("\n");
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "conflict-siblings-ver-"));
+    vault = new Vault(dir);
+    fs.mkdirSync(path.join(dir, ".obsidian"), { recursive: true });
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  for (const p of [".obsidian/.gitignore", ".gitignore"]) {
+    it(`🔑 ${p}: the local file takes the copy's version lines; the copy is the server's bytes`, async () => {
+      fs.writeFileSync(path.join(dir, p), at("2.0.5-beta", "*.b2-rule"));
+      const theirs = at("2.0.6-beta", "*.a2-rule");
+      const info = { path: p, timeLabel: TS, deviceLabel: "test", blob: enc(theirs) };
+      await saveConflictSiblingFile(vault as never, info, NO_LEDGER);
+      expect(dec((await readSiblingFileFromVault(vault as never, info))!)).toBe(theirs);
+      expect(fs.readFileSync(path.join(dir, p), "utf8")).toBe(at("2.0.6-beta", "*.b2-rule"));
+    });
+  }
+
+  it("works the other way too: a NEWER local takes the copy's older version (resolution restamps later)", async () => {
+    const p = ".obsidian/.gitignore";
+    fs.writeFileSync(path.join(dir, p), at("2.0.7-beta", "*.mine"));
+    await saveConflictSiblingFile(
+      vault as never,
+      { path: p, timeLabel: TS, deviceLabel: "x", blob: enc(at("2.0.6-beta", "*.theirs")) },
+      NO_LEDGER,
+    );
+    expect(fs.readFileSync(path.join(dir, p), "utf8")).toBe(at("2.0.6-beta", "*.mine"));
+  });
+
+  it("an ordinary file, or a plugin's own .gitignore, is left alone", async () => {
+    for (const p of ["Notes/x.md", ".obsidian/plugins/cmdr/.gitignore"]) {
+      fs.mkdirSync(path.dirname(path.join(dir, p)), { recursive: true });
+      fs.writeFileSync(path.join(dir, p), at("2.0.5-beta", "*.mine"));
+      await saveConflictSiblingFile(
+        vault as never,
+        { path: p, timeLabel: TS, deviceLabel: "x", blob: enc(at("2.0.6-beta", "*.theirs")) },
+        NO_LEDGER,
+      );
+      expect(fs.readFileSync(path.join(dir, p), "utf8"), p).toBe(at("2.0.5-beta", "*.mine"));
+    }
   });
 });

@@ -26,6 +26,8 @@ import { normalizePath, type Vault } from "obsidian";
 import { atomicWriteFile } from "./atomic-write";
 import { sanitizeFilename } from "./cross-platform";
 import { calculateGitBlobSHA } from "../utils";
+import { highestVersionIn, restampVersionLines } from "./gitignore-markers";
+import { utf8RoundTrip } from "./text-normalize";
 
 // Deep-defense fallback only: every conflict birth site (§III STEP1 /
 // pull-folding-refresh / Vault-step-born) lazily fetches the device
@@ -242,6 +244,28 @@ export async function saveConflictSiblingFile(
   // AtomicWrite — the same crash protocol as every vault write
   // (§II.11 relies on it for the STEP3 replace transaction).
   await atomicWriteFile(vault, normalizePath(siblingPath), fileInfo.blob);
+  await alignVersionLinesWithCopy(vault, normalizePath(fileInfo.path), fileInfo.blob);
+}
+
+// A conflict on a managed .gitignore is about RULES; our version lines are
+// the plugin's business and must not show as a difference (owner,
+// 2026-10-24 — NEW-DRAIN §II.1 п.3). So the LOCAL file takes the copy's
+// version lines. The COPY is never touched: its bytes are the server's
+// version, and the replace transaction's recovery (§II.11) checks them by
+// SHA. Once the conflict is resolved, enforce() stamps the build's version
+// as always. Anything that is not text, or has no version line, is left
+// exactly as it is.
+async function alignVersionLinesWithCopy(vault: Vault, path: string, copy: ArrayBuffer): Promise<void> {
+  if (path !== ".gitignore" && path !== `${vault.configDir}/.gitignore`) return;
+  const copyText = utf8RoundTrip(copy);
+  const version = copyText === null ? null : highestVersionIn(copyText);
+  if (version === null || !(await vault.adapter.exists(path))) return;
+  const localText = utf8RoundTrip(await vault.adapter.readBinary(path));
+  if (localText === null) return;
+  const aligned = restampVersionLines(localText, version);
+  if (aligned === localText) return;
+  const bytes = new TextEncoder().encode(aligned);
+  await atomicWriteFile(vault, path, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
 }
 
 // Read ONE specific sibling — needs the whole (path, timeLabel,
