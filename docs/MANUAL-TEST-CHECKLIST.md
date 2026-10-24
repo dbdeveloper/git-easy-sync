@@ -253,33 +253,20 @@ Use it, and note which runs you did.
 > does with a block the first one wrote, and the whole mechanism exists to stop two
 > plugin versions fighting over it.
 
-- [ ] **The blocks appear and carry a version.** (`<configDir>` = `.obsidian` unless you renamed it.)
-      1. Press **Sync**.
-      2. Open `<vault>/.gitignore`. At the top: `# ===== git-easy-sync invariants v2.0.2-beta - DO NOT EDIT =====`;
-         at the bottom: `# ===== git-easy-sync final v2.0.2-beta - DO NOT EDIT =====`.
-      3. Open `<configDir>/.gitignore`. It has ONE block: `# ===== git-easy-sync final v2.0.2-beta - DO NOT EDIT =====`.
-      4. Open `<configDir>/plugins/git-easy-sync/.gitignore`. First line:
-         `# ===== git-easy-sync v2.0.2-beta - managed file, DO NOT EDIT =====`.
-      5. The version in all three = the version of the installed build (Settings → Community plugins).
-      6. Check that the version comes from the BUILD, not from the file on disk: in
-         `<configDir>/plugins/git-easy-sync/manifest.json` change `"version"` to `"9.9.9"`, press **Sync** →
-         the three lines above still say `v2.0.2-beta`. Put the old version back afterwards.
-      (`<configDir>/plugins/.gitignore` is a different, unversioned file — the "Sync plugins data.json"
-      switch — nothing to check there.)
-- [ ] **⚠️ Two devices, two versions — the ping-pong guard (one device is enough).** An OLDER build must never
-      rewrite blocks a NEWER build wrote. Pretend a newer build was here:
-      1. In each of the three files from the item above, change `v2.0.2-beta` to `v9.9.9` in every
-         git-easy-sync marker line (in `<vault>/.gitignore`: both `invariants` and `final`).
-      2. In `<vault>/.gitignore`, add one line INSIDE the `invariants` block, e.g. `# tester was here`.
-      3. Press **Sync**. Your edit is committed like any change of yours — that is expected.
-      4. Open the files again: they still say `v9.9.9`, and `# tester was here` is still there. The plugin did
-         NOT put its own version back.
-      5. Open the log (Settings → log viewer) → there are lines `gitignore section anomaly` with
-         `yielded-to-newer`.
-      6. Press **Sync** again → NO new commit touches a `.gitignore` (check the commit list on GitHub).
-         Without this guard every Sync would flip the versions back and forth.
-      7. Clean up: change `v9.9.9` back to `v2.0.2-beta` (or delete the line `# tester was here` and the
-         `v9.9.9` markers) and press **Sync** → the plugin writes its blocks again with `v2.0.2-beta`.
+- [x] **The blocks appear and carry a version** (format since 2026-10-24). (`<configDir>` = `.obsidian` unless renamed.)
+      After a **Sync**, in `<vault>/.gitignore` AND `<configDir>/.gitignore`: a block at the top and one at the bottom,
+      each opening with a CONSTANT line and the version right under it:
+      `# ===== git-easy-sync invariants - DO NOT EDIT =====` / `# ===== plugin version: X =====` (the `=====` aligned),
+      and the same for `final`. `<configDir>/plugins/git-easy-sync/.gitignore` starts with
+      `# ===== git-easy-sync vX - managed file, DO NOT EDIT =====`. X = the installed build's version.
+      *(Field 2026-10-24: seen on three vaults through 2.0.3 → 2.0.7-beta.)*
+- [ ] **The version comes from the BUILD, not from the file on disk.** In `<configDir>/plugins/git-easy-sync/manifest.json`
+      change `"version"` to `"9.9.9"`, press **Sync** → the version lines still show the build's version. Put the old
+      value back afterwards. (`<configDir>/plugins/.gitignore` is the unversioned "Sync plugins data.json" switch.)
+- [x] **⚠️ Two devices, two versions — the ping-pong guard.** An OLDER build never rewrites blocks a NEWER build
+      wrote: its log has `gitignore section anomaly` / `yielded-to-newer`, the file keeps the newer version lines, and a
+      second Sync makes NO `.gitignore` commit. *(Field 2026-10-24: verified with REAL builds — T3 below, and again
+      2.0.4/2.0.5/2.0.6. On one device it can still be simulated by changing `plugin version:` lines to `9.9.9`.)*
 #### Three vaults, one repo — the version bump to `2.0.3-beta` and the two-block `<configDir>/.gitignore` (new 2026-10-24)
 
 Vaults (all connected to repo `obsidian8`):
@@ -291,7 +278,7 @@ folder included) — that is what keeps them "old". Each vault's log: `<vault>/g
 `adb pull /sdcard/Documents/Obsidian-test/git-easy-sync.log`). **Keep the order T0 → T7.**
 If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost: stop and collect all three logs.
 
-- [ ] **T0. Preparation.** A shows `2.0.3-beta` in Settings → Community plugins; B and C show `2.0.2-beta`.
+- [x] **T0. Preparation.** A shows `2.0.3-beta` in Settings → Community plugins; B and C show `2.0.2-beta`.
       In B and C turn **Sync configs OFF** and press **Sync** → on GitHub nothing under `.obsidian/` changes (no
       deletions, no new files). Then, in **C only**, add the line `*.phone-test` to the user zone (between the two
       blocks) of `<vault>/.gitignore` — and do **NOT** sync C yet (it is used in T4).
@@ -311,22 +298,25 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
         also turns that switch OFF (greyed out); turning Sync configs back ON does NOT turn it back on.
       - `<vault>/.gitignore`: unchanged (`!/.obsidian/` there does not depend on the switch).
       While OFF, Sync neither sends nor receives anything under `.obsidian/` (the GitHub copies stay as they were).
-- [ ] **T1. The new build's first Sync (A).** Press **Sync** in A → exactly ONE commit with the three `.gitignore`
+      *(Field 2026-10-24: the ON direction verified on B and on the phone — exactly these files changed, the
+      data.json switch stayed off. The OFF direction was NOT observed: both were already OFF. Still to do.)*
+- [x] **T1. The new build's first Sync (A).** Press **Sync** in A → exactly ONE commit with the three `.gitignore`
       files (`<vault>/.gitignore`, `.obsidian/.gitignore`, `.obsidian/plugins/git-easy-sync/.gitignore`, all now
       `v2.0.3-beta`) plus the new `main.js` / `manifest.json`. A's `.obsidian/.gitignore`: the allowlist block on top,
       `final` at the bottom.
-- [ ] **T2. An old-style `.obsidian/.gitignore` moves to the new layout (A).** Paste into A's `.obsidian/.gitignore`
+- [x] **T2. An old-style `.obsidian/.gitignore` moves to the new layout (A).** Paste into A's `.obsidian/.gitignore`
       the OLD content (`# Recommended defaults…` + the five `plugins/*/…` lines + a `final v2.0.2-beta` block), add
       your own line `*.mytest`, and an exact copy of the line
       `# Write your own rules BELOW this block to override it.` somewhere in your zone. Press **Sync** →
       the five rules are inside the top block, the old comments are still there, `*.mytest` sits between the blocks,
       the copied comment line exists only ONCE (inside the block), the markers say `v2.0.3-beta`; one commit.
-- [ ] **T3. The old build yields to the newer one (B, desktop).** Press **Sync** in B → B downloads
+      *(Field: done on A's real old file; the "exact copy of our comment line" step was not tried — unit-tested.)*
+- [x] **T3. The old build yields to the newer one (B, desktop).** Press **Sync** in B → B downloads
       `<vault>/.gitignore` with `v2.0.3-beta`, and sends nothing. **Sync** B again — the `.gitignore` check runs at
       the START of a Sync (before the download), so only now does the old build meet the newer marker → B's log has
       `gitignore section anomaly` with `yielded-to-newer` and `"version":"2.0.3-beta"` for `.gitignore`; the file
       keeps `v2.0.3-beta`; NO commit from B touches a `.gitignore`.
-- [ ] **T4. A clean merge of `<vault>/.gitignore` on an old, yielding build (C, phone).** ⚠️ The ROOT file —
+- [x] **T4. A clean merge of `<vault>/.gitignore` on an old, yielding build (C, phone).** ⚠️ The ROOT file —
       `/sdcard/Documents/Obsidian-test/.gitignore` — NOT `.obsidian/.gitignore` (that one is local while Sync
       configs is OFF and takes no part; field 2026-10-24: the line landed there by mistake and T4 tested nothing).
       1. **C:** add `*.phone-test` at the very BOTTOM of the user zone of the ROOT file (right above
@@ -337,14 +327,18 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
          has `yielded-to-newer` (it does not rewrite the newer blocks).
       4. **Sync** A, then B → both lines everywhere, no further `.gitignore` commits.
       (The two lines are far apart on purpose, so the line merge does not see them as one region.)
-- [ ] **T5. An edit INSIDE our block on an old build converges in one round (C → A).** In C add a line INSIDE the
+      *(Field: first runs made a conflict copy — the version was inside BEGIN, adjacent to the user's line; fixed by
+      the two-line marker format (1e220db); re-run with 2.0.4: clean. Two DIFFERENT rules inserted at the SAME spot
+      stay a conflict — owner's decision.)*
+- [x] **T5. An edit INSIDE our block on an old build converges in one round (C → A).** In C add a line INSIDE the
       `invariants` block of `<vault>/.gitignore`, press **Sync** in C → C (old, yielding) does not repair it, the line
       goes to GitHub. **Sync** A → A repairs the block (the line is gone), one commit. **Sync** C → C gets the clean
-      file, no commit from C. No back-and-forth.
-- [ ] **T6. (Optional) A brand-new vault meets the repo.** Make an empty folder (e.g. `~/obsidian-test3`), copy A's
+      file, no commit from C. No back-and-forth. *(Field: done with B instead of C; A repaired on its SECOND Sync.)*
+- [x] **T6. (Optional) A brand-new vault meets the repo.** Make an empty folder (e.g. `~/obsidian-test3`), copy A's
       `.obsidian/plugins/git-easy-sync/` into it, set the same repo and token, Sync configs ON, first **Sync** →
       its `.obsidian/.gitignore` equals the repo's, no conflict copy, at most one `.gitignore` commit.
-- [ ] **T7. The old devices move to the new build (B, then C).** In B turn **Sync configs ON**, press **Sync** → B
+      *(Field: ~/obsidian-test3 — passed; the only conflict was Obsidian's own default `Welcome.md`, expected.)*
+- [x] **T7. The old devices move to the new build (B, then C).** In B turn **Sync configs ON**, press **Sync** → B
       downloads the new `main.js` and the plugin reloads itself to `2.0.3-beta`. ⚠️ Not certain how many commits:
       before the reload the old build may first send its own old-style `.obsidian/.gitignore` (files in `.obsidian/`
       resolve by the newer modification time), so one or two extra `.gitignore` commits are possible. What MUST
@@ -357,16 +351,34 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       Record which. This is the long-standing "newest wins in `.obsidian/`" rule, not this change — but for a
       `.gitignore` it means user rules can vanish silently; the owner decides afterwards whether
       `.obsidian/.gitignore` should be merged like the root file.
-- [ ] **Your edits inside `invariants` survive; `final` is absolute.** Add a line to the
-      top block → it stays after the next sync. The bottom block is restored verbatim if
-      you edit it.
-- [ ] **Per-device `data.json` switch.** `<configDir>/plugins/.gitignore` is the
+      *(Field: self-update fine on B and the phone. The repo's file won on the phone and `*.phone-test` vanished
+      silently → owner's decision: `.gitignore` files under `.obsidian/` now merge like ordinary files (616d2c4) —
+      see the item below.)*
+- [x] **Our blocks are ours; your rules go BETWEEN them.** A line added INSIDE either block is removed on the next
+      Sync (the block is rewritten); a rule written between the blocks stays. *(Field: T5.)*
+- [ ] **`final` is absolute.** Between the blocks of `.obsidian/.gitignore` write `!workspace.json`, **Sync** →
+      `workspace.json` still does NOT go to GitHub. Between the blocks of `<vault>/.gitignore` write
+      `!*.conflict-from-*` → conflict copies still never travel.
+- [x] **`.obsidian/.gitignore` and a plugin's `.gitignore` conflict like ordinary files (new 2026-10-24).** Two vaults
+      add DIFFERENT rules at the same spot of `.obsidian/.gitignore` → a conflict copy
+      `.obsidian/.gitignore.conflict-from-…`, every Sync shows "Sync paused — .gitignore is in conflict" until it is
+      resolved; the diff editor shows ONLY the rule lines — never our `plugin version` lines, even when the two vaults
+      run different versions (161d98e). Rules at DIFFERENT spots merge cleanly. *(Field: three desktop vaults,
+      2.0.5–2.0.7-beta.)*
+- [ ] **A difference only in version lines is never a conflict (new 2026-10-24).** A vault on an OLDER build with
+      Sync configs OFF, whose `.obsidian/.gitignore` rules are identical to the repo's, switches Sync configs ON →
+      no conflict copy; the newer version lines are taken (1c29476). *(Unit-tested; not yet seen live.)*
+- [ ] **A plugin's own `.gitignore` conflicts too.** Edit `.obsidian/plugins/<some plugin>/.gitignore` differently on
+      two vaults (Sync configs ON on both) → a conflict copy next to it, Sync paused, the resolution syncs.
+- [x] **Per-device `data.json` switch.** `<configDir>/plugins/.gitignore` is the
       per-device control; toggling the setting changes what it holds, and the file is
-      NOT the same on both devices (that is the feature, not drift).
+      NOT the same on both devices (that is the feature, not drift). *(Field 2026-10-24: B switched ON →
+      `!*/data.json`, the phone stayed `*/data.json`; the file never travels.)*
 - [ ] **Nested-gitignore migration (§8.1).** A vault that still has nested `.gitignore`
       files gets ONE commit removing them, with its own message naming the count.
-- [ ] 🌐 **One release = one `.gitignore` commit.** The first sync after a version bump
-      rewrites three files and produces exactly ONE commit. Expected, not a defect.
+- [x] 🌐 **One release = one `.gitignore` commit.** The first sync after a version bump
+      rewrites three files and produces exactly ONE commit. Expected, not a defect. *(Field: 76b6069 (2.0.3), 0401b17
+      (2.0.4) — the version lines only, plus main.js/manifest.json.)*
 - [ ] **Root `.gitignore` editor (GITIGNORE-EDITOR, new 2026-10-08)** — Settings → `.gitignore`
       → *Edit the root .gitignore*:
       - **[Open]** shows the warning EVERY time: "Edit .gitignore?", two short sentences,
