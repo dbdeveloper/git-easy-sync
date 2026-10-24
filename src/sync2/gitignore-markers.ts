@@ -46,6 +46,48 @@ export function beginPattern(kind: SectionKind): RegExp {
   return new RegExp(`^# ===== git-easy-sync ${kind} - DO NOT EDIT =====$`);
 }
 
+// ── Comparing / merging two managed files that may differ ONLY in version
+// lines (owner, 2026-10-24 — NEW-DRAIN §II.1 п.3 exception): such a
+// difference is not a conflict, the newer version wins. These three are
+// what the drain needs for it.
+
+// Every version line replaced by ONE placeholder, so two texts that differ
+// only in versions (or padding) compare equal and merge cleanly.
+const VERSION_PLACEHOLDER = "# ===== plugin version: 0.0.0 =====";
+export function withoutVersionLines(text: string): string {
+  return text
+    .split("\n")
+    .map((l) => (parseVersionLine(l) === null ? l : `${VERSION_PLACEHOLDER}${l.endsWith("\r") ? "\r" : ""}`))
+    .join("\n");
+}
+
+// The highest readable version in any version line of the given texts;
+// null when there is none (a stamp that is not a version never wins).
+export function highestVersionIn(...texts: string[]): string | null {
+  let best: string | null = null;
+  for (const text of texts) {
+    for (const line of text.split("\n")) {
+      const v = parseVersionLine(line);
+      if (v === null || compareSemver(v, v) === null) continue;
+      if (best === null || compareSemver(v, best) === 1) best = v;
+    }
+  }
+  return best;
+}
+
+// Every version line that sits right under one of our BEGIN markers,
+// re-rendered with `version` (aligned for that marker's kind).
+export function restampVersionLines(text: string, version: string): string {
+  const lines = text.split("\n");
+  for (let i = 1; i < lines.length; i++) {
+    if (parseVersionLine(lines[i]) === null) continue;
+    const begin = parseBeginMarker(lines[i - 1]);
+    if (begin === null) continue;
+    lines[i] = `${versionLine(begin.kind, version)}${lines[i].endsWith("\r") ? "\r" : ""}`;
+  }
+  return lines.join("\n");
+}
+
 export function parseBeginMarker(line: string): { kind: SectionKind } | null {
   const m = BEGIN_RE.exec(line.replace(/\s+$/, ""));
   return m === null ? null : { kind: m[1] as SectionKind };

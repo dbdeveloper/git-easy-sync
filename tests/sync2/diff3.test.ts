@@ -22,6 +22,7 @@ import {
   RemoteFileNotInRepoError,
 } from "../../src/errors";
 import { calculateGitBlobSHA } from "../../src/utils";
+import { beginMarker, endMarker, versionLine } from "../../src/sync2/gitignore-markers";
 
 // §VIII category A (29) — _diff3 rules §II.1 п.2-4 as a pure-ish
 // function; A.1 (п.1-20) — the .obsidian/ + plugins/** branch;
@@ -676,6 +677,73 @@ describe("_diff3 (§VIII A + A.1 + P.20-22)", () => {
       expect(both(OTHER)).toBe(false);
       expect(both(SELF_GI)).toBe(true);
       expect(both(".obsidian/app.json")).toBe(true);
+    });
+  });
+
+  // Owner, 2026-10-24: a difference ONLY in our `# ===== plugin version: … =====`
+  // lines is not a conflict — the newer version wins. Otherwise a device on an
+  // older build that switches config sync ON (no base) would get a conflict
+  // copy for the version alone. Applies to the files that carry such lines:
+  // <vault>/.gitignore and <configDir>/.gitignore.
+  describe("A1 — managed .gitignore: a difference only in version lines is not a conflict", () => {
+    const at = (version: string, extra = "") =>
+      [
+        beginMarker("invariants"),
+        versionLine("invariants", version),
+        "plugins/*/*",
+        endMarker("invariants"),
+        "",
+        "*.ab",
+        ...(extra ? [extra] : []),
+        "",
+        beginMarker("final"),
+        versionLine("final", version),
+        "workspace.json",
+        endMarker("final"),
+        "",
+      ].join("\n");
+    const text = (r: unknown) => new TextDecoder().decode((r as { file: FileInfo }).file.blob!);
+
+    for (const p of [".obsidian/.gitignore", ".gitignore"]) {
+      it(`🔑 ${p}: no base, only the version differs → the NEWER side, both ways`, async () => {
+        const older = side(p, at("2.0.3-beta"));
+        const newer = side(p, at("2.0.4-beta"));
+        expect(await _diff3(makeDeps(), t(emptyFileInfo(), newer), older, HEAD)).toEqual({ kind: "file", file: newer });
+        expect(await _diff3(makeDeps(), t(emptyFileInfo(), older), newer, HEAD)).toEqual({ kind: "file", file: newer });
+      });
+
+      it(`${p}: no base, a RULE differs too → still a conflict`, async () => {
+        const r = await _diff3(
+          makeDeps(),
+          t(emptyFileInfo(), side(p, at("2.0.4-beta", "*.remote"))),
+          side(p, at("2.0.3-beta", "*.local")),
+          HEAD,
+        );
+        expect(r).toEqual({ kind: "manual-conflict" });
+      });
+
+      it(`🔑 ${p}: both sides bumped the version differently, one also added a rule → merged, highest version`, async () => {
+        const base = side(p, at("2.0.3-beta"));
+        const r = await _diff3(
+          makeDeps(),
+          t(base, side(p, at("2.0.4-beta", "*.remote"))),
+          side(p, at("2.0.5-beta")),
+          HEAD,
+        );
+        expect(r.kind).toBe("file");
+        expect(text(r)).toBe(at("2.0.5-beta", "*.remote"));
+      });
+    }
+
+    it("an ordinary file is not touched by this rule", async () => {
+      const p = "notes/x.md";
+      const r = await _diff3(
+        makeDeps(),
+        t(emptyFileInfo(), side(p, at("2.0.4-beta"))),
+        side(p, at("2.0.3-beta")),
+        HEAD,
+      );
+      expect(r).toEqual({ kind: "manual-conflict" });
     });
   });
 

@@ -34,6 +34,8 @@ import { hasTextExtension } from "../utils";
 import { DELETED_SHA_HASH } from "./discovery";
 import SyncStore from "./sync-store";
 import { utf8RoundTrip } from "./text-normalize";
+import { highestVersionIn, restampVersionLines, withoutVersionLines } from "./gitignore-markers";
+import { compareSemver } from "./semver";
 import { mergeText, type MergeOutcome } from "./three-way-merge";
 
 // The spec's DELETED mode sentinel. `mode: ""` = ordinary file;
@@ -146,6 +148,46 @@ function isUserGitignoreInConfigDir(path: string, configDir: string, selfPluginI
   if (rest === ".gitignore") return true;
   const m = PLUGIN_GITIGNORE.exec(rest);
   return m !== null && m[1] !== selfPluginId;
+}
+
+// The managed .gitignore files that carry our `# ===== plugin version: … =====`
+// lines: <vault>/.gitignore and <configDir>/.gitignore. A difference ONLY
+// in those lines is not a conflict (owner, 2026-10-24): the newer wins.
+function carriesVersionLines(path: string, configDir: string): boolean {
+  return path === ".gitignore" || path === `${configDir}/.gitignore`;
+}
+
+// UTF-8 text of each blob, or null when any of them does not round-trip
+// (then the version rule simply does not apply — never guess at bytes).
+function asTexts(...blobs: ArrayBuffer[]): string[] | null {
+  const out: string[] = [];
+  for (const b of blobs) {
+    const text = utf8RoundTrip(b);
+    if (text === null) return null;
+    out.push(text);
+  }
+  return out;
+}
+
+// Of two sides whose texts differ only in version lines: the one with the
+// higher version (local on a tie).
+function newerOf<T>(local: T, remote: T, localText: string, remoteText: string): T {
+  const lv = highestVersionIn(localText);
+  const rv = highestVersionIn(remoteText);
+  if (rv === null) return local;
+  if (lv === null) return remote;
+  return compareSemver(rv, lv) === 1 ? remote : local;
+}
+
+// A blob for a side of the version rule: inline, the sync store, or (for
+// the remote) the repository. null when it cannot be had — the rule then
+// does not apply and the ordinary outcome stands.
+async function blobFor(deps: Diff3Deps, f: FileInfo, fromRepo: boolean): Promise<ArrayBuffer | null> {
+  if (f.blob !== null) return f.blob;
+  if (f.sha === null) return null;
+  const stored = await deps.syncStore.getBlobFromSyncStore(f.sha, deps.verifiedShas);
+  if (stored !== null) return stored;
+  return fromRepo ? deps.getBlobFromRepo(f.sha) : null;
 }
 
 // Does this path take the §II.1 п.3 config branch (no merge, never a
@@ -339,6 +381,18 @@ export async function _diff3(
     if (local.mode === DELETED) return { kind: "file", file: remote }; // 4.1.d
     // 4.2 — both created the same path independently with different
     // content; without a base there is nothing to merge against.
+    // ...unless they differ ONLY in our version lines (owner, 2026-10-24):
+    // a device on an older build that switches config sync on has no base
+    // for <configDir>/.gitignore, and must not get a conflict copy for the
+    // version alone.
+    if (carriesVersionLines(path, deps.configDir)) {
+      const lb = await blobFor(deps, local, false);
+      const rb = await blobFor(deps, remote, true);
+      const texts = lb !== null && rb !== null ? asTexts(lb, rb) : null;
+      if (texts !== null && withoutVersionLines(texts[0]) === withoutVersionLines(texts[1])) {
+        return { kind: "file", file: newerOf(local, remote, texts[0], texts[1]) };
+      }
+    }
     return { kind: "manual-conflict" };
   }
 
@@ -498,17 +552,38 @@ export async function _diff3(
     }
   }
 
+  // Our version lines are compared and merged as ONE placeholder, and the
+  // result gets the highest version of the two sides (owner, 2026-10-24):
+  // two devices that bumped to different versions are not in conflict
+  // over that line, and sides that differ only there need no merge.
+  const versioned = carriesVersionLines(path, deps.configDir)
+    ? asTexts(base.blob, local.blob, remote.blob)
+    : null;
+  const highest = versioned === null ? null : highestVersionIn(versioned[1], versioned[2]);
+  if (versioned !== null && highest !== null) {
+    if (withoutVersionLines(versioned[1]) === withoutVersionLines(versioned[2])) {
+      return { kind: "file", file: newerOf(local, remote, versioned[1], versioned[2]) };
+    }
+  }
+
   // ── the actual 3-way merge (spec: ANY_DIFF3_ERROR → conflict) ───
   let merged: ArrayBuffer;
   try {
-    const outcome = await deps.mergeBlobs(
-      path,
-      base.blob,
-      local.blob,
-      remote.blob,
-    );
+    const enc = (t: string) => new TextEncoder().encode(t).buffer as ArrayBuffer;
+    const outcome =
+      versioned !== null && highest !== null
+        ? await deps.mergeBlobs(
+            path,
+            enc(withoutVersionLines(versioned[0])),
+            enc(withoutVersionLines(versioned[1])),
+            enc(withoutVersionLines(versioned[2])),
+          )
+        : await deps.mergeBlobs(path, base.blob, local.blob, remote.blob);
     if (outcome.kind === "conflict") return { kind: "manual-conflict" };
-    merged = outcome.merged;
+    merged =
+      versioned !== null && highest !== null
+        ? enc(restampVersionLines(new TextDecoder().decode(outcome.merged), highest))
+        : outcome.merged;
   } catch {
     return { kind: "manual-conflict" };
   }

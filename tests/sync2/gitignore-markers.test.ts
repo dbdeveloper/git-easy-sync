@@ -23,6 +23,9 @@ import {
   parseOwnedFileHeader,
   versionLine,
   versionLinePattern,
+  withoutVersionLines,
+  highestVersionIn,
+  restampVersionLines,
 } from "../../src/sync2/gitignore-markers";
 import {
   assembleManagedSections,
@@ -235,5 +238,31 @@ describe("another version's VERSION LINE is replaced, never duplicated", () => {
     const twice = assembleManagedSections(once.content, { invariants: sectionAt("2.1.0", ".*"), final });
     expect(twice.content).toBe(once.content);
     expect(twice.removed).toEqual([]);
+  });
+});
+
+// Owner, 2026-10-24: a difference only in version lines is not a conflict.
+describe("comparing / merging across version lines", () => {
+  const file = (v: string, eol = "\n") =>
+    [beginMarker("final"), versionLine("final", v), "*.x", endMarker("final")].join(eol);
+
+  it("🔑 two files differing only in the version compare equal without the version lines", () => {
+    expect(withoutVersionLines(file("2.0.3-beta"))).toBe(withoutVersionLines(file("2.0.9-beta")));
+    expect(withoutVersionLines(file("2.0.3-beta"))).not.toBe(withoutVersionLines(file("2.0.3-beta") + "\n*.y"));
+  });
+
+  it("the highest readable version wins; garbage never does", () => {
+    expect(highestVersionIn(file("2.0.3-beta"), file("2.0.10-beta"))).toBe("2.0.10-beta");
+    expect(highestVersionIn(file("not-a-version"))).toBeNull();
+    expect(highestVersionIn("no version lines")).toBeNull();
+  });
+
+  it("🔑 restamping re-renders each version line under its BEGIN, aligned for that kind; CRLF kept", () => {
+    expect(restampVersionLines(withoutVersionLines(file("2.0.3-beta")), "2.0.9-beta")).toBe(file("2.0.9-beta"));
+    expect(restampVersionLines(withoutVersionLines(file("2.0.3-beta", "\r\n")), "2.0.9-beta")).toBe(
+      file("2.0.9-beta", "\r\n"),
+    );
+    // A version line NOT under a BEGIN is left alone.
+    expect(restampVersionLines(versionLine("final", "1.0.0"), "2.0.0")).toBe(versionLine("final", "1.0.0"));
   });
 });
