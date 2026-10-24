@@ -185,10 +185,28 @@ describe("Logger", () => {
       "utf8",
     );
     expect(contents).toContain("hello world");
-    expect(contents).toContain('"level":"INFO"');
+    expect(contents).toContain('"l":"INFO"');
   });
 
   // ── JSONL faithfulness (safeStringify on the disk write) ──────────
+
+  // Owner, 2026-10-24: one-letter field names on disk; values unchanged.
+  it("🔑 each line has exactly the fields t, l, m (and d when there is data)", async () => {
+    const logger = new Logger(vault as unknown as import("obsidian").Vault, PLUGIN_ID, true);
+    await logger.init();
+    logger.warn("with", { n: 1 });
+    logger.info("without");
+    await new Promise((r) => setTimeout(r, 50));
+    const lines = fs
+      .readFileSync(path.join(tmp, `${PLUGIN_ID}-unknown.log`), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(Object.keys(lines[0])).toEqual(["t", "l", "m", "d"]);
+    expect(lines[0]).toMatchObject({ l: "WARN", m: "with", d: { n: 1 } });
+    expect(Date.parse(lines[0].t)).not.toBeNaN();
+    expect(Object.keys(lines[1])).toEqual(["t", "l", "m"]);
+  });
 
   it("Error in additional_data is written faithfully (not {}) and the line stays valid JSON", async () => {
     const logger = new Logger(
@@ -208,9 +226,9 @@ describe("Logger", () => {
     const entry = JSON.parse(lines[lines.length - 1]);
     // Error is preserved (message/stack), NOT flattened to `{}` — plain
     // JSON.stringify would have written `"err":{}`.
-    const dumped = JSON.stringify(entry.additional_data);
+    const dumped = JSON.stringify(entry.d);
     expect(dumped).toContain("kaboom");
-    expect(entry.additional_data.err).not.toEqual({});
+    expect(entry.d.err).not.toEqual({});
   });
 
   it("circular ref in additional_data does NOT drop the line; emits [Circular] as valid JSON", async () => {
@@ -233,6 +251,6 @@ describe("Logger", () => {
     // rejection → the whole line silently lost. safeStringify keeps it.
     expect(lines.length).toBeGreaterThan(0);
     const entry = JSON.parse(lines[lines.length - 1]); // valid JSON
-    expect(JSON.stringify(entry.additional_data)).toContain("[Circular]");
+    expect(JSON.stringify(entry.d)).toContain("[Circular]");
   });
 });

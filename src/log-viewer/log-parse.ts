@@ -39,16 +39,19 @@ export function parseLogLine(line: string): LogEntry {
     if (
       o !== null &&
       typeof o === "object" &&
-      typeof o.timestamp === "string" &&
-      typeof o.level === "string" &&
-      typeof o.message === "string"
+      typeof o.t === "string" &&
+      typeof o.l === "string" &&
+      typeof o.m === "string"
     ) {
+      // The logger's one-letter names (logger.ts). A line in the old
+      // long-name format (timestamp/level/message) is NOT read as a
+      // record — it shows as plain text (owner, 2026-10-24).
       return {
         kind: "entry",
-        timestamp: o.timestamp,
-        level: o.level,
-        message: o.message,
-        data: o.additional_data,
+        timestamp: o.t,
+        level: o.l,
+        message: o.m,
+        data: o.d,
       };
     }
   } catch {

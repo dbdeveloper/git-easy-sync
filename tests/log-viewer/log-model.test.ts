@@ -13,7 +13,7 @@ import type { LogEntry } from "../../src/log-viewer/log-parse";
 
 const UTC = { timeZone: "utc" as const };
 const line = (ts: string, msg: string, level = "INFO") =>
-  JSON.stringify({ timestamp: ts, level, message: msg });
+  JSON.stringify({ t: ts, l: level, m: msg });
 const A = line("2026-10-07T10:00:00.000Z", "alpha");
 const B = line("2026-10-07T10:00:01.000Z", "beta", "ERROR");
 const C = line("2026-10-07T10:00:02.000Z", "gamma");

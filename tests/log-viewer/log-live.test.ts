@@ -16,7 +16,7 @@ import type { LogEntry } from "../../src/log-viewer/log-parse";
 const UTC = { timeZone: "utc" as const };
 const r = (seq: number): RecentLine => ({
   seq,
-  line: JSON.stringify({ timestamp: "2026-10-07T10:00:00.000Z", level: "INFO", message: `m${seq}` }),
+  line: JSON.stringify({ t: "2026-10-07T10:00:00.000Z", l: "INFO", m: `m${seq}` }),
 });
 const fakeLogger = () => {
   const subs = new Set<(l: RecentLine) => void>();

@@ -67,7 +67,7 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
       read(name)
         .split("\n")
         .filter((l) => l !== "")
-        .map((l) => JSON.parse(l).message as string);
+        .map((l) => JSON.parse(l).m as string);
     // The logger's own line about the move is checked separately.
     const messages = (name: string) => all(name).filter((m) => !m.startsWith("Log "));
     const make = (label: string, enabled = true) =>
@@ -123,7 +123,7 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
     it("🔑 a file with the new name already there: no rename — continue in it, the old file stays", async () => {
       fs.writeFileSync(
         file("git-easy-sync-phone.log"),
-        JSON.stringify({ timestamp: "t", level: "INFO", message: "phone's own" }) + "\n",
+        JSON.stringify({ t: "t", l: "INFO", m: "phone's own" }) + "\n",
       );
       const logger = make("test");
       await logger.init();

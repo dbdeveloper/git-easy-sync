@@ -15,7 +15,7 @@ import {
 // from the logger's in-memory ring of exact lines.
 
 const line = (ts: string, msg: string, data?: unknown): string =>
-  JSON.stringify({ timestamp: ts, level: "INFO", message: msg, additional_data: data });
+  JSON.stringify({ t: ts, l: "INFO", m: msg, d: data });
 const L1 = line("2026-10-07T10:00:00.000Z", "one");
 const L2 = line("2026-10-07T10:00:01.000Z", "two", { n: 2 });
 const L3 = line("2026-10-07T10:00:02.000Z", "three");
@@ -46,11 +46,25 @@ describe("parseLogText / parseLogLine", () => {
     expect(r.entries[1]).toEqual({ kind: "raw", raw: "not json at all" });
   });
 
-  it("JSON that is not a log record (no timestamp/level/message) is raw too", () => {
+  it("JSON that is not a log record (no t/l/m) is raw too", () => {
     expect(parseLogLine('{"a":1}')).toEqual({ kind: "raw", raw: '{"a":1}' });
   });
 
-  it("a record without additional_data has data undefined", () => {
+  // Owner, 2026-10-24: the field NAMES on disk are one letter — t, l, m,
+  // d — written thousands of times; the values are unchanged. Lines in
+  // the old long-name format are NOT understood (owner's choice): they
+  // show as plain text, which also exercises the "unknown format" path.
+  it("🔑 the on-disk names are t / l / m / d", () => {
+    const e = parseLogLine('{"t":"2026-10-07T10:00:00.000Z","l":"WARN","m":"x","d":{"n":1}}');
+    expect(e).toEqual({ kind: "entry", timestamp: "2026-10-07T10:00:00.000Z", level: "WARN", message: "x", data: { n: 1 } });
+  });
+
+  it("🔑 a line in the OLD long-name format is plain text", () => {
+    const old = '{"timestamp":"2026-10-07T10:00:00.000Z","level":"INFO","message":"x","additional_data":{"n":1}}';
+    expect(parseLogLine(old)).toEqual({ kind: "raw", raw: old });
+  });
+
+  it("a record without d has data undefined", () => {
     const e = parseLogLine(line("2026-10-07T10:00:00.000Z", "bare"));
     expect(e).toMatchObject({ kind: "entry", message: "bare", data: undefined });
   });

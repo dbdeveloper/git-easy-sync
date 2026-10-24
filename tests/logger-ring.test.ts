@@ -60,7 +60,7 @@ describe("Logger ring + subscription (LOG-VIEWER step 2)", () => {
     const log = make();
     log.info("now");
     // Synchronously after the call — the append has not happened yet.
-    expect(log.recentLines().map((r) => JSON.parse(r.line).message)).toEqual(["now"]);
+    expect(log.recentLines().map((r) => JSON.parse(r.line).m)).toEqual(["now"]);
   });
 
   it("subscribers get each new line once, with its number; unsubscribe stops delivery", async () => {
@@ -73,7 +73,7 @@ describe("Logger ring + subscription (LOG-VIEWER step 2)", () => {
     off();
     log.info("c");
     await settle();
-    expect(got.map((r) => JSON.parse(r.line).message)).toEqual(["a", "b"]);
+    expect(got.map((r) => JSON.parse(r.line).m)).toEqual(["a", "b"]);
     expect(got.map((r) => r.seq)).toEqual([1, 2]);
   });
 
@@ -84,7 +84,7 @@ describe("Logger ring + subscription (LOG-VIEWER step 2)", () => {
     log.subscribe(() => {
       throw new Error("boom");
     });
-    log.subscribe((r) => got.push(JSON.parse(r.line).message));
+    log.subscribe((r) => got.push(JSON.parse(r.line).m));
     log.info("still logged");
     await settle();
     expect(got).toEqual(["still logged"]);

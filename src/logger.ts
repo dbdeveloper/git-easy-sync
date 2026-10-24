@@ -203,11 +203,14 @@ export default class Logger {
       }
     }
 
+    // One-letter field names (owner, 2026-10-24): they are written on
+    // every line, thousands of times. t = ISO time, l = level, m = message,
+    // d = the data (omitted when there is none). The values are unchanged.
     const logEntry = {
-      timestamp: new Date().toISOString(),
-      level,
-      message,
-      additional_data: payload,
+      t: new Date().toISOString(),
+      l: level,
+      m: message,
+      d: payload,
     };
 
     // Mirror to console with a tag prefix so `adb logcat | grep '\[ges\]'`
@@ -221,7 +224,7 @@ export default class Logger {
 
     // Use safeStringify (NOT plain JSON.stringify) for the on-disk write:
     // the log file is JSONL, so a torn or lossy line breaks line-by-line
-    // parsing. Plain JSON.stringify renders an Error in `additional_data`
+    // parsing. Plain JSON.stringify renders an Error in `d` (the data)
     // as `{}` (fields live on the prototype) and THROWS on a circular ref
     // — the throw would silently drop the whole line (fire-and-forget
     // rejection). safeStringify preserves Error fields and emits

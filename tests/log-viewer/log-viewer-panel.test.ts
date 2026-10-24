@@ -60,7 +60,7 @@ if (!P.createEl) {
 }
 
 const line = (n: number) =>
-  JSON.stringify({ timestamp: "2026-10-07T10:00:00.000Z", level: "INFO", message: `m${n}` });
+  JSON.stringify({ t: "2026-10-07T10:00:00.000Z", l: "INFO", m: `m${n}` });
 
 function deps(text: string, readGate?: Promise<void>, size?: number) {
   const subs = new Set<(l: RecentLine) => void>();

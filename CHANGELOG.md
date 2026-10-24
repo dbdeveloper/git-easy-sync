@@ -85,6 +85,10 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   every device's log can be collected in one vault. Changing the
   label renames the log. The old `git-easy-sync.log` is left as is —
   delete it by hand. An empty device label now becomes `Obsidian`.
+- **Shorter log lines**: the field names in each JSONL line are one
+  letter — `t` (time), `l` (level), `m` (message), `d` (data); the
+  values are unchanged. Lines written by an older build show in the
+  log viewer as plain text.
 - **Everything starting with a dot is invisible to sync by
   default**, and becomes visible only through the root
   `.gitignore` (a `!`-rule naming a concrete path), the
