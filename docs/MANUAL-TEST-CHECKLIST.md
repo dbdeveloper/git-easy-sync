@@ -278,6 +278,34 @@ Use it, and note which runs you did.
          Without this guard every Sync would flip the versions back and forth.
       7. Clean up: change `v9.9.9` back to `v2.0.2-beta` (or delete the line `# tester was here` and the
          `v9.9.9` markers) and press **Sync** → the plugin writes its blocks again with `v2.0.2-beta`.
+- [ ] **🖥️🖥️ Two vaults, one repo: the move to the build where `<configDir>/.gitignore` has TWO blocks (new 2026-10-24).**
+      Vault **A** = `~/Obsidian-test`, vault **B** = `~/obsidian-test2`, both connected to the SAME repo, both with
+      **Sync configs ON**. You need two builds:
+      - **OLD** = any build from before commit `034e552`, version `2.0.2-beta` (e.g. `git checkout 7260fdf && pnpm build`,
+        keep `main.js` + `manifest.json`, then `git checkout diff2`);
+      - **NEW** = `diff2` with the version raised to `2.0.3-beta` (`pnpm build`).
+      1. Put the OLD build into BOTH vaults (`<vault>/.obsidian/plugins/git-easy-sync/`), reload the plugin, press
+         **Sync** in A, then B, then A again until nothing changes. Open `.obsidian/.gitignore` in both: ONE block,
+         `final v2.0.2-beta`, and above it "Recommended defaults" with the `plugins/*/*` lines.
+      2. Put the NEW build into **A** only, reload the plugin, press **Sync** in A. In A's `.obsidian/.gitignore`:
+         - at the top `# ===== git-easy-sync invariants v2.0.3-beta - DO NOT EDIT =====` with the five allowlist
+           lines and the comment "Write your own rules BELOW this block…";
+         - the old comments "# Recommended defaults…" / "# Plugin folder allowlist…" are still there, but the five
+           `plugins/*/…` lines are gone from under them (they moved into the block);
+         - at the bottom `final v2.0.3-beta`.
+         `<vault>/.gitignore` and `.obsidian/plugins/git-easy-sync/.gitignore` now say `v2.0.3-beta` too.
+         On GitHub: one Sync commit with these `.gitignore` files and the new `main.js` / `manifest.json`.
+      3. Press **Sync** in **B** (still the OLD build). B downloads the three `.gitignore` files and the new
+         `main.js`; the plugin reloads itself (a notice says so). Check: B's `.obsidian/.gitignore` is now the SAME
+         as A's; Settings → Community plugins shows `2.0.3-beta` in B.
+      4. On GitHub: there is NO commit from B that removes the `invariants` block or puts `v2.0.2-beta` back.
+      5. Press **Sync** in B, A, B again: NO new commit touches a `.gitignore`.
+      6. Your own rule wins: in A, write `!plugins/<some plugin>/<some file>` (a file in that plugin folder other
+         than main.js/manifest.json/styles.css/data.json) BETWEEN the two blocks, press **Sync** → that file
+         appears on GitHub; after a Sync in B the same line is in B's file. Then try `!workspace.json` between the
+         blocks → `workspace.json` still does NOT go to GitHub (`final` wins).
+      If step 3/4 shows B putting `v2.0.2-beta` back, or the commits in step 5 keep coming — that is the
+      ping-pong: stop and report with both logs.
 - [ ] **Your edits inside `invariants` survive; `final` is absolute.** Add a line to the
       top block → it stays after the next sync. The bottom block is restored verbatim if
       you edit it.
