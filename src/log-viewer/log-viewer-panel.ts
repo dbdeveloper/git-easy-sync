@@ -425,7 +425,13 @@ export class LogViewerPanel {
     const cb = ed.lineBlockAt(cursorPos);
     const inView = cb.bottom > sc.scrollTop && cb.top < sc.scrollTop + sc.clientHeight;
     const oldHead = inView ? cursorItemLines(before, before, items, cursorLine.number - 1) : null;
-    const offset = oldHead === null ? 0 : ed.lineBlockAt(doc0.line(oldHead.oldLine + 1).from).top - sc.scrollTop;
+    // The entry's first line may be ABOVE the window (an expanded entry
+    // seen only by its last lines, the cursor clicked on one of them):
+    // then it becomes the first visible line — the collapsed entry shows
+    // whole at the top (owner, 2026-10-24), never above the window.
+    const offset = oldHead === null
+      ? 0
+      : Math.max(0, ed.lineBlockAt(doc0.line(oldHead.oldLine + 1).from).top - sc.scrollTop);
     const oldStarts = this.starts;
     const top = doc0.lineAt(ed.lineBlockAtHeight(sc.scrollTop).from).number - 1;
     this.render(false);
