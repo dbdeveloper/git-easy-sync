@@ -293,6 +293,22 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       In B and C turn **Sync configs OFF** and press **Sync** → on GitHub nothing under `.obsidian/` changes (no
       deletions, no new files). Then, in **C only**, add the line `*.phone-test` to the user zone (between the two
       blocks) of `<vault>/.gitignore` — and do **NOT** sync C yet (it is used in T4).
+- [ ] **T0b. What the Sync configs switch changes in `.obsidian/` (watch it in B and C when you turn it OFF in
+      T0, and again when you turn it ON in T7).** Before flipping, copy the folder aside
+      (`cp -R .obsidian /tmp/obsidian-before`), flip, press **Sync**, then `diff -r /tmp/obsidian-before .obsidian`.
+      Expected — and NOTHING else in `.obsidian/` changes, nothing is deleted locally or on GitHub:
+      - `.obsidian/.gitignore`: only the bottom `final` block changes — **OFF**: `/.gitignore` and `*`;
+        **ON**: the `!/.gitignore`, `!/plugins/*/.gitignore` and per-device lines (`workspace.json`, …). The top
+        allowlist block and your own lines between the blocks stay as they are.
+      - `.obsidian/plugins/git-easy-sync/.gitignore`: **OFF** adds a `final` block at the end with
+        `# syncConfigDir is OFF on this device (git-easy-sync…)` and `*`; **ON** removes it.
+      - another plugin's folder that HAS its own `.gitignore`: **OFF** appends the same two lines (that comment +
+        `*`) at the very end; **ON** removes exactly those two lines. A plugin folder WITHOUT a `.gitignore` gets
+        none (nothing is created).
+      - `.obsidian/plugins/.gitignore` (the per-device "Sync plugins data.json" switch): turning Sync configs OFF
+        also turns that switch OFF (greyed out); turning Sync configs back ON does NOT turn it back on.
+      - `<vault>/.gitignore`: unchanged (`!/.obsidian/` there does not depend on the switch).
+      While OFF, Sync neither sends nor receives anything under `.obsidian/` (the GitHub copies stay as they were).
 - [ ] **T1. The new build's first Sync (A).** Press **Sync** in A → exactly ONE commit with the three `.gitignore`
       files (`<vault>/.gitignore`, `.obsidian/.gitignore`, `.obsidian/plugins/git-easy-sync/.gitignore`, all now
       `v2.0.3-beta`) plus the new `main.js` / `manifest.json`. A's `.obsidian/.gitignore`: the allowlist block on top,
