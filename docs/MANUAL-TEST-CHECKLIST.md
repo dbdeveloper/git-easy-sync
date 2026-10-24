@@ -324,10 +324,17 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       the START of a Sync (before the download), so only now does the old build meet the newer marker → B's log has
       `gitignore section anomaly` with `yielded-to-newer` and `"version":"2.0.3-beta"` for `.gitignore`; the file
       keeps `v2.0.3-beta`; NO commit from B touches a `.gitignore`.
-- [ ] **T4. A clean merge of `<vault>/.gitignore` (C, phone).** Press **Sync** in C (its unsynced `*.phone-test`
-      meets the new `v2.0.3-beta` markers) → C's file has BOTH `*.phone-test` and `v2.0.3-beta`; NO
-      `.gitignore.conflict-from-*` file appears anywhere; no line is lost; C pushes the file with its line.
-      Then **Sync** A and B → `*.phone-test` is in both, and no further `.gitignore` commits.
+- [ ] **T4. A clean merge of `<vault>/.gitignore` on an old, yielding build (C, phone).** ⚠️ The ROOT file —
+      `/sdcard/Documents/Obsidian-test/.gitignore` — NOT `.obsidian/.gitignore` (that one is local while Sync
+      configs is OFF and takes no part; field 2026-10-24: the line landed there by mistake and T4 tested nothing).
+      1. **C:** add `*.phone-test` at the very BOTTOM of the user zone of the ROOT file (right above
+         `# ===== git-easy-sync final …`). Do NOT sync C.
+      2. **A:** add `*.desk-test` at the very TOP of the user zone of A's ROOT file (right under
+         `# ===== end of git-easy-sync invariants =====`). **Sync** A.
+      3. **Sync** C → C's file has BOTH lines; NO `.gitignore.conflict-from-*` anywhere; C sends ONE commit; C's log
+         has `yielded-to-newer` (it does not rewrite the newer blocks).
+      4. **Sync** A, then B → both lines everywhere, no further `.gitignore` commits.
+      (The two lines are far apart on purpose, so the line merge does not see them as one region.)
 - [ ] **T5. An edit INSIDE our block on an old build converges in one round (C → A).** In C add a line INSIDE the
       `invariants` block of `<vault>/.gitignore`, press **Sync** in C → C (old, yielding) does not repair it, the line
       goes to GitHub. **Sync** A → A repairs the block (the line is gone), one commit. **Sync** C → C gets the clean
@@ -341,6 +348,13 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       resolve by the newer modification time), so one or two extra `.gitignore` commits are possible. What MUST
       hold: within two Syncs everything settles — the file is the same in all vaults, `v2.0.3-beta`, no conflict
       copies, and no further commits. Repeat on C (the phone) — this also checks the self-update on mobile.
+      ⚠️ **Watch whose `.obsidian/.gitignore` survives.** Files under `.obsidian/` are NOT merged line by line: the
+      file with the newer modification time wins WHOLE. Turning the switch ON rewrites the device's file, so it is
+      probably the newer one. Expected risk, to be observed and written down: either A's own lines
+      (`!plugins/*/mynewfiles.txt`, `*.ab`) or C's `*.phone-test` (it sits in C's `.obsidian/.gitignore`) disappear.
+      Record which. This is the long-standing "newest wins in `.obsidian/`" rule, not this change — but for a
+      `.gitignore` it means user rules can vanish silently; the owner decides afterwards whether
+      `.obsidian/.gitignore` should be merged like the root file.
 - [ ] **Your edits inside `invariants` survive; `final` is absolute.** Add a line to the
       top block → it stays after the next sync. The bottom block is restored verbatim if
       you edit it.
