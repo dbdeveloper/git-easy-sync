@@ -359,9 +359,12 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       see the item below.)*
 - [x] **Our blocks are ours; your rules go BETWEEN them.** A line added INSIDE either block is removed on the next
       Sync (the block is rewritten); a rule written between the blocks stays. *(Field: T5.)*
-- [ ] **`final` is absolute.** Between the blocks of `.obsidian/.gitignore` write `!workspace.json`, **Sync** →
+- [x] **`final` is absolute.** Between the blocks of `.obsidian/.gitignore` write `!workspace.json`, **Sync** →
       `workspace.json` still does NOT go to GitHub. Between the blocks of `<vault>/.gitignore` write
-      `!*.conflict-from-*` → conflict copies still never travel.
+      `!*.conflict-from-*` → conflict copies still never travel. *(Field 2026-10-24: `!workspace.json` between the
+      blocks and `!workspace*.json` written AFTER `final` — the plugin moved that line up above the block (WARN
+      "Managed .gitignore written by the plugin"), `workspace.json` never reached GitHub; the conflict copies in B's
+      `.test/` never travelled either. The root `!*.conflict-from-*` line itself was not tried.)*
 - [x] **`.obsidian/.gitignore` and a plugin's `.gitignore` conflict like ordinary files (new 2026-10-24).** Two vaults
       add DIFFERENT rules at the same spot of `.obsidian/.gitignore` → a conflict copy
       `.obsidian/.gitignore.conflict-from-…`, every Sync shows "Sync paused — .gitignore is in conflict" until it is
@@ -371,8 +374,11 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
 - [ ] **A difference only in version lines is never a conflict (new 2026-10-24).** A vault on an OLDER build with
       Sync configs OFF, whose `.obsidian/.gitignore` rules are identical to the repo's, switches Sync configs ON →
       no conflict copy; the newer version lines are taken (1c29476). *(Unit-tested; not yet seen live.)*
-- [ ] **A plugin's own `.gitignore` conflicts too.** Edit `.obsidian/plugins/<some plugin>/.gitignore` differently on
+- [x] **A plugin's own `.gitignore` conflicts too.** Edit `.obsidian/plugins/<some plugin>/.gitignore` differently on
       two vaults (Sync configs ON on both) → a conflict copy next to it, Sync paused, the resolution syncs.
+      *(Field 2026-10-24, `github-gitless-sync`: B pushed `*.b-plugin-rule`, A's `*.a-plugin-rule` got the copy
+      (WARN "the server's version is saved as a conflict copy"); Sync stayed blocked while it was unresolved; the
+      both-lines resolution reached B.)*
 - [x] **Per-device `data.json` switch.** `<configDir>/plugins/.gitignore` is the
       per-device control; toggling the setting changes what it holds, and the file is
       NOT the same on both devices (that is the feature, not drift). *(Field 2026-10-24: B switched ON →
