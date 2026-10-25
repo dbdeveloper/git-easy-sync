@@ -71,7 +71,7 @@ export class LogViewerView extends ItemView {
   // so it did not happen there.) So once our pop-out has really closed,
   // the window we were opened from is raised again — the way Obsidian
   // raises its own Settings window: restore() if minimised, then focus().
-  // Armed in onClose, which Obsidian calls however the tab is closed —
+  // Started in onClose, which Obsidian calls however the tab is closed —
   // Esc, Cmd+W, the tab's ×, the window's close button (owner, 2026-10-25:
   // Cmd+W and the × went past the Esc path and lost the focus).
   private returnFocusWhenPopoutCloses(): void {
@@ -90,14 +90,23 @@ export class LogViewerView extends ItemView {
       window.setTimeout(() => raiseWindow(back), 0);
       return;
     }
-    const ws = this.app.workspace;
-    const ref = ws.on("window-close", (_ws, closed) => {
-      if (closed !== own) return;
-      ws.offref(ref);
-      window.setTimeout(() => raiseWindow(back), 0);
-    });
-    // The pop-out may stay open (other tabs in it): do not wait forever.
-    window.setTimeout(() => ws.offref(ref), 5000);
+    // Wait for the pop-out to be really gone, by looking — not by the
+    // "window-close" event: Obsidian fires it BEFORE the tab's onClose
+    // runs (field log 2026-10-25: armed here, it never arrived), while
+    // the window is still open. 50 ms steps, at most 5 s (the pop-out may
+    // stay open with other tabs in it).
+    const started = Date.now();
+    const timer = window.setInterval(() => {
+      if (own.closed) {
+        window.clearInterval(timer);
+        this.deps.logger().info?.("Log viewer pop-out gone - raising the window it was opened from", {
+          ms: Date.now() - started,
+        });
+        raiseWindow(back);
+      } else if (Date.now() - started > 5000) {
+        window.clearInterval(timer);
+      }
+    }, 50);
   }
 
   async onClose(): Promise<void> {
