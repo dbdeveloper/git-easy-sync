@@ -373,7 +373,12 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       2.0.5–2.0.7-beta.)*
 - [ ] **A difference only in version lines is never a conflict (new 2026-10-24).** A vault on an OLDER build with
       Sync configs OFF, whose `.obsidian/.gitignore` rules are identical to the repo's, switches Sync configs ON →
-      no conflict copy; the newer version lines are taken (1c29476). *(Unit-tested; not yet seen live.)*
+      no conflict copy; the newer version lines are taken (1c29476). *(Unit-tested.)* ⏳ **Run it at the NEXT REAL
+      version bump** (e.g. `2.0.8-beta`): A on the new build pushes; B still on the old build with Sync configs OFF
+      switches it ON. ⚠️ It CANNOT be simulated by writing a higher version into B's own file (tried 2026-10-25,
+      `9.9.9` in the repo, `9.9.8` on B): a file whose version lines are NEWER than the build makes the plugin keep its
+      hands off the blocks (`yielded-to-newer`), so B's `final` block was never switched to the ON rules — the guard
+      for real version skew, not the case under test. A real older build never has a newer version in its own file.
 - [x] **A plugin's own `.gitignore` conflicts too.** Edit `.obsidian/plugins/<some plugin>/.gitignore` differently on
       two vaults (Sync configs ON on both) → a conflict copy next to it, Sync paused, the resolution syncs.
       *(Field 2026-10-24, `github-gitless-sync`: B pushed `*.b-plugin-rule`, A's `*.a-plugin-rule` got the copy
