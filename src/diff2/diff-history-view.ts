@@ -14,7 +14,7 @@
 //     treats null as "no match").
 
 import { holdEscapeWhileActive } from "../ui/esc-scope";
-import { keepLeafFocus, refocusOnEmptyClick } from "../ui/keep-focus";
+import { keepLeafFocus } from "../ui/keep-focus";
 import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
 import {
   historyIsoTimestamp,
@@ -208,13 +208,12 @@ export class DiffHistoryView extends ItemView {
         if (leaf === this.leaf) this.focusList();
       }),
     );
-    // A click anywhere in the view gives the list the keyboard — AFTER the
-    // browser's own focus move (ui/keep-focus.ts).
-    refocusOnEmptyClick(this, this.contentEl, () => this.focusList());
     // Esc must not throw the keyboard out to another tab, and after a move
     // (or the window's return from another program) the list gets the
     // focus again — as in every tab of ours (owner, 2026-10-25).
     holdEscapeWhileActive(this);
+    // …and a click anywhere in the view (outside the rows) gives the list
+    // the keyboard — after the browser's own focus move.
     keepLeafFocus(this, () => this.focusList());
     void this.render();
   }

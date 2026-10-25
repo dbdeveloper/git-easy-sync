@@ -23,7 +23,7 @@
 
 import { ItemView, type Vault, WorkspaceLeaf } from "obsidian";
 import { holdEscapeWhileActive } from "../ui/esc-scope";
-import { keepLeafFocus, refocusOnEmptyClick } from "../ui/keep-focus";
+import { keepLeafFocus } from "../ui/keep-focus";
 import type { ConflictAnalyzer } from "../sync2/conflict-analyzer";
 import type ConflictStoreV2 from "../sync2/conflict-store-v2";
 import {
@@ -237,9 +237,6 @@ export class DiffPanelView extends ItemView {
         if (leaf === this.leaf) this.onActivated();
       }),
     );
-    // A click anywhere in the view gives the list the keyboard — AFTER the
-    // browser's own focus move (ui/keep-focus.ts; History had the same bug).
-    refocusOnEmptyClick(this, this.contentEl, () => this.focusConflictList());
     // Esc must not throw the focus out to another tab (owner, 2026-10-25):
     // Obsidian's own Esc does that for a view that is not "navigation" —
     // swallowed while this tab is active, as in the diff-editor (TODO #8).

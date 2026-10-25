@@ -19,6 +19,7 @@ export interface KeepFocusView {
   app: App;
   leaf: WorkspaceLeaf;
   containerEl: HTMLElement;
+  contentEl?: HTMLElement;
   registerEvent(ref: EventRef): void;
   register(cb: () => void): void;
   registerDomEvent(el: HTMLElement, type: "mousedown", cb: (e: MouseEvent) => unknown): void;
@@ -72,6 +73,10 @@ export function keepLeafFocus(view: KeepFocusView, focusEditor: () => void): voi
     if (target?.closest?.(HEADER_CONTROLS)) return;
     focusSoon();
   };
+  // A click on an empty spot of the content — a toolbar's body, a hint
+  // line, a button row (owner, 2026-10-25) — the same, after the browser's
+  // own focus move; controls and the text itself keep their focus.
+  if (view.contentEl) refocusOnEmptyClick(view, view.contentEl, focusEditor);
   const viewHeader = containerEl.querySelector<HTMLElement>(".view-header");
   if (viewHeader) view.registerDomEvent(viewHeader, "mousedown", onHeaderDown);
   const handle = (leaf as unknown as { tabHeaderEl?: HTMLElement }).tabHeaderEl;

@@ -201,3 +201,39 @@ describe("keepLeafFocus — clicks on the tab's header and handle", () => {
     expect(w.focusEditor).not.toHaveBeenCalled();
   });
 });
+
+// Owner, 2026-10-25: in the diff-editor, the log viewer and the .gitignore
+// editor a click on the toolbar's body, the hint line or the button row
+// took the keyboard away from the text. Every tab of ours: a click on an
+// empty spot of its content gives the editing area the focus back, after
+// the browser's own focus move.
+describe("keepLeafFocus — clicks on empty spots of the content", () => {
+  it("🔑 a click on the toolbar's body → the editing area gets the focus", () => {
+    vi.useFakeTimers();
+    const containerEl = document.createElement("div");
+    const content = containerEl.appendChild(document.createElement("div"));
+    content.className = "view-content";
+    const toolbar = content.appendChild(document.createElement("div"));
+    const editor = content.appendChild(document.createElement("div"));
+    editor.setAttribute("contenteditable", "true");
+    document.body.appendChild(containerEl);
+    (containerEl as unknown as { onWindowMigrated: unknown }).onWindowMigrated = () => () => {};
+    const focusEditor = vi.fn();
+    const view = {
+      leaf: {},
+      app: { workspace: { activeLeaf: null, on: () => ({}) } },
+      containerEl,
+      contentEl: content,
+      registerEvent: () => {},
+      register: () => {},
+      registerDomEvent: (el: HTMLElement, type: string, fn: (e: Event) => void) => el.addEventListener(type, fn),
+    };
+    keepLeafFocus(view as never, focusEditor);
+    toolbar.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    vi.runAllTimers();
+    expect(focusEditor).toHaveBeenCalledTimes(1);
+    editor.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); // the text itself
+    vi.runAllTimers();
+    expect(focusEditor).toHaveBeenCalledTimes(1);
+  });
+});
