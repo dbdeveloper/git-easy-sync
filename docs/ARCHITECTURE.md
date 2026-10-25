@@ -82,6 +82,13 @@ without scrolling the whole log:
 - **a file modified without a person's direct action** — canonicalization (CRLF/BOM/trailing
   newline) of a text file, our blocks written into or repaired in a `.gitignore`.
 
+**Exception — the drain's Layer 2 corrections** (owner, 2026-10-25): the drain's record of what the
+server holds, corrected against the live tree, is ONE **INFO** line per drain (`Remote check: the
+change list corrected against the server` with `count` and `paths`), not a WARN per file — the
+first sync after "Sync configs" is switched on corrects every config file the server already
+holds (35 WARN lines for nothing that needed a person). The per-path detail stays in the drain
+result.
+
 The `HTTP <method> <what> … status=N` line of every GitHub request (`httpLogLevel` in
 `src/github/client.ts`): 2xx/3xx → INFO; 404, 409, 410, 422 and other 4xx → WARN; 429, or
 403 with the rate limit used up / a `Retry-After` → WARN; 401, 403 otherwise, 5xx → ERROR. A

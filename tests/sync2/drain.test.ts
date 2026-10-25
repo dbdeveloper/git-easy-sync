@@ -1587,6 +1587,29 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     );
   });
 
+  // Owner, 2026-10-25: the first sync after "Sync configs" was switched on
+  // logged 35 WARN lines "Remote check: … corrected", one per file — the
+  // server already held every one of them. One INFO line per drain now,
+  // with the count and the paths.
+  it("🔑 Layer 2 corrections: ONE info line per drain with the count, no per-file warning", async () => {
+    await setupAligned();
+    await world.commitFiles({ "note.md": "one\ntwo\nHIDDEN\n" });
+    discoveryOverride = async () => ({ changes: [], tree: null });
+    await stageBatch({ "note.md": "LOCAL\ntwo\nthree\n" });
+    const infos: Array<{ m: string; d: unknown }> = [];
+    const warns: string[] = [];
+    const r = await drainOnce(
+      makeDeps({
+        logger: { info: (m: string, d?: unknown) => infos.push({ m, d }), warn: (m: string) => warns.push(m) },
+      }),
+    );
+    expect(r.layer2Corrections).toHaveLength(1);
+    expect(warns.filter((w) => /Remote check/.test(w))).toEqual([]);
+    const lines = infos.filter((i) => /Remote check/.test(i.m));
+    expect(lines).toHaveLength(1);
+    expect(lines[0].d).toMatchObject({ count: 1, paths: ["note.md"] });
+  });
+
   it("P.3: the WRONG tracked sha coincides with local.sha → the correction lands BEFORE the short-circuit", async () => {
     await setupAligned();
     const localContent = "LOCAL\ntwo\nthree\n";

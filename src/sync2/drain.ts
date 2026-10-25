@@ -1012,20 +1012,37 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     return { file: cmp > 0 ? tracked.remote : local };
   };
 
-  const result = (status: DrainStatus): DrainResult => ({
-    status,
-    layer2Corrections,
-    conflictVerdicts,
-    vaultStepErrors,
-    cancelledConflicts,
-    newConflictCopies,
-    pushedCommits,
-    finalizedMergeSha,
-    vaultStepWrites,
-    vaultStepRemoves,
-    selfUpdateStaged,
-    pushedPaths: [...pushedPaths],
-  });
+  // Layer 2 corrections: ONE info line per drain with the count and the
+  // paths (owner, 2026-10-25: the first sync after "Sync configs" was
+  // switched on wrote 35 WARN lines, one per file the server already
+  // held). Each path with expected/actual is in the drain result.
+  let correctionsLogged = false;
+  const logCorrections = () => {
+    if (correctionsLogged || layer2Corrections.length === 0) return;
+    correctionsLogged = true;
+    deps.logger?.info("Remote check: the change list corrected against the server", {
+      count: layer2Corrections.length,
+      paths: layer2Corrections.slice(0, 50).map((c) => c.path),
+      more: Math.max(0, layer2Corrections.length - 50),
+    });
+  };
+  const result = (status: DrainStatus): DrainResult => {
+    logCorrections();
+    return {
+      status,
+      layer2Corrections,
+      conflictVerdicts,
+      vaultStepErrors,
+      cancelledConflicts,
+      newConflictCopies,
+      pushedCommits,
+      finalizedMergeSha,
+      vaultStepWrites,
+      vaultStepRemoves,
+      selfUpdateStaged,
+      pushedPaths: [...pushedPaths],
+    };
+  };
 
   // S1: git identity per push site (main = batch.createdAt; conflict
   // branch + merge = now()) — see DrainDeps.gitAuthor.
@@ -1837,11 +1854,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           // sites only).
           tracked.remote.mtime = null;
           tracked.remote.deviceLabel = null;
-          deps.logger?.warn("Remote check: the server's file differs from the change list — corrected", {
-            path: entry.path,
-            expected: trackedSha,
-            actual: liveSha,
-          });
+          // Logged once per drain, summed up (result() below).
           layer2Corrections.push({
             path: entry.path,
             expected: trackedSha,
