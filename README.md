@@ -617,6 +617,17 @@ reads one in every folder, so rules written deeper in the tree would apply for g
 be invisible here — which is why the plugin offers to collect them into the root file
 instead.
 
+**One `.gitignore` for the whole vault.** After that first collection, the root
+`.gitignore` alone decides what syncs. (The plugin also keeps a few of its own inside
+`.obsidian/`; you normally need not touch them.) Keep this in mind:
+
+- A `.gitignore` you put into a subfolder **later** has no effect, and the plugin does
+  **not** notice it by itself. Press **Check now** (below) to collect it.
+- An old `.gitignore` inside a folder that a rule above already excludes is left where it
+  is: git never reads it, so its rules do nothing today, and collecting them would switch
+  them on. If you later **stop** excluding that folder, its old `.gitignore` still does
+  nothing here — press **Check now** before your next sync.
+
 The first time it runs it checks the whole vault for `.gitignore` files outside the
 root. If it finds any, their rules are translated into root-anchored form and offered
 as a **change to the root `.gitignore`**, which you accept, edit or discard in the

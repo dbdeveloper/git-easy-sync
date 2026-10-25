@@ -912,7 +912,9 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           "translate their rules into root-anchored form, and offer them as " +
           "a change to the root .gitignore for you to review. The originals " +
           "are renamed to .bak — nothing is deleted. Runs once by itself " +
-          "after install; use this after adding a new one by hand.",
+          "after install. After that only the root .gitignore counts: a " +
+          ".gitignore added to a folder later, or one in a folder you stop " +
+          "excluding, does nothing and is not noticed until you press this.",
       )
       .addButton((button) =>
         button.setButtonText("Check now").onClick(async () => {
