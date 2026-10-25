@@ -80,6 +80,7 @@ import { switchLogExtension, type LogExtensionResult } from "./log-viewer/log-ex
 import type { LogViewerDeps } from "./log-viewer/log-viewer-panel";
 import { logViewerTarget } from "./log-viewer/log-open-target";
 import { crashLogFileNameFor } from "./logger";
+import { setEscDiagnostics } from "./ui/esc-scope";
 import { settleSelfUpdateBaselines } from "./sync2/self-update-applied";
 import DeletedStore from "./diff2/deleted-store";
 import { Sync2Manager, type DrainStatus } from "./sync2/sync2-manager";
@@ -646,6 +647,8 @@ export default class GitHubSyncPlugin extends Plugin {
         this.settings.deviceLabel,
       );
       await this.logger.init();
+      // DIAGNOSTIC (2026-10-25): Esc after a tear-off — see ui/esc-scope.ts.
+      setEscDiagnostics((m, d) => this.logger.info(m, d));
       // TODO(perf) diagnostic — bridge the diff2 render layer's intra-chunk-diff timing to
       // the file log (it is a pure StateField update with no logger of its own). Fires only
       // for notable groups: a big group that hit the skip cap, or a char/word diff ≥15 ms.
