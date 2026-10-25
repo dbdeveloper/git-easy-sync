@@ -63,3 +63,23 @@ export function keepLeafFocus(view: KeepFocusView, focusEditor: () => void): voi
     }),
   );
 }
+
+// A click in the tab outside its list (above it, below it) must just give
+// the list the keyboard (owner, 2026-10-25, History: the selection went
+// pale). Focusing the list ON mousedown is too early — the browser's own
+// default then moves the focus to the clicked empty spot. So the list is
+// focused right AFTER that default. A click on something that takes the
+// focus itself (an input, a button, a link…) keeps it.
+const TAKES_FOCUS = "input, textarea, select, button, a[href], [contenteditable]";
+
+export function refocusOnEmptyClick(
+  view: { registerDomEvent(el: HTMLElement, type: "mousedown", cb: (e: MouseEvent) => unknown): void },
+  container: HTMLElement,
+  focus: () => void,
+): void {
+  view.registerDomEvent(container, "mousedown", (e) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.(TAKES_FOCUS)) return;
+    window.setTimeout(() => focus(), 0);
+  });
+}

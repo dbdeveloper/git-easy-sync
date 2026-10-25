@@ -4,7 +4,7 @@
 // AGPL-3.0 — see LICENSE.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { keepLeafFocus } from "../src/ui/keep-focus";
+import { keepLeafFocus, refocusOnEmptyClick } from "../src/ui/keep-focus";
 
 // Owner, 2026-10-25: after a move (into its own window, or next to other
 // tabs) the editing area lost the focus until clicked.
@@ -102,5 +102,44 @@ describe("keepLeafFocus — the window gets the OS focus", () => {
     window.dispatchEvent(new FocusEvent("focus"));
     vi.runAllTimers();
     expect(w.focusEditor).not.toHaveBeenCalled();
+  });
+});
+
+// Owner, 2026-10-25 (History): a click in the tab OUTSIDE the list (above
+// or below it) turned the selection pale — the list's focus was set on
+// mousedown, and the browser's own default then moved the focus to the
+// clicked empty spot. The list gets the focus back AFTER that default.
+describe("refocusOnEmptyClick", () => {
+  function clickWorld() {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const empty = container.appendChild(document.createElement("div"));
+    const input = container.appendChild(document.createElement("input"));
+    const button = container.appendChild(document.createElement("button"));
+    const focus = vi.fn();
+    const view = {
+      registerDomEvent: (el: HTMLElement, type: string, fn: (e: Event) => void) => el.addEventListener(type, fn),
+    };
+    refocusOnEmptyClick(view as never, container, focus);
+    const down = (el: HTMLElement) => el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    return { empty, input, button, focus, down };
+  }
+
+  it("🔑 a click on an empty spot → the list gets the focus AFTER the browser's default", () => {
+    vi.useFakeTimers();
+    const w = clickWorld();
+    w.down(w.empty);
+    expect(w.focus).not.toHaveBeenCalled(); // not before the default
+    vi.runAllTimers();
+    expect(w.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("a click on an input or a button → its focus is left alone", () => {
+    vi.useFakeTimers();
+    const w = clickWorld();
+    w.down(w.input);
+    w.down(w.button);
+    vi.runAllTimers();
+    expect(w.focus).not.toHaveBeenCalled();
   });
 });
