@@ -49,7 +49,7 @@ import GitignoreSeedStore from "../../src/sync2/gitignore-seeds";
 import { isSyncable } from "../../src/sync2/change-detector";
 import GI, { whitelistedGitignoreDirs } from "../../src/gi";
 import { Vault } from "../../mock-obsidian";
-import { ownedFileHeader } from "../../src/sync2/gitignore-markers";
+import { selfPluginGitignore } from "../../src/sync2/gitignore-invariants";
 
 const CONFIG_DIR = ".obsidian";
 const SELF = "git-easy-sync";
@@ -71,10 +71,10 @@ const TEST_VERSION = "2.1.0";
 // the module would make this test agree with any future mistake.
 const SHIPPED_ALLOWLIST_RULES =
   "*\n!main.js\n!manifest.json\n!styles.css\n!.gitignore\n";
-// What enforce() actually writes: the §5.11 header (prose + this
-// build's stamp, taken from the module because it is not the subject
-// here) followed by those rules, in that order.
-const SHIPPED_ALLOWLIST = `${ownedFileHeader(TEST_VERSION).join("\n")}\n${SHIPPED_ALLOWLIST_RULES}`;
+// What enforce() actually writes: the header (prose, taken from the
+// module because it is not the subject here — no version since
+// 2026-10-25) followed by those hand-written rules, in that order.
+const SHIPPED_ALLOWLIST = `${selfPluginGitignore(true).split("\n*\n")[0]}\n${SHIPPED_ALLOWLIST_RULES}`;
 
 // A syntactically real-looking PAT so a failing assertion reads like
 // the incident it prevents. Never a real token.

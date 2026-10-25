@@ -16,6 +16,7 @@ import GitignoreInvariants, {
   FINAL_END,
   type SectionAnomalyReport,
   findBeginLine,
+  selfPluginGitignore,
 } from "../../src/sync2/gitignore-invariants";
 import GitignoreSeedStore from "../../src/sync2/gitignore-seeds";
 import FileBaselinesStore from "../../src/sync2/file-baselines";
@@ -28,7 +29,6 @@ import GI, { whitelistedGitignoreDirs } from "../../src/gi";
 import {
   beginMarker,
   foreignSilencerComment,
-  ownedFileHeader,
   versionLine,
 } from "../../src/sync2/gitignore-markers";
 import { isUnhonouredGitignore } from "../../src/sync2/change-detector";
@@ -724,44 +724,46 @@ describe("§5.11 the yield: a section stamped by a NEWER plugin is left alone", 
     expect(f.seeds.get(".gitignore")).toBeUndefined();
   });
 
-  it("🔑 reaches <self>/.gitignore too — the file with no sections to stamp", async () => {
-    // It TRAVELS (the configDir block re-admits plugins/*/.gitignore),
-    // so "ours outright" was never protection from a newer version of
-    // ourselves: two builds with different constants would rewrite it
-    // for each other on every sync.
-    const selfPath = selfGitignore(f.root);
-    const newer =
-      [...ownedFileHeader("9.9.9"), "*", "!main.js", "!something-new"].join(
-        "\n",
-      ) + "\n";
-    fs.writeFileSync(selfPath, newer);
-    await f.inv.enforce();
-    expect(fs.readFileSync(selfPath, "utf8")).toBe(newer);
-    expect(
-      f.anomalies.filter((a) => a.anomaly === "yielded-to-newer"),
-    ).toHaveLength(1);
-  });
-
-  it("<self>/.gitignore says what it is, and carries this build's stamp", async () => {
-    await f.inv.enforce();
-    const self = fs.readFileSync(selfGitignore(f.root), "utf8");
-    expect(self.startsWith(ownedFileHeader(TEST_VERSION)[0])).toBe(true);
-    expect(self).toContain("must never");
-    // The rules still follow, in order, and nothing was lost to the
-    // header: this file is what keeps the token off GitHub.
-    expect(self).toContain("*\n!main.js\n!manifest.json\n!styles.css\n!.gitignore");
-  });
-
-  it("an OLDER stamp in <self>/.gitignore is overwritten, header and all", async () => {
+  // Owner, 2026-10-25: <self>/.gitignore is OURS OUTRIGHT — two constants
+  // (Sync configs ON / OFF), rewritten whole, with no version and no
+  // yield ("Occam's razor"). A file stamped by any build, newer or older,
+  // is brought to this build's constant.
+  it("🔑 <self>/.gitignore is rewritten whole — even under a NEWER build's stamp", async () => {
     const selfPath = selfGitignore(f.root);
     fs.writeFileSync(
       selfPath,
-      [...ownedFileHeader("1.0.0"), "*", "!main.js"].join("\n") + "\n",
+      "# ===== git-easy-sync v9.9.9 - managed file, DO NOT EDIT =====\n*\n!main.js\n!something-new\n",
     );
     await f.inv.enforce();
-    const after = fs.readFileSync(selfPath, "utf8");
-    expect(after).toContain(ownedFileHeader(TEST_VERSION)[0]);
-    expect(after).toContain("!styles.css"); // the canonical rules are back
+    expect(fs.readFileSync(selfPath, "utf8")).toBe(selfPluginGitignore(true));
+    expect(f.anomalies.filter((a) => a.anomaly === "yielded-to-newer")).toHaveLength(0);
+  });
+
+  it("🔑 <self>/.gitignore says what it is and carries NO version", async () => {
+    await f.inv.enforce();
+    const self = fs.readFileSync(selfGitignore(f.root), "utf8");
+    expect(self.split("\n")[0]).toBe("# ===== git-easy-sync - managed file, DO NOT EDIT =====");
+    expect(self).toContain("must never");
+    expect(self).not.toMatch(/v\d+\.\d+/);
+    // The rules follow, in order: this file is what keeps the token off GitHub.
+    expect(self).toContain("*\n!main.js\n!manifest.json\n!styles.css\n!.gitignore");
+  });
+
+  it("🔑 the OFF constant: the header, one comment, `*` — no allowlist, no markers", () => {
+    const off = selfPluginGitignore(false);
+    const lines = off.trimEnd().split("\n");
+    expect(lines[lines.length - 1]).toBe("*");
+    expect(off).toContain("syncConfigDir is OFF on this device");
+    expect(off).not.toContain("!main.js");
+    expect(off).not.toContain("DO NOT EDIT =====\n# =====");
+    expect(off).not.toMatch(/end of git-easy-sync/);
+  });
+
+  it("any other content in <self>/.gitignore is overwritten", async () => {
+    const selfPath = selfGitignore(f.root);
+    fs.writeFileSync(selfPath, "*\n!main.js\n!data.json\n");
+    await f.inv.enforce();
+    expect(fs.readFileSync(selfPath, "utf8")).toBe(selfPluginGitignore(true));
   });
 
   it("an OLDER or equal stamp does not yield — the file is brought to canonical", async () => {
@@ -986,16 +988,13 @@ describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () =>
     expect(cd).toContain("/.gitignore"); // this file stops syncing too
     expect(cd).toContain("\n*");
 
-    // Our own file: the silencer is part of the constant we own, and it
-    // is needed because our node speaks LAST for our own folder — the
-    // allowlist would otherwise keep main.js visible.
+    // Our own file: the OFF constant — `*` and nothing re-admitted; our
+    // node speaks LAST for our own folder, so an allowlist here would keep
+    // main.js visible. No markers: the file is ours outright (2026-10-25).
     const self = fs.readFileSync(selfGitignore(f.root), "utf8");
-    expect(self).toContain("!main.js");
-    // ⚠️ UNVERSIONED here, on purpose (§5.11): this file is a constant
-    // the plugin owns outright and rewrites whole, so there is nothing
-    // to arbitrate and a stamp would only churn it once per release.
-    expect(self).toContain(FINAL_BEGIN);
-    expect(self.indexOf("!main.js")).toBeLessThan(self.indexOf(FINAL_BEGIN));
+    expect(self).toBe(selfPluginGitignore(false));
+    expect(self).not.toContain("!main.js");
+    expect(self).not.toContain(FINAL_BEGIN);
 
     // A third party's file: TWO lines of ours at the end, their rules
     // untouched, and NO markers — those belong in files that are ours.

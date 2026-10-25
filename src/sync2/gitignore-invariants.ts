@@ -19,7 +19,6 @@ import {
   newerVersionIn,
   versionLine,
   versionLinePattern,
-  ownedFileHeader,
   parseForeignSilencer,
 } from "./gitignore-markers";
 
@@ -223,42 +222,42 @@ plugins/*/*
 !plugins/*/manifest.json
 !plugins/*/styles.css`;
 
-// Canonical content of <configDir>/plugins/<self>/.gitignore. Unlike
-// the configDir gitignore, the plugin owns this file outright — full
-// rewrite each time, no user content carried over.
-//
-// ⚙️ 2026-09-30 (§5.11, owner): it opens with a HEADER that says what
-// the file is and carries this build's version. Two reasons, and the
-// second is not cosmetic:
-//
-//   - the file is four cryptic lines that decide whether a token ever
-//     leaves the device; a reader who opens it deserves a sentence;
-//   - the stamp brings this file under the SAME yield rule as the
-//     sectioned ones. Without it, a future change to this constant
-//     would have two plugin versions rewriting it for each other
-//     forever — the one file where the section rule cannot reach,
-//     because there is no section here to mark.
-function selfPluginGitignore(
-  syncConfigDir: boolean,
-  pluginVersion: string,
-): string {
-  const allowlist = `${ownedFileHeader(pluginVersion).join("\n")}
+// Canonical content of <configDir>/plugins/<self>/.gitignore — OURS
+// OUTRIGHT: two constants, rewritten whole every time, no user content
+// carried over, no version, no yield (owner, 2026-10-25: "Occam's
+// razor" — a version stamp and a yield rule here only complicated an
+// already complex system). The header says what the file is; the rules
+// keep the token and everything else in our folder off GitHub.
+//   ON  — only the files that ARE the plugin travel;
+//   OFF — nothing in our folder travels. Our own node speaks last for our
+//         own folder, so without `*` here the ON allowlist would keep
+//         main.js visible even with `*` in <configDir> (§3.1.1).
+// (Until 2026-10-25 the header carried the build's version and a newer
+// stamp made this file yield; OFF was the ON allowlist plus a marked
+// `final` section.)
+const SELF_HEADER = [
+  "# ===== git-easy-sync - managed file, DO NOT EDIT =====",
+  "# This is the plugin's own folder. Everything here is local state -",
+  "# your token, the sync queue, conflict records - and must never",
+  "# leave this device. Only the files that ARE the plugin travel.",
+  "# Edit the plugin's settings, not this file: it is rewritten whole",
+  "# on every load.",
+].join("\n");
+
+export function selfPluginGitignore(syncConfigDir: boolean): string {
+  if (syncConfigDir) {
+    return `${SELF_HEADER}
 *
 !main.js
 !manifest.json
 !styles.css
 !.gitignore
 `;
-  if (syncConfigDir) return allowlist;
-  // Our own node speaks last for our own folder, so without this the
-  // allowlist above keeps main.js visible to the matcher even with `*`
-  // in <configDir> (§3.1.1). Same silencer the third-party files get,
-  // but here it is simply part of the constant we own outright.
-  return `${allowlist}${composeSection(
-    FINAL_BEGIN,
-    foreignPluginFinalBodyFor(false) as string,
-    FINAL_END,
-  )}\n`;
+  }
+  return `${SELF_HEADER}
+# syncConfigDir is OFF on this device: nothing here travels.
+*
+`;
 }
 
 // BODY of the `invariants` section at the TOP of <vault>/.gitignore:
@@ -681,10 +680,7 @@ export default class GitignoreInvariants {
 
   private async enforceSelfPluginGitignore(): Promise<void> {
     const path = this.selfPluginGitignorePath;
-    const canonical = selfPluginGitignore(
-      this.syncConfigDir(),
-      this.pluginVersion,
-    );
+    const canonical = selfPluginGitignore(this.syncConfigDir());
 
     const stat = await this.vault.adapter.stat(path);
     if (!stat) {
@@ -692,31 +688,12 @@ export default class GitignoreInvariants {
       return;
     }
 
-    // Always read+compare against the canonical constant. No freshness
-    // short-circuit here: the file is ~80 bytes, so the read costs
-    // nothing, and skipping it would need a fingerprint of the WHOLE
-    // file rather than of a section — a different shape than the record
-    // holds, for no gain.
+    // Always read+compare against the constant — the file is a few
+    // hundred bytes. Ours outright: anything else is overwritten, a file
+    // written by another build of ours included (no version here, no
+    // yield — owner, 2026-10-25).
     const content = await this.vault.adapter.read(path);
-    if (content === canonical) {
-      // Already canonical — refresh cache only.
-      return;
-    }
-
-    // §5.11 — the same yield as the sectioned files, reaching the one
-    // file that has no sections. This file TRAVELS (the configDir block
-    // re-admits `plugins/*/.gitignore`), so without this a newer build's
-    // constant and ours would be rewritten for each other on every sync.
-    // "Ours outright" says the USER may not edit it; it never meant a
-    // newer version of ourselves.
-    const newer = newerVersionIn(content, this.pluginVersion);
-    if (newer !== null) {
-      this.noteYield(path, newer);
-      return;
-    }
-
-    // Sync2 owns this file outright — overwrite anything the user (or
-    // anything else) wrote into it.
+    if (content === canonical) return;
     await this.write(path, canonical);
   }
 

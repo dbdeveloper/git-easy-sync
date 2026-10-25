@@ -19,8 +19,6 @@ import {
   beginPattern,
   parseBeginMarker,
   newerVersionIn,
-  ownedFileHeader,
-  parseOwnedFileHeader,
   versionLine,
   versionLinePattern,
   withoutVersionLines,
@@ -61,31 +59,6 @@ describe("BEGIN and END are constants (2026-10-24)", () => {
 
   it("the two kinds do not answer for each other", () => {
     expect(beginPattern("final").test(beginMarker("invariants"))).toBe(false);
-  });
-});
-
-// §5.11 — a file that is OURS OUTRIGHT (no sections, no user content:
-// <self>/.gitignore) has nowhere to put a section, but the same problem:
-// two versions with different constants would rewrite it for each other
-// forever. It gets a HEADER instead, carrying the stamp.
-describe("the owned-file header (§5.11)", () => {
-  it("says what the file is, and stamps who wrote it", () => {
-    const header = ownedFileHeader("2.1.0");
-    expect(header[0]).toBe("# ===== git-easy-sync v2.1.0 - managed file, DO NOT EDIT =====");
-    expect(header.join("\n")).toContain("plugin's own folder");
-  });
-
-  it("is recognised whatever version wrote it — and NOT when it is someone else's line", () => {
-    expect(parseOwnedFileHeader(ownedFileHeader("9.9.9")[0])).toBe("9.9.9");
-    expect(parseOwnedFileHeader("# just a comment")).toBeNull();
-    expect(parseOwnedFileHeader(beginMarker("invariants"))).toBeNull();
-  });
-
-  it("🔑 the SAME yield rule covers it — an older build leaves the file alone", () => {
-    const newer = [...ownedFileHeader("9.9.9"), "*", "!main.js"].join("\n");
-    expect(newerVersionIn(newer, "2.1.0")).toBe("9.9.9");
-    expect(newerVersionIn(newer, "9.9.9")).toBeNull();
-    expect(newerVersionIn("*\n!main.js\n", "2.1.0")).toBeNull();
   });
 });
 
