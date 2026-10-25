@@ -2,7 +2,7 @@
 // picks the window immediately to the right of the origin, in the same horizontal band.
 
 import { describe, expect, it } from "vitest";
-import { findRightNeighborIndex, type Rect } from "../../src/diff2/split-nav";
+import { findRightNeighborIndex, openOriginLeaf, sameWindowLeaves, type Rect } from "../../src/diff2/split-nav";
 
 const r = (left: number, top = 0, width = 100, height = 100): Rect => ({
   left,
@@ -39,5 +39,37 @@ describe("findRightNeighborIndex", () => {
 
   it("a window at the same left edge (stacked) is not 'to the right'", () => {
     expect(findRightNeighborIndex(r(100), [r(100, 200)])).toBe(-1);
+  });
+});
+
+// Owner, 2026-10-25: a History torn off into its own window, Ctrl+click /
+// Ctrl+Enter on a version opened the diff-editor back in the MAIN window.
+// The origin was Obsidian's active leaf (after a tear-off often still a
+// tab in the main window), and right-hand neighbours were looked for in
+// the main window only. The origin is now the leaf the keyboard is in;
+// neighbours come from ITS window.
+describe("openOriginLeaf / sameWindowLeaves", () => {
+  const leaf = (root: string, focused = false) => ({
+    root,
+    getRoot: () => root,
+    holdsFocus: () => focused,
+  });
+
+  it("🔑 the leaf holding the keyboard is the origin, not Obsidian's active leaf", () => {
+    const active = leaf("main");
+    const history = leaf("popout", true);
+    expect(openOriginLeaf([active, history], (l) => l.holdsFocus(), active)).toBe(history);
+  });
+
+  it("no leaf holds the keyboard → Obsidian's active leaf", () => {
+    const active = leaf("main");
+    expect(openOriginLeaf([active, leaf("popout")], (l) => l.holdsFocus(), active)).toBe(active);
+  });
+
+  it("🔑 neighbours are looked for in the origin's OWN window", () => {
+    const origin = leaf("popout");
+    const a = leaf("popout");
+    const b = leaf("main");
+    expect(sameWindowLeaves(origin, [origin, a, b])).toEqual([a]);
   });
 });

@@ -129,7 +129,7 @@ import {
 } from "./sync2/reset";
 import { DiffPanelView, DIFF2_PANEL_VIEW_TYPE, type DiffEditViewDeps } from "./diff2/diff-panel-view";
 import { DiffEditorView, DIFF2_EDITOR_VIEW_TYPE } from "./diff2/diff-editor-view";
-import { findRightNeighborIndex, type Rect } from "./diff2/split-nav";
+import { findRightNeighborIndex, openOriginLeaf, sameWindowLeaves, type Rect } from "./diff2/split-nav";
 import {
   DiffHistoryView,
   DIFF2_HISTORY_VIEW_TYPE,
@@ -4882,24 +4882,31 @@ export default class GitHubSyncPlugin extends Plugin {
     const { workspace } = this.app;
     if (!toRight || Platform.isMobile) return workspace.getLeaf("tab");
     try {
-      const origin = workspace.activeLeaf;
+      // The origin is the leaf the keyboard is in — not Obsidian's active
+      // leaf, which after a tear-off is often still a tab in the main window
+      // (owner, 2026-10-25: a torn-off History opened the editor THERE).
+      const all = allLeaves<WorkspaceLeaf>(workspace);
+      const focusEl = activeDocument.activeElement;
+      const origin = openOriginLeaf(
+        all,
+        (l) => focusEl !== null && (l.view?.containerEl?.contains(focusEl) ?? false),
+        workspace.activeLeaf,
+      );
       const originEl = origin?.view?.containerEl;
       if (origin && originEl) {
         const originRect = originEl.getBoundingClientRect() as Rect;
         const cands: WorkspaceLeaf[] = [];
         const rects: Rect[] = [];
-        workspace.iterateAllLeaves((l) => {
-          if (l === origin) return;
-          // Main area only — a sidebar to the right must not swallow the editor.
-          const getRoot = (l as unknown as { getRoot?: () => unknown }).getRoot;
-          if (typeof getRoot === "function" && getRoot.call(l) !== workspace.rootSplit) return;
+        // In the origin's OWN window (a pop-out has its own root); a sidebar
+        // has a root of its own too, so it never swallows the editor.
+        for (const l of sameWindowLeaves(origin, all)) {
           const el = l.view?.containerEl;
-          if (!el) return;
+          if (!el) continue;
           const rc = el.getBoundingClientRect();
-          if (rc.width === 0 || rc.height === 0) return; // inactive/hidden tab
+          if (rc.width === 0 || rc.height === 0) continue; // inactive/hidden tab
           cands.push(l);
           rects.push(rc as Rect);
-        });
+        }
         const idx = findRightNeighborIndex(originRect, rects);
         if (idx >= 0) {
           // Rule 2/3 — new tab in the closest right-neighbour window's group.
@@ -4910,9 +4917,10 @@ export default class GitHubSyncPlugin extends Plugin {
           const leaf = make ? make.call(workspace, parent, -1) : undefined;
           if (leaf) return leaf;
         }
-        // Rule 1 — no right neighbour (or createLeafInParent unavailable) → split origin right.
-        // "vertical" = side-by-side in Obsidian; device-verify the SIDE and flip if it opens below.
-        return workspace.getLeaf("split", "vertical");
+        // Rule 1 — no right neighbour (or createLeafInParent unavailable) → split the ORIGIN
+        // right (getLeaf("split") would split the ACTIVE leaf — maybe in another window).
+        // "vertical" = side-by-side in Obsidian.
+        return workspace.createLeafBySplit(origin, "vertical");
       }
     } catch (e) {
       this.logger?.info?.("diff2 open-to-right failed → plain tab", { err: String(e) });

@@ -36,3 +36,20 @@ export function findRightNeighborIndex(
   }
   return best;
 }
+
+// The leaf an open-to-the-right starts from (owner, 2026-10-25): the one
+// the keyboard is in — the Ctrl+Enter / Ctrl+click just happened there.
+// Obsidian's active leaf is only the fallback: after a tab is torn off
+// into its own window it is often still a tab in the main window, and the
+// editor opened THERE.
+export function openOriginLeaf<L>(leaves: readonly L[], holdsFocus: (l: L) => boolean, active: L | null): L | null {
+  return leaves.find(holdsFocus) ?? active;
+}
+
+// The candidate right-hand neighbours: the leaves in the origin's OWN
+// window (a pop-out has a root of its own; the main window's used to be
+// the only one looked at).
+export function sameWindowLeaves<L extends { getRoot(): unknown }>(origin: L, leaves: readonly L[]): L[] {
+  const root = origin.getRoot();
+  return leaves.filter((l) => l !== origin && l.getRoot() === root);
+}
