@@ -388,12 +388,21 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       per-device control; toggling the setting changes what it holds, and the file is
       NOT the same on both devices (that is the feature, not drift). *(Field 2026-10-24: B switched ON →
       `!*/data.json`, the phone stayed `*/data.json`; the file never travels.)*
-- [ ] **Nested-gitignore migration (§8.1).** A vault that still has nested `.gitignore`
-      files gets ONE commit removing them, with its own message naming the count.
+- [x] **Nested-gitignore migration (§8.1).** Settings → `.gitignore` → **Check now** (or the first run): every
+      `.gitignore` outside the root that git would READ is renamed to `.bak`, its rules are offered as a proposal to
+      the root `.gitignore` (`.gitignore.conflict-from-Old gitignore files-…`, a `# rules from <dir>/.gitignore`
+      comment per group); a `.gitignore` in a folder already excluded above (shadowed) is left alone; Sync is
+      refused until the proposal is resolved; after it, the first sync makes its own commit `Remove N nested
+      .gitignore file(s) consolidated into the root …` deleting them from GitHub. *(Field 2026-10-25, A:
+      `nested-test/.gitignore` (+ on GitHub) and a shadowed `nested-test/old/.gitignore` — the shadowed one was
+      skipped, the sync was blocked, `add9bd3` removed the nested file from GitHub. Note: once the first proposal's
+      rules were dropped from the root, the shadow was gone and a second Check now correctly collected
+      `old/.gitignore` — the check always works on the rules in force at that moment.)*
 - [x] 🌐 **One release = one `.gitignore` commit.** The first sync after a version bump
       rewrites three files and produces exactly ONE commit. Expected, not a defect. *(Field: 76b6069 (2.0.3), 0401b17
       (2.0.4) — the version lines only, plus main.js/manifest.json.)*
-- [ ] **Root `.gitignore` editor (GITIGNORE-EDITOR, new 2026-10-08)** — Settings → `.gitignore`
+- [x] **Root `.gitignore` editor (GITIGNORE-EDITOR, new 2026-10-08)** *(Field 2026-10-25: owner checked it —
+      works; Esc / focus return to Settings since 4021c36.)* — Settings → `.gitignore`
       → *Edit the root .gitignore*:
       - **[Open]** shows the warning EVERY time: "Edit .gitignore?", two short sentences,
         [Cancel] / [I know .gitignore rules] (red); 📱 it fits a small screen even with a
