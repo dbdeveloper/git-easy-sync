@@ -469,7 +469,6 @@ describe("LogViewerPanel", () => {
     function fileWorld(initial: string, live = false) {
       const disk = { text: initial as string | null, mtime: 1 };
       const closed = vi.fn();
-      let escCloses = true;
       const d = deps("");
       const adapter = {
         stat: async () => (disk.text === null ? null : { size: disk.text.length, mtime: disk.mtime }),
@@ -486,11 +485,7 @@ describe("LogViewerPanel", () => {
         disk,
         write,
         closed,
-        setEsc: (v: boolean) => (escCloses = v),
-        panel: new LogViewerPanel(
-          { ...d.deps, adapter, live },
-          { onClose: closed, closeOnEscape: () => escCloses },
-        ),
+        panel: new LogViewerPanel({ ...d.deps, adapter, live }, { onClose: closed }),
       };
     }
     const tick = () => vi.advanceTimersByTimeAsync(1000);
@@ -569,23 +564,9 @@ describe("LogViewerPanel", () => {
       vi.useRealTimers();
     });
 
-    // Esc reaches the panel through the tab's keymap scope (ui/esc-scope),
-    // which runs before CodeMirror — so handleEscape does the search
-    // panel's Esc too.
-    it("🔑 Esc closes when the host allows it; not when it does not", async () => {
-      const w = fileWorld(`${rec("a")}\n`);
-      const root = document.createElement("div");
-      document.body.appendChild(root);
-      await w.panel.mount(root);
-      w.setEsc(false);
-      w.panel.handleEscape();
-      expect(w.closed).not.toHaveBeenCalled();
-      w.setEsc(true);
-      w.panel.handleEscape();
-      expect(w.closed).toHaveBeenCalledTimes(1);
-      w.panel.destroy();
-    });
-
+    // Esc reaches the panel through the tab's keymap scope, which runs
+    // before CodeMirror — so the panel closes its search panel itself;
+    // closing the TAB on Esc is ui/settings-popout's (tested there).
     it("🔑 Esc with the search panel open closes the SEARCH, not the viewer", async () => {
       const w = fileWorld(`${rec("a")}\n`);
       const root = document.createElement("div");
@@ -593,8 +574,9 @@ describe("LogViewerPanel", () => {
       await w.panel.mount(root);
       root.querySelector<HTMLButtonElement>(".ges-log-search-toggle")!.click();
       expect(root.querySelector(".cm-search")).not.toBeNull();
-      w.panel.handleEscape();
+      expect(w.panel.closeSearch()).toBe(true);
       expect(root.querySelector(".cm-search")).toBeNull();
+      expect(w.panel.closeSearch()).toBe(false); // nothing open any more
       expect(w.closed).not.toHaveBeenCalled();
       w.panel.destroy();
     });

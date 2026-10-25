@@ -858,7 +858,8 @@ export default class GitHubSyncPlugin extends Plugin {
       // after the warning (docs/tasks/GITIGNORE-EDITOR.md).
       this.registerView(
         GITIGNORE_EDITOR_VIEW_TYPE,
-        (leaf) => new GitignoreEditorView(leaf, this.gitignoreEditorDeps()),
+        (leaf) =>
+          new GitignoreEditorView(leaf, this.gitignoreEditorDeps(), () => this.gitignoreEditorOpenedFrom),
       );
       // A click in the file tree while one of OUR tabs is active (owner,
       // 2026-10-10): our views are not navigable, so Obsidian re-opened the
@@ -2585,8 +2586,13 @@ export default class GitHubSyncPlugin extends Plugin {
   // only its confirm opens the editor: on desktop in its own window above
   // Settings, on a phone as a full-screen modal (the log viewer's way).
   // Obsidian hides dotted paths, so there is no TFile for a normal tab.
+  // The window Settings → .gitignore → [Open] was pressed in: it gets the
+  // focus back when the editor's pop-out closes (ui/settings-popout).
+  private gitignoreEditorOpenedFrom: Window | null = null;
+
   async openRootGitignore(): Promise<void> {
     const { workspace } = this.app;
+    this.gitignoreEditorOpenedFrom = activeWindow;
     const open = workspace.getLeavesOfType(GITIGNORE_EDITOR_VIEW_TYPE)[0];
     if (open) {
       await bringLeafToFront(open, {

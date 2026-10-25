@@ -62,12 +62,9 @@ export interface LogViewerDeps {
 
 // What the panel needs from whoever shows it (the tab or the modal).
 export interface LogViewerHost {
-  // Close the viewer: logging was turned off in Settings, the file is
-  // gone (§2.23), or Esc (§2.24).
+  // Close the viewer: logging was turned off in Settings, or the file is
+  // gone (§2.23).
   onClose?: () => void;
-  // Asked at each Esc press: may Esc close this viewer? (The one tab of
-  // its own pop-out window — §2.24.) Absent → Esc never closes it here.
-  closeOnEscape?: () => boolean;
 }
 
 const POLL_MS = 1000; // §2.23: every open log file, once a second
@@ -392,17 +389,13 @@ export class LogViewerPanel {
     };
   }
 
-  // §2.24: Esc, as the tab's keymap scope (ui/esc-scope.ts) hands it over
-  // — that scope runs BEFORE CodeMirror and swallows the key, so the
-  // search panel's own Esc is done here: an open search panel closes;
-  // otherwise the viewer closes when the host allows it (the one tab of
-  // its own pop-out); otherwise nothing.
-  handleEscape(): void {
-    if (this.editor && searchPanelOpen(this.editor.state)) {
-      closeSearchPanel(this.editor);
-      return;
-    }
-    if (this.host.closeOnEscape?.()) this.host.onClose?.();
+  // §2.24: the search panel's Esc, done here because the tab's keymap
+  // scope (ui/esc-scope.ts) runs BEFORE CodeMirror and swallows the key.
+  // true = it was open and is closed now.
+  closeSearch(): boolean {
+    if (!this.editor || !searchPanelOpen(this.editor.state)) return false;
+    closeSearchPanel(this.editor);
+    return true;
   }
 
   // Everything the panel started ends here: the logger subscription

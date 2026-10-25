@@ -9,7 +9,8 @@
 // pop-out window.
 
 import { describe, it, expect } from "vitest";
-import { appendedLines, onlyTabInItsPopout, pollStep } from "../../src/log-viewer/log-poll";
+import { appendedLines, pollStep } from "../../src/log-viewer/log-poll";
+import { onlyTabInItsPopout } from "../../src/ui/settings-popout";
 
 describe("pollStep", () => {
   const st = (size: number, mtime: number) => ({ size, mtime });

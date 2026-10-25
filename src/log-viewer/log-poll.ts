@@ -41,29 +41,3 @@ export function appendedLines(oldText: string, newText: string): string[] | null
   parts.pop(); // the torn tail, or "" after a final "\n"
   return parts.filter((l) => l.length > 0);
 }
-
-// Esc closes a viewer opened from Settings only while it is the ONE tab
-// of its own pop-out window (§2.24) — checked at the key press, so a tab
-// dragged next to others stays. Never in the main window (an empty tab
-// would remain) or a sidebar.
-export interface LeafLike {
-  getRoot(): unknown;
-}
-
-export function onlyTabInItsPopout(
-  leaf: LeafLike,
-  ws: {
-    rootSplit: unknown;
-    leftSplit: unknown;
-    rightSplit: unknown;
-    iterateAllLeaves(cb: (l: LeafLike) => void): void;
-  },
-): boolean {
-  const root = leaf.getRoot();
-  if (root === ws.rootSplit || root === ws.leftSplit || root === ws.rightSplit) return false;
-  let n = 0;
-  ws.iterateAllLeaves((l) => {
-    if (l.getRoot() === root) n += 1;
-  });
-  return n === 1;
-}
