@@ -395,9 +395,25 @@ export class LogViewerPanel {
       e.stopImmediatePropagation();
       openSearchPanel(this.editor);
     };
+    // §2.24: the one tab of its own pop-out — EVERY Esc in that window is
+    // ours, wherever the focus is. Right after the pop-out opens the focus
+    // is not inside the viewer yet, so the listener on the viewer's
+    // element (mount) never saw the key and Obsidian's own Esc moved the
+    // focus to the main window (owner, 2026-10-25). Caught here in the
+    // capture phase, before Obsidian's handler; the search panel, when
+    // open, keeps its Esc.
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (this.editor && searchPanelOpen(this.editor.state)) return;
+      if (!this.host.closeOnEscape?.()) return;
+      e.preventDefault();
+      this.host.onClose?.();
+    };
     win.addEventListener("keydown", onKey, { capture: true });
+    win.addEventListener("keydown", onEsc, { capture: true });
     this.unbindKeys = () => {
       win.removeEventListener("keydown", onKey, { capture: true });
+      win.removeEventListener("keydown", onEsc, { capture: true });
     };
   }
 
@@ -584,6 +600,7 @@ export class LogViewerPanel {
   // and the "…" goes away (spec §2.14).
   private async loadLog(isGapReread: boolean): Promise<void> {
     const gen = this.generation;
+    const started = Date.now();
     const r = await openLog(this.deps.adapter, this.deps.logPath, this.deps.logger());
     if (this.destroyed || gen !== this.generation) return;
     if (r.kind === "too-big") {
@@ -603,6 +620,20 @@ export class LogViewerPanel {
     this.fileText = r.text;
     this.items = r.items;
     this.render(true);
+    // Owner, 2026-10-25: the viewer sometimes opened EMPTY over a log that
+    // has lines, and opening it again showed them. One line per open says
+    // what was read and what was drawn, to tell a short read from a draw
+    // that did not show.
+    this.deps.logger().info?.("Log viewer opened", {
+      path: this.deps.logPath,
+      bytesRead: r.text.length,
+      entries: this.total,
+      shown: this.shown,
+      docLength: this.editor?.state.doc.length ?? null,
+      gap: r.gap,
+      reread: isGapReread,
+      ms: Date.now() - started,
+    });
     if (isGapReread) this.feed?.advanceTo(r.lastSeq);
     else this.feed?.start(r.lastSeq, (l) => this.onLive(l));
     if (r.gap && !isGapReread) {

@@ -590,6 +590,36 @@ describe("LogViewerPanel", () => {
     // tab — Obsidian's own window-level Esc makes the last-active
     // navigable tab active when the active view is not "navigation"
     // (meant for sidebars), unless the event is already handled.
+    // Owner, 2026-10-25: right after the pop-out opens, the focus is not
+    // inside the viewer yet — an Esc listener on the viewer's element
+    // never saw the key, and Obsidian's own Esc moved the focus to the
+    // main window. The one-tab-of-its-pop-out case is caught on the
+    // WINDOW, before Obsidian's handler.
+    it("🔑 Esc with the focus OUTSIDE the viewer still closes it when it is the one tab of its pop-out", async () => {
+      const w = fileWorld(`${rec("a")}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      await w.panel.mount(root);
+      const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      document.body.dispatchEvent(ev);
+      expect(w.closed).toHaveBeenCalledTimes(1);
+      expect(ev.defaultPrevented).toBe(true);
+      w.panel.destroy();
+    });
+
+    it("Esc outside the viewer, when it is NOT alone in its window, is left to Obsidian", async () => {
+      const w = fileWorld(`${rec("a")}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      await w.panel.mount(root);
+      w.setEsc(false);
+      const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      document.body.dispatchEvent(ev);
+      expect(w.closed).not.toHaveBeenCalled();
+      expect(ev.defaultPrevented).toBe(false);
+      w.panel.destroy();
+    });
+
     it("🔑 an Esc that does not close the viewer is marked handled (Obsidian does not switch tabs)", async () => {
       const w = fileWorld(`${rec("a")}\n`);
       const root = document.createElement("div");
