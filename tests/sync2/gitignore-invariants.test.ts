@@ -600,7 +600,7 @@ describe("the restore pass over a DYNAMIC file set (DOT-FILES §3.1.2)", () => {
     fs.cpSync(f.root, off.root, { recursive: true });
     await off.inv.enforce();
     expect(fs.readFileSync(foreign(off.root), "utf8")).toContain(
-      foreignSilencerComment(TEST_VERSION),
+      foreignSilencerComment(null),
     );
   });
 
@@ -1005,7 +1005,10 @@ describe("section CONTENT: syncConfigDir=OFF silences the config subtree", () =>
     expect(foreign).toContain("*.map");
     expect(foreign).not.toContain(FINAL_BEGIN);
     expect(
-      foreign.endsWith(`${foreignSilencerComment(TEST_VERSION)}\n*\n`),
+      // Owner, 2026-10-25: NO version in our comment — the line is local
+      // (OFF keeps <configDir> off the server) and a stamp is complexity
+      // for nothing.
+      foreign.endsWith(`${foreignSilencerComment(null)}\n*\n`),
     ).toBe(true);
   });
 

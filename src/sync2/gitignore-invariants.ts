@@ -187,11 +187,7 @@ core-plugins.json`;
 // and friends) would otherwise survive the `*` we put in <configDir>.
 // The one line that marks the silencer as OURS in a file that is not.
 //
-// ⚠️ UNVERSIONED here, and only here: this value composes the `final`
-// section inside OUR OWN <self>/.gitignore, where the owned-file header
-// already carries the stamp (§5.11) and two stamps would be two answers
-// to one question. What goes into a THIRD PARTY's file comes from
-// `foreignSilencerComment(version)` at the write site below.
+// Unversioned, as every silencer comment is since 2026-10-25.
 const FOREIGN_SILENCER_COMMENT = foreignSilencerComment(null);
 
 function foreignPluginFinalBodyFor(syncConfigDir: boolean): string | null {
@@ -874,11 +870,13 @@ export default class GitignoreInvariants {
     const fixed = applyForeignSilencer(
       content,
       {
-        // Written WITH this build's version, so the next investigation
-        // can tell which build touched a file that is not ours...
-        line: foreignSilencerComment(this.pluginVersion),
-        // ...and recognised WITHOUT regard to version, so no build ever
-        // stacks its pair on top of another's, or fails to clean one up
+        // Written WITHOUT a version (owner, 2026-10-25): the line only
+        // exists while syncConfigDir is OFF, when <configDir> never
+        // reaches the server — it is local, and a stamp is complexity for
+        // nothing...
+        line: foreignSilencerComment(null),
+        // ...and recognised WITHOUT regard to version, so a pair an older
+        // build stamped is still ours — kept when wanted, removed when not
         // (§5.11 — measured, not supposed).
         matches: (l) => parseForeignSilencer(l) !== null,
       },
