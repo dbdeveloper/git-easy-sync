@@ -41,16 +41,12 @@ export class LogViewerView extends ItemView {
     // Esc closes it while it is the one tab of its own pop-out window —
     // where Settings open it (§2.24); asked at each press.
     this.panel = new LogViewerPanel(this.deps, {
-      // Leaving a pop-out: the main window of THIS vault comes to the
-      // front — Settings, where the viewer was opened from (owner,
-      // 2026-10-25). window.focus() does not raise an OS window: the OS
-      // brought up another Obsidian window (another vault), and Settings
-      // stayed hidden behind it. Raised the way Obsidian itself does it:
-      // electronWindow — restore() if minimised, then focus().
+      // Leaving a pop-out: focus goes back to the main window — Settings,
+      // where the viewer was opened from (owner, 2026-10-25).
       onClose: () => {
         const own = this.containerEl.win;
         this.leaf.detach();
-        if (own && own !== window) raiseMainWindow();
+        if (own && own !== window) window.focus();
       },
       closeOnEscape: () =>
         onlyTabInItsPopout(this.leaf, this.app.workspace as unknown as Parameters<typeof onlyTabInItsPopout>[1]),
@@ -62,20 +58,4 @@ export class LogViewerView extends ItemView {
     this.panel?.destroy();
     this.panel = null;
   }
-}
-
-function raiseMainWindow(): void {
-  const ew = (window as unknown as {
-    electronWindow?: { isMinimized?: () => boolean; restore?: () => void; focus: () => void };
-  }).electronWindow;
-  try {
-    if (ew) {
-      if (ew.isMinimized?.()) ew.restore?.();
-      ew.focus();
-      return;
-    }
-  } catch {
-    // fall back below
-  }
-  window.focus();
 }
