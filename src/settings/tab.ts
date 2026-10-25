@@ -1005,8 +1005,27 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       });
     viewLogSetting.settingEl.toggle(this.plugin.settings.enableLogging);
 
+    // Always created, hidden while logging is off — so the toggle above
+    // can show it without rebuilding the page. Its description carries
+    // the LIVE size of the log (TODO.md п.36, owner 2026-10-07): after
+    // [Clean] the user sees 0 rather than taking our word for it. One
+    // local stat a second, only while this page is open and logging is on.
+    cleanLogsSetting = new Setting(containerEl)
+      .setName("Clean logs")
+      .setDesc(cleanLogsDescription(0))
+      .addButton((button) => {
+        button.setButtonText("Clean").onClick(async () => {
+          await this.plugin.logger.clean();
+          await refreshLogSize();
+        });
+      });
+    cleanLogsSetting.settingEl.toggle(this.plugin.settings.enableLogging);
+    void refreshLogSize();
+    this.logSizeTimer = setInterval(() => void refreshLogSize(), 1000);
+
     // LOG-VIEWER §2.23 (owner, 2026-10-25): ALWAYS shown — one may keep
-    // one's own log off and only read other devices' logs.
+    // one's own log off and only read other devices' logs — and LAST in
+    // the group, below the rows the logging switch shows and hides.
     new Setting(containerEl)
       .setName("Open any *.log file in the plugin log viewer")
       .setDesc(
@@ -1031,24 +1050,6 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           });
       });
-
-    // Always created, hidden while logging is off — so the toggle above
-    // can show it without rebuilding the page. Its description carries
-    // the LIVE size of the log (TODO.md п.36, owner 2026-10-07): after
-    // [Clean] the user sees 0 rather than taking our word for it. One
-    // local stat a second, only while this page is open and logging is on.
-    cleanLogsSetting = new Setting(containerEl)
-      .setName("Clean logs")
-      .setDesc(cleanLogsDescription(0))
-      .addButton((button) => {
-        button.setButtonText("Clean").onClick(async () => {
-          await this.plugin.logger.clean();
-          await refreshLogSize();
-        });
-      });
-    cleanLogsSetting.settingEl.toggle(this.plugin.settings.enableLogging);
-    void refreshLogSize();
-    this.logSizeTimer = setInterval(() => void refreshLogSize(), 1000);
 
     // ── Danger zone ─────────────────────────────────────────────────
     new Setting(containerEl).setName("Danger zone").setHeading();
@@ -1318,7 +1319,6 @@ function makePreviewElement(parent: HTMLElement): HTMLElement {
   el.style.userSelect = "text"; // let users copy the rendered preview
   return el;
 }
-
 
 // A short message with [Close] — Settings → Logging when the "log"
 // extension is taken by another plugin (owner, 2026-10-25).
