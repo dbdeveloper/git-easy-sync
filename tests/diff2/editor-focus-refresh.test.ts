@@ -499,7 +499,6 @@ describe("diff-editor — closed under the 'files changed' window", () => {
     const discardSession = vi.fn(async () => {});
     const tryMount = vi.fn(async () => {});
     ed.entry = null;
-    ed.escScope = null;
     ed.mounted = true;
     ed.seenDisk = null;
     ed.tryMount = tryMount;

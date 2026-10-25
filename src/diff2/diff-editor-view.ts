@@ -16,11 +16,13 @@
 //     no dynamic `getDisplayText` flip / `refreshHeader` hack; title-simplification
 //     starts here per §12).
 //
-// Phase 1 only ever mounts `origin: "conflict"`. The escScope + Mod+F window hook
-// are duplicated per-host on purpose (the contract ratified "view-level chrome in
-// each host, don't gold-plate the generic API"); S6 may factor them.
+// Phase 1 only ever mounts `origin: "conflict"`. The Mod+F window hook is
+// duplicated per-host on purpose (the contract ratified "view-level chrome in
+// each host, don't gold-plate the generic API"). The Esc scope is shared since
+// 2026-10-25 (ui/esc-scope.ts), on the owner's word: three views needed it.
 
-import { ItemView, Notice, Scope, WorkspaceLeaf } from "obsidian";
+import { ItemView, Notice, WorkspaceLeaf } from "obsidian";
+import { holdEscapeWhileActive } from "../ui/esc-scope";
 import { formatConflictTimestamp } from "./strip-conflict-suffix";
 import {
   DiffDetailController,
@@ -62,12 +64,6 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   // one call that has both controller+state ready, so a second setState landing during
   // its first await can't double-mount.
   private mounting = false;
-  // TODO #8 — ESC-swallowing scope (Obsidian's default ESC jumps focus to the last
-  // markdown editor). Pushed only while THIS leaf is active. Duplicated from the
-  // panel host per the §12 per-host-chrome decision.
-  private escScope: Scope | null = null;
-  private escScopePushed = false;
-
   constructor(leaf: WorkspaceLeaf, deps: DiffEditViewDeps) {
     super(leaf);
     this.deps = deps;
@@ -155,12 +151,11 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
 
     // TODO #8 — ESC must NOT pull focus out of the diff-editor. A keymap Scope
     // swallows it through Obsidian's own dispatch; pushed only while this leaf is
-    // active so ESC keeps working in other tabs.
-    this.escScope = new Scope(this.app.scope);
-    this.escScope.register([], "Escape", () => false);
+    // active so ESC keeps working in other tabs. The mechanism is shared since
+    // 2026-10-25 (ui/esc-scope.ts — the diff-panel and the log viewer use it too).
+    holdEscapeWhileActive(this);
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
-        this.syncEscScope(leaf);
         // Re-focus the editor when this leaf becomes active again (Obsidian does
         // this for MarkdownView but not a custom ItemView).
         if (leaf === this.leaf) {
@@ -169,7 +164,6 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
         }
       }),
     );
-    this.syncEscScope(this.app.workspace.activeLeaf ?? null);
 
     // Obsidian's window gets the OS focus back (owner, 2026-10-18): the user
     // returns from another program — check what changed meanwhile.
@@ -330,19 +324,6 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   // Obsidian's window got the OS focus back.
   onWindowFocus(): void {
     if (this.app.workspace.activeLeaf === this.leaf) void this.onActivated();
-  }
-
-  // TODO #8 — push the ESC scope iff this leaf is active; pop otherwise. Idempotent.
-  private syncEscScope(activeLeaf: WorkspaceLeaf | null): void {
-    if (!this.escScope) return;
-    const shouldBlock = activeLeaf === this.leaf;
-    if (shouldBlock && !this.escScopePushed) {
-      this.app.keymap.pushScope(this.escScope);
-      this.escScopePushed = true;
-    } else if (!shouldBlock && this.escScopePushed) {
-      this.app.keymap.popScope(this.escScope);
-      this.escScopePushed = false;
-    }
   }
 
   // Mount the detail editor once BOTH the controller (onOpen) and the state (setState)
@@ -552,11 +533,6 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   }
 
   async onClose(): Promise<void> {
-    if (this.escScope && this.escScopePushed) {
-      this.app.keymap.popScope(this.escScope);
-      this.escScopePushed = false;
-    }
-    this.escScope = null;
     this.controller?.dispose();
     // Closed: an answer still pending in a window (e.g. "files changed" →
     // Reload) must not mount into this leaf any more.
