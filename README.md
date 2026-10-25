@@ -658,10 +658,18 @@ Three buttons live in Settings under **.gitignore**:
 - If the plugin fails to start, it writes
   `<vault>/git-easy-sync-crash-<device label>.log` (`…-crash-unknown.log`
   when it failed before reading its settings).
-- **View log** — opens the log as a table: filter by column (`|`
-  separates the pieces, left to right), search, copy. Compact by
-  default (one entry per line); the first button switches to the
-  expanded view with the data laid out under each message. New entries
+- **View plugin's log** — opens the plugin's current log as a table:
+  filter by column (`|` separates the pieces, left to right), search,
+  copy. Compact by default (one entry per line); the first button
+  switches to the expanded view with the data laid out under each
+  message. Opens in its own window on desktop; Esc closes it while it
+  is the only tab there.
+- **Open any \*.log file in the plugin log viewer** — off by default,
+  available even with logging off. Shows every `*.log` of the vault in
+  the file explorer; a click opens it in the log viewer in an ordinary
+  tab — e.g. a phone's log synced to a desktop. Lines in another
+  format are shown as plain text. An open file is re-read when it
+  changes; its tab closes when the file is gone. New entries
   appear as they are written. Its own window on desktop, full screen
   on a phone. Shown only while logging is on.
 - **Clean logs** — empties the log; the description shows its live

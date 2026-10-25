@@ -38,10 +38,18 @@ import { SEPARATOR, separatorsAsDashes, type FormatOptions, type LevelMark } fro
 import type { LogFileAdapter } from "./log-load";
 import { parseLogLine, type LogEntry, type RecentLine } from "./log-parse";
 import { formatLogSize } from "../settings/log-size";
+import { appendedLines, pollStep, type PollState } from "./log-poll";
+import { loadLogText } from "./log-load";
+import { parseLogText } from "./log-parse";
 
 export interface LogViewerDeps {
   adapter: LogFileAdapter;
   logPath: string;
+  // true (default): the plugin's CURRENT log — new lines come live from
+  // the logger, Settings → Logging (Clean, off) acts on it. false: any
+  // other log file — re-read when the once-a-second poll sees it change
+  // (§2.23). The poll closes the viewer when the file is gone, either way.
+  live?: boolean;
   // A getter: the plugin may replace its logger (RESET).
   logger: () => {
     recentLines(): RecentLine[];
@@ -53,9 +61,15 @@ export interface LogViewerDeps {
 
 // What the panel needs from whoever shows it (the tab or the modal).
 export interface LogViewerHost {
-  // Logging was turned off in Settings: close the viewer.
+  // Close the viewer: logging was turned off in Settings, the file is
+  // gone (§2.23), or Esc (§2.24).
   onClose?: () => void;
+  // Asked at each Esc press: may Esc close this viewer? (The one tab of
+  // its own pop-out window — §2.24.) Absent → Esc never closes it here.
+  closeOnEscape?: () => boolean;
 }
+
+const POLL_MS = 1000; // §2.23: every open log file, once a second
 
 const FILTER_DEBOUNCE_MS = 150; // spec §2.12
 const GAP_REREAD_MS = 1000; // spec §2.14: one background re-read
@@ -203,6 +217,12 @@ export class LogViewerPanel {
   // its scroll event must not be judged as the user's (it could turn
   // auto-scroll on and jump to the end).
   private placedScrollTop: number | null = null;
+  // §2.23: the poll of the file on disk, and the text last read (a file
+  // that is not the live log is re-read when it changes).
+  private pollTimer: number | null = null;
+  private pollState: PollState = { last: null, misses: 0 };
+  private polling = false;
+  private fileText = "";
   private statusEl!: HTMLElement;
   private errorEl!: HTMLElement;
   private bodyEl!: HTMLElement;
@@ -274,14 +294,79 @@ export class LogViewerPanel {
 
     // Subscribe BEFORE the file is read: what is logged during the read
     // waits in the feed and is let through after the merge (spec §2.14).
-    const logger = this.deps.logger();
-    this.feed = new LiveFeed((fn) => logger.subscribe(fn));
-    // Settings → Logging (owner, 2026-10-08): every open viewer reacts.
-    this.unLifecycle = logger.onLifecycle((e) => {
-      if (e === "cleaned") this.onCleaned();
-      else this.host.onClose?.();
-    });
+    if (this.isLive()) {
+      const logger = this.deps.logger();
+      this.feed = new LiveFeed((fn) => logger.subscribe(fn));
+      // Settings → Logging (owner, 2026-10-08): every open viewer of OUR
+      // log reacts; another file is not ours to clean or close (§2.23).
+      this.unLifecycle = logger.onLifecycle((e) => {
+        if (e === "cleaned") this.onCleaned();
+        else this.host.onClose?.();
+      });
+    }
     await this.loadLog(false);
+    if (this.destroyed) return;
+    this.pollState = { last: await this.stamp(), misses: 0 };
+    if (this.destroyed) return;
+    this.pollTimer = window.setInterval(() => void this.poll(), POLL_MS);
+  }
+
+  private isLive(): boolean {
+    return this.deps.live !== false;
+  }
+
+  private async stamp(): Promise<{ size: number; mtime: number } | null> {
+    try {
+      const st = await this.deps.adapter.stat(this.deps.logPath);
+      return st === null ? null : { size: st.size, mtime: st.mtime ?? 0 };
+    } catch {
+      return null;
+    }
+  }
+
+  // §2.23 (owner, 2026-10-25): once a second. Gone at two polls in a row
+  // → close. Changed, and not the live log → re-read: only the new lines
+  // when the text just grew, else the whole file anew.
+  private async poll(): Promise<void> {
+    if (this.polling || this.destroyed) return;
+    this.polling = true;
+    try {
+      const step = pollStep(this.pollState, await this.stamp());
+      if (this.destroyed) return;
+      this.pollState = step.state;
+      if (step.action === "close") {
+        this.stopPoll();
+        this.host.onClose?.();
+        return;
+      }
+      if (step.action !== "changed" || this.isLive()) return;
+      const loaded = await loadLogText(this.deps.adapter, this.deps.logPath);
+      if (this.destroyed) return;
+      if (loaded.kind === "too-big") {
+        this.showMessage(
+          `The log file is too large to open here (${formatLogSize(loaded.size)}). ` +
+            `Open it with your operating system's tools: <vault>/${this.deps.logPath}`,
+        );
+        return;
+      }
+      if (loaded.kind === "error") return; // the next poll decides (gone → close)
+      const added = appendedLines(this.fileText, loaded.text);
+      this.fileText = loaded.text;
+      if (added !== null && this.editor) {
+        for (const line of added) this.onLive({ seq: 0, line });
+        return;
+      }
+      this.items = parseLogText(loaded.text).entries;
+      this.render(false);
+      if (this.following) this.scrollToBottom();
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  private stopPoll(): void {
+    if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
+    this.pollTimer = null;
   }
 
   // The capture-phase Mod+F listener, on the window the panel lives in
@@ -295,8 +380,22 @@ export class LogViewerPanel {
       e.stopImmediatePropagation();
       openSearchPanel(this.editor);
     };
+    // §2.24: Esc closes the viewer when the host allows it (the one tab of
+    // its own pop-out window). BUBBLING, so CM6 sees it first: an Esc that
+    // closed the search panel arrives here already handled.
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (this.editor && searchPanelOpen(this.editor.state)) return;
+      if (!this.host.closeOnEscape?.()) return;
+      e.preventDefault();
+      this.host.onClose?.();
+    };
     win.addEventListener("keydown", onKey, { capture: true });
-    this.unbindKeys = () => win.removeEventListener("keydown", onKey, { capture: true });
+    win.addEventListener("keydown", onEsc);
+    this.unbindKeys = () => {
+      win.removeEventListener("keydown", onKey, { capture: true });
+      win.removeEventListener("keydown", onEsc);
+    };
   }
 
   // Everything the panel started ends here: the logger subscription
@@ -309,6 +408,7 @@ export class LogViewerPanel {
     this.unLifecycle = null;
     if (this.filterTimer !== null) window.clearTimeout(this.filterTimer);
     if (this.gapTimer !== null) window.clearTimeout(this.gapTimer);
+    this.stopPoll();
     this.unbindKeys?.();
     this.unbindKeys = null;
     this.unwatchWindow?.();
@@ -497,6 +597,7 @@ export class LogViewerPanel {
       return;
     }
     if (isGapReread && r.gap) return; // still no overlap — keep what we show
+    this.fileText = r.text;
     this.items = r.items;
     this.render(true);
     if (isGapReread) this.feed?.advanceTo(r.lastSeq);

@@ -991,11 +991,12 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     // settings panel doesn't carry dead UI.
     // LOG-VIEWER §2.16: the ONLY way to open the log viewer. Shown and
     // hidden in place with the toggle, like "Clean logs".
+    // Owner's wording (2026-10-25): it opens OUR current log only — any
+    // other *.log opens from the file explorer (the switch below).
     viewLogSetting = new Setting(containerEl)
-      .setName("View log")
+      .setName("View plugin's log")
       .setDesc(
-        "Open the log as a table: filter by column (use | between pieces), " +
-          "search, copy. New entries appear as they are logged.",
+        `Open the plugin's current log (${this.plugin.logger.logPath}) in the log viewer.`,
       )
       .addButton((button) => {
         button.setButtonText("Open").onClick(() => {
@@ -1003,6 +1004,33 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
         });
       });
     viewLogSetting.settingEl.toggle(this.plugin.settings.enableLogging);
+
+    // LOG-VIEWER §2.23 (owner, 2026-10-25): ALWAYS shown — one may keep
+    // one's own log off and only read other devices' logs.
+    new Setting(containerEl)
+      .setName("Open any *.log file in the plugin log viewer")
+      .setDesc(
+        "Show every *.log file of the vault in Obsidian's file explorer, " +
+          "and open it in the plugin's log viewer on click.",
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.openLogFilesInViewer)
+          .onChange(async (value) => {
+            const r = this.plugin.setLogFileExtension(value);
+            if (r === "taken") {
+              new MessageModal(
+                this.app,
+                "*.log files are already handled by another plugin.",
+              ).open();
+              toggle.setValue(false);
+              return;
+            }
+            if (r === "restart") new Notice("Applies after restarting Obsidian", 6000);
+            this.plugin.settings.openLogFilesInViewer = value;
+            await this.plugin.saveSettings();
+          });
+      });
 
     // Always created, hidden while logging is off — so the toggle above
     // can show it without rebuilding the page. Its description carries
@@ -1291,3 +1319,25 @@ function makePreviewElement(parent: HTMLElement): HTMLElement {
   return el;
 }
 
+
+// A short message with [Close] — Settings → Logging when the "log"
+// extension is taken by another plugin (owner, 2026-10-25).
+class MessageModal extends Modal {
+  constructor(
+    app: App,
+    private readonly text: string,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.contentEl.createEl("p", { text: this.text });
+    new Setting(this.contentEl).addButton((b) =>
+      b.setButtonText("Close").setCta().onClick(() => this.close()),
+    );
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}

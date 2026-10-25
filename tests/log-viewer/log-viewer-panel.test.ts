@@ -460,6 +460,145 @@ describe("LogViewerPanel", () => {
     });
   });
 
+  // Owner, 2026-10-25: any open log file is polled once a second (lines
+  // appended when it grew, shown anew when rewritten), and the tab closes
+  // when the file is gone at two polls in a row. Esc closes the viewer
+  // when the host says so (the one tab of its own pop-out window).
+  describe("polling the file, closing when it is gone, Esc", () => {
+    const rec = (m: string) => JSON.stringify({ t: "2026-10-07T10:00:00.000Z", l: "INFO", m });
+    function fileWorld(initial: string, live = false) {
+      const disk = { text: initial as string | null, mtime: 1 };
+      const closed = vi.fn();
+      let escCloses = true;
+      const d = deps("");
+      const adapter = {
+        stat: async () => (disk.text === null ? null : { size: disk.text.length, mtime: disk.mtime }),
+        read: async () => {
+          if (disk.text === null) throw new Error("gone");
+          return disk.text;
+        },
+      };
+      const write = (t: string | null) => {
+        disk.text = t;
+        disk.mtime += 1;
+      };
+      return {
+        disk,
+        write,
+        closed,
+        setEsc: (v: boolean) => (escCloses = v),
+        panel: new LogViewerPanel(
+          { ...d.deps, adapter, live },
+          { onClose: closed, closeOnEscape: () => escCloses },
+        ),
+      };
+    }
+    const tick = () => vi.advanceTimersByTimeAsync(1000);
+
+    it("🔑 a file that grew: its new lines appear", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const w = fileWorld(`${rec("a")}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      await w.panel.mount(root);
+      expect(status(root)).toBe("1 of 1 entries");
+      w.write(`${rec("a")}\n${rec("b")}\n${rec("c")}\n`);
+      await tick();
+      expect(status(root)).toBe("3 of 3 entries");
+      w.panel.destroy();
+      vi.useRealTimers();
+    });
+
+    it("🔑 a file rewritten (not just grown): shown anew", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const w = fileWorld(`${rec("a")}\n${rec("b")}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      await w.panel.mount(root);
+      w.write(`${rec("x")}\n`);
+      await tick();
+      expect(status(root)).toBe("1 of 1 entries");
+      expect(root.textContent).toContain("x");
+      w.panel.destroy();
+      vi.useRealTimers();
+    });
+
+    it("🔑 gone at ONE poll: stays open; gone at two in a row: closes", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const w = fileWorld(`${rec("a")}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      await w.panel.mount(root);
+      w.write(null);
+      await tick();
+      expect(w.closed).not.toHaveBeenCalled();
+      await tick();
+      expect(w.closed).toHaveBeenCalledTimes(1);
+      w.panel.destroy();
+      vi.useRealTimers();
+    });
+
+    it("our own log (live from the logger) is not re-read — but it still closes when gone", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const w = fileWorld(`${rec("a")}\n`, true);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      await w.panel.mount(root);
+      w.write(`${rec("a")}\n${rec("b")}\n`);
+      await tick();
+      expect(status(root)).toBe("1 of 1 entries"); // lines come from the logger, not the file
+      w.write(null);
+      await tick();
+      await tick();
+      expect(w.closed).toHaveBeenCalledTimes(1);
+      w.panel.destroy();
+      vi.useRealTimers();
+    });
+
+    it("destroy() stops the polling", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const w = fileWorld(`${rec("a")}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      await w.panel.mount(root);
+      w.panel.destroy();
+      w.write(null);
+      await tick();
+      await tick();
+      expect(w.closed).not.toHaveBeenCalled();
+      vi.useRealTimers();
+    });
+
+    const esc = (root: HTMLElement) =>
+      root.ownerDocument.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+
+    it("🔑 Esc closes when the host allows it; not when it does not", async () => {
+      const w = fileWorld(`${rec("a")}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      await w.panel.mount(root);
+      w.setEsc(false);
+      esc(root);
+      expect(w.closed).not.toHaveBeenCalled();
+      w.setEsc(true);
+      esc(root);
+      expect(w.closed).toHaveBeenCalledTimes(1);
+      w.panel.destroy();
+    });
+
+    it("🔑 Esc with the search panel open closes the SEARCH, not the viewer", async () => {
+      const w = fileWorld(`${rec("a")}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      await w.panel.mount(root);
+      root.querySelector<HTMLButtonElement>(".ges-log-search-toggle")!.click();
+      expect(root.querySelector(".cm-search")).not.toBeNull();
+      esc(root);
+      expect(w.closed).not.toHaveBeenCalled();
+      w.panel.destroy();
+    });
+  });
+
   // Owner, 2026-10-08: Settings → Logging acts on EVERY open viewer.
   describe("reacting to Settings → Logging", () => {
     it("🔑 [Clean]: the table empties in every open viewer, and they all follow", async () => {

@@ -15,7 +15,7 @@ export type LoadResult =
   | { kind: "error"; reason: string };
 
 export interface LogFileAdapter {
-  stat(path: string): Promise<{ size: number } | null>;
+  stat(path: string): Promise<{ size: number; mtime?: number } | null>;
   read(path: string): Promise<string>;
 }
 

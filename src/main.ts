@@ -75,6 +75,8 @@ import GitignoreSeedStore from "./sync2/gitignore-seeds";
 import { pluginUpdatedText, readPluginVersion } from "./sync2/plugin-js";
 import { LogViewerView, LOG_VIEWER_VIEW_TYPE } from "./log-viewer/log-viewer-view";
 import { LogViewerModal } from "./log-viewer/log-viewer-modal";
+import { LogFileView, LOG_FILE_VIEW_TYPE } from "./log-viewer/log-file-view";
+import { switchLogExtension, type LogExtensionResult } from "./log-viewer/log-extension";
 import type { LogViewerDeps } from "./log-viewer/log-viewer-panel";
 import { logViewerTarget } from "./log-viewer/log-open-target";
 import { crashLogFileNameFor } from "./logger";
@@ -837,6 +839,21 @@ export default class GitHubSyncPlugin extends Plugin {
         (leaf) =>
           new LogViewerView(leaf, this.logViewerDeps()),
       );
+      // LOG-VIEWER §2.23: any *.log clicked in the file explorer — only
+      // while the "log" extension is ours (the Settings switch below).
+      this.registerView(
+        LOG_FILE_VIEW_TYPE,
+        (leaf) =>
+          new LogFileView(leaf, {
+            adapter: this.app.vault.adapter,
+            ownLogPath: () => this.logger.logPath,
+            logger: () => this.logger,
+          }),
+      );
+      if (this.settings.openLogFilesInViewer && this.setLogFileExtension(true) === "taken") {
+        // At startup: a line in the log, no dialog (owner, 2026-10-25).
+        this.logger.warn("*.log files are already handled by another plugin - they do not open in the log viewer");
+      }
       // The root .gitignore editor — opened ONLY from Settings → .gitignore,
       // after the warning (docs/tasks/GITIGNORE-EDITOR.md).
       this.registerView(
@@ -4355,6 +4372,25 @@ export default class GitHubSyncPlugin extends Plugin {
       }
     }
     new LogViewerModal(this.app, this.logViewerDeps()).open();
+  }
+
+  // LOG-VIEWER §2.23: the "log" extension follows Settings → Logging →
+  // "Open any *.log file in the plugin log viewer". "taken" = another
+  // plugin holds it; "restart" = turning it off needs a restart here.
+  private logExtensionRegistered = false;
+
+  setLogFileExtension(on: boolean): LogExtensionResult {
+    const registry = (this.app as unknown as {
+      viewRegistry?: { unregisterExtensions?: (exts: string[]) => void };
+    }).viewRegistry;
+    const r = switchLogExtension(on, this.logExtensionRegistered, {
+      register: () => this.registerExtensions(["log"], LOG_FILE_VIEW_TYPE),
+      unregister: registry?.unregisterExtensions
+        ? () => registry.unregisterExtensions!(["log"])
+        : undefined,
+    });
+    this.logExtensionRegistered = r.registered;
+    return r.result;
   }
 
   private logViewerDeps(): LogViewerDeps {

@@ -188,6 +188,10 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   Compact mode by default — one entry per line, the data as one-line
   JSON; the first button switches to the expanded table and back, and
   the choice is remembered on the device.
+  *Open any \*.log file in the plugin log viewer* (Settings → Logging,
+  off by default) shows `*.log` files in the file explorer and opens
+  them in the viewer — re-read as they change, closed when the file is
+  gone. Esc closes the viewer opened from Settings.
 - **A proper editor for the root `.gitignore`** (Settings →
   .gitignore → *Open*), behind a short warning shown every time. It
   saves only a real change and refuses to overwrite a version a sync

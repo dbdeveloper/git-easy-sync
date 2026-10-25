@@ -523,6 +523,13 @@ export class ItemView {
   }
 }
 
+// FileView stub: the log-file tab (log-file-view.ts) extends it.
+export class FileView extends ItemView {
+  file: TFile | null = null;
+  allowNoFile = false;
+  navigation = true;
+}
+
 // MarkdownView stub: writePreservingOpenViews does `view instanceof MarkdownView` +
 // reads view.file?.path. Tests never construct one (no real workspace), so a bare
 // constructable class with a `file` field is enough for the import + instanceof.

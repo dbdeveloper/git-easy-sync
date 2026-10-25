@@ -8,6 +8,7 @@
 
 import { ItemView, type WorkspaceLeaf } from "obsidian";
 import { LogViewerPanel, type LogViewerDeps } from "./log-viewer-panel";
+import { onlyTabInItsPopout } from "./log-poll";
 
 export const LOG_VIEWER_VIEW_TYPE = "git-easy-sync-log-viewer";
 
@@ -37,7 +38,13 @@ export class LogViewerView extends ItemView {
 
   async onOpen(): Promise<void> {
     // Logging turned off in Settings closes the tab (owner, 2026-10-08).
-    this.panel = new LogViewerPanel(this.deps, { onClose: () => this.leaf.detach() });
+    // Esc closes it while it is the one tab of its own pop-out window —
+    // where Settings open it (§2.24); asked at each press.
+    this.panel = new LogViewerPanel(this.deps, {
+      onClose: () => this.leaf.detach(),
+      closeOnEscape: () =>
+        onlyTabInItsPopout(this.leaf, this.app.workspace as unknown as Parameters<typeof onlyTabInItsPopout>[1]),
+    });
     await this.panel.mount(this.contentEl);
   }
 

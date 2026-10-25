@@ -78,6 +78,11 @@ export interface GitHubSyncSettings {
   diffEditorAutoFocus?: { conflict?: boolean; history?: boolean; deleted?: boolean };
 
   enableLogging: boolean;
+  // LOG-VIEWER §2.23 (owner, 2026-10-25): register the "log" extension so
+  // every *.log of the vault shows in the file explorer and a click opens
+  // it in the plugin's log viewer. Off by default; independent of
+  // enableLogging (one may only want to READ other devices' logs).
+  openLogFilesInViewer: boolean;
 
   // No commit-message template field. Commit messages are hardcoded
   // via formatX helpers in src/sync2/commit-message.ts; `deviceLabel`
@@ -216,6 +221,7 @@ export const DEFAULT_SETTINGS: GitHubSyncSettings = {
   diffEditorDiffMode: "characters",
   diffEditorAutoFocus: { conflict: true, history: false, deleted: false },
   enableLogging: false,
+  openLogFilesInViewer: false,
   consolidateCommits: false,
   deviceLabel: "Obsidian",
   syncConfigDir: false,

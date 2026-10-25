@@ -32,7 +32,7 @@ import { makeFilter, type FilterOptions } from "./log-filter";
 export type LogItem = LogEntry | GapItem;
 
 export type OpenResult =
-  | { kind: "ok"; items: LogItem[]; gap: boolean; lastSeq: number | null }
+  | { kind: "ok"; items: LogItem[]; gap: boolean; lastSeq: number | null; text: string }
   | { kind: "too-big"; size: number }
   | { kind: "error"; reason: string };
 
@@ -48,7 +48,7 @@ export async function openLog(
   const items: LogItem[] = [...file.entries];
   if (m.gap) items.push(GAP);
   for (const r of m.extra) items.push(parseLogLine(r.line));
-  return { kind: "ok", items, gap: m.gap, lastSeq: m.lastSeq };
+  return { kind: "ok", items, gap: m.gap, lastSeq: m.lastSeq, text: loaded.text };
 }
 
 export interface RenderResult {
