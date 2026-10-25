@@ -586,6 +586,27 @@ describe("LogViewerPanel", () => {
       w.panel.destroy();
     });
 
+    // Owner, 2026-10-25: Esc in the viewer's pop-out also closed Settings —
+    // Obsidian's own Esc handling (the Settings dialog in the main window)
+    // sees keys from pop-outs too. An Esc that closes the viewer must
+    // reach nobody else.
+    it("🔑 an Esc that closes the viewer reaches no other listener (Settings stays open)", async () => {
+      const w = fileWorld(`${rec("a")}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      await w.panel.mount(root);
+      const obsidian = vi.fn();
+      document.addEventListener("keydown", obsidian);
+      esc(root);
+      expect(w.closed).toHaveBeenCalledTimes(1);
+      expect(obsidian).not.toHaveBeenCalled();
+      w.setEsc(false);
+      esc(root);
+      expect(obsidian).toHaveBeenCalledTimes(1); // not ours to close: passes on
+      document.removeEventListener("keydown", obsidian);
+      w.panel.destroy();
+    });
+
     it("🔑 Esc with the search panel open closes the SEARCH, not the viewer", async () => {
       const w = fileWorld(`${rec("a")}\n`);
       const root = document.createElement("div");

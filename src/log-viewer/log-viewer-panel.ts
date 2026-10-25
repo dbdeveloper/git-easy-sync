@@ -381,20 +381,23 @@ export class LogViewerPanel {
       openSearchPanel(this.editor);
     };
     // §2.24: Esc closes the viewer when the host allows it (the one tab of
-    // its own pop-out window). BUBBLING, so CM6 sees it first: an Esc that
-    // closed the search panel arrives here already handled.
+    // its own pop-out window). CAPTURE, and stopped when it closes us:
+    // Obsidian handles keys from pop-outs too, and the Settings dialog in
+    // the main window closed on the same Esc (owner, 2026-10-25). With the
+    // search panel open the key is left alone — CM6 closes the panel.
     const onEsc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (e.key !== "Escape") return;
       if (this.editor && searchPanelOpen(this.editor.state)) return;
       if (!this.host.closeOnEscape?.()) return;
       e.preventDefault();
+      e.stopImmediatePropagation();
       this.host.onClose?.();
     };
     win.addEventListener("keydown", onKey, { capture: true });
-    win.addEventListener("keydown", onEsc);
+    win.addEventListener("keydown", onEsc, { capture: true });
     this.unbindKeys = () => {
       win.removeEventListener("keydown", onKey, { capture: true });
-      win.removeEventListener("keydown", onEsc);
+      win.removeEventListener("keydown", onEsc, { capture: true });
     };
   }
 
