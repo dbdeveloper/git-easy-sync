@@ -40,10 +40,20 @@ export class LogViewerView extends ItemView {
     // Logging turned off in Settings closes the tab (owner, 2026-10-08).
     // Esc closes it while it is the one tab of its own pop-out window —
     // where Settings open it (§2.24); asked at each press.
+    const alone = () =>
+      onlyTabInItsPopout(this.leaf, this.app.workspace as unknown as Parameters<typeof onlyTabInItsPopout>[1]);
     this.panel = new LogViewerPanel(this.deps, {
-      onClose: () => this.leaf.detach(),
-      closeOnEscape: () =>
-        onlyTabInItsPopout(this.leaf, this.app.workspace as unknown as Parameters<typeof onlyTabInItsPopout>[1]),
+      // The one tab of its own pop-out: close the WINDOW, as its close
+      // button does — then the OS returns the focus to the window it was
+      // opened from (Settings). Detaching the tab let the emptied pop-out
+      // close on its own, and the OS brought another Obsidian window to
+      // the front, hiding Settings (owner, 2026-10-25).
+      onClose: () => {
+        const win = this.containerEl.win;
+        if (win && win !== window && alone()) win.close();
+        else this.leaf.detach();
+      },
+      closeOnEscape: alone,
     });
     await this.panel.mount(this.contentEl);
   }
