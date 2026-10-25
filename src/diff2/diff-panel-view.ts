@@ -22,6 +22,7 @@
 //   - docs/tasks/SPLIT-PANEL-EDITOR-FEASIBILITY.md §12 (the split), R-A/R-D (panel/[←])
 
 import { ItemView, type Vault, WorkspaceLeaf } from "obsidian";
+import { holdEscapeWhileActive } from "../ui/esc-scope";
 import type { ConflictAnalyzer } from "../sync2/conflict-analyzer";
 import type ConflictStoreV2 from "../sync2/conflict-store-v2";
 import {
@@ -238,6 +239,10 @@ export class DiffPanelView extends ItemView {
     this.registerDomEvent(this.contentEl, "mousedown", () =>
       this.focusConflictList(),
     );
+    // Esc must not throw the focus out to another tab (owner, 2026-10-25):
+    // Obsidian's own Esc does that for a view that is not "navigation" —
+    // swallowed while this tab is active, as in the diff-editor (TODO #8).
+    holdEscapeWhileActive(this);
 
     this.viewState = initialState();
     this.render();

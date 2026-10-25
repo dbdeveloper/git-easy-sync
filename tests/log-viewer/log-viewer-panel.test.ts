@@ -569,67 +569,20 @@ describe("LogViewerPanel", () => {
       vi.useRealTimers();
     });
 
-    const esc = (root: HTMLElement) =>
-      root.querySelector(".cm-content")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
-
+    // Esc reaches the panel through the tab's keymap scope (ui/esc-scope),
+    // which runs before CodeMirror — so handleEscape does the search
+    // panel's Esc too.
     it("🔑 Esc closes when the host allows it; not when it does not", async () => {
       const w = fileWorld(`${rec("a")}\n`);
       const root = document.createElement("div");
       document.body.appendChild(root);
       await w.panel.mount(root);
       w.setEsc(false);
-      esc(root);
+      w.panel.handleEscape();
       expect(w.closed).not.toHaveBeenCalled();
       w.setEsc(true);
-      esc(root);
+      w.panel.handleEscape();
       expect(w.closed).toHaveBeenCalledTimes(1);
-      w.panel.destroy();
-    });
-
-    // Owner, 2026-10-25: docked next to other tabs, Esc jumped to another
-    // tab — Obsidian's own window-level Esc makes the last-active
-    // navigable tab active when the active view is not "navigation"
-    // (meant for sidebars), unless the event is already handled.
-    // Owner, 2026-10-25: right after the pop-out opens, the focus is not
-    // inside the viewer yet — an Esc listener on the viewer's element
-    // never saw the key, and Obsidian's own Esc moved the focus to the
-    // main window. The one-tab-of-its-pop-out case is caught on the
-    // WINDOW, before Obsidian's handler.
-    it("🔑 Esc with the focus OUTSIDE the viewer still closes it when it is the one tab of its pop-out", async () => {
-      const w = fileWorld(`${rec("a")}\n`);
-      const root = document.createElement("div");
-      document.body.appendChild(root);
-      await w.panel.mount(root);
-      const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-      document.body.dispatchEvent(ev);
-      expect(w.closed).toHaveBeenCalledTimes(1);
-      expect(ev.defaultPrevented).toBe(true);
-      w.panel.destroy();
-    });
-
-    it("Esc outside the viewer, when it is NOT alone in its window, is left to Obsidian", async () => {
-      const w = fileWorld(`${rec("a")}\n`);
-      const root = document.createElement("div");
-      document.body.appendChild(root);
-      await w.panel.mount(root);
-      w.setEsc(false);
-      const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-      document.body.dispatchEvent(ev);
-      expect(w.closed).not.toHaveBeenCalled();
-      expect(ev.defaultPrevented).toBe(false);
-      w.panel.destroy();
-    });
-
-    it("🔑 an Esc that does not close the viewer is marked handled (Obsidian does not switch tabs)", async () => {
-      const w = fileWorld(`${rec("a")}\n`);
-      const root = document.createElement("div");
-      document.body.appendChild(root);
-      await w.panel.mount(root);
-      w.setEsc(false);
-      const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-      root.querySelector(".cm-content")!.dispatchEvent(ev);
-      expect(ev.defaultPrevented).toBe(true);
-      expect(w.closed).not.toHaveBeenCalled();
       w.panel.destroy();
     });
 
@@ -640,7 +593,8 @@ describe("LogViewerPanel", () => {
       await w.panel.mount(root);
       root.querySelector<HTMLButtonElement>(".ges-log-search-toggle")!.click();
       expect(root.querySelector(".cm-search")).not.toBeNull();
-      esc(root);
+      w.panel.handleEscape();
+      expect(root.querySelector(".cm-search")).toBeNull();
       expect(w.closed).not.toHaveBeenCalled();
       w.panel.destroy();
     });

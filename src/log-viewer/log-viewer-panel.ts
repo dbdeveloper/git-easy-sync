@@ -277,20 +277,7 @@ export class LogViewerPanel {
     // the global ones: on desktop the viewer lives in its own pop-out
     // window, which has a window and document of its own.
     this.bindKeys(root.win ?? window);
-    // §2.24: Esc inside the viewer. On the viewer's own element, so it
-    // runs BEFORE Obsidian's window-level Esc — which, for a view that is
-    // not "navigation" (ours), makes the last-active file tab active
-    // (meant for sidebars; owner, 2026-10-25: docked next to other tabs,
-    // Esc jumped to one). Bubbling, so CodeMirror sees it first: an Esc
-    // that closed the search panel arrives here already handled. Closes
-    // the viewer when the host allows it; otherwise it is only marked
-    // handled, and nothing happens.
-    root.addEventListener("keydown", (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      if (this.editor && searchPanelOpen(this.editor.state)) return;
-      e.preventDefault();
-      if (this.host.closeOnEscape?.()) this.host.onClose?.();
-    });
+
 
     // Dragged into ANOTHER window (owner's field report, 2026-10-08: a tab
     // pulled out into a new pop-out showed "|||text" and would not
@@ -395,26 +382,23 @@ export class LogViewerPanel {
       e.stopImmediatePropagation();
       openSearchPanel(this.editor);
     };
-    // §2.24: the one tab of its own pop-out — EVERY Esc in that window is
-    // ours, wherever the focus is. Right after the pop-out opens the focus
-    // is not inside the viewer yet, so the listener on the viewer's
-    // element (mount) never saw the key and Obsidian's own Esc moved the
-    // focus to the main window (owner, 2026-10-25). Caught here in the
-    // capture phase, before Obsidian's handler; the search panel, when
-    // open, keeps its Esc.
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      if (this.editor && searchPanelOpen(this.editor.state)) return;
-      if (!this.host.closeOnEscape?.()) return;
-      e.preventDefault();
-      this.host.onClose?.();
-    };
     win.addEventListener("keydown", onKey, { capture: true });
-    win.addEventListener("keydown", onEsc, { capture: true });
     this.unbindKeys = () => {
       win.removeEventListener("keydown", onKey, { capture: true });
-      win.removeEventListener("keydown", onEsc, { capture: true });
     };
+  }
+
+  // §2.24: Esc, as the tab's keymap scope (ui/esc-scope.ts) hands it over
+  // — that scope runs BEFORE CodeMirror and swallows the key, so the
+  // search panel's own Esc is done here: an open search panel closes;
+  // otherwise the viewer closes when the host allows it (the one tab of
+  // its own pop-out); otherwise nothing.
+  handleEscape(): void {
+    if (this.editor && searchPanelOpen(this.editor.state)) {
+      closeSearchPanel(this.editor);
+      return;
+    }
+    if (this.host.closeOnEscape?.()) this.host.onClose?.();
   }
 
   // Everything the panel started ends here: the logger subscription

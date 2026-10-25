@@ -9,6 +9,7 @@
 import { ItemView, type WorkspaceLeaf } from "obsidian";
 import { LogViewerPanel, type LogViewerDeps } from "./log-viewer-panel";
 import { onlyTabInItsPopout } from "./log-poll";
+import { holdEscapeWhileActive } from "../ui/esc-scope";
 
 export const LOG_VIEWER_VIEW_TYPE = "git-easy-sync-log-viewer";
 
@@ -60,6 +61,10 @@ export class LogViewerView extends ItemView {
       onClose: () => this.leaf.detach(),
       closeOnEscape: alone,
     });
+    // Esc goes through a keymap scope while this tab is active: Obsidian's
+    // own Esc would otherwise jump to another tab (owner, 2026-10-25) —
+    // the diff-editor's mechanism (TODO #8).
+    holdEscapeWhileActive(this, () => this.panel?.handleEscape());
     await this.panel.mount(this.contentEl);
   }
 

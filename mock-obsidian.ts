@@ -523,6 +523,19 @@ export class ItemView {
   }
 }
 
+// Scope stub: a keymap scope records its registrations (key + handler) so
+// tests can find and call them.
+export class Scope {
+  keys: Array<{ modifiers: unknown; key: string; func: (evt?: unknown) => unknown }> = [];
+  constructor(public parent?: unknown) {}
+  register(modifiers: unknown, key: string, func: (evt?: unknown) => unknown) {
+    const k = { modifiers, key, func };
+    this.keys.push(k);
+    return k;
+  }
+  unregister(): void {}
+}
+
 // FileView stub: the log-file tab (log-file-view.ts) extends it.
 export class FileView extends ItemView {
   file: TFile | null = null;
