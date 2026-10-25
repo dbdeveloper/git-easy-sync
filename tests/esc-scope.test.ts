@@ -109,7 +109,7 @@ describe("holdEscapeWhileActive — Esc with the focus inside the tab, whatever 
       app: {
         scope: {},
         keymap: { pushScope: () => {}, popScope: () => {} },
-        workspace: { activeLeaf: { id: "a note" }, on: () => ({}) },
+        workspace: { activeLeaf: { id: "a note" }, on: () => ({}), setActiveLeaf: () => {} },
       },
       leaf: { id: "me" },
       containerEl: container,

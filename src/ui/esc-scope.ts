@@ -32,6 +32,9 @@ let diag: ((message: string, data: unknown) => void) | null = null;
 export function setEscDiagnostics(fn: ((message: string, data: unknown) => void) | null): void {
   diag = fn;
 }
+export function escDiag(message: string, data: unknown): void {
+  diag?.(message, data);
+}
 
 export function holdEscapeWhileActive(view: EscScopeHost, onEscape: () => void = () => {}): void {
   const { app, leaf } = view;
@@ -94,6 +97,9 @@ export function holdEscapeWhileActive(view: EscScopeHost, onEscape: () => void =
         focusTag: focus?.tagName ?? null,
       });
       if (!inside) return;
+      // Obsidian handles keys in a window before us; this Esc may already
+      // have gone its way — at least the next one finds our leaf active.
+      if (app.workspace.activeLeaf !== leaf) app.workspace.setActiveLeaf(leaf, { focus: false });
       if ((focus as HTMLElement).closest?.(".cm-search")) return;
       e.preventDefault();
       e.stopImmediatePropagation();

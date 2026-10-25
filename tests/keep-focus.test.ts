@@ -99,3 +99,42 @@ describe("keepLeafFocus", () => {
     expect(w.focusEditor).not.toHaveBeenCalled();
   });
 });
+
+// Field log 2026-10-25: after a tear-off Obsidian made a NOTE in the main
+// window the active leaf, silently and some time AFTER the move, while
+// the keyboard stayed in our tab. The tab re-asserts itself: 100 ms and
+// 500 ms after a move, and whenever its window gets the OS focus — each
+// time only if the keyboard is inside it.
+describe("keepLeafFocus — re-asserting the active leaf after a move", () => {
+  it("🔑 Obsidian switched the active leaf away after the move → taken back at 100/500 ms", () => {
+    vi.useFakeTimers();
+    const w = world();
+    w.migrate();
+    w.inner.focus();
+    w.ws.activeLeaf = w.other; // Obsidian, silently, after the move
+    vi.advanceTimersByTime(100);
+    expect(w.ws.activeLeaf).toBe(w.leaf);
+    w.ws.activeLeaf = w.other; // and again
+    vi.advanceTimersByTime(400);
+    expect(w.ws.activeLeaf).toBe(w.leaf);
+  });
+
+  it("the keyboard NOT inside the tab → the timers leave the active leaf alone", () => {
+    vi.useFakeTimers();
+    const w = world();
+    w.migrate();
+    vi.runAllTimers(); // the move itself focuses the editor (a stub here)
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    w.ws.activeLeaf = w.other;
+    vi.advanceTimersByTime(1000);
+    expect(w.ws.activeLeaf).toBe(w.other);
+  });
+
+  it("🔑 the tab's window gets the OS focus with the keyboard inside → active", () => {
+    const w = world();
+    w.inner.focus();
+    w.ws.activeLeaf = w.other;
+    window.dispatchEvent(new FocusEvent("focus"));
+    expect(w.ws.activeLeaf).toBe(w.leaf);
+  });
+});
