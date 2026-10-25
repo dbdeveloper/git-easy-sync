@@ -135,6 +135,10 @@ export function mergeVersionList(
  * a warning). Extracted from the view so this local-always contract is unit-
  * testable without an Obsidian ItemView runtime.
  */
+// How long History waits for GitHub's list of versions before it shows the
+// local ones with "GitHub did not answer" (owner, 2026-10-25).
+export const HISTORY_GITHUB_TIMEOUT_MS = 30_000;
+
 export async function loadHistoryVersions(
   queue: QueueVersionSource,
   client: HistoryCommitSource,
@@ -148,6 +152,9 @@ export async function loadHistoryVersions(
   // this path becomes a full participant in the §35 gate.
   isTokenExpired?: () => boolean,
   noteAuthError?: (err: unknown) => void,
+  // GitHub that does not answer at all ends like an error (owner,
+  // 2026-10-25: History sat on "Loading…" for minutes).
+  githubTimeoutMs = HISTORY_GITHUB_TIMEOUT_MS,
 ): Promise<{
   versions: HistoryVersion[];
   githubError: boolean;
@@ -170,7 +177,18 @@ export async function loadHistoryVersions(
   let githubErrorText: string | undefined;
   let tokenExpired = false;
   try {
-    github = await client.listCommitsForPath({ path, branch });
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`GitHub did not answer within ${Math.round(githubTimeoutMs / 1000)} s`)),
+        githubTimeoutMs,
+      );
+    });
+    try {
+      github = await Promise.race([client.listCommitsForPath({ path, branch }), timeout]);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
   } catch (err) {
     githubError = true;
     githubErrorText = String(err);

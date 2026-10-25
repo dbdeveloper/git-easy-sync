@@ -286,9 +286,11 @@ export class DiffHistoryView extends ItemView {
         err: githubErrorText,
       });
     }
-    // Superseded by a newer render, OR this leaf was detached mid-fetch (the move-guard
-    // detaching a same-path leaf that was still loading) → don't render into a dead node.
-    if (gen !== this.gen || !this.contentEl.isConnected) return;
+    // Superseded by a newer render → drop it. A tab detached from the page at this
+    // instant is NOT dropped any more: a move to another window detaches it for a
+    // moment, and "Loading…" then stayed for good (owner, 2026-10-25). Rendering
+    // into a tab that was really closed costs nothing.
+    if (gen !== this.gen) return;
     const hadFocus = container.contains(container.ownerDocument.activeElement);
     const scrollTop = container.scrollTop;
     this.renderList(

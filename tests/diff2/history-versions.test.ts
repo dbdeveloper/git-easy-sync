@@ -278,6 +278,23 @@ describe("enumeratePushQueueVersions", () => {
       expect(versions.map((v) => v.id)).toEqual([id]); // local survived the github failure
     });
 
+    // Owner, 2026-10-25: History sat on "Loading…" for minutes. GitHub that
+    // does not answer at all must end like an error: local versions shown,
+    // a message that GitHub did not answer.
+    it("🔑 GitHub never answers → after the time limit: local versions, githubError, a reason", async () => {
+      writeVaultFile("Notes/x.md", "v1\n");
+      const id = await writer.writeBatch([ADD("Notes/x.md")]);
+      const client = {
+        listCommitsForPath: (): Promise<GithubCommit[]> => new Promise(() => {}),
+      };
+      const r = await loadHistoryVersions(
+        queue, client, "Notes/x.md", "main", "phone", undefined, undefined, 30,
+      );
+      expect(r.githubError).toBe(true);
+      expect(r.githubErrorText).toMatch(/did not answer/i);
+      expect(r.versions.map((v) => v.id)).toEqual([id]);
+    });
+
     it("§35 latched marker → skips GitHub entirely, tokenExpired:true, local returned", async () => {
       writeVaultFile("Notes/x.md", "v1\n");
       const id = await writer.writeBatch([ADD("Notes/x.md")]);
