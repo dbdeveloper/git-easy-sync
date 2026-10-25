@@ -52,7 +52,6 @@ export class LogViewerView extends ItemView {
       openedFrom: this.openedFrom,
       close: () => this.leaf.detach(),
       onEscape: () => this.panel?.closeSearch() ?? false,
-      log: (m, d) => this.deps.logger().info?.(m, d),
     });
     keepLeafFocus(this, () => this.panel?.focus());
     await this.panel.mount(this.contentEl);

@@ -588,7 +588,6 @@ export class LogViewerPanel {
   // and the "…" goes away (spec §2.14).
   private async loadLog(isGapReread: boolean): Promise<void> {
     const gen = this.generation;
-    const started = Date.now();
     const r = await openLog(this.deps.adapter, this.deps.logPath, this.deps.logger());
     if (this.destroyed || gen !== this.generation) return;
     if (r.kind === "too-big") {
@@ -608,20 +607,6 @@ export class LogViewerPanel {
     this.fileText = r.text;
     this.items = r.items;
     this.render(true);
-    // Owner, 2026-10-25: the viewer sometimes opened EMPTY over a log that
-    // has lines, and opening it again showed them. One line per open says
-    // what was read and what was drawn, to tell a short read from a draw
-    // that did not show.
-    this.deps.logger().info?.("Log viewer opened", {
-      path: this.deps.logPath,
-      bytesRead: r.text.length,
-      entries: this.total,
-      shown: this.shown,
-      docLength: this.editor?.state.doc.length ?? null,
-      gap: r.gap,
-      reread: isGapReread,
-      ms: Date.now() - started,
-    });
     if (isGapReread) this.feed?.advanceTo(r.lastSeq);
     else this.feed?.start(r.lastSeq, (l) => this.onLive(l));
     if (r.gap && !isGapReread) {

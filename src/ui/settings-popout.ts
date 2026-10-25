@@ -40,8 +40,6 @@ export interface SettingsPopoutOptions {
   close: () => void;
   // The view's own Esc, first: true = handled, nothing more.
   onEscape?: () => boolean;
-  // One line for the log when the opener is raised.
-  log?: (message: string, data: unknown) => void;
 }
 
 // Install in the view's onOpen; call closed() from its onClose.
@@ -69,9 +67,6 @@ export function settingsPopout(
       const timer = window.setInterval(() => {
         if (own.closed) {
           window.clearInterval(timer);
-          opts.log?.("Pop-out from Settings gone - raising the window it was opened from", {
-            ms: Date.now() - started,
-          });
           raiseWindow(back);
         } else if (Date.now() - started > 5000) {
           window.clearInterval(timer);

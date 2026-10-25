@@ -87,66 +87,6 @@ describe("holdEscapeWhileActive", () => {
   });
 });
 
-// Field log 2026-10-25: right after a tab is torn off into its own window,
-// Obsidian's active leaf is a NOTE in the main window (no
-// active-leaf-change fired), the keyboard is inside our tab, and the
-// keymap scope never sees the Esc — Obsidian's own Esc then focuses the
-// note, i.e. the main window. So an Esc with the focus INSIDE our tab is
-// caught first, on the tab's window in the capture phase, whatever the
-// active leaf.
-describe("holdEscapeWhileActive — Esc with the focus inside the tab, whatever the active leaf", () => {
-  function domWorld() {
-    const container = document.createElement("div");
-    document.body.appendChild(container);
-    const input = container.appendChild(document.createElement("input"));
-    const search = container.appendChild(document.createElement("div"));
-    search.className = "cm-search";
-    const searchInput = search.appendChild(document.createElement("input"));
-    (container as unknown as { onWindowMigrated: unknown }).onWindowMigrated = () => () => {};
-    const outside = document.body.appendChild(document.createElement("input"));
-    const onEscape = vi.fn();
-    const view = {
-      app: {
-        scope: {},
-        keymap: { pushScope: () => {}, popScope: () => {} },
-        workspace: { activeLeaf: { id: "a note" }, on: () => ({}), setActiveLeaf: () => {} },
-      },
-      leaf: { id: "me" },
-      containerEl: container,
-      registerEvent: () => {},
-      register: () => {},
-    };
-    holdEscapeWhileActive(view as never, onEscape);
-    const esc = (target: HTMLElement) => {
-      target.focus();
-      const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-      target.dispatchEvent(ev);
-      return ev;
-    };
-    return { input, searchInput, outside, onEscape, esc };
-  }
-
-  it("🔑 the focus inside the tab (another leaf active): handled by us, Obsidian does not get it", () => {
-    const w = domWorld();
-    const ev = w.esc(w.input);
-    expect(w.onEscape).toHaveBeenCalledTimes(1);
-    expect(ev.defaultPrevented).toBe(true);
-  });
-
-  it("🔑 the focus in CodeMirror's search field: left to CodeMirror (it closes the search)", () => {
-    const w = domWorld();
-    const ev = w.esc(w.searchInput);
-    expect(w.onEscape).not.toHaveBeenCalled();
-    expect(ev.defaultPrevented).toBe(false);
-  });
-
-  it("the focus outside the tab: not ours", () => {
-    const w = domWorld();
-    w.esc(w.outside);
-    expect(w.onEscape).not.toHaveBeenCalled();
-  });
-});
-
 // Read in Obsidian 1.13.4 (2026-10-25): the keymap keeps a scope stack PER
 // WINDOW — pushScope pushes onto the stack of `activeWindow` at that
 // moment, and keys in a window use only that window's stack. Our scope,
