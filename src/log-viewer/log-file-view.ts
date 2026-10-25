@@ -13,6 +13,7 @@
 import { FileView, type TFile, type WorkspaceLeaf } from "obsidian";
 import { LogViewerPanel, type LogViewerDeps } from "./log-viewer-panel";
 import type { LogFileAdapter } from "./log-load";
+import { keepLeafFocus } from "../ui/keep-focus";
 
 export const LOG_FILE_VIEW_TYPE = "git-easy-sync-log-file";
 
@@ -60,6 +61,11 @@ export class LogFileView extends FileView {
 
   canAcceptExtension(extension: string): boolean {
     return extension === "log";
+  }
+
+  async onOpen(): Promise<void> {
+    await super.onOpen();
+    keepLeafFocus(this, () => this.panel?.focus());
   }
 
   async onLoadFile(file: TFile): Promise<void> {

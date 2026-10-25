@@ -23,6 +23,7 @@
 
 import { ItemView, Notice, WorkspaceLeaf } from "obsidian";
 import { holdEscapeWhileActive } from "../ui/esc-scope";
+import { keepLeafFocus } from "../ui/keep-focus";
 import { formatConflictTimestamp } from "./strip-conflict-suffix";
 import {
   DiffDetailController,
@@ -129,6 +130,9 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     // 2026-10-25 (ui/esc-scope.ts — the diff-panel and the log viewer use it too).
     holdEscapeWhileActive(this);
     this.watchWindow();
+    // The keyboard in this tab = the active leaf; after a move the text
+    // gets the focus back (owner, 2026-10-25 — ui/keep-focus.ts).
+    keepLeafFocus(this, () => this.controller.getView()?.focus());
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
         // Re-focus the editor when this leaf becomes active again (Obsidian does

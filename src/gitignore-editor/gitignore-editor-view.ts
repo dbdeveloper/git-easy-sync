@@ -13,6 +13,7 @@
 import { ItemView, type WorkspaceLeaf } from "obsidian";
 import { GitignoreEditorPanel, type GitignoreEditorDeps } from "./gitignore-editor-panel";
 import { settingsPopout } from "../ui/settings-popout";
+import { keepLeafFocus } from "../ui/keep-focus";
 
 export const GITIGNORE_EDITOR_VIEW_TYPE = "git-easy-sync-gitignore-editor";
 
@@ -46,6 +47,7 @@ export class GitignoreEditorView extends ItemView {
       openedFrom: this.openedFrom,
       close: () => this.leaf.detach(),
     });
+    keepLeafFocus(this, () => panel.focus());
     await panel.mount(this.contentEl);
   }
 

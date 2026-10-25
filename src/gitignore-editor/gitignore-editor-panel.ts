@@ -45,6 +45,11 @@ export class GitignoreEditorPanel {
     private readonly host: GitignoreEditorHost,
   ) {}
 
+  // The text gets the keyboard (after a move — ui/keep-focus.ts).
+  focus(): void {
+    this.area?.focus();
+  }
+
   async mount(root: HTMLElement): Promise<void> {
     root.empty();
     root.addClass("ges-gitignore-editor");

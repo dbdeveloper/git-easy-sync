@@ -392,6 +392,11 @@ export class LogViewerPanel {
   // §2.24: the search panel's Esc, done here because the tab's keymap
   // scope (ui/esc-scope.ts) runs BEFORE CodeMirror and swallows the key.
   // true = it was open and is closed now.
+  // The editing area gets the keyboard (after a move — ui/keep-focus.ts).
+  focus(): void {
+    this.editor?.focus();
+  }
+
   closeSearch(): boolean {
     if (!this.editor || !searchPanelOpen(this.editor.state)) return false;
     closeSearchPanel(this.editor);

@@ -9,6 +9,7 @@
 import { ItemView, type WorkspaceLeaf } from "obsidian";
 import { LogViewerPanel, type LogViewerDeps } from "./log-viewer-panel";
 import { settingsPopout } from "../ui/settings-popout";
+import { keepLeafFocus } from "../ui/keep-focus";
 
 export const LOG_VIEWER_VIEW_TYPE = "git-easy-sync-log-viewer";
 
@@ -53,6 +54,7 @@ export class LogViewerView extends ItemView {
       onEscape: () => this.panel?.closeSearch() ?? false,
       log: (m, d) => this.deps.logger().info?.(m, d),
     });
+    keepLeafFocus(this, () => this.panel?.focus());
     await this.panel.mount(this.contentEl);
   }
 

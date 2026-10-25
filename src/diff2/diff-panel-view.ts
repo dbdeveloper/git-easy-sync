@@ -23,6 +23,7 @@
 
 import { ItemView, type Vault, WorkspaceLeaf } from "obsidian";
 import { holdEscapeWhileActive } from "../ui/esc-scope";
+import { keepLeafFocus } from "../ui/keep-focus";
 import type { ConflictAnalyzer } from "../sync2/conflict-analyzer";
 import type ConflictStoreV2 from "../sync2/conflict-store-v2";
 import {
@@ -243,6 +244,7 @@ export class DiffPanelView extends ItemView {
     // Obsidian's own Esc does that for a view that is not "navigation" —
     // swallowed while this tab is active, as in the diff-editor (TODO #8).
     holdEscapeWhileActive(this);
+    keepLeafFocus(this, () => this.focusConflictList());
 
     this.viewState = initialState();
     this.render();
