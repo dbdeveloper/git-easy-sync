@@ -122,39 +122,13 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   async onOpen(): Promise<void> {
     this.controller = new DiffDetailController(this.app, this.deps, this);
 
-    // §2.2.17 — Cmd/Ctrl+F opens the diff-editor's OWN search panel. Obsidian
-    // captures Mod+F before a custom view's CM6 keymap; a window capture-phase
-    // keydown wins, gated on focus being in OUR editor. (Duplicated from the panel
-    // host — each editor leaf installs its own, self-guarded by the dom-contains
-    // check so only the focused editor reacts.)
-    this.registerDomEvent(
-      window,
-      "keydown",
-      (e) => {
-        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "r" || e.key === "R")) {
-          // Ctrl/Cmd+R — only for the editor the user is in.
-          if (this.app.workspace.activeLeaf !== this.leaf) return;
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          void this.onActivated(); // the same check as a focus, one at a time
-          return;
-        }
-        if (!((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "f" || e.key === "F"))) return;
-        const v = this.controller.getView();
-        if (!v || !v.dom.contains(document.activeElement)) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        this.controller.toggleSearch();
-      },
-      { capture: true },
-    );
 
     // TODO #8 — ESC must NOT pull focus out of the diff-editor. A keymap Scope
     // swallows it through Obsidian's own dispatch; pushed only while this leaf is
     // active so ESC keeps working in other tabs. The mechanism is shared since
     // 2026-10-25 (ui/esc-scope.ts — the diff-panel and the log viewer use it too).
     holdEscapeWhileActive(this);
-    this.rerootOnWindowMove();
+    this.watchWindow();
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
         // Re-focus the editor when this leaf becomes active again (Obsidian does
@@ -165,11 +139,6 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
         }
       }),
     );
-
-    // Obsidian's window gets the OS focus back (owner, 2026-10-18): the user
-    // returns from another program — check what changed meanwhile.
-    const win = this.containerEl.ownerDocument?.defaultView;
-    if (win) this.registerDomEvent(win, "focus", () => this.onWindowFocus());
 
     // A change to one of this editor's files (owner, 2026-10-18) — see
     // onVaultChange. Dot-paths send no events; the focus check covers them.
@@ -327,17 +296,57 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     if (this.app.workspace.activeLeaf === this.leaf) void this.onActivated();
   }
 
-  // A tab dragged into another window (owner, 2026-10-25: line numbers on
-  // the right, empty text lines): CM6 keeps its base styles in the
-  // document it was created in, and a new window's document has none.
-  // setRoot() is CM6's API for this move — the log viewer's fix of
-  // 2026-10-08.
-  private rerootOnWindowMove(): void {
+  // The tab's WINDOW (owner, 2026-10-25: "every diff-editor hotkey must
+  // work the same in any tab or window"). Bound to the window the tab is
+  // in now, and moved with it when it is dragged into another one:
+  //   - keydown (capture): §2.2.17 Cmd/Ctrl+F opens the editor's OWN
+  //     search panel — Obsidian captures Mod+F before a custom view's CM6
+  //     keymap, so a capture-phase listener wins, gated on the focus being
+  //     in OUR editor (in THAT window's document); Cmd/Ctrl+R re-checks the
+  //     files, only for the active editor. (Duplicated from the panel host
+  //     — each leaf installs its own, self-guarded.)
+  //   - focus: the OS gives the window the focus back (owner, 2026-10-18)
+  //     — check what changed meanwhile.
+  //   - CM6 keeps its base styles in the document it was created in; on a
+  //     move it is re-rooted there (setRoot — the log viewer's fix of
+  //     2026-10-08; without it a pop-out drew the gutter on the right and
+  //     empty text lines).
+  // Before 2026-10-25 all of it listened on the MAIN window only.
+  private watchWindow(): void {
+    let unbind: (() => void) | null = null;
+    const bind = (win: Window) => {
+      unbind?.();
+      const onKey = (e: KeyboardEvent) => {
+        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "r" || e.key === "R")) {
+          if (this.app.workspace.activeLeaf !== this.leaf) return;
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          void this.onActivated(); // the same check as a focus, one at a time
+          return;
+        }
+        if (!((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "f" || e.key === "F"))) return;
+        const v = this.controller.getView();
+        if (!v || !v.dom.contains(win.document.activeElement)) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        this.controller.toggleSearch();
+      };
+      const onFocus = () => this.onWindowFocus();
+      win.addEventListener("keydown", onKey, { capture: true });
+      win.addEventListener("focus", onFocus);
+      unbind = () => {
+        win.removeEventListener("keydown", onKey, { capture: true });
+        win.removeEventListener("focus", onFocus);
+      };
+    };
+    bind(this.containerEl.win ?? window);
     this.register(
       this.containerEl.onWindowMigrated((win) => {
+        bind(win);
         this.controller?.getView()?.setRoot(win.document);
       }),
     );
+    this.register(() => unbind?.());
   }
 
   // Mount the detail editor once BOTH the controller (onOpen) and the state (setState)

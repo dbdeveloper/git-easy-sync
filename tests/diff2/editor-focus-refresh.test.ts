@@ -529,28 +529,68 @@ describe("diff-editor — closed under the 'files changed' window", () => {
 
 // Owner, 2026-10-25: a diff-editor dragged into its own window drew the
 // line numbers on the RIGHT and empty text lines — CM6 keeps its base
-// styles in the document it was created in, and a new window's document
-// has none (the log viewer's fix of 2026-10-08). On the move the editor
-// is re-rooted into the new window's document.
-describe("diff-editor — moved to another window", () => {
-  it("🔑 the CodeMirror view is re-rooted into the new window's document", () => {
+// styles in the document it was created in. The re-root on the move is
+// checked below, with the window listeners that move along.
+// Owner, 2026-10-25: every diff-editor hotkey must work the same in any
+// tab or window. The window-level ones (Mod+F, Mod+R) and the OS-focus
+// check listened on the MAIN window only — in a pop-out they never fired.
+describe("diff-editor — window-level keys follow the tab to its window", () => {
+  function fakeWin(active: unknown = null) {
+    const listeners: Array<{ type: string; fn: (e: unknown) => void; opts?: unknown }> = [];
+    return {
+      listeners,
+      document: { activeElement: active },
+      addEventListener: (type: string, fn: (e: unknown) => void, opts?: unknown) => listeners.push({ type, fn, opts }),
+      removeEventListener: (type: string, fn: (e: unknown) => void) => {
+        const i = listeners.findIndex((l) => l.type === type && l.fn === fn);
+        if (i >= 0) listeners.splice(i, 1);
+      },
+    };
+  }
+
+  function editor(first: ReturnType<typeof fakeWin>) {
     const ed = Object.create(DiffEditorView.prototype) as unknown as Record<string, unknown> & {
-      rerootOnWindowMove(): void;
+      watchWindow(): void;
     };
     let migrated: ((w: Window) => void) | null = null;
     const setRoot = vi.fn();
+    const toggleSearch = vi.fn();
+    const inEditor = { id: "cm" };
     ed.containerEl = {
+      win: first,
       onWindowMigrated: (fn: (w: Window) => void) => {
         migrated = fn;
         return () => {};
       },
     };
     ed.register = vi.fn();
-    ed.controller = { getView: () => ({ setRoot }) };
-    ed.rerootOnWindowMove();
-    const doc = { title: "pop-out" };
-    migrated!({ document: doc } as unknown as Window);
-    expect(setRoot).toHaveBeenCalledWith(doc);
-    expect(ed.register).toHaveBeenCalled(); // unsubscribed with the view
+    ed.controller = {
+      getView: () => ({ setRoot, dom: { contains: (el: unknown) => el === inEditor } }),
+      toggleSearch,
+    };
+    ed.watchWindow();
+    return { ed, setRoot, toggleSearch, inEditor, move: (w: unknown) => migrated!(w as Window) };
+  }
+
+  it("🔑 keydown + focus listen on the tab's CURRENT window, moved with it", () => {
+    const main = fakeWin();
+    const pop = fakeWin();
+    const w = editor(main);
+    expect(main.listeners.map((l) => l.type).sort()).toEqual(["focus", "keydown"]);
+    w.move(pop);
+    expect(main.listeners).toHaveLength(0);
+    expect(pop.listeners.map((l) => l.type).sort()).toEqual(["focus", "keydown"]);
+    expect(w.setRoot).toHaveBeenCalledWith(pop.document);
+  });
+
+  it("🔑 Mod+F in a pop-out: the focus is looked up in THAT window's document", () => {
+    const pop = fakeWin();
+    const w = editor(fakeWin());
+    w.move(pop);
+    (pop.document as { activeElement: unknown }).activeElement = w.inEditor;
+    const key = pop.listeners.find((l) => l.type === "keydown")!;
+    const e = { key: "f", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false, preventDefault: vi.fn(), stopImmediatePropagation: vi.fn() };
+    key.fn(e);
+    expect(w.toggleSearch).toHaveBeenCalledTimes(1);
   });
 });
