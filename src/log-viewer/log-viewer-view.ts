@@ -39,7 +39,18 @@ export class LogViewerView extends ItemView {
     return "scroll-text";
   }
 
+  // The window this tab lives in, kept current: at onClose the tab is
+  // already detached and containerEl.win no longer tells it (owner,
+  // 2026-10-25: Esc lost the focus again once the return moved there).
+  private ownWin: Window | null = null;
+
   async onOpen(): Promise<void> {
+    this.ownWin = this.containerEl.win ?? null;
+    this.register(
+      this.containerEl.onWindowMigrated((win) => {
+        this.ownWin = win;
+      }),
+    );
     // Logging turned off in Settings closes the tab (owner, 2026-10-08).
     // Esc closes it while it is the one tab of its own pop-out window —
     // where Settings open it (§2.24); asked at each press.
@@ -65,10 +76,23 @@ export class LogViewerView extends ItemView {
   // Cmd+W and the × went past the Esc path and lost the focus).
   private returnFocusWhenPopoutCloses(): void {
     const back = this.openedFrom();
-    const own = this.containerEl.win;
+    const own = this.ownWin;
+    // One line per close, so a field report says which way it went.
+    this.deps.logger().info?.("Log viewer closed", {
+      inPopout: own !== null && own !== window,
+      openedFromKnown: back !== null,
+      openedFromOpen: back !== null && !back.closed,
+      popoutAlreadyClosed: own?.closed ?? null,
+    });
     if (!back || !own || back === own || own === window) return;
+    // Closed already (the window went before the tab's onClose ran)?
+    if (own.closed) {
+      window.setTimeout(() => raiseWindow(back), 0);
+      return;
+    }
     const ws = this.app.workspace;
-    const ref = ws.on("window-close", () => {
+    const ref = ws.on("window-close", (_ws, closed) => {
+      if (closed !== own) return;
       ws.offref(ref);
       window.setTimeout(() => raiseWindow(back), 0);
     });

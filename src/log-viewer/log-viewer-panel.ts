@@ -56,6 +56,7 @@ export interface LogViewerDeps {
     subscribe(fn: (l: RecentLine) => void): () => void;
     onLifecycle(fn: (e: "cleaned" | "disabled") => void): () => void;
     error?(message: string, data?: unknown): void;
+    info?(message: string, data?: unknown): void;
   };
 }
 
