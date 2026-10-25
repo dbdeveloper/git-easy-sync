@@ -154,6 +154,7 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
     // active so ESC keeps working in other tabs. The mechanism is shared since
     // 2026-10-25 (ui/esc-scope.ts — the diff-panel and the log viewer use it too).
     holdEscapeWhileActive(this);
+    this.rerootOnWindowMove();
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
         // Re-focus the editor when this leaf becomes active again (Obsidian does
@@ -324,6 +325,19 @@ export class DiffEditorView extends ItemView implements DiffDetailHost {
   // Obsidian's window got the OS focus back.
   onWindowFocus(): void {
     if (this.app.workspace.activeLeaf === this.leaf) void this.onActivated();
+  }
+
+  // A tab dragged into another window (owner, 2026-10-25: line numbers on
+  // the right, empty text lines): CM6 keeps its base styles in the
+  // document it was created in, and a new window's document has none.
+  // setRoot() is CM6's API for this move — the log viewer's fix of
+  // 2026-10-08.
+  private rerootOnWindowMove(): void {
+    this.register(
+      this.containerEl.onWindowMigrated((win) => {
+        this.controller?.getView()?.setRoot(win.document);
+      }),
+    );
   }
 
   // Mount the detail editor once BOTH the controller (onOpen) and the state (setState)

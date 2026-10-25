@@ -526,3 +526,31 @@ describe("diff-editor — closed under the 'files changed' window", () => {
     }
   });
 });
+
+// Owner, 2026-10-25: a diff-editor dragged into its own window drew the
+// line numbers on the RIGHT and empty text lines — CM6 keeps its base
+// styles in the document it was created in, and a new window's document
+// has none (the log viewer's fix of 2026-10-08). On the move the editor
+// is re-rooted into the new window's document.
+describe("diff-editor — moved to another window", () => {
+  it("🔑 the CodeMirror view is re-rooted into the new window's document", () => {
+    const ed = Object.create(DiffEditorView.prototype) as unknown as Record<string, unknown> & {
+      rerootOnWindowMove(): void;
+    };
+    let migrated: ((w: Window) => void) | null = null;
+    const setRoot = vi.fn();
+    ed.containerEl = {
+      onWindowMigrated: (fn: (w: Window) => void) => {
+        migrated = fn;
+        return () => {};
+      },
+    };
+    ed.register = vi.fn();
+    ed.controller = { getView: () => ({ setRoot }) };
+    ed.rerootOnWindowMove();
+    const doc = { title: "pop-out" };
+    migrated!({ document: doc } as unknown as Window);
+    expect(setRoot).toHaveBeenCalledWith(doc);
+    expect(ed.register).toHaveBeenCalled(); // unsubscribed with the view
+  });
+});
