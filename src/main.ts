@@ -4018,7 +4018,9 @@ export default class GitHubSyncPlugin extends Plugin {
       // any other plugin: the new main.js is already on disk (the
       // marker swap completed), so disable+enable loads the new code.
       if (enabled !== undefined && !enabled.has(id)) {
-        this.logger?.warn(
+        // INFO (owner, 2026-10-25): the update of a disabled plugin just
+        // arrived — nothing changed or lost on this device.
+        this.logger?.info(
           "BRAT-style reload skipped: plugin not enabled",
           { id },
         );

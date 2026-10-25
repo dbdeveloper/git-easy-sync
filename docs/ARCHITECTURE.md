@@ -79,8 +79,15 @@ without scrolling the whole log:
   collision (3-way merge, "newer file wins", "repository wins", edit beats delete, plugin files by
   version): the natural course is no conflicts at all, and the user may not have wanted the rule's
   choice (`Conflict resolved automatically` with `how`);
-- **a file modified without a person's direct action** — canonicalization (CRLF/BOM/trailing
-  newline) of a text file, our blocks written into or repaired in a `.gitignore`.
+- **the user's data modified by the plugin ON ITS OWN** (owner, 2026-10-25) — our blocks added to
+  or repaired in a `.gitignore`, nested `.gitignore` files merged into `<vault>/.gitignore`,
+  markdown cleaned up by auto-canonicalize (CRLF/BOM/trailing newline), a file in conflict that
+  diff3 resolved itself from changes on BOTH sides.
+
+**A change from ONE side is not a modification** (owner, 2026-10-25): pulling or pushing what
+the user changed on one device is the transfer of the user's own change — **INFO**. So is an
+update arriving for a plugin that is disabled here (`BRAT-style reload skipped: plugin not
+enabled`). A plugin REMOVED by sync stays WARN: it is unloaded from the running Obsidian.
 
 **The plugin's own bookkeeping is INFO** — not something "done on its own" in the sense above,
 because it changes no file. Example (owner, 2026-10-25): the drain's Layer 2 corrections — its

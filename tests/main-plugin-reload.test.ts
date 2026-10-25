@@ -465,6 +465,10 @@ describe("§4.3 — what the user is told", () => {
 
     expect(pm.disableCalls).toEqual([]);
     expect(f.notices()).toEqual([]);
+    // Owner, 2026-10-25: nothing changed, nothing lost — the update of a
+    // disabled plugin just arrived. INFO, not WARN.
+    const skip = f.said("plugin not enabled");
+    expect(skip.map((l) => l.level)).toEqual(["info"]);
   });
 });
 
