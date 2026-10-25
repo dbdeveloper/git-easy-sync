@@ -41,13 +41,7 @@ export class LogViewerView extends ItemView {
     // Esc closes it while it is the one tab of its own pop-out window —
     // where Settings open it (§2.24); asked at each press.
     this.panel = new LogViewerPanel(this.deps, {
-      // Leaving a pop-out: focus goes back to the main window — Settings,
-      // where the viewer was opened from (owner, 2026-10-25).
-      onClose: () => {
-        const own = this.containerEl.win;
-        this.leaf.detach();
-        if (own && own !== window) window.focus();
-      },
+      onClose: () => this.leaf.detach(),
       closeOnEscape: () =>
         onlyTabInItsPopout(this.leaf, this.app.workspace as unknown as Parameters<typeof onlyTabInItsPopout>[1]),
     });
