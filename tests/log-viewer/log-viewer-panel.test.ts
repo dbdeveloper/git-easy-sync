@@ -570,7 +570,7 @@ describe("LogViewerPanel", () => {
     });
 
     const esc = (root: HTMLElement) =>
-      root.ownerDocument.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      root.querySelector(".cm-content")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
 
     it("🔑 Esc closes when the host allows it; not when it does not", async () => {
       const w = fileWorld(`${rec("a")}\n`);
@@ -583,6 +583,23 @@ describe("LogViewerPanel", () => {
       w.setEsc(true);
       esc(root);
       expect(w.closed).toHaveBeenCalledTimes(1);
+      w.panel.destroy();
+    });
+
+    // Owner, 2026-10-25: docked next to other tabs, Esc jumped to another
+    // tab — Obsidian's own window-level Esc makes the last-active
+    // navigable tab active when the active view is not "navigation"
+    // (meant for sidebars), unless the event is already handled.
+    it("🔑 an Esc that does not close the viewer is marked handled (Obsidian does not switch tabs)", async () => {
+      const w = fileWorld(`${rec("a")}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      await w.panel.mount(root);
+      w.setEsc(false);
+      const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      root.querySelector(".cm-content")!.dispatchEvent(ev);
+      expect(ev.defaultPrevented).toBe(true);
+      expect(w.closed).not.toHaveBeenCalled();
       w.panel.destroy();
     });
 

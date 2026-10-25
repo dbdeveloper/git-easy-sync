@@ -277,6 +277,20 @@ export class LogViewerPanel {
     // the global ones: on desktop the viewer lives in its own pop-out
     // window, which has a window and document of its own.
     this.bindKeys(root.win ?? window);
+    // §2.24: Esc inside the viewer. On the viewer's own element, so it
+    // runs BEFORE Obsidian's window-level Esc — which, for a view that is
+    // not "navigation" (ours), makes the last-active file tab active
+    // (meant for sidebars; owner, 2026-10-25: docked next to other tabs,
+    // Esc jumped to one). Bubbling, so CodeMirror sees it first: an Esc
+    // that closed the search panel arrives here already handled. Closes
+    // the viewer when the host allows it; otherwise it is only marked
+    // handled, and nothing happens.
+    root.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (this.editor && searchPanelOpen(this.editor.state)) return;
+      e.preventDefault();
+      if (this.host.closeOnEscape?.()) this.host.onClose?.();
+    });
 
     // Dragged into ANOTHER window (owner's field report, 2026-10-08: a tab
     // pulled out into a new pop-out showed "|||text" and would not
@@ -381,21 +395,9 @@ export class LogViewerPanel {
       e.stopImmediatePropagation();
       openSearchPanel(this.editor);
     };
-    // §2.24: Esc closes the viewer when the host allows it (the one tab of
-    // its own pop-out window). BUBBLING, so CM6 sees it first: an Esc that
-    // closed the search panel arrives here already handled.
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      if (this.editor && searchPanelOpen(this.editor.state)) return;
-      if (!this.host.closeOnEscape?.()) return;
-      e.preventDefault();
-      this.host.onClose?.();
-    };
     win.addEventListener("keydown", onKey, { capture: true });
-    win.addEventListener("keydown", onEsc);
     this.unbindKeys = () => {
       win.removeEventListener("keydown", onKey, { capture: true });
-      win.removeEventListener("keydown", onEsc);
     };
   }
 
