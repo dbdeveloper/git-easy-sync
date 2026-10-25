@@ -82,3 +82,25 @@ describe("keepLeafFocus", () => {
     expect(w.focusEditor).not.toHaveBeenCalled();
   });
 });
+
+// Owner, 2026-10-25 (History): "whenever such a tab or window gets the
+// focus, the list must get it at once" — coming back to the window from
+// another program left the keyboard nowhere.
+describe("keepLeafFocus — the window gets the OS focus", () => {
+  it("🔑 THIS tab active, the keyboard not inside → the editing area gets the focus", () => {
+    vi.useFakeTimers();
+    const w = world();
+    w.ws.activeLeaf = w.leaf;
+    window.dispatchEvent(new FocusEvent("focus"));
+    vi.runAllTimers();
+    expect(w.focusEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it("another tab active → no focus stolen", () => {
+    vi.useFakeTimers();
+    const w = world();
+    window.dispatchEvent(new FocusEvent("focus"));
+    vi.runAllTimers();
+    expect(w.focusEditor).not.toHaveBeenCalled();
+  });
+});

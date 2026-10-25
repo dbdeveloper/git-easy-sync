@@ -13,6 +13,8 @@
 //     real `{path}` lands, so `currentPath()` returns null then (the dup-guard
 //     treats null as "no match").
 
+import { holdEscapeWhileActive } from "../ui/esc-scope";
+import { keepLeafFocus } from "../ui/keep-focus";
 import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
 import {
   historyIsoTimestamp,
@@ -98,6 +100,16 @@ export function nextHistorySelection(
     case "Enter": return "open";
     default: return null;
   }
+}
+
+// After a render, does the list take the keyboard? A full render (opening)
+// does; a QUIET one (a sync refreshing open History tabs) did only if the
+// list held the focus at that instant — a focus that had slipped for a
+// moment was lost for good: pale cursor, dead arrows (owner, 2026-10-25).
+// Now also whenever THIS tab is the active one; never otherwise, so a
+// background refresh does not steal the keyboard.
+export function historyTakesFocus(s: { quiet: boolean; hadFocus: boolean; active: boolean }): boolean {
+  return !s.quiet || s.hadFocus || s.active;
 }
 
 // The pure per-file dup-guard (`findExistingHistoryLeaf`) lives in editor-tabs.ts
@@ -197,6 +209,11 @@ export class DiffHistoryView extends ItemView {
       }),
     );
     this.registerDomEvent(this.contentEl, "mousedown", () => this.focusList());
+    // Esc must not throw the keyboard out to another tab, and after a move
+    // (or the window's return from another program) the list gets the
+    // focus again — as in every tab of ours (owner, 2026-10-25).
+    holdEscapeWhileActive(this);
+    keepLeafFocus(this, () => this.focusList());
     void this.render();
   }
 
@@ -274,7 +291,14 @@ export class DiffHistoryView extends ItemView {
     if (gen !== this.gen || !this.contentEl.isConnected) return;
     const hadFocus = container.contains(container.ownerDocument.activeElement);
     const scrollTop = container.scrollTop;
-    this.renderList(container, path, versions, githubError, tokenExpired, !quiet || hadFocus);
+    this.renderList(
+      container,
+      path,
+      versions,
+      githubError,
+      tokenExpired,
+      historyTakesFocus({ quiet, hadFocus, active: this.app.workspace.activeLeaf === this.leaf }),
+    );
     if (quiet) container.scrollTop = scrollTop;
   }
 

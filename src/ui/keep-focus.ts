@@ -10,6 +10,8 @@
 // area gets the focus back. After a layout change in the same window,
 // the same — but only for the ACTIVE tab whose focus is not inside it any
 // more, so an unrelated layout change (a sidebar opened) never steals it.
+// And when the OS gives the window the focus back, the same for the
+// active tab.
 
 import type { App, EventRef, WorkspaceLeaf } from "obsidian";
 
@@ -31,7 +33,28 @@ export function keepLeafFocus(view: KeepFocusView, focusEditor: () => void): voi
     // After the re-draw settles.
     window.setTimeout(() => focusEditor(), 0);
   };
-  view.register(containerEl.onWindowMigrated(() => focusSoon()));
+  // The OS gives the window the focus back (owner, 2026-10-25, History:
+  // "whenever such a tab or window gets the focus, the list must get it")
+  // — for the ACTIVE tab whose keyboard is not inside it. Re-bound when
+  // the tab moves to another window.
+  let unbindWin: (() => void) | null = null;
+  const watchWin = (win: Window) => {
+    unbindWin?.();
+    const onFocus = () => {
+      if (app.workspace.activeLeaf !== leaf || keyboardInside()) return;
+      focusSoon();
+    };
+    win.addEventListener("focus", onFocus);
+    unbindWin = () => win.removeEventListener("focus", onFocus);
+  };
+  watchWin(containerEl.win ?? window);
+  view.register(() => unbindWin?.());
+  view.register(
+    containerEl.onWindowMigrated((win) => {
+      watchWin(win);
+      focusSoon();
+    }),
+  );
   view.registerEvent(
     app.workspace.on("layout-change", () => {
       if (app.workspace.activeLeaf !== leaf) return;
