@@ -600,6 +600,42 @@ describe("LogViewerPanel", () => {
     });
   });
 
+  // Owner, 2026-10-25: the viewer sometimes stayed EMPTY until clicked —
+  // the text was there (the "Log viewer opened" line: 24 KB drawn), but
+  // CodeMirror had measured its box before the box had a size and never
+  // re-measured. The box's size is watched (with ITS window's
+  // ResizeObserver — a pop-out has its own) and every change asks the
+  // editor to measure again.
+  it("🔑 a change of the viewer's size makes the editor measure again", async () => {
+    const callbacks: Array<() => void> = [];
+    const observed: Element[] = [];
+    const saved = (window as unknown as { ResizeObserver?: unknown }).ResizeObserver;
+    (window as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+      constructor(cb: () => void) {
+        callbacks.push(cb);
+      }
+      observe(el: Element) {
+        observed.push(el);
+      }
+      disconnect() {}
+    };
+    try {
+      const d = deps(`${line(1)}\n`);
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const panel = new LogViewerPanel(d.deps);
+      await panel.mount(root);
+      const ed = (panel as unknown as { editor: EditorView }).editor;
+      const spy = vi.spyOn(ed, "requestMeasure");
+      expect(observed).toContain(root.querySelector(".ges-log-body"));
+      callbacks.forEach((cb) => cb());
+      expect(spy).toHaveBeenCalled();
+      panel.destroy();
+    } finally {
+      (window as unknown as { ResizeObserver?: unknown }).ResizeObserver = saved;
+    }
+  });
+
   // Owner, 2026-10-08: Settings → Logging acts on EVERY open viewer.
   describe("reacting to Settings → Logging", () => {
     it("🔑 [Clean]: the table empties in every open viewer, and they all follow", async () => {

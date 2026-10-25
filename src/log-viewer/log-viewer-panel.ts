@@ -224,6 +224,9 @@ export class LogViewerPanel {
   private pollState: PollState = { last: null, misses: 0 };
   private polling = false;
   private fileText = "";
+  // Watches the viewer's box: CodeMirror measured it before it had a size
+  // and stayed empty until clicked (owner, 2026-10-25).
+  private sizeWatch: ResizeObserver | null = null;
   private statusEl!: HTMLElement;
   private errorEl!: HTMLElement;
   private bodyEl!: HTMLElement;
@@ -288,6 +291,7 @@ export class LogViewerPanel {
     this.unwatchWindow = root.onWindowMigrated?.((win) => {
       this.editor?.setRoot(win.document);
       this.bindKeys(win);
+      if (this.editor) this.watchSize();
       // The move also reset the scroll to 0 — silently, no scroll event
       // (owner, 2026-10-08: a user reading an entry in the middle lost
       // it). Put it back from the last known position.
@@ -416,6 +420,8 @@ export class LogViewerPanel {
     this.unbindKeys = null;
     this.unwatchWindow?.();
     this.unwatchWindow = null;
+    this.sizeWatch?.disconnect();
+    this.sizeWatch = null;
     this.editor?.destroy();
     this.editor = null;
   }
@@ -649,7 +655,29 @@ export class LogViewerPanel {
     this.render(true); // with no editor yet, this also removes the "too large" / error text
   }
 
+  // Every change of the viewer's box size → the editor measures again
+  // (owner, 2026-10-25: the text was there, but the editor had measured a
+  // box with no size yet and drew nothing until clicked). The box's OWN
+  // window's ResizeObserver — a pop-out has its own; re-made when the
+  // viewer moves to another window.
+  private watchSize(): void {
+    this.sizeWatch?.disconnect();
+    this.sizeWatch = null;
+    const win = (this.bodyEl.win ?? window) as Window & { ResizeObserver?: typeof ResizeObserver };
+    const RO = win.ResizeObserver;
+    if (!RO) return;
+    this.sizeWatch = new RO(() => {
+      const ed = this.editor;
+      if (!ed) return;
+      ed.requestMeasure();
+      if (this.following) this.scrollToBottom();
+    });
+    this.sizeWatch.observe(this.bodyEl);
+  }
+
   private showMessage(text: string): void {
+    this.sizeWatch?.disconnect();
+    this.sizeWatch = null;
     this.editor?.destroy();
     this.editor = null;
     this.bodyEl.empty();
@@ -769,6 +797,7 @@ export class LogViewerPanel {
       });
       this.editor.dispatch({ effects: setLevelMarks.of(v.marks) });
       const ed = this.editor;
+      this.watchSize();
       // Auto-scroll on/off from the user's scrolling (owner, 2026-10-08,
       // incl. the field report on trackpads). A gesture is never pure:
       // each event is judged by its DOMINANT axis, so the jitter on the
