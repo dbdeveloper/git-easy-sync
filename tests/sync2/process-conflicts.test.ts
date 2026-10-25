@@ -390,7 +390,10 @@ describe("process_conflicts (§VIII I)", () => {
       });
     });
 
-    it("gone from disk (deleted or renamed by the user) → 'no longer on disk'", async () => {
+    // Owner, 2026-10-25: the engine cannot tell WHO removed the copy ([←]
+    // in the diff editor, the user, another program) — the line says only
+    // what it knows.
+    it("🔑 gone from disk → 'Conflict copy is gone from disk - conflict resolved'", async () => {
       putFile("note.md", "base\n");
       const state = emptyConflictsState();
       entry(state, "note.md", [await tracked("note.md", "theirs\n", 2000, "phone", false)]);
@@ -398,7 +401,7 @@ describe("process_conflicts (§VIII I)", () => {
 
       await processConflicts(d, state);
 
-      const line = lines.find((l) => /no longer on disk/i.test(l.message));
+      const line = lines.find((l) => l.message === "Conflict copy is gone from disk - conflict resolved");
       expect(line?.data).toMatchObject({ path: "note.md", copy: copyPath("note.md", 2000) });
     });
   });
