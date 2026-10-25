@@ -13,7 +13,11 @@ import { settingsPopout } from "../src/ui/settings-popout";
 // the window it was opened from gets the focus back.
 function world(opts: { alone?: boolean; onEscape?: () => boolean } = {}) {
   const main = window;
-  const popout = { closed: false } as unknown as Window & { closed: boolean };
+  const popout = {
+    closed: false,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  } as unknown as Window & { closed: boolean };
   const settingsWin = {
     closed: false,
     electronWindow: { isMinimized: () => false, restore: vi.fn(), focus: vi.fn() },
@@ -44,6 +48,7 @@ function world(opts: { alone?: boolean; onEscape?: () => boolean } = {}) {
     },
     containerEl: {
       win: popout,
+      contains: () => false,
       onWindowMigrated: (fn: (w: Window) => void) => {
         migrate = fn;
         return () => {};

@@ -59,41 +59,55 @@ export function holdEscapeWhileActive(view: EscScopeHost, onEscape: () => void =
     pushed = false;
   });
 
-  // DIAGNOSTIC — see setEscDiagnostics.
+  // The keyboard inside the tab — caught first, whatever the active leaf
+  // (field log 2026-10-25: right after a tear-off into its own window,
+  // Obsidian's active leaf was a NOTE in the main window with no
+  // active-leaf-change, the focus was inside our tab, and the keymap scope
+  // above never saw the Esc; Obsidian's own Esc then focused the note —
+  // the main window). On the tab's window, capture phase, so nothing else
+  // sees it; moved with the tab. CodeMirror's search field keeps its Esc
+  // (it closes the search).
   const el = view.containerEl;
-  if (diag && el) {
-    const popout = () => (el.win ?? window) !== window;
-    diag("Esc scope installed", {
-      view: view.getViewType?.(),
-      popout: popout(),
-      activeIsMe: app.workspace.activeLeaf === leaf,
-      pushed,
-    });
-    let unbind: (() => void) | null = null;
-    const bind = (win: Window) => {
-      unbind?.();
-      const onKey = (e: KeyboardEvent) => {
-        if (e.key !== "Escape") return;
-        const doc = el.doc ?? document;
-        diag?.("Esc pressed in our tab's window", {
-          view: view.getViewType?.(),
-          popout: popout(),
-          activeIsMe: app.workspace.activeLeaf === leaf,
-          activeType: app.workspace.activeLeaf?.view?.getViewType?.() ?? null,
-          pushed,
-          focusInside: el.contains(doc.activeElement),
-          focusTag: doc.activeElement?.tagName ?? null,
-          windowHasFocus: doc.hasFocus(),
-        });
-      };
-      win.addEventListener("keydown", onKey, { capture: true });
-      unbind = () => win.removeEventListener("keydown", onKey, { capture: true });
+  if (!el) return;
+  const popout = () => (el.win ?? window) !== window;
+  diag?.("Esc scope installed", {
+    view: view.getViewType?.(),
+    popout: popout(),
+    activeIsMe: app.workspace.activeLeaf === leaf,
+    pushed,
+  });
+  let unbind: (() => void) | null = null;
+  const bind = (win: Window) => {
+    unbind?.();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const doc = el.doc ?? document;
+      const focus = doc.activeElement;
+      const inside = focus !== null && el.contains(focus);
+      diag?.("Esc pressed in our tab's window", {
+        view: view.getViewType?.(),
+        popout: popout(),
+        activeIsMe: app.workspace.activeLeaf === leaf,
+        activeType: app.workspace.activeLeaf?.view?.getViewType?.() ?? null,
+        pushed,
+        focusInside: inside,
+        focusTag: focus?.tagName ?? null,
+      });
+      if (!inside) return;
+      if ((focus as HTMLElement).closest?.(".cm-search")) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onEscape();
     };
-    bind(el.win ?? window);
-    view.register(el.onWindowMigrated((win) => {
+    win.addEventListener("keydown", onKey, { capture: true });
+    unbind = () => win.removeEventListener("keydown", onKey, { capture: true });
+  };
+  bind(el.win ?? window);
+  view.register(
+    el.onWindowMigrated((win) => {
       diag?.("Esc diag: tab moved to another window", { view: view.getViewType?.() });
       bind(win);
-    }));
-    view.register(() => unbind?.());
-  }
+    }),
+  );
+  view.register(() => unbind?.());
 }
