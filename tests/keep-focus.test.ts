@@ -143,3 +143,61 @@ describe("refocusOnEmptyClick", () => {
     expect(w.focus).not.toHaveBeenCalled();
   });
 });
+
+// Owner, 2026-10-25: a click on the tab's own header (the title bar) or
+// on its handle in the tab strip took the keyboard away from the list /
+// the editor — both lie outside the content, and the tab was already
+// active, so no active-leaf-change came. The editing area gets the focus
+// back after such a click; the header's icons (menu, navigation) and the
+// handle's close button are left alone.
+describe("keepLeafFocus — clicks on the tab's header and handle", () => {
+  function headerWorld() {
+    const containerEl = document.createElement("div");
+    const header = containerEl.appendChild(document.createElement("div"));
+    header.className = "view-header";
+    const title = header.appendChild(document.createElement("div"));
+    const icon = header.appendChild(document.createElement("div"));
+    icon.className = "clickable-icon";
+    containerEl.appendChild(document.createElement("div")).className = "view-content";
+    document.body.appendChild(containerEl);
+    const tabHeaderEl = document.createElement("div");
+    const handleTitle = tabHeaderEl.appendChild(document.createElement("div"));
+    const close = tabHeaderEl.appendChild(document.createElement("div"));
+    close.className = "workspace-tab-header-inner-close-button";
+    document.body.appendChild(tabHeaderEl);
+    (containerEl as unknown as { onWindowMigrated: unknown }).onWindowMigrated = () => () => {};
+    const leaf = { tabHeaderEl };
+    const focusEditor = vi.fn();
+    const view = {
+      leaf,
+      app: { workspace: { activeLeaf: leaf, on: () => ({}) } },
+      containerEl,
+      registerEvent: () => {},
+      register: () => {},
+      registerDomEvent: (el: HTMLElement, type: string, fn: (e: Event) => void) => el.addEventListener(type, fn),
+    };
+    keepLeafFocus(view as never, focusEditor);
+    const down = (el: HTMLElement) => el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    return { title, icon, handleTitle, close, focusEditor, down };
+  }
+
+  it("🔑 a click on the title bar or the tab handle → the editing area gets the focus", () => {
+    vi.useFakeTimers();
+    const w = headerWorld();
+    w.down(w.title);
+    vi.runAllTimers();
+    expect(w.focusEditor).toHaveBeenCalledTimes(1);
+    w.down(w.handleTitle);
+    vi.runAllTimers();
+    expect(w.focusEditor).toHaveBeenCalledTimes(2);
+  });
+
+  it("the header's icons and the handle's close button → left alone", () => {
+    vi.useFakeTimers();
+    const w = headerWorld();
+    w.down(w.icon);
+    w.down(w.close);
+    vi.runAllTimers();
+    expect(w.focusEditor).not.toHaveBeenCalled();
+  });
+});

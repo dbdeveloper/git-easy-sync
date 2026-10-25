@@ -21,6 +21,7 @@ export interface KeepFocusView {
   containerEl: HTMLElement;
   registerEvent(ref: EventRef): void;
   register(cb: () => void): void;
+  registerDomEvent(el: HTMLElement, type: "mousedown", cb: (e: MouseEvent) => unknown): void;
 }
 
 export function keepLeafFocus(view: KeepFocusView, focusEditor: () => void): void {
@@ -62,7 +63,23 @@ export function keepLeafFocus(view: KeepFocusView, focusEditor: () => void): voi
       focusSoon();
     }),
   );
+  // A click on the tab's own title bar or on its handle in the tab strip
+  // (owner, 2026-10-25): both lie outside the content and the tab is
+  // already active, so nothing else brings the keyboard back. Their icons
+  // (menu, navigation) and the handle's close button are left alone.
+  const onHeaderDown = (e: MouseEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.(HEADER_CONTROLS)) return;
+    focusSoon();
+  };
+  const viewHeader = containerEl.querySelector<HTMLElement>(".view-header");
+  if (viewHeader) view.registerDomEvent(viewHeader, "mousedown", onHeaderDown);
+  const handle = (leaf as unknown as { tabHeaderEl?: HTMLElement }).tabHeaderEl;
+  if (handle) view.registerDomEvent(handle, "mousedown", onHeaderDown);
 }
+
+const HEADER_CONTROLS =
+  ".clickable-icon, .workspace-tab-header-inner-close-button, button, input, a[href], [contenteditable]";
 
 // A click in the tab outside its list (above it, below it) must just give
 // the list the keyboard (owner, 2026-10-25, History: the selection went
