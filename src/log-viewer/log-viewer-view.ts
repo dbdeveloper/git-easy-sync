@@ -18,6 +18,9 @@ export class LogViewerView extends ItemView {
   constructor(
     leaf: WorkspaceLeaf,
     private readonly deps: LogViewerDeps,
+    // The window the viewer was opened from (Settings) — it gets the
+    // focus back when the viewer's pop-out closes (§2.24).
+    private readonly openedFrom: () => Window | null = () => null,
   ) {
     super(leaf);
   }
@@ -43,23 +46,54 @@ export class LogViewerView extends ItemView {
     const alone = () =>
       onlyTabInItsPopout(this.leaf, this.app.workspace as unknown as Parameters<typeof onlyTabInItsPopout>[1]);
     this.panel = new LogViewerPanel(this.deps, {
-      // The one tab of its own pop-out: close the WINDOW, as its close
-      // button does — then the OS returns the focus to the window it was
-      // opened from (Settings). Detaching the tab let the emptied pop-out
-      // close on its own, and the OS brought another Obsidian window to
-      // the front, hiding Settings (owner, 2026-10-25).
-      onClose: () => {
-        const win = this.containerEl.win;
-        if (win && win !== window && alone()) win.close();
-        else this.leaf.detach();
-      },
+      onClose: () => this.closeAndReturnFocus(),
       closeOnEscape: alone,
     });
     await this.panel.mount(this.contentEl);
+  }
+
+  // Owner, 2026-10-25: after Esc (or Cmd+W) the Settings window went
+  // BEHIND another one. Obsidian 1.13 can show Settings in a window of
+  // their own (its "settingsPopoutWindow" option), and when Obsidian
+  // closes a pop-out it hands the focus to the vault's MAIN window — in
+  // front of Settings. (The OS close button does not go through Obsidian,
+  // so it did not happen there.) So once our pop-out has really closed,
+  // the window we were opened from is raised again — the way Obsidian
+  // raises its own Settings window: restore() if minimised, then focus().
+  private closeAndReturnFocus(): void {
+    const back = this.openedFrom();
+    const own = this.containerEl.win;
+    if (back && own && back !== own && own !== window) {
+      const ws = this.app.workspace;
+      const ref = ws.on("window-close", () => {
+        ws.offref(ref);
+        window.setTimeout(() => raiseWindow(back), 0);
+      });
+      // The pop-out may stay open (other tabs in it): do not wait forever.
+      window.setTimeout(() => ws.offref(ref), 5000);
+    }
+    this.leaf.detach();
   }
 
   async onClose(): Promise<void> {
     this.panel?.destroy();
     this.panel = null;
   }
+}
+
+function raiseWindow(win: Window): void {
+  if (win.closed) return;
+  const ew = (win as unknown as {
+    electronWindow?: { isMinimized?: () => boolean; restore?: () => void; focus: () => void };
+  }).electronWindow;
+  try {
+    if (ew) {
+      if (ew.isMinimized?.()) ew.restore?.();
+      ew.focus();
+      return;
+    }
+  } catch {
+    // fall back below
+  }
+  win.focus();
 }

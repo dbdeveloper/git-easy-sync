@@ -837,7 +837,7 @@ export default class GitHubSyncPlugin extends Plugin {
       this.registerView(
         LOG_VIEWER_VIEW_TYPE,
         (leaf) =>
-          new LogViewerView(leaf, this.logViewerDeps()),
+          new LogViewerView(leaf, this.logViewerDeps(), () => this.logViewerOpenedFrom),
       );
       // LOG-VIEWER §2.23: any *.log clicked in the file explorer — only
       // while the "log" extension is ours (the Settings switch below).
@@ -4344,8 +4344,14 @@ export default class GitHubSyncPlugin extends Plugin {
   // it); phone → no pop-outs, so a FULL-SCREEN modal above Settings —
   // closing it returns to Settings. An open viewer is brought
   // forward, never doubled. See log-open-target.ts.
+  // The window "View plugin's log" was pressed in (Settings — its own
+  // window when Obsidian's "settingsPopoutWindow" is on): it gets the
+  // focus back when the viewer's pop-out closes.
+  private logViewerOpenedFrom: Window | null = null;
+
   async openLogViewer(): Promise<void> {
     const { workspace } = this.app;
+    this.logViewerOpenedFrom = activeWindow;
     const open = workspace.getLeavesOfType(LOG_VIEWER_VIEW_TYPE)[0];
     const target = logViewerTarget({
       hasOpenViewer: open !== undefined,
