@@ -49,6 +49,8 @@ function world(opts: { alone?: boolean; onEscape?: () => boolean } = {}) {
     containerEl: {
       win: popout,
       contains: () => false,
+      addEventListener: () => {},
+      removeEventListener: () => {},
       onWindowMigrated: (fn: (w: Window) => void) => {
         migrate = fn;
         return () => {};

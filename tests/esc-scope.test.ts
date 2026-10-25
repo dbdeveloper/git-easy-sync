@@ -146,3 +146,85 @@ describe("holdEscapeWhileActive — Esc with the focus inside the tab, whatever 
     expect(w.onEscape).not.toHaveBeenCalled();
   });
 });
+
+// Read in Obsidian 1.13.4 (2026-10-25): the keymap keeps a scope stack PER
+// WINDOW — pushScope pushes onto the stack of `activeWindow` at that
+// moment, and keys in a window use only that window's stack. Our scope,
+// pushed while the tab was in the main window, stayed there after a
+// tear-off: Esc in the pop-out never reached it.
+describe("holdEscapeWhileActive — the scope lives in the tab's OWN window", () => {
+  function perWindowWorld() {
+    const g = globalThis as unknown as { activeWindow: unknown };
+    const saved = g.activeWindow;
+    const mainWin = { name: "main", addEventListener: () => {}, removeEventListener: () => {} };
+    const popWin = { name: "pop", addEventListener: () => {}, removeEventListener: () => {} };
+    const stacks = new Map<unknown, unknown[]>();
+    const stack = (w: unknown) => stacks.get(w) ?? (stacks.set(w, []), stacks.get(w)!);
+    g.activeWindow = mainWin;
+    let migrated: ((w: Window) => void) | null = null;
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const inner = container.appendChild(document.createElement("input"));
+    const c = container as unknown as Record<string, unknown>;
+    c.onWindowMigrated = (fn: (w: Window) => void) => {
+      migrated = fn;
+      return () => {};
+    };
+    let tabWin: unknown = mainWin;
+    Object.defineProperty(container, "win", { get: () => tabWin, configurable: true });
+    const leaf = { id: "me" };
+    const view = {
+      app: {
+        scope: {},
+        keymap: {
+          pushScope: (s: { win?: unknown }) => {
+            stack(g.activeWindow).push(s);
+            s.win = g.activeWindow;
+          },
+          popScope: (s: { win?: unknown }) => {
+            const st = stack(s.win);
+            st.splice(st.indexOf(s), 1);
+            s.win = undefined;
+          },
+        },
+        workspace: { activeLeaf: leaf, on: () => ({}), setActiveLeaf: () => {} },
+      },
+      leaf,
+      containerEl: container,
+      registerEvent: () => {},
+      register: () => {},
+      registerDomEvent: (el: HTMLElement, type: string, fn: () => void) => el.addEventListener(type, fn),
+    };
+    holdEscapeWhileActive(view as never);
+    return {
+      stack,
+      mainWin,
+      popWin,
+      inner,
+      restore: () => (g.activeWindow = saved),
+      tearOff: () => {
+        tabWin = popWin;
+        migrated!(popWin as unknown as Window);
+      },
+      focusPopout: () => {
+        g.activeWindow = popWin;
+        inner.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+      },
+    };
+  }
+
+  it("🔑 torn off → the scope moves to the pop-out's stack once that window is active", () => {
+    const w = perWindowWorld();
+    try {
+      expect(w.stack(w.mainWin)).toHaveLength(1);
+      w.tearOff();
+      w.focusPopout();
+      expect(w.stack(w.mainWin)).toHaveLength(0);
+      expect(w.stack(w.popWin)).toHaveLength(1);
+      w.focusPopout(); // again: not doubled
+      expect(w.stack(w.popWin)).toHaveLength(1);
+    } finally {
+      w.restore();
+    }
+  });
+});

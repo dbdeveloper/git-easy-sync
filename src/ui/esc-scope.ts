@@ -44,23 +44,58 @@ export function holdEscapeWhileActive(view: EscScopeHost, onEscape: () => void =
     onEscape();
     return false; // handled: Obsidian's own Esc does not run
   });
+  // Obsidian's keymap keeps a scope stack PER WINDOW (read in 1.13.4,
+  // 2026-10-25): pushScope pushes onto the stack of `activeWindow` at that
+  // moment, and the keys of a window use only that window's stack. A
+  // scope pushed while the tab was in the main window stayed there after
+  // a tear-off, and Esc in the pop-out never reached it — Obsidian's own
+  // Esc then focused a note in the main window. So the scope follows the
+  // tab: re-pushed into the tab's window once that window is the active
+  // one (the keyboard entering the tab, a move to another window).
   let pushed = false;
+  let scopeWin: unknown = null;
+  const currentWindow = (): unknown =>
+    typeof activeWindow !== "undefined" ? activeWindow : window;
+  const tabWindow = (): unknown => view.containerEl?.win ?? window;
+  const push = () => {
+    app.keymap.pushScope(scope);
+    scopeWin = currentWindow();
+    pushed = true;
+  };
+  const pop = () => {
+    app.keymap.popScope(scope);
+    scopeWin = null;
+    pushed = false;
+  };
+  const relocate = () => {
+    if (!pushed || scopeWin === tabWindow() || currentWindow() !== tabWindow()) return;
+    diag?.("Esc scope moved to the tab's window", { view: view.getViewType?.() });
+    pop();
+    push();
+  };
   const sync = (active: WorkspaceLeaf | null) => {
     const want = active === leaf;
-    if (want && !pushed) {
-      app.keymap.pushScope(scope);
-      pushed = true;
-    } else if (!want && pushed) {
-      app.keymap.popScope(scope);
-      pushed = false;
-    }
+    if (want && !pushed) push();
+    else if (!want && pushed) pop();
+    relocate();
   };
   view.registerEvent(app.workspace.on("active-leaf-change", (l) => sync(l)));
   sync(app.workspace.activeLeaf ?? null);
   view.register(() => {
-    if (pushed) app.keymap.popScope(scope);
-    pushed = false;
+    if (pushed) pop();
   });
+  if (view.containerEl) {
+    const host = view.containerEl;
+    const onFocusIn = () => relocate();
+    host.addEventListener("focusin", onFocusIn);
+    view.register(() => host.removeEventListener("focusin", onFocusIn));
+    view.register(
+      host.onWindowMigrated(() => {
+        relocate();
+        window.setTimeout(relocate, 0);
+      }),
+    );
+  }
 
   // The keyboard inside the tab — caught first, whatever the active leaf
   // (field log 2026-10-25: right after a tear-off into its own window,
