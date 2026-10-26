@@ -476,8 +476,10 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
 
 ## 5d. Sync progress, cancel, and what the engine tells you (🖥️📱)
 
-*(Field 2026-10-26: owner — everything in 5d works. Since then a commit line still showing when the
-summary arrives leaves together with it: "Nothing to commit" → "Nothing to commit / Sync done" → gone.)*
+*(Field 2026-10-26: owner — everything in 5d works, closed. Then two notice refinements, owner-checked: inside a
+Sync "Nothing to commit" holds until the drain's summary takes both lines away together ("Nothing to commit" →
+"Nothing to commit / Sync done" → gone), or until the drain's counters appear (it found work), or a 10 s fallback —
+66b6d88, 4538f71.)*
 
 - [x] **Progress notice (§II.16):** a long sync shows progress that actually moves, and
       the counts do not jump backwards on a retry.
