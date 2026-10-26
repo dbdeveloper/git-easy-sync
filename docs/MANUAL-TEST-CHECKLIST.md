@@ -476,9 +476,12 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
 
 ## 5d. Sync progress, cancel, and what the engine tells you (🖥️📱)
 
-- [ ] **Progress notice (§II.16):** a long sync shows progress that actually moves, and
+*(Field 2026-10-26: owner — everything in 5d works. Since then a commit line still showing when the
+summary arrives leaves together with it: "Nothing to commit" → "Nothing to commit / Sync done" → gone.)*
+
+- [x] **Progress notice (§II.16):** a long sync shows progress that actually moves, and
       the counts do not jump backwards on a retry.
-- [ ] **Commit lines by forecast (COMMIT-PASS-PERF §3.1, new 2026-10-05) — no timers.**
+- [x] **Commit lines by forecast (COMMIT-PASS-PERF §3.1, new 2026-10-05) — no timers.**
       Each line appears at the START of its phase and only if the phase is forecast over
       ~1.5 s (statistics in `.runtime/commit-stats.json`):
       - no statistics yet — the first commit after a RESET, **and the first commit after
@@ -495,22 +498,22 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
         which is why the threshold is 1.5 s, not 2 s);
       - "Committing…" appears only when listing dot-space files is forecast over 1.5 s;
       - a single-file commit shows no line; inside a Sync there is no "Committed L files".
-- [ ] **"Pulling / Pushing N of M" (new 2026-10-05).** The progress lines say **Pulling** and
+- [x] **"Pulling / Pushing N of M" (new 2026-10-05).** The progress lines say **Pulling** and
       **Pushing**, never "Downloading" / "Uploading". The counters advance when the drain
       TAKES a file, so a file identical on both sides is counted too — on a first pull into
       an almost-empty vault "Pushing 18 of 18" is expected even if only one file changes.
-- [ ] 🌐 **"Sync done — N sent, M received" counts REAL changes (new 2026-10-05).** On a fresh
+- [x] 🌐 **"Sync done — N sent, M received" counts REAL changes (new 2026-10-05).** On a fresh
       device whose few local files are already on the server, the summary says **"1 sent"**
       (or "0") — not the number of files queued. Check against the repo: `sent` = files the
       sync's commit actually changed on GitHub, `received` = files actually written to or
       removed from the vault. An auto-merged file counts in both; a conflict counts in
       neither (it has its own clause, which shows ALL tracked conflicts). Deletions count.
-- [ ] **Split mode: "Commit" then "Sync" (new 2026-10-06).** With commit and sync separated,
+- [x] **Split mode: "Commit" then "Sync" (new 2026-10-06).** With commit and sync separated,
       press **Commit**, wait a few seconds, then **Sync** on a quiet vault: only "Sync done"
       appears — no "Syncing with GitHub" flash first (same as pressing Sync twice).
-- [ ] **Summary linger (new 2026-10-05):** the summary **with numbers** stays ~**2 s**, the bare
+- [x] **Summary linger (new 2026-10-05):** the summary **with numbers** stays ~**2 s**, the bare
       "Sync done" ~1 s, and a summary with a **plugin line** (§7) ~**2.5 s**.
-- [ ] **Stop sync (§II.17):** Settings → **Stop sync** during a long run stops it at the
+- [x] **Stop sync (§II.17):** Settings → **Stop sync** during a long run stops it at the
       next checkpoint, says so, and **loses nothing** — the next sync finishes the job.
 - [x] 📱🌐 **Cancel interrupts an upload IN FLIGHT (new 2026-10-11).** Start a sync that uploads a big file
       (~35 MiB), then press **Sync → Cancel sync** or **Settings → Stop sync** while "Syncing with GitHub"
@@ -520,12 +523,12 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
 - [x] 📱🌐 **GitHub's "input was too large" is not retried (new 2026-10-11).** If GitHub answers a blob with
       422 "Sorry, your input was too large to process", the log shows ONE attempt, the file is skipped with
       a WARN, and the rest of the batch is pushed — no loop re-uploading the same blob.
-- [ ] **⚠️ A cancelled conflict is announced.** If a conflict's remote content vanishes
+- [x] **⚠️ A cancelled conflict is announced.** If a conflict's remote content vanishes
       from the repo, its conflict mode is cancelled and a Notice says so, naming the file
       and stating the local copy is unchanged. This is the ONE vault-step failure the
       user is told about — everything else is retried silently on the next sync, which is
       the point: a notice here must stay rare enough to be believed.
-- [ ] **Skipped paths are re-asked.** After a sync that logged a skipped path, the NEXT
+- [x] **Skipped paths are re-asked.** After a sync that logged a skipped path, the NEXT
       sync asks about that path again even though no commit mentions it (the
       `.runtime/.recheck-paths` note). Easiest check: the file catches up on sync #2
       without you touching it.
