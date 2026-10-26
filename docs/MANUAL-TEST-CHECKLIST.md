@@ -285,7 +285,7 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       In B and C turn **Sync configs OFF** and press **Sync** → on GitHub nothing under `.obsidian/` changes (no
       deletions, no new files). Then, in **C only**, add the line `*.phone-test` to the user zone (between the two
       blocks) of `<vault>/.gitignore` — and do **NOT** sync C yet (it is used in T4).
-- [ ] **T0b. What the Sync configs switch changes in `.obsidian/` (watch it in B and C when you turn it OFF in
+- [x] **T0b. What the Sync configs switch changes in `.obsidian/` (watch it in B and C when you turn it OFF in
       T0, and again when you turn it ON in T7).** Before flipping, copy the folder aside
       (`cp -R .obsidian /tmp/obsidian-before`), flip, press **Sync**, then `diff -r /tmp/obsidian-before .obsidian`.
       Expected — and NOTHING else in `.obsidian/` changes, nothing is deleted locally or on GitHub:
@@ -300,6 +300,11 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       - `.obsidian/plugins/.gitignore` (the per-device "Sync plugins data.json" switch): turning Sync configs OFF
         also turns that switch OFF (greyed out); turning Sync configs back ON does NOT turn it back on.
       - `<vault>/.gitignore`: unchanged (`!/.obsidian/` there does not depend on the switch).
+      *(Field 2026-10-25/26, B: OFF then ON, each followed by Sync, `diff -r` against snapshots — OFF changed exactly
+      the three files above (the foreign one got a blank line + comment + `*`), ON brought all four back byte for
+      byte to the first snapshot; "Sync plugins data.json" stayed off; no commit, nothing deleted on GitHub. Since
+      1623793/6ce709e the plugin's own file is two plain constants (OFF = header, one comment, `*`, no markers) and
+      the comment in a foreign file carries no version.)*
       While OFF, Sync neither sends nor receives anything under `.obsidian/` (the GitHub copies stay as they were).
       *(Field 2026-10-24: the ON direction verified on B and on the phone — exactly these files changed, the
       data.json switch stayed off. The OFF direction was NOT observed: both were already OFF. Still to do.)*
