@@ -3359,11 +3359,17 @@ export default class GitHubSyncPlugin extends Plugin {
     lingerMs = SYNC_SUMMARY_LINGER_MS,
   ): void {
     this.disarmSyncProgress();
-    this.setDrainSection({
-      state: "settled",
-      text,
-      until: this.settleAt(lingerMs),
-    });
+    const until = this.settleAt(lingerMs);
+    // A commit line still on screen when the drain's last word arrives
+    // leaves WITH it (owner, 2026-10-26): "Nothing to commit" → "Nothing
+    // to commit / Sync done" → gone, instead of a third, one-line "Sync
+    // done" after the commit's own second ran out. One that already
+    // expired (the drain was busy receiving) is not brought back.
+    const commit = this.noticeState.commit;
+    if (commit.state === "settled" && commit.until > Date.now()) {
+      this.noticeState = { ...this.noticeState, commit: { ...commit, until } };
+    }
+    this.setDrainSection({ state: "settled", text, until });
   }
 
   // The closing summary of a sync. With any number in it it stays

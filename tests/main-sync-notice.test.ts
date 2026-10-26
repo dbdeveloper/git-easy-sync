@@ -32,7 +32,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import GitHubSyncPlugin from "../src/main";
 import { recordedNotices, clearRecordedNotices } from "../mock-obsidian";
-import { EMPTY_NOTICE_STATE, type NoticeState } from "../src/sync-progress-model";
+import { EMPTY_NOTICE_STATE, renderNoticeState, type NoticeState } from "../src/sync-progress-model";
 
 interface NoticeHandle {
   sync2Manager: unknown;
@@ -434,6 +434,35 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(all).not.toContain("Committing…");
     expect(all).not.toContain("Syncing with GitHub");
     expect(lastMessage()).toBe("Nothing to commit\nSync done");
+  });
+
+  // Owner, 2026-10-26: in a quick Sync the box went
+  //   "Nothing to commit" → "Nothing to commit / Sync done" → "Sync done"
+  // — the commit's second ran out before the drain's. It should be just
+  //   "Nothing to commit" → "Nothing to commit / Sync done", then gone:
+  // a commit line still on screen when the summary arrives leaves WITH it.
+  it("🔑 the commit line still showing when the summary arrives leaves together with it", () => {
+    const p = makePlugin();
+    p.inFullSync = true;
+    p.reportNothingToCommit(false);
+    vi.advanceTimersByTime(400);
+    p.settleDrainSection("Sync done");
+    expect(lastMessage()).toBe("Nothing to commit\nSync done");
+    vi.advanceTimersByTime(700); // past the commit line's own second
+    expect(p.noticeState.commit.state).toBe("settled");
+    expect(lastMessage()).toBe("Nothing to commit\nSync done"); // no one-line "Sync done"
+    expect(recordedNotices.map((n) => n.message)).not.toContain("Sync done");
+    vi.advanceTimersByTime(400); // the summary's second is over
+    expect(renderNoticeState(p.noticeState, Date.now())).toBeNull(); // both gone at once
+  });
+
+  it("a commit line that already expired is not brought back by the summary", () => {
+    const p = makePlugin();
+    p.inFullSync = true;
+    p.reportNothingToCommit(false);
+    vi.advanceTimersByTime(1500); // a long drain: the commit line is gone
+    p.settleDrainSection("Sync done");
+    expect(lastMessage()).toBe("Sync done");
   });
 
   it("…but slow work still gets its start line", () => {
