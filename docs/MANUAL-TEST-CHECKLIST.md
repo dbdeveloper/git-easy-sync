@@ -602,7 +602,7 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
         following ON; run a Sync — the new entries appear in all of them. A viewer that showed
         "too large" becomes an empty live log the same way. Turn **Enable logging** off — every
         viewer (tab, window, 📱 modal) closes.
-- [ ] **Changing a switch never scrolls the page (new 2026-10-07).** Scroll down to *Logging* and toggle **Enable logging** on and off: the page stays where it is, and the *Clean logs* row appears/disappears in place. (Tab/Shift-Tab between fields is not expected to work — Obsidian's settings behave that way for every plugin.)
+- [x] **Changing a switch never scrolls the page (new 2026-10-07).** *(Field 2026-10-26: owner — the page stays put.)* Scroll down to *Logging* and toggle **Enable logging** on and off: the page stays where it is, and the *Clean logs* row appears/disappears in place. (Tab/Shift-Tab between fields is not expected to work — Obsidian's settings behave that way for every plugin.)
 - [x] Changing the **device label** makes new commits carry the new `(label)` suffix.
 - [ ] Switching repositories resets state correctly. ⚠️ **Change it in the SETTINGS UI,
       not by editing `data.json`.** A hand edit while Obsidian runs does nothing: the
