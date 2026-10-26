@@ -532,6 +532,10 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
 
 ## 5e. Deleted bin (🖥️📱 · HISTORY-DELETED)
 
+⏸ **Not testable yet** (owner, 2026-10-26): the Deleted bin's UI (Phase 9b) is not built — the
+panel's **Deleted** sub-tab is a placeholder. The store underneath (`deleted-store.ts`) already
+keeps a copy when History deletes a file; these items wait for the UI.
+
 - [ ] The conflicts panel's **Deleted** sub-tab opens even when there are zero conflicts.
 - [ ] A file deleted locally appears there and can be restored before its deletion
       reaches a commit; after a successful sync, older records are pruned.
