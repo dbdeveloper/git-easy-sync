@@ -452,8 +452,20 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(p.noticeState.commit.state).toBe("settled");
     expect(lastMessage()).toBe("Nothing to commit\nSync done"); // no one-line "Sync done"
     expect(recordedNotices.map((n) => n.message)).not.toContain("Sync done");
-    vi.advanceTimersByTime(400); // the summary's second is over
+    vi.advanceTimersByTime(300); // within the summary's 1.5 s
+    expect(lastMessage()).toBe("Nothing to commit\nSync done");
+    vi.advanceTimersByTime(600); // the summary's 1.5 s is over
     expect(renderNoticeState(p.noticeState, Date.now())).toBeNull(); // both gone at once
+  });
+
+  // Owner, 2026-10-26: "Sync done" stays half a second longer — 1.5 s.
+  it("🔑 the bare \"Sync done\" stays 1.5 s", () => {
+    const p = makePlugin();
+    p.settleDrainSection("Sync done");
+    vi.advanceTimersByTime(1400);
+    expect(renderNoticeState(p.noticeState, Date.now())).toBe("Sync done");
+    vi.advanceTimersByTime(200);
+    expect(renderNoticeState(p.noticeState, Date.now())).toBeNull();
   });
 
   // Owner, 2026-10-26: inside a Sync "Nothing to commit" HOLDS — until
@@ -620,7 +632,7 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(p.syncNotice).toBeNull(); // nothing visible → cleared
   });
 
-  it("🔑 the summary WITH numbers stays 2 s; the bare \"Sync done\" keeps its 1 s (owner, 2026-10-05)", () => {
+  it("🔑 the summary WITH numbers stays 2 s (owner, 2026-10-05); the bare \"Sync done\" 1.5 s (owner, 2026-10-26)", () => {
     const p = makePlugin();
     p.settleSyncSummary({ sent: 1, received: 454, conflicts: 0 });
     expect(lastMessage()).toBe("Sync done — 1 sent, 454 received");
@@ -632,8 +644,10 @@ describe("sync notice lifecycle (§II.16)", () => {
     const q = makePlugin();
     q.settleSyncSummary({ sent: 0, received: 0, conflicts: 0 });
     expect(lastMessage()).toBe("Sync done");
-    vi.advanceTimersByTime(1100);
-    expect(q.syncNotice).toBeNull(); // unchanged: one second
+    vi.advanceTimersByTime(1400);
+    expect(q.syncNotice).not.toBeNull();
+    vi.advanceTimersByTime(200);
+    expect(q.syncNotice).toBeNull(); // 1.5 s
   });
 
   it("🔑 a summary with a plugin line stays 2.5 s (owner, 2026-10-05)", () => {

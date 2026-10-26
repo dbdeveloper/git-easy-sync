@@ -222,6 +222,10 @@ const NO_STATS_COUNTER_MIN_BYTES = 100 * 1024 * 1024;
 // dwell time of a toast that appears out of nowhere — a second is the
 // owner's call.
 const SYNC_SUMMARY_LINGER_MS = 1000;
+// The drain's last word without numbers ("Sync done", "Sync canceled"):
+// half a second longer than the commit's (owner, 2026-10-26). A commit
+// line still showing leaves together with it (settleDrainSection).
+const SYNC_DONE_LINGER_MS = 1500;
 // …except the summary WITH numbers ("Sync done — 1 sent, 454 received"):
 // a second was too short to read them (owner, 2026-10-05). The bare
 // "Sync done" keeps the second above — it is read at a glance.
@@ -3362,7 +3366,7 @@ export default class GitHubSyncPlugin extends Plugin {
   // finished drain is the 2026-09-26 field bug.
   private settleDrainSection(
     text: string,
-    lingerMs = SYNC_SUMMARY_LINGER_MS,
+    lingerMs = SYNC_DONE_LINGER_MS,
   ): void {
     this.disarmSyncProgress();
     const until = this.settleAt(lingerMs);
@@ -3395,7 +3399,7 @@ export default class GitHubSyncPlugin extends Plugin {
         ? SYNC_SUMMARY_WITH_PLUGINS_MS
         : hasCounts
           ? SYNC_SUMMARY_WITH_COUNTS_MS
-          : SYNC_SUMMARY_LINGER_MS,
+          : SYNC_DONE_LINGER_MS,
     );
   }
 
