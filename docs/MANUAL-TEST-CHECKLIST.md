@@ -633,25 +633,27 @@ keeps a copy when History deletes a file; these items wait for the UI.
 
 ## 7. Self-update and plugin updates (🖥️📱🌐)
 
-- [ ] Updating the plugin through itself: it completes and restarts after the update.
+- [x] Updating the plugin through itself: it completes and restarts after the update.
 - [ ] 📱 On mobile the plugin auto-reloads (disable + enable) after a self-update, with no manual step.
-- [ ] 🌐 **Our plugin updates ITSELF on the receiving device — no restart (regression fixed
+- [x] 🌐 **Our plugin updates ITSELF on the receiving device — no restart (regression fixed
       2026-10-05).** Device A pushes a new build; on device B press Sync and do nothing else.
       The log shows `self-update staged`, then `BRAT-style reload scheduled ["git-easy-sync"]`
       and `BRAT-style reload done`; afterwards `main.js` on B is the new build, no
       `main.ges-tmp.js` is left, and open diff2 tabs come back. The reload starts ~**2.75 s**
       after the sync ends, so the summary can be read first.
-- [ ] **Exactly ONE toast for our own update**, `Plugin "git-easy-sync" updated` — with
+- [x] **Exactly ONE toast for our own update**, `Plugin "git-easy-sync" updated` — with
       ` to <version>` when the version changed. (A build that still has the old reload loop
       may show two on the update that replaces it; judge from the NEXT update.)
-- [ ] **No redundant re-ask after a self-update (new 2026-10-06):** the drain on the
+- [x] **No redundant re-ask after a self-update (new 2026-10-06):** the drain on the
       receiving device logs no `re-asking about a previously skipped path … main.js` after
       the update was applied.
-- [ ] **No false local edit after a self-update.** On B, the first sync after the update
+- [x] **No false local edit after a self-update.** On B, the first sync after the update
       must NOT queue "modified …/git-easy-sync/main.js"; the log at the reload shows
       `initSync2: applied self-update settled in the baseline`. ⚠️ Needs an update applied
       by a build that already has this (2026-10-05 `a74b0b1` or later) — the first update
       onto that build cannot show it.
+      *(Field 2026-10-26: owner — self-update on B (from A, configs ON): no restart, one toast, no re-ask,
+      no false local edit; the log had `applied self-update settled in the baseline`.)*
 - [ ] **Click-enabling the plugin while an update waits staged** raises no `TypeError` in the
       dev console (the instance that applies the stage exits early; a new one takes over).
 - [ ] 🌐 **Other plugins: one toast each, with the version.** An ENABLED plugin updated by a
