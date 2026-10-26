@@ -230,6 +230,12 @@ const SYNC_SUMMARY_WITH_COUNTS_MS = 2000;
 // more line to read (owner, 2026-10-05). Our OWN reload is held back
 // past it — the reload tears this instance down, and the notice with it.
 const SYNC_SUMMARY_WITH_PLUGINS_MS = 2500;
+// "Nothing to commit" INSIDE a Sync holds this long at most (owner,
+// 2026-10-26). Normally something else ends it first: the drain's
+// summary takes both lines away together, or a drain that found real
+// work (its counters appear) takes this line away. The timer is only the
+// fallback when neither comes.
+const NOTHING_TO_COMMIT_IN_SYNC_MS = 10_000;
 const SELF_RELOAD_DELAY_MS = SYNC_SUMMARY_WITH_PLUGINS_MS + 250;
 
 // The "sync in progress" window shows at least this long before the sync's
@@ -3436,7 +3442,9 @@ export default class GitHubSyncPlugin extends Plugin {
     this.setCommitSection({
       state: "settled",
       text: "Nothing to commit",
-      until: this.settleAt(),
+      // Inside a Sync it holds (see NOTHING_TO_COMMIT_IN_SYNC_MS); a
+      // standalone [Commit] keeps the usual second.
+      until: this.settleAt(this.inFullSync ? NOTHING_TO_COMMIT_IN_SYNC_MS : SYNC_SUMMARY_LINGER_MS),
     });
   }
 
@@ -3573,6 +3581,15 @@ export default class GitHubSyncPlugin extends Plugin {
     // one would resurrect a phase that is over.
     const d = this.noticeState.drain.state;
     if (d === "settled" || d === "none") return;
+    // A drain that FOUND work — its counters are about to show — takes a
+    // held "Nothing to commit" away (owner, 2026-10-26): from here the
+    // notice is about what is being received or sent.
+    const p = this.sync2Manager?.getDrainStatus().progress ?? null;
+    const foundWork = p !== null && (p.pullTotal > 0 || p.pushTotal > 0);
+    const c = this.noticeState.commit;
+    if (foundWork && c.state === "settled" && c.text === "Nothing to commit") {
+      this.noticeState = { ...this.noticeState, commit: { state: "none" } };
+    }
     this.setDrainSection({
       state: "live",
       text: this.currentSyncProgressText(),

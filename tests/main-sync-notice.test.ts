@@ -456,13 +456,51 @@ describe("sync notice lifecycle (§II.16)", () => {
     expect(renderNoticeState(p.noticeState, Date.now())).toBeNull(); // both gone at once
   });
 
-  it("a commit line that already expired is not brought back by the summary", () => {
+  // Owner, 2026-10-26: inside a Sync "Nothing to commit" HOLDS — until
+  // the summary takes both lines away, or until the drain shows it has
+  // real work (its counters), or, if neither comes, until its own long
+  // timer ends it.
+  it("🔑 inside a Sync, \"Nothing to commit\" holds past its old second while the drain runs", () => {
     const p = makePlugin();
     p.inFullSync = true;
     p.reportNothingToCommit(false);
-    vi.advanceTimersByTime(1500); // a long drain: the commit line is gone
-    p.settleDrainSection("Sync done");
-    expect(lastMessage()).toBe("Sync done");
+    vi.advanceTimersByTime(3000);
+    expect(renderNoticeState(p.noticeState, Date.now())).toBe("Nothing to commit");
+  });
+
+  it("🔑 the drain that FOUND work (its counters show) takes \"Nothing to commit\" away", () => {
+    const p = makePlugin({ pullDone: 1, pullTotal: 5, pushDone: 0, pushTotal: 0, conflicts: 0, path: "a.md" });
+    p.inFullSync = true;
+    p.reportNothingToCommit(false);
+    p.setDrainSection({ state: "live", text: "Syncing with GitHub" });
+    p.syncProgressActive = true;
+    p.repaintSyncProgressNotice();
+    expect(lastMessage()).toBe("Syncing with GitHub\nPulling 1 of 5");
+  });
+
+  it("…a drain with nothing to show yet leaves it where it is", () => {
+    const p = makePlugin(null);
+    p.inFullSync = true;
+    p.reportNothingToCommit(false);
+    p.setDrainSection({ state: "live", text: "Syncing with GitHub" });
+    p.syncProgressActive = true;
+    p.repaintSyncProgressNotice();
+    expect(lastMessage()).toBe("Nothing to commit\nSyncing with GitHub");
+  });
+
+  it("if nothing ends it, its own long timer does", () => {
+    const p = makePlugin();
+    p.inFullSync = true;
+    p.reportNothingToCommit(false);
+    vi.advanceTimersByTime(10_500);
+    expect(renderNoticeState(p.noticeState, Date.now())).toBeNull();
+  });
+
+  it("a STANDALONE commit keeps its short second", () => {
+    const p = makePlugin();
+    p.reportNothingToCommit(false);
+    vi.advanceTimersByTime(1100);
+    expect(renderNoticeState(p.noticeState, Date.now())).toBeNull();
   });
 
   it("…but slow work still gets its start line", () => {
