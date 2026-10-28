@@ -28,6 +28,9 @@ import { DELETED_SHA_HASH } from "./discovery";
 
 export interface QueueShaIndex {
   peekLatestPathSha(path: string): Promise<string | null>;
+  // Every path some queued batch holds (GITKEEP: the commit's .gitkeep
+  // phase counts queued-but-unpushed additions as "what was").
+  paths(): IterableIterator<string>;
 }
 
 export async function buildQueueShaIndex(
@@ -65,6 +68,7 @@ export async function buildQueueShaIndex(
   }
   return {
     peekLatestPathSha: async (path) => latest.get(path) ?? null,
+    paths: () => latest.keys(),
   };
 }
 

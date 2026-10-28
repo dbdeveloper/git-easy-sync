@@ -58,6 +58,10 @@ import FileBaselinesStore from "./file-baselines";
 import { freeNameFor, needsSanitization, sanitizeFilename } from "./cross-platform";
 import { newBatchId } from "./timestamp-id";
 import { isGitkeep } from "./text-normalize";
+import FolderJournal from "./folder-journal";
+import { planGitkeeps } from "./gitkeep-plan";
+import { isOrdinaryFolderGitkeep } from "./change-detector";
+import { DELETED_SHA_HASH } from "./discovery";
 import { AuthError, NetworkError } from "../errors";
 import type { TrashHooks } from "./trash-hooks";
 import { normalizePath } from "obsidian";
@@ -297,6 +301,9 @@ export class Sync2Manager {
   // findChanges dedup reference over the queue metafiles — rebuilt at
   // the start of every commit pass, lazily on first out-of-pass read.
   private queueIndex: QueueShaIndex | null = null;
+  // GITKEEP I11-I14: the folders worth a look at the next commit — in
+  // memory only, rebuilt by the start scan after a restart.
+  private readonly folderJournal = new FolderJournal();
 
   // The "N sent, M received" of the sync summary — what the drains of
   // THIS user-visible operation really changed (owner, 2026-10-05).
@@ -576,6 +583,16 @@ export class Sync2Manager {
         cancelled: this.lastDrainWasCancelled,
       });
     }
+  }
+
+  // GITKEEP I12: folder events, the start scan and the drain only MARK;
+  // the commit pass is the one that writes (I20).
+  markFolder(path: string): void {
+    this.folderJournal.mark(path);
+  }
+
+  markedFolders(): IterableIterator<string> {
+    return this.folderJournal.paths();
   }
 
   async commitOnly(): Promise<void> {
@@ -874,6 +891,42 @@ export class Sync2Manager {
       changes = one === null ? [] : [one];
     }
     lap("detectMs");
+
+    // GITKEEP I21-I23: the .gitkeep phase — only in a full pass (a
+    // one-file commit commits that file and nothing else), and BEFORE the
+    // "nothing to commit" return: a pass with no ordinary change may
+    // still have folders to send. The journal is handed over as a
+    // snapshot; a pass that does not get its batches written puts it back.
+    const snapshot = target === null ? this.folderJournal.take() : [];
+    try {
+      return await this.commitWithGitkeeps(target, snapshot, changes, {
+        ph, t0, lap, plan, total, checksDone,
+      });
+    } catch (err) {
+      this.folderJournal.restore(snapshot);
+      throw err;
+    }
+  }
+
+  private async commitWithGitkeeps(
+    target: string | null,
+    snapshot: string[],
+    changes: FileChange[],
+    pass: {
+      ph: Record<string, number>;
+      t0: number;
+      lap: (name: string) => void;
+      plan: ScanPlan | null;
+      total: number;
+      checksDone: number;
+    },
+  ): Promise<number> {
+    const { ph, t0, lap, total, checksDone } = pass;
+    const plan = pass.plan;
+    if (snapshot.length > 0) {
+      changes = changes.concat(await this.gitkeepPhase(snapshot));
+      lap("gitkeepMs");
+    }
     if (changes.length === 0) {
       this.logCommitTiming(target, ph, t0, 0);
       this.deps.onNoLocalChanges?.((await this.listQueueIds()).length > 0);
@@ -915,6 +968,7 @@ export class Sync2Manager {
       if (id !== null) enqueued += slice.length;
       if (total > 0) {
         for (const c of slice) {
+          if (isGitkeep(c.path)) continue; // GITKEEP I37: not counted
           if (c.kind === "deleted") stage3 += 1;
           else if (c.kind === "added" && c.sha === undefined && unhashedLeft > 0) {
             unhashedLeft -= 1;
@@ -929,14 +983,121 @@ export class Sync2Manager {
     this.logCommitTiming(target, ph, t0, changes.length);
     this.queueIndex = null; // the queue just changed — rebuild lazily
     await this.fireQueueDepth();
-    if (enqueued > 0) {
-      this.deps.onLocalCommitted?.(enqueued);
+    // GITKEEP I36/I37: .gitkeep is the plugin's own housekeeping — not
+    // counted for the user and not listed per file (the phase has its
+    // own single line). A pass that sent ONLY .gitkeep reads as "nothing
+    // to commit" to the user.
+    const visible = changes.filter((c) => !isGitkeep(c.path));
+    const shown = enqueued - (changes.length - visible.length);
+    if (shown > 0) {
+      this.deps.onLocalCommitted?.(shown);
       this.deps.logger.info("Sync2 commit pass: committed", {
-        count: enqueued,
-        changes: changes.map((c) => `${c.kind} ${c.path}`),
+        count: shown,
+        changes: visible.map((c) => `${c.kind} ${c.path}`),
       });
+    } else if (enqueued > 0) {
+      this.deps.onNoLocalChanges?.((await this.listQueueIds()).length > 0);
     }
     return enqueued;
+  }
+
+  // GITKEEP I22 — the phase, in the owner's order: (1) put a missing
+  // .gitkeep into every visited folder, excluded ones too, and truncate a
+  // non-empty one; (2) what .gitignore blocks is not sent (planGitkeeps
+  // filters it per folder); (3) the rest becomes ordinary changes for
+  // ordinary batches. On disk it writes ONLY through adapter.write, never
+  // vault.create (which makes parent folders), and only after checking
+  // the folder still exists (I24) — a folder gone in between stays marked.
+  private async gitkeepPhase(snapshot: string[]): Promise<FileChange[]> {
+    const adapter = this.deps.vault.adapter;
+    const records = await this.ordinaryGitkeepRecords();
+    const index =
+      this.queueIndex ??
+      (await buildQueueShaIndex(this.deps.vault, this.deps.selfPluginId));
+    const queuedPaths = [...index.paths()].filter(isOrdinaryFolderGitkeep);
+    const folders = (
+      this.deps.vault as unknown as { getAllFolders(): Array<{ path: string }> }
+    )
+      .getAllFolders()
+      .map((f) => f.path);
+    const plan = await planGitkeeps({
+      snapshot,
+      folders,
+      records,
+      queuedPaths,
+      syncable: (p) => this.deps.detector.checkSyncable(p),
+      queued: async (p) => {
+        const sha = await index.peekLatestPathSha(p);
+        if (sha === null) return undefined;
+        return sha === DELETED_SHA_HASH ? null : sha;
+      },
+    });
+
+    let placed = 0;
+    let truncated = 0;
+    const failed = new Set<string>();
+    for (const folder of plan.visited) {
+      const path = `${folder}/.gitkeep`;
+      try {
+        const stat = await adapter.stat(path);
+        if (stat !== null && stat.size === 0) continue;
+        if (!(await adapter.exists(folder))) {
+          failed.add(folder);
+          continue;
+        }
+        await adapter.write(path, "");
+        if (stat === null) placed += 1;
+        else {
+          truncated += 1;
+          this.deps.logger.warn(".gitkeep must be empty — truncated to zero bytes", {
+            path,
+            previousSize: stat.size,
+          });
+        }
+      } catch {
+        failed.add(folder);
+      }
+    }
+    for (const folder of failed) this.folderJournal.mark(folder);
+
+    const ok = (p: string) => !failed.has(p.slice(0, -"/.gitkeep".length));
+    const now = Date.now();
+    const out: FileChange[] = [];
+    for (const p of plan.add.filter(ok)) out.push({ kind: "added", path: p, size: 0, mtime: now });
+    for (const p of plan.update.filter(ok)) {
+      out.push({ kind: "modified", path: p, size: 0, mtime: now, previousRemoteSha: records.get(p)! });
+    }
+    for (const p of plan.remove) {
+      const prev = records.get(p) ?? (await index.peekLatestPathSha(p)) ?? "";
+      out.push({ kind: "deleted", path: p, previousRemoteSha: prev });
+    }
+    if (plan.forget.length > 0) await this.deps.baselines.removeMany(plan.forget);
+
+    const counts = {
+      placed,
+      truncated,
+      added: plan.add.filter(ok).length,
+      updated: plan.update.filter(ok).length,
+      removed: plan.remove.length,
+      forgotten: plan.forget.length,
+      failedChecks: failed.size,
+    };
+    if (Object.values(counts).some((n) => n > 0)) {
+      this.deps.logger.info(".gitkeep: folders kept in git", counts);
+    }
+    return out;
+  }
+
+  // Every ORDINARY-folder .gitkeep record (GITKEEP I9: the journal's).
+  // One pass over the baselines.
+  private async ordinaryGitkeepRecords(): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    await this.deps.baselines.forEachBucket((files) => {
+      for (const [p, b] of files) {
+        if (isOrdinaryFolderGitkeep(p)) out.set(p, b.baselineSha);
+      }
+    });
+    return out;
   }
 
   // COMMIT-PASS-PERF 3a — best effort: the statistics are cosmetic

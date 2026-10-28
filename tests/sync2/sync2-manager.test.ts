@@ -1330,6 +1330,166 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(fs.readFileSync(path.join(dir, "note.md"), "utf8")).toBe("good\n");
   });
 
+  // ── GITKEEP: the folder journal inside the commit pass (I20-I26, I36, I37)
+  describe("GITKEEP — the .gitkeep phase of the commit pass", () => {
+    const EMPTY = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+    const mkdir = (p: string) => fs.mkdirSync(path.join(dir, p), { recursive: true });
+    const exists = (p: string) => fs.existsSync(path.join(dir, p));
+    const size = (p: string) => fs.statSync(path.join(dir, p)).size;
+    const batchPaths = () => writtenBatches.flat().map((c) => `${c.kind} ${c.path}`).sort();
+    let warns: string[];
+    let infos: Array<[string, unknown]>;
+    const withLog = () => {
+      warns = [];
+      infos = [];
+      deps.logger = {
+        info: (m: string, d?: unknown) => infos.push([m, d]),
+        warn: (m: string) => warns.push(m),
+        error: () => {},
+      };
+      manager = new Sync2Manager(deps);
+    };
+
+    it("🔑 a marked new folder: .gitkeep put into it and every subfolder, committed as ordinary additions", async () => {
+      withLog();
+      mkdir("notes/sub/deep");
+      mkdir("other");
+      manager.markFolder("notes");
+      await manager.commitOnly();
+      for (const p of ["notes/.gitkeep", "notes/sub/.gitkeep", "notes/sub/deep/.gitkeep"]) {
+        expect(exists(p)).toBe(true);
+        expect(size(p)).toBe(0);
+      }
+      expect(exists("other/.gitkeep")).toBe(false); // not marked
+      expect(batchPaths()).toEqual([
+        "added notes/.gitkeep",
+        "added notes/sub/.gitkeep",
+        "added notes/sub/deep/.gitkeep",
+      ]);
+    });
+
+    it("🔑 I37: .gitkeep is not counted — only .gitkeep → the user sees 'nothing to commit'", async () => {
+      withLog();
+      mkdir("notes");
+      manager.markFolder("notes");
+      await manager.commitOnly();
+      expect(writtenBatches.flat()).toHaveLength(1);
+      expect(notices.committed).toEqual([]);
+      expect(notices.noChanges).toBe(1);
+    });
+
+    it("I37: with a real change beside it, the count is the real change only", async () => {
+      withLog();
+      mkdir("notes");
+      put("a.md", "x");
+      findChangesResult = [modified("a.md")];
+      manager.markFolder("notes");
+      await manager.commitOnly();
+      expect(batchPaths()).toEqual(["added notes/.gitkeep", "modified a.md"]);
+      expect(notices.committed).toEqual([1]);
+    });
+
+    it("🔑 I1/I35: an excluded subfolder gets its .gitkeep on disk, but it is not sent", async () => {
+      withLog();
+      put(".gitignore", "/notes/private/\n");
+      mkdir("notes/private");
+      manager.markFolder("notes");
+      await manager.commitOnly();
+      expect(exists("notes/private/.gitkeep")).toBe(true);
+      expect(batchPaths()).toEqual(["added notes/.gitkeep"]);
+    });
+
+    it("🔑 a marked folder that is gone: its recorded .gitkeep — and its subfolders' — are deleted", async () => {
+      withLog();
+      await baselinesRef.setMany([
+        { path: "gone/.gitkeep", baselineSha: EMPTY, mtime: 1, size: 0 },
+        { path: "gone/sub/.gitkeep", baselineSha: EMPTY, mtime: 1, size: 0 },
+      ]);
+      manager.markFolder("gone");
+      await manager.commitOnly();
+      expect(batchPaths()).toEqual(["deleted gone/.gitkeep", "deleted gone/sub/.gitkeep"]);
+    });
+
+    it("an excluded folder's record is forgotten silently — nothing sent", async () => {
+      withLog();
+      put(".gitignore", "/secret/\n");
+      mkdir("secret");
+      await baselinesRef.setMany([{ path: "secret/.gitkeep", baselineSha: EMPTY, mtime: 1, size: 0 }]);
+      manager.markFolder("secret");
+      await manager.commitOnly();
+      expect(writtenBatches.flat()).toEqual([]);
+      expect(await baselinesRef.get("secret/.gitkeep")).toBeFalsy();
+    });
+
+    it("🔑 I4: a non-empty .gitkeep in a marked folder is truncated, with its WARN", async () => {
+      withLog();
+      put("notes/.gitkeep", "someone wrote here");
+      await baselinesRef.setMany([{ path: "notes/.gitkeep", baselineSha: EMPTY, mtime: 1, size: 0 }]);
+      manager.markFolder("notes");
+      await manager.commitOnly();
+      expect(size("notes/.gitkeep")).toBe(0);
+      expect(warns).toEqual([".gitkeep must be empty — truncated to zero bytes"]);
+      expect(writtenBatches.flat()).toEqual([]); // record already empty: nothing to send
+    });
+
+    it("🔑 I24: a folder gone between the walk and the write gets no .gitkeep, stays marked, is not sent", async () => {
+      withLog();
+      mkdir("real");
+      const v = deps.vault as unknown as { getAllFolders: () => Array<{ path: string }> };
+      const original = v.getAllFolders.bind(v);
+      v.getAllFolders = () => [...original(), { path: "ghost" }];
+      manager.markFolder("real");
+      manager.markFolder("ghost");
+      await manager.commitOnly();
+      expect(exists("ghost")).toBe(false); // not resurrected
+      expect(batchPaths()).toEqual(["added real/.gitkeep"]);
+      expect([...manager.markedFolders()]).toEqual(["ghost"]);
+    });
+
+    it("🔑 I21: the journal is emptied by a written commit and put back by a failed one", async () => {
+      withLog();
+      mkdir("a");
+      manager.markFolder("a");
+      await manager.commitOnly();
+      expect([...manager.markedFolders()]).toEqual([]);
+
+      mkdir("b");
+      manager.markFolder("b");
+      const w = deps.batchWriter as unknown as { writeBatch: (c: FileChange[]) => Promise<string | null> };
+      w.writeBatch = async () => {
+        throw new Error("disk full");
+      };
+      await expect(manager.commitOnly()).rejects.toThrow("disk full");
+      expect([...manager.markedFolders()]).toEqual(["b"]);
+    });
+
+    it("I36: ONE info line for the phase, only when something was done; nothing per file", async () => {
+      withLog();
+      await manager.commitOnly();
+      expect(infos.filter(([m]) => m.startsWith(".gitkeep"))).toEqual([]);
+
+      mkdir("x/y");
+      manager.markFolder("x");
+      await manager.commitOnly();
+      const lines = infos.filter(([m]) => m.startsWith(".gitkeep"));
+      expect(lines).toHaveLength(1);
+      expect(lines[0][1]).toMatchObject({ placed: 2, added: 2 });
+      // The ordinary "committed" line does not list .gitkeep paths.
+      const committed = infos.find(([m]) => m === "Sync2 commit pass: committed");
+      expect(JSON.stringify(committed ?? "")).not.toContain(".gitkeep");
+    });
+
+    it("a one-file commit (Commit active file) leaves the journal alone", async () => {
+      withLog();
+      mkdir("n");
+      put("a.md", "x");
+      manager.markFolder("n");
+      await manager.syncFile?.("a.md").catch(() => {});
+      expect([...manager.markedFolders()]).toEqual(["n"]);
+      expect(exists("n/.gitkeep")).toBe(false);
+    });
+  });
+
   it("🔑 GITKEEP I7: the zero-byte guard never restores a .gitkeep — it is empty by definition", async () => {
     // The server once held a non-empty .gitkeep (record = its sha); the
     // plugin truncated the local one. Restoring it would undo exactly that.
