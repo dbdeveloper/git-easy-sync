@@ -199,6 +199,27 @@ export class Vault {
     return out;
   }
 
+  // Mirrors Obsidian's vault.getAllFolders(includeRoot = false): every
+  // folder in the index — and the index holds no path with a dot segment
+  // (1.13.4 `Dl`), so no `.obsidian/`, `.trash/` or `notes/.hidden/`.
+  // Recomputed from disk on each call, like getFiles().
+  getAllFolders(includeRoot = false): TFolder[] {
+    const out: TFolder[] = includeRoot ? [new TFolder("/")] : [];
+    const walk = (relDir: string) => {
+      const absDir = relDir === "" ? this.rootPath : path.join(this.rootPath, relDir);
+      if (!existsSync(absDir)) return;
+      const entries = require("fs").readdirSync(absDir, { withFileTypes: true });
+      for (const entry of entries as Array<{ isDirectory: () => boolean; name: string }>) {
+        if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+        const childRel = relDir === "" ? entry.name : `${relDir}/${entry.name}`;
+        out.push(new TFolder(childRel));
+        walk(childRel);
+      }
+    };
+    walk("");
+    return out;
+  }
+
   // Subscribe to vault events. ConflictWatcher relies on this for
   // its delete/modify/rename triggers — tests fire events
   // synchronously via the test helper `fireEvent` below.
