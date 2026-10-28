@@ -165,9 +165,9 @@ describe.skipIf(!gitAvailable())("GI ↔ real git parity", () => {
   // than importing the constants is deliberate — an edit to the shipped
   // rules must surface as a failing parity test to be re-measured
   // against git, not ride along silently.
-  const ROOT_TOP = ".*\n.*/\n!/.gitignore\n!.gitkeep\n";
+  const ROOT_TOP = ".*\n.*/\n!/.gitignore\n";
   const ROOT_BOTTOM =
-    "!/.obsidian/\n*.conflict-from-*\n*.ges-tmp*\n*.ges-bak*\n";
+    "!/.obsidian/\n!.gitkeep\n*.conflict-from-*\n*.ges-tmp*\n*.ges-bak*\n";
   const ROOT_DEFAULTS = "*.log\n.DS_Store\n.trash/\n";
   const CONFIG_DEFAULTS =
     "plugins/*/*\n!plugins/*/\n" +
@@ -279,19 +279,25 @@ describe.skipIf(!gitAvailable())("GI ↔ real git parity", () => {
     );
   });
 
-  it("GITKEEP I34/I35: a user rule below the top block hides an excluded folder's .gitkeep", () => {
-    // `!.gitkeep` sits in the overridable TOP block on purpose: a folder
-    // the user excludes must keep its name off the server, whether the
-    // rule names the directory or its contents.
-    expectParity({
-      ".gitignore": ROOT_TOP + "private/\npriv2/*\n" + ROOT_BOTTOM,
+  it("GITKEEP I34/I35: `/folder/` hides the folder whole, `/folder/*` keeps it visible", () => {
+    // `!.gitkeep` sits in the FINAL block (owner, 2026-10-28): no rule
+    // blocks it, and the form of the user's exclusion decides — git never
+    // descends into `/private/`, while `/visible/*` only hides contents.
+    const files = {
+      ".gitignore": ROOT_TOP + "/private/\n/visible/*\n" + ROOT_BOTTOM,
       ".obsidian/.gitignore": CONFIG_DEFAULTS + CONFIG_FINAL_ON,
       "private/.gitkeep": "",
       "private/a.md": "a",
-      "priv2/.gitkeep": "",
-      "priv2/a.md": "a",
+      "visible/.gitkeep": "",
+      "visible/a.md": "a",
       "open/.gitkeep": "",
-    });
+    };
+    expectParity(files);
+    const { git } = bothVerdicts(files);
+    expect(git.get("private/.gitkeep")).toBe(true); // ignored
+    expect(git.get("visible/.gitkeep")).toBe(false); // tracked
+    expect(git.get("visible/a.md")).toBe(true);
+    expect(git.get("open/.gitkeep")).toBe(false);
   });
 
   it("a user rule between the two root sections: overrides the top, not the bottom", () => {

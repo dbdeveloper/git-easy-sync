@@ -2134,8 +2134,9 @@ describe("a file over GitHub's size limit", () => {
 // a deletion. In a dot-folder (and at the root) it is an ordinary file
 // the detector monitors like any other.
 describe("GITKEEP — who owns a .gitkeep (I8, I9)", () => {
-  // The root block as the plugin writes it: `.*` hides every dot-name,
-  // `!.gitkeep` lets .gitkeep through again at any depth.
+  // The root file reduced to what matters here: `.*` hides every
+  // dot-name, `!.gitkeep` (in the shipped FINAL block) lets .gitkeep
+  // through again at any depth.
   const ROOT = ".*\n.*/\n!/.gitignore\n!.gitkeep\n";
   let f: ReturnType<typeof fixture>;
 
@@ -2241,10 +2242,12 @@ describe("GITKEEP — sync membership of a .gitkeep (I8, I34, I35)", () => {
     expect(await ask("a/b/c/.gitkeep", giWith(ROOT))).toBe(true);
   });
 
-  it(".gitignore keeps the last word: no `!.gitkeep`, or a user rule below it, hides it", async () => {
+  it(".gitignore keeps the last word: `/folder/` hides it, `/folder/*` does not", async () => {
+    // `!.gitkeep` closes the file, as the shipped FINAL block has it.
+    const withUser = (user: string) => giWith(".*\n.*/\n!/.gitignore\n" + user + "!.gitkeep\n");
     expect(await ask("notes/.gitkeep", giWith(".*\n.*/\n"))).toBe(false);
-    expect(await ask("private/.gitkeep", giWith(ROOT + "private/\n"))).toBe(false);
-    expect(await ask("priv2/.gitkeep", giWith(ROOT + "priv2/*\n"))).toBe(false);
+    expect(await ask("private/.gitkeep", withUser("/private/\n"))).toBe(false);
+    expect(await ask("visible/.gitkeep", withUser("/visible/*\n"))).toBe(true);
   });
 
   it("the path rule does NOT open dot-folders — there only the opt-in set does", async () => {

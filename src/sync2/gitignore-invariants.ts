@@ -272,12 +272,6 @@ export function selfPluginGitignore(syncConfigDir: boolean): string {
 //   `!/.gitignore` ANCHORED to root, so only the root control file
 //         comes back. NOT `!.gitignore` (would un-hide `notes/.gitignore`
 //         and break D6) and NOT `!./.gitignore` (matches nothing at all).
-//   `!.gitkeep` UNANCHORED on purpose (GITKEEP I34): every folder's
-//         `.gitkeep`, at any depth. Here at the TOP, not in `final`, so a
-//         user rule below (`private/*`) still wins and an excluded
-//         folder's name stays off the server. For the walker it names
-//         only the root `/.gitkeep` (classifyRule) — the ordinary-folder
-//         ones come through the folder journal, not a scan.
 const ROOT_INVARIANTS_BODY = `# Editing this block triggers a rewrite to canonical on next load.
 # Rules BELOW this block override it - that is how you opt a dot-file
 # or an anchored dot-directory back into sync.
@@ -288,9 +282,6 @@ const ROOT_INVARIANTS_BODY = `# Editing this block triggers a rewrite to canonic
 
 # ...except this file, the one that decides the rest.
 !/.gitignore
-
-# ...and .gitkeep, the empty file that keeps a folder in git.
-!.gitkeep
 
 # Ignores every *.log file. To keep logs in the repository, add
 # below this block e.g.: !/git-easy-sync-*.log
@@ -306,6 +297,16 @@ const ROOT_INVARIANTS_BODY = `# Editing this block triggers a rewrite to canonic
 // state lands on the others as unrelated files; the staging artifacts
 // are transient files of the crash-safe write protocol.
 //
+// `!.gitkeep` UNANCHORED on purpose (GITKEEP I34): every folder's
+// `.gitkeep`, at any depth, and HERE so no rule can block it (owner,
+// 2026-10-28). That is what tells the two ways of excluding a folder
+// apart: `/private/` hides the folder whole — git never descends into
+// it, so nothing below can bring its `.gitkeep` back; `/private/*` hides
+// only its contents — the folder stays visible through its `.gitkeep`.
+// A rule in the overridable top block could not tell them apart. For
+// the walker the rule names only the root `/.gitkeep` (classifyRule);
+// the ordinary-folder ones come through the folder journal.
+//
 // `!<configDir>/` re-admits the config subtree UNCONDITIONALLY — it does
 // NOT follow the syncConfigDir toggle. Switching that off acts one level
 // down, inside <configDir>/.gitignore and the plugin files, so both root
@@ -316,6 +317,10 @@ function rootFinalBody(configDir: string): string {
 
 # The config subtree, governed by its own .gitignore files from here on.
 !/${configDir}/
+
+# .gitkeep keeps a folder in git. To hide a folder WHOLE, exclude it as
+# /folder/ ; /folder/* hides its contents and keeps the folder visible.
+!.gitkeep
 
 # Conflict-resolver sibling files - per-device markers that must
 # never propagate via sync.
