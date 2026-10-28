@@ -27,22 +27,22 @@ const rec = (...entries: Array<[string, string]>) => new Map(entries);
 describe("planGitkeeps — the table of §3.6.1", () => {
   it("🔑 folder exists, no record → add", async () => {
     const p = await plan({ snapshot: ["notes"], folders: ["notes"] });
-    expect(p).toEqual({ add: ["notes/.gitkeep"], update: [], remove: [], forget: [] });
+    expect(p).toEqual({ add: ["notes/.gitkeep"], update: [], remove: [], forget: [], visited: expect.any(Array) });
   });
 
   it("🔑 record exists, folder gone → remove", async () => {
     const p = await plan({ snapshot: ["notes"], records: rec(["notes/.gitkeep", GITKEEP_SHA]) });
-    expect(p).toEqual({ add: [], update: [], remove: ["notes/.gitkeep"], forget: [] });
+    expect(p).toEqual({ add: [], update: [], remove: ["notes/.gitkeep"], forget: [], visited: expect.any(Array) });
   });
 
   it("🔑 folder and record, record is the server's non-empty sha → update (heals the server)", async () => {
     const p = await plan({ snapshot: ["notes"], folders: ["notes"], records: rec(["notes/.gitkeep", JUNK]) });
-    expect(p).toEqual({ add: [], update: ["notes/.gitkeep"], remove: [], forget: [] });
+    expect(p).toEqual({ add: [], update: ["notes/.gitkeep"], remove: [], forget: [], visited: expect.any(Array) });
   });
 
   it("folder and an empty record → nothing", async () => {
     const p = await plan({ snapshot: ["notes"], folders: ["notes"], records: rec(["notes/.gitkeep", GITKEEP_SHA]) });
-    expect(p).toEqual({ add: [], update: [], remove: [], forget: [] });
+    expect(p).toEqual({ add: [], update: [], remove: [], forget: [], visited: expect.any(Array) });
   });
 });
 
@@ -62,7 +62,7 @@ describe("planGitkeeps — the subtree", () => {
 
   it("🔑 a recorded subfolder that is gone under a prefix with NO record of its own is still removed", async () => {
     const p = await plan({ snapshot: ["a"], folders: ["a"], records: rec(["a/.gitkeep", GITKEEP_SHA], ["a/old/.gitkeep", GITKEEP_SHA]) });
-    expect(p).toEqual({ add: [], update: [], remove: ["a/old/.gitkeep"], forget: [] });
+    expect(p).toEqual({ add: [], update: [], remove: ["a/old/.gitkeep"], forget: [], visited: expect.any(Array) });
   });
 
   it("a rename is both: the old path vanished, the new appeared", async () => {
@@ -96,12 +96,12 @@ describe("planGitkeeps — .gitignore per visited folder (I22 step 2, I35)", () 
       records: rec(["notes/.gitkeep", GITKEEP_SHA], ["notes/private/.gitkeep", GITKEEP_SHA]),
       syncable: notUnder("notes/private"),
     });
-    expect(p).toEqual({ add: [], update: [], remove: [], forget: ["notes/private/.gitkeep"] });
+    expect(p).toEqual({ add: [], update: [], remove: [], forget: ["notes/private/.gitkeep"], visited: expect.any(Array) });
   });
 
   it("an excluded folder that is also gone: its record is forgotten, not deleted (the detector's two-way mute)", async () => {
     const p = await plan({ snapshot: ["x"], records: rec(["x/.gitkeep", GITKEEP_SHA]), syncable: async () => false });
-    expect(p).toEqual({ add: [], update: [], remove: [], forget: ["x/.gitkeep"] });
+    expect(p).toEqual({ add: [], update: [], remove: [], forget: ["x/.gitkeep"], visited: expect.any(Array) });
   });
 });
 
@@ -131,6 +131,36 @@ describe("planGitkeeps — already committed, not yet pushed (I26)", () => {
       queued: async (path) => (path.startsWith("a/") ? GITKEEP_SHA : undefined),
     });
     expect(p.remove.sort()).toEqual(["a/.gitkeep", "a/b/.gitkeep"]);
+  });
+});
+
+describe("planGitkeeps — visited: every existing folder of the walk, excluded ones too (I1)", () => {
+  it("🔑 step 1 places into excluded folders as well — only the SENDING is filtered", async () => {
+    const p = await plan({
+      snapshot: ["notes"],
+      folders: ["notes", "notes/private", "other"],
+      syncable: async (path) => !path.startsWith("notes/private/"),
+    });
+    expect(p.visited.sort()).toEqual(["notes", "notes/private"]);
+    expect(p.add).toEqual(["notes/.gitkeep"]);
+  });
+
+  it("🔑 each existing folder is asked about exactly ONCE — 20 000 top-level, and a deep tree", async () => {
+    const top = Array.from({ length: 20000 }, (_, i) => `f${i}`);
+    let asks = 0;
+    await plan({ snapshot: top, folders: top, syncable: async () => (asks++, true) });
+    expect(asks).toBe(20000);
+
+    const deep: string[] = [];
+    let p = "root";
+    for (let i = 0; i < 2000; i++) {
+      deep.push(p);
+      p = `${p}/d${i % 40}`;
+      if (i % 40 === 39) p = `root/b${i}`;
+    }
+    asks = 0;
+    await plan({ snapshot: ["root"], folders: deep, syncable: async () => (asks++, true) });
+    expect(asks).toBe(new Set(deep).size);
   });
 });
 

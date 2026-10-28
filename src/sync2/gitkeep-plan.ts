@@ -23,6 +23,10 @@
 // Dot folders and the root are not this function's business: dot
 // folders' .gitkeep is the detector's (I8), the root never gets one.
 // No disk I/O here - putting the files on disk is the caller's step 1.
+//
+// Precondition: `records` and `queuedPaths` hold ORDINARY-folder
+// `.gitkeep` paths only (isOrdinaryFolderGitkeep) - a root `.gitkeep`
+// would map to the folder "" and be ignored, not rejected.
 
 import { isDotPath } from "./change-detector";
 import { GITKEEP_SHA } from "./text-normalize";
@@ -51,6 +55,10 @@ export interface GitkeepPlan {
   update: string[]; // send the empty one over a recorded non-empty sha
   remove: string[]; // send the deletion - its folder is gone
   forget: string[]; // drop the record silently - .gitignore excludes it now
+  // Every existing ordinary folder the walk visited, EXCLUDED ones too:
+  // the caller's step 1 puts a missing .gitkeep into each (I1, I22) -
+  // the same walk, so it is not done twice.
+  visited: string[];
 }
 
 const gitkeepOf = (folder: string): string => `${folder}/.gitkeep`;
@@ -86,7 +94,7 @@ function* subtree(sorted: string[], prefix: string): IterableIterator<string> {
 }
 
 export async function planGitkeeps(input: GitkeepPlanInput): Promise<GitkeepPlan> {
-  const plan: GitkeepPlan = { add: [], update: [], remove: [], forget: [] };
+  const plan: GitkeepPlan = { add: [], update: [], remove: [], forget: [], visited: [] };
 
   const existing = [
     ...new Set([...input.folders].map(normalized).filter((f) => f !== "" && !isDotPath(f))),
@@ -103,6 +111,7 @@ export async function planGitkeeps(input: GitkeepPlanInput): Promise<GitkeepPlan
 
     // folders -> records
     for (const folder of subtree(existing, prefix)) {
+      plan.visited.push(folder);
       const path = gitkeepOf(folder);
       const recorded = input.records.get(path);
       if (!(await input.syncable(path))) {
