@@ -151,6 +151,12 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
       expect(warnings).toEqual([]); // an empty one is not news
     });
 
+    it("GITKEEP: the pull lands the empty file OVER a non-empty local one (no gate refuses 0 bytes)", async () => {
+      await vault.adapter.write("notes/.gitkeep", "a user wrote here");
+      await reader().write("notes/.gitkeep", enc("junk from GitHub"));
+      expect((await vault.adapter.readBinary("notes/.gitkeep")).byteLength).toBe(0);
+    });
+
     it("🔑 GITKEEP I5a: a .gitkeep READS as empty, whatever is on disk", async () => {
       await vault.adapter.write("notes/.gitkeep", "text a user put here");
       const got = await reader().read("notes/.gitkeep");
