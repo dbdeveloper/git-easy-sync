@@ -464,6 +464,8 @@ export interface BuildDrainDepsArgs {
   // Pull-side canonicalize toggle (autoCanonicalizeTextFiles) — the
   // third of text-normalize.ts's three must-agree sites.
   autoCanonicalize?: () => boolean;
+  // GITKEEP I4: the commit's folder journal (marking only).
+  markFolder?: (folder: string) => void;
   onProgress?: (p: DrainProgress) => void;
   logger?: Logger;
   now?: () => number;
@@ -607,6 +609,7 @@ export function buildDrainDeps(args: BuildDrainDepsArgs): DrainDeps {
       // The ONE folder whose loadable files are staged for the
       // bootloader instead of written live.
       selfPluginId: args.selfPluginId,
+      markFolder: args.markFolder,
     }),
     mergeBlobs: makeWorkerMergeBlobs(args.worker),
     computeSha,

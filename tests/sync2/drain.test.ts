@@ -415,6 +415,22 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       expect(warns.filter((w) => /resolved automatically/.test(w))).toEqual([]);
     });
 
+    it("🔑 I37: .gitkeep is not counted — neither pulled nor pushed", async () => {
+      baseCommit = await world.commitFiles({ "x.md": V0 });
+      await world.commitFiles({ "new/.gitkeep": "", "new/a.md": "a", "new/sub/.gitkeep": "" });
+      await stageBatch({ "mine/.gitkeep": "", "mine/b.md": "b" });
+      const snaps: Array<{ pullDone: number; pullTotal: number; pushDone: number; pushTotal: number }> = [];
+      const r = await drainOnce(makeDeps({ onProgress: (p) => snaps.push({ ...p }) }));
+      expect(r.status).toBe("ok");
+      const last = snaps[snaps.length - 1];
+      expect(last.pullTotal).toBe(1); // new/a.md
+      expect(last.pullDone).toBe(1);
+      expect(last.pushTotal).toBe(1); // mine/b.md
+      expect(last.pushDone).toBe(1);
+      expect(vaultFiles.files.has("new/sub/.gitkeep")).toBe(true); // still pulled
+      expect(world.headFiles().has("mine/.gitkeep")).toBe(true); // still pushed
+    });
+
     it("I5c mirror: the folder deleted HERE, the .gitkeep edited on GitHub → our deletion goes out", async () => {
       await seed();
       vaultFiles.files.delete(K);

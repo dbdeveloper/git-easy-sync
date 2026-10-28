@@ -29,6 +29,7 @@
 import { normalizePath, type Vault } from "obsidian";
 import { atomicWriteFile } from "./atomic-write";
 import { canonicalizeForPath, GITKEEP_SHA, isGitkeep, shouldCanonicalize } from "./text-normalize";
+import { isOrdinaryFolderGitkeep } from "./change-detector";
 import type { TrashHooks } from "./trash-hooks";
 import type { VaultFileReader } from "./drain";
 import {
@@ -51,6 +52,10 @@ export interface VaultFileReaderDeps {
   // Our own plugin's id — the ONE folder whose loadable files are
   // staged instead of written (see `stageSelfUpdate`).
   selfPluginId: string;
+  // GITKEEP I4: mark a folder in the commit's folder journal — a
+  // non-empty `.gitkeep` from the server in an ORDINARY folder must go
+  // back empty with the next commit. Marking only; the commit writes.
+  markFolder?: (folder: string) => void;
 }
 
 async function ensureParentDir(vault: Vault, filePath: string): Promise<void> {
@@ -193,6 +198,11 @@ export function makeVaultFileReader(
             ".gitkeep from the server is not empty — keeping the empty one and sending it back",
             { path: normalized, serverSize: bytes.byteLength },
           );
+          // A dot folder's .gitkeep needs no mark: the detector sees the
+          // record differ and sends the empty one itself (I8).
+          if (isOrdinaryFolderGitkeep(normalized)) {
+            deps.markFolder?.(normalized.slice(0, -"/.gitkeep".length));
+          }
         }
       } else if (out !== bytes && !sameBytes(out, bytes)) {
         // WARN (ARCHITECTURE "Log levels"): written not as it came from the server.
@@ -260,7 +270,9 @@ export function makeVaultFileReader(
         );
         return;
       }
-      if (deps.trashHooks) {
+      // GITKEEP I38: an empty marker is not worth a place in the Deleted
+      // bin — N copies per deleted folder would be noise.
+      if (deps.trashHooks && !isGitkeep(normalized)) {
         try {
           await deps.trashHooks.captureForDelete(normalized);
         } catch (err) {

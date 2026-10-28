@@ -1215,9 +1215,10 @@ export class Sync2Manager {
       // Vault-step outcome → UI signals (independent of status: the
       // writes that DID land are real even on a later abort).
       const touched = [...r.vaultStepWrites, ...r.vaultStepRemoves];
-      for (const p of touched) this.receivedThisSync.add(p);
+      // GITKEEP I37: "N sent / M received" leave the plugin's marker out.
+      for (const p of touched) if (!isGitkeep(p)) this.receivedThisSync.add(p);
       for (const p of r.selfUpdateStaged) this.receivedThisSync.add(p);
-      for (const p of r.pushedPaths) this.sentThisSync.add(p);
+      for (const p of r.pushedPaths) if (!isGitkeep(p)) this.sentThisSync.add(p);
       // A STAGED self-update must reload us too (regression 2026-10-05):
       // since 86c808e our own loadable files are staged, not written, and
       // the bootloader applies them at the top of onload — the onload
@@ -1354,6 +1355,7 @@ export class Sync2Manager {
       cancelRequested: () => this.abortRequested,
       cancelSignal: this.deps.cancelSignal,
       trashHooks: this.deps.trashHooks,
+      markFolder: (f) => this.folderJournal.mark(f),
       gitignoreSeeds: this.deps.gitignoreSeeds,
       deletedBinReferencedShas: this.deps.deletedBin
         ? () => this.deps.deletedBin!.referencedShas()

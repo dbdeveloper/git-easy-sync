@@ -748,6 +748,20 @@ describe("BatchWriter (Phase 2 group B)", () => {
     }
   });
 
+  it("🔑 GITKEEP I38: a .gitkeep deletion carries no Deleted-bin reference", async () => {
+    const peeked: string[] = [];
+    const id = await makeWriter({
+      deletedBin: {
+        peek: (p) => (peeked.push(p), "bin-sha"),
+        release: async () => {},
+      },
+    }).writeBatch([
+      { kind: "deleted", path: "notes/.gitkeep", previousRemoteSha: "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391" },
+    ]);
+    expect(readMeta(id!).entries[0].deletedSha).toBeNull();
+    expect(peeked).toEqual([]);
+  });
+
   it("GITKEEP: an empty .gitkeep is committed as is — no write-back, no WARN", async () => {
     putVaultFile("notes/.gitkeep", "");
     const id = await makeWriter().writeBatch([modified("notes/.gitkeep")]);

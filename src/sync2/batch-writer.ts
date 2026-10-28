@@ -278,7 +278,8 @@ export default class BatchWriter {
           // §5.2.1: the last LIVE bytes of this path, if the bin
           // captured them. Null = nothing to restore later, which is
           // the honest answer for a delete made outside our hooks.
-          deletedSha: this.deletedBin?.peek(c.path) ?? null,
+          // GITKEEP I38: a .gitkeep never has a Deleted-bin copy.
+          deletedSha: isGitkeep(c.path) ? null : (this.deletedBin?.peek(c.path) ?? null),
         });
         continue;
       }

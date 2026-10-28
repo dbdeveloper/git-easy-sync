@@ -157,6 +157,31 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
       expect((await vault.adapter.readBinary("notes/.gitkeep")).byteLength).toBe(0);
     });
 
+    it("🔑 GITKEEP I38: a .gitkeep removed by the drain is NOT captured into the Deleted bin", async () => {
+      await vault.adapter.write("notes/.gitkeep", "");
+      await vault.adapter.write("notes/a.md", "a");
+      const r = reader();
+      await r.remove("notes/.gitkeep");
+      await r.remove("notes/a.md");
+      expect(captured).toEqual(["notes/a.md"]);
+      expect(await vault.adapter.exists("notes/.gitkeep")).toBe(false);
+    });
+
+    it("🔑 GITKEEP I4: a non-empty .gitkeep from the server in an ORDINARY folder marks that folder", async () => {
+      const marked: string[] = [];
+      const r = makeVaultFileReader({
+        selfPluginId: "git-easy-sync",
+        vault: vault as never,
+        computeSha: calculateGitBlobSHA,
+        logger: { warn: () => {} },
+        markFolder: (f) => marked.push(f),
+      });
+      await r.write("notes/sub/.gitkeep", enc("junk"));
+      await r.write(".mydir/.gitkeep", enc("junk")); // dot folder: the detector heals it
+      await r.write("other/.gitkeep", new ArrayBuffer(0)); // empty: nothing to heal
+      expect(marked).toEqual(["notes/sub"]);
+    });
+
     it("🔑 GITKEEP I5a: a .gitkeep READS as empty, whatever is on disk", async () => {
       await vault.adapter.write("notes/.gitkeep", "text a user put here");
       const got = await reader().read("notes/.gitkeep");
