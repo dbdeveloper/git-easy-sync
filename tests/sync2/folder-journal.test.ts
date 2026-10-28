@@ -130,9 +130,10 @@ describe("FolderJournal — cost grows with the input, not its square (I14)", ()
         for (let k = 0; k < 10; k++) shape(2000)();
       };
       tenSmall(); // warm-up
-      const small = best(tenSmall, 3);
-      const large = best(shape(20000), 3);
-      expect(large / small).toBeLessThan(4);
+      const small = best(tenSmall, 5);
+      const large = best(shape(20000), 5);
+      // Linear ≈ 1, quadratic ≈ 10; 5 leaves room for a GC pause.
+      expect(large / small).toBeLessThan(5);
     });
   }
 });
