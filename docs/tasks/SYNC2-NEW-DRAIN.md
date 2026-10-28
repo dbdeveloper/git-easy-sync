@@ -2981,6 +2981,15 @@ def _diff3(tracked: FileInfo, local: FileInfo, head_hash: string):  # return (Fi
               return (local, null)
            if (local.sha is null or local.sha == base.sha) and remote.sha is not null:       # 3.b.1.b/3.b.2.b
               return (remote, null)
+           # 3.b.0 — НЕМАЄ запису (base=null), і один бік — ВІДСУТНІСТЬ (DELETED): це НЕ колізія,
+           # а односторонній рух — так само, як 4.1.c/d у стандартній гілці (власник, 2026-10-28).
+           # Поле: drain прибрав файл плагіна (видалений у репо) разом з його записом; коли інший
+           # пристрій повернув ті самі файли, кожен ішов у 3.b.1.c і писав WARN «Conflict resolved
+           # automatically … live-beats-delete» — для файлів, яких цей пристрій сам не видаляв.
+           if base.sha == null and local.mode == DELETED:
+              return (remote, null)    # тихо, без onAutoResolve
+           if base.sha == null and remote.mode == DELETED:
+              return (local, null)     # тихо, без onAutoResolve
            # 3.b.1.c/3.b.2.c
            if local.mode == DELETED:
               return (remote, null)

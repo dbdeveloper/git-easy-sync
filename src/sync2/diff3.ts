@@ -363,6 +363,19 @@ export async function _diff3(
     if (localUnmovedRemoteLive(base, local, remote)) {
       return { kind: "file", file: remote }; // 3.b.1.b / 3.b.2.b
     }
+    // 3.b.0 — NO record (base=null) and one side ABSENT: not a collision
+    // but a one-sided move, exactly as 4.1.c/d in the standard branch
+    // (owner, 2026-10-28). Field: the drain removed a plugin's files (gone
+    // from the repo) together with their records; when another device put
+    // the same files back, each one landed in the delete-vs-edit rule
+    // below and logged WARN "Conflict resolved automatically …
+    // live-beats-delete" for files this device never deleted itself.
+    if (base.sha === null && local.mode === DELETED) {
+      return { kind: "file", file: remote };
+    }
+    if (base.sha === null && remote.mode === DELETED) {
+      return { kind: "file", file: local };
+    }
     // Real collision, delete-vs-edit → the LIVE side wins, mtime not
     // consulted (3.b.*.c/d) — deliberately NO 4.6.b asymmetry here.
     if (local.mode === DELETED) {

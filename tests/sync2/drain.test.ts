@@ -332,6 +332,35 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
   // the plugin would then fail to load — on this restart and every
   // one after it, until the app catches up. That was the 2026-08-02
   // incident, and the sync engine was blameless in it.
+  // Field (owner, 2026-10-28, B): a plugin removed from the repo was
+  // removed here by the drain; when A put the same files back, B's next
+  // drain logged three WARN "Conflict resolved automatically …
+  // live-beats-delete" — a plain pull of files THIS device never deleted
+  // by itself.
+  it("a file the drain itself removed, coming back from the server, is a plain pull — no conflict", async () => {
+    const P = ".obsidian/plugins/obsidian-importer/main.js";
+    const V = "// importer v1\n";
+    baseCommit = await world.commitFiles({ "note.md": V0, [P]: V });
+    baselines.set("note.md", { baselineSha: await sha(V0), mtime: 50, size: enc(V0).byteLength });
+    baselines.set(P, { baselineSha: await sha(V), mtime: 50, size: enc(V).byteLength });
+    vaultFiles.files.set("note.md", { content: V0, mtime: 50 });
+    vaultFiles.files.set(P, { content: V, mtime: 50 });
+
+    await world.commitFiles({ [P]: null }); // A removed the plugin
+    const warns1: string[] = [];
+    const r1 = await drainOnce(makeDeps({ logger: { info: () => {}, warn: (m: string) => warns1.push(m) } }));
+    expect(r1.status).toBe("ok");
+    expect(vaultFiles.files.has(P)).toBe(false); // removed here by the drain
+
+    baseCommit = world.head!; // the pointer the first drain advanced to
+    await world.commitFiles({ [P]: V }); // A put it back, same bytes
+    const warns2: string[] = [];
+    const r2 = await drainOnce(makeDeps({ logger: { info: () => {}, warn: (m: string) => warns2.push(m) } }));
+    expect(r2.status).toBe("ok");
+    expect(vaultFiles.files.get(P)?.content).toBe(V);
+    expect(warns2.filter((w) => /resolved automatically/.test(w))).toEqual([]);
+  });
+
   describe("holding a plugin update this Obsidian cannot load", () => {
     const ID = "templater-obsidian";
     const DIR = `.obsidian/plugins/${ID}`;
