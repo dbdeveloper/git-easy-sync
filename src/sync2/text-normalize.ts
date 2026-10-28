@@ -137,6 +137,10 @@ export function canonicalizeBytes(
 // committed, never written from a pull, and a .gitkeep never conflicts.
 export const GITKEEP_SHA = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"; // git's empty blob
 
+// The owner's words (2026-10-28) for a .gitkeep the plugin emptied —
+// written by the commit's placement step and by the batch write-back.
+export const GITKEEP_TRUNCATED = ".gitkeep must be empty — truncated to zero bytes";
+
 export function isGitkeep(path: string): boolean {
   return path === ".gitkeep" || path.endsWith("/.gitkeep");
 }

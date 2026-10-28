@@ -53,7 +53,7 @@
 import { normalizePath, type Vault } from "obsidian";
 import type WorkerClient from "../worker/worker-client";
 import SyncStore, { PIN_OWNER_COMMIT } from "./sync-store";
-import { canonicalizeForPath, isGitkeep, shouldCanonicalize } from "./text-normalize";
+import { canonicalizeForPath, GITKEEP_TRUNCATED, isGitkeep, shouldCanonicalize } from "./text-normalize";
 import { newBatchId, parseTimestampId } from "./timestamp-id";
 import { FileChange } from "./types";
 import {
@@ -382,7 +382,7 @@ export default class BatchWriter {
       // WARN (ARCHITECTURE "Log levels"): the file changed without a person.
       if (isGitkeep(path)) {
         // GITKEEP I4 (owner, 2026-10-28): its own words, not "canonicalized".
-        this.logger?.warn(".gitkeep must be empty — truncated to zero bytes", { path, previousSize });
+        this.logger?.warn(GITKEEP_TRUNCATED, { path, previousSize });
       } else {
         this.logger?.warn("Text file canonicalized by the plugin (line endings / BOM / final newline)", { path });
       }

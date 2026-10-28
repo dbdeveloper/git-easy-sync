@@ -1479,6 +1479,12 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       expect(JSON.stringify(committed ?? "")).not.toContain(".gitkeep");
     });
 
+    it("I4 wiring: the drain's reader marks into THIS manager's journal (buildDeps → buildDrainDeps → reader)", async () => {
+      const built = (manager as unknown as { buildDeps(): { vaultFiles: { write(p: string, b: ArrayBuffer): Promise<void> } } }).buildDeps();
+      await built.vaultFiles.write("notes/.gitkeep", new TextEncoder().encode("junk").buffer as ArrayBuffer);
+      expect([...manager.markedFolders()]).toEqual(["notes"]);
+    });
+
     it("a one-file commit (Commit active file) leaves the journal alone", async () => {
       withLog();
       mkdir("n");

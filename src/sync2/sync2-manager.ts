@@ -57,7 +57,7 @@ import HotMetadataStore from "./hot-metadata";
 import FileBaselinesStore from "./file-baselines";
 import { freeNameFor, needsSanitization, sanitizeFilename } from "./cross-platform";
 import { newBatchId } from "./timestamp-id";
-import { isGitkeep } from "./text-normalize";
+import { GITKEEP_TRUNCATED, isGitkeep } from "./text-normalize";
 import FolderJournal from "./folder-journal";
 import { planGitkeeps } from "./gitkeep-plan";
 import { isOrdinaryFolderGitkeep } from "./change-detector";
@@ -1049,7 +1049,7 @@ export class Sync2Manager {
         if (stat === null) placed += 1;
         else {
           truncated += 1;
-          this.deps.logger.warn(".gitkeep must be empty — truncated to zero bytes", {
+          this.deps.logger.warn(GITKEEP_TRUNCATED, {
             path,
             previousSize: stat.size,
           });
