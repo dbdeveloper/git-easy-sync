@@ -17,6 +17,7 @@ import FileBaselinesStore from "../../src/sync2/file-baselines";
 import ChangeDetector, {
   isUnhonouredGitignore,
   isSyncable,
+  isOrdinaryFolderGitkeep,
   MAX_SYNC_FILE_BYTES,
 } from "../../src/sync2/change-detector";
 import { Vault } from "../../mock-obsidian";
@@ -2124,5 +2125,147 @@ describe("a file over GitHub's size limit", () => {
     const tooLarge: Array<[string, number]> = [];
     expect(await detectorWith(f, tooLarge).findChangeForPath("video.mp4")).toBeNull();
     expect(tooLarge).toEqual([["video.mp4", MAX_SYNC_FILE_BYTES + 1]]);
+  });
+});
+
+// GITKEEP I8/I9 (docs/tasks/GITKEEP.md): two owners of `.gitkeep`, decided
+// by the FOLDER. In an ordinary folder (no dot segment) it belongs to the
+// folder journal, never to this detector — neither as an addition nor as
+// a deletion. In a dot-folder (and at the root) it is an ordinary file
+// the detector monitors like any other.
+describe("GITKEEP — who owns a .gitkeep (I8, I9)", () => {
+  // The root block as the plugin writes it: `.*` hides every dot-name,
+  // `!.gitkeep` lets .gitkeep through again at any depth.
+  const ROOT = ".*\n.*/\n!/.gitignore\n!.gitkeep\n";
+  let f: ReturnType<typeof fixture>;
+
+  beforeEach(async () => {
+    f = fixture();
+    await f.hot.load();
+  });
+  afterEach(() => {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  const EMPTY_SHA = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+  const record = (p: string) =>
+    f.store.set(p, { baselineSha: EMPTY_SHA, mtime: 1, size: 0 });
+
+  it("🔑 a recorded ordinary-folder .gitkeep is NOT deleted, and its record survives", async () => {
+    // After the first push every folder has such a record. Pass 2 walks
+    // all records; without the rule the second commit would send 2000
+    // deletions and the folders would vanish on every device.
+    writeFile(f.root, ".gitignore", ROOT);
+    writeFile(f.root, "notes/a.md", "a");
+    writeFile(f.root, "notes/.gitkeep", "");
+    await record("notes/.gitkeep");
+    const out = await f.detector.findChanges();
+    expect(out.find((c) => c.path === "notes/.gitkeep")).toBeUndefined();
+    expect(await f.store.get("notes/.gitkeep")).toBeTruthy();
+  });
+
+  it("🔑 ...even when the file is gone from disk — the journal decides that, not Pass 2", async () => {
+    writeFile(f.root, ".gitignore", ROOT);
+    writeFile(f.root, "notes/a.md", "a");
+    await record("notes/.gitkeep");
+    await record("deep/er/.gitkeep");
+    const out = await f.detector.findChanges();
+    expect(out.some((c) => c.kind === "deleted")).toBe(false);
+    expect(await f.store.get("notes/.gitkeep")).toBeTruthy();
+    expect(await f.store.get("deep/er/.gitkeep")).toBeTruthy();
+  });
+
+  it("an unrecorded ordinary-folder .gitkeep is not emitted as added", async () => {
+    writeFile(f.root, ".gitignore", ROOT);
+    writeFile(f.root, "notes/.gitkeep", "");
+    writeFile(f.root, "notes/sub/.gitkeep", "");
+    const out = await f.detector.findChanges();
+    expect(out.map((c) => c.path)).toEqual([".gitignore"]);
+  });
+
+  it("in a synced dot-folder .gitkeep is an ordinary file: added, then deleted", async () => {
+    // `!/.obsidian/` as the shipped `final` block has it.
+    writeFile(f.root, ".gitignore", ROOT + "!/.mydir/\n!/.obsidian/\n");
+    writeFile(f.root, ".mydir/.gitkeep", "");
+    writeFile(f.root, ".mydir/notes/.gitkeep", "");
+    writeFile(f.root, `${CONFIG_DIR}/snippets/.gitkeep`, "");
+    let out = await f.detector.findChanges();
+    expect(out.filter((c) => c.kind === "added").map((c) => c.path).sort()).toEqual([
+      ".gitignore",
+      ".mydir/.gitkeep",
+      ".mydir/notes/.gitkeep",
+      `${CONFIG_DIR}/snippets/.gitkeep`,
+    ]);
+
+    await record(".mydir/notes/.gitkeep");
+    fs.rmSync(path.join(f.root, ".mydir/notes/.gitkeep"));
+    out = await f.detector.findChanges();
+    expect(out).toContainEqual(
+      expect.objectContaining({ kind: "deleted", path: ".mydir/notes/.gitkeep" }),
+    );
+  });
+
+  it("a hand-placed root /.gitkeep is monitored by the detector", async () => {
+    writeFile(f.root, ".gitignore", ROOT);
+    writeFile(f.root, ".gitkeep", "");
+    const out = await f.detector.findChanges();
+    expect(out.map((c) => c.path).sort()).toEqual([".gitignore", ".gitkeep"]);
+  });
+});
+
+describe("GITKEEP — sync membership of a .gitkeep (I8, I34, I35)", () => {
+  const CD = ".obsidian";
+  const none = { dotFiles: new Set<string>(), walkTargets: new Set<string>() };
+  let giRoot = "";
+  const giWith = (rules: string) => {
+    giRoot = path.join(os.tmpdir(), `gk-gi-${crypto.randomBytes(4).toString("hex")}`);
+    fs.mkdirSync(giRoot, { recursive: true });
+    fs.writeFileSync(path.join(giRoot, ".gitignore"), rules);
+    return new GI(giRoot);
+  };
+  // Reads the fixture's .gitignore files from disk, as the plugin does.
+  const reader = async (p: string) => {
+    const abs = path.isAbsolute(p) ? p : path.join(giRoot, p);
+    try {
+      return { content: fs.readFileSync(abs, "utf8"), mtime: fs.statSync(abs).mtimeMs };
+    } catch {
+      return null;
+    }
+  };
+  const ask = (p: string, gi: GI, optIn = none) =>
+    isSyncable(p, CD, "git-easy-sync", true, gi, reader, optIn);
+  const ROOT = ".*\n.*/\n!/.gitignore\n!.gitkeep\n";
+
+  it("🔑 an ordinary-folder .gitkeep passes D7 by its PATH, then .gitignore decides", async () => {
+    expect(await ask("notes/.gitkeep", giWith(ROOT))).toBe(true);
+    expect(await ask("a/b/c/.gitkeep", giWith(ROOT))).toBe(true);
+  });
+
+  it(".gitignore keeps the last word: no `!.gitkeep`, or a user rule below it, hides it", async () => {
+    expect(await ask("notes/.gitkeep", giWith(".*\n.*/\n"))).toBe(false);
+    expect(await ask("private/.gitkeep", giWith(ROOT + "private/\n"))).toBe(false);
+    expect(await ask("priv2/.gitkeep", giWith(ROOT + "priv2/*\n"))).toBe(false);
+  });
+
+  it("the path rule does NOT open dot-folders — there only the opt-in set does", async () => {
+    expect(await ask("notes/.hidden/.gitkeep", giWith(ROOT))).toBe(false);
+    expect(await ask(".mydir/.gitkeep", giWith(ROOT))).toBe(false);
+    // Opted in the way a user does it: an anchored rule, which also
+    // makes `.mydir` a walk target.
+    expect(
+      await ask(".mydir/.gitkeep", giWith(ROOT + "!/.mydir/\n"), {
+        dotFiles: new Set(),
+        walkTargets: new Set([".mydir"]),
+      }),
+    ).toBe(true);
+  });
+
+  it("only the exact basename — `x.gitkeep`, `.gitkeep.bak` are not it", async () => {
+    expect(await ask("notes/.gitkeep.bak", giWith(ROOT))).toBe(false);
+    expect(isOrdinaryFolderGitkeep("notes/x.gitkeep")).toBe(false);
+    expect(isOrdinaryFolderGitkeep("notes/.gitkeep")).toBe(true);
+    expect(isOrdinaryFolderGitkeep(".gitkeep")).toBe(false); // root: the detector's
+    expect(isOrdinaryFolderGitkeep(".mydir/.gitkeep")).toBe(false);
+    expect(isOrdinaryFolderGitkeep("notes/.hidden/.gitkeep")).toBe(false);
   });
 });

@@ -809,6 +809,12 @@ describe("section CONTENT: two strengths in the root file (DOT-FILES §3.1)", ()
     expect(c.indexOf(I_BEGIN)).toBe(0);
     expect(c).toContain(".*\n");
     expect(c).toContain("!/.gitignore");
+    // GITKEEP I34: `!.gitkeep` in the TOP block, after the dot-hide — so
+    // a user rule below it (`private/*`) still wins and an excluded
+    // folder's name never reaches the server.
+    expect(c).toContain("\n!.gitkeep\n");
+    expect(c.indexOf("\n!.gitkeep\n")).toBeGreaterThan(c.indexOf(".*/\n"));
+    expect(c.indexOf("\n!.gitkeep\n")).toBeLessThan(c.indexOf(INVARIANTS_END));
     // The user's zone sits between the two sections.
     expect(c.indexOf("Recommended defaults")).toBeGreaterThan(
       c.indexOf(INVARIANTS_END),

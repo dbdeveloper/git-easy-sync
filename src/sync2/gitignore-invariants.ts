@@ -272,6 +272,12 @@ export function selfPluginGitignore(syncConfigDir: boolean): string {
 //   `!/.gitignore` ANCHORED to root, so only the root control file
 //         comes back. NOT `!.gitignore` (would un-hide `notes/.gitignore`
 //         and break D6) and NOT `!./.gitignore` (matches nothing at all).
+//   `!.gitkeep` UNANCHORED on purpose (GITKEEP I34): every folder's
+//         `.gitkeep`, at any depth. Here at the TOP, not in `final`, so a
+//         user rule below (`private/*`) still wins and an excluded
+//         folder's name stays off the server. For the walker it names
+//         only the root `/.gitkeep` (classifyRule) — the ordinary-folder
+//         ones come through the folder journal, not a scan.
 const ROOT_INVARIANTS_BODY = `# Editing this block triggers a rewrite to canonical on next load.
 # Rules BELOW this block override it - that is how you opt a dot-file
 # or an anchored dot-directory back into sync.
@@ -282,6 +288,9 @@ const ROOT_INVARIANTS_BODY = `# Editing this block triggers a rewrite to canonic
 
 # ...except this file, the one that decides the rest.
 !/.gitignore
+
+# ...and .gitkeep, the empty file that keeps a folder in git.
+!.gitkeep
 
 # Ignores every *.log file. To keep logs in the repository, add
 # below this block e.g.: !/git-easy-sync-*.log

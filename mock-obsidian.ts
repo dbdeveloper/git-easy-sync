@@ -170,14 +170,16 @@ export class Vault {
           relDir === "" ? entry.name : `${relDir}/${entry.name}`.replace(/\\/g, "/");
         // Skip configDir to match real Obsidian's index behaviour.
         if (childRel === this.configDir) continue;
-        // Skip ROOT-level dotfiles — production Obsidian's file
-        // indexer omits anything whose name starts with `.` at the
-        // vault root (<vault>/.gitignore, .gitattributes, etc.).
-        // change-detector's walkRootDotfiles is the production
-        // codepath that picks them up; mirroring the gap here
-        // ensures unit tests catch any code path that wrongly
-        // assumes getFiles() returns root dotfiles.
-        if (relDir === "" && entry.name.startsWith(".")) continue;
+        // Skip dot-names at ANY depth — production Obsidian's file
+        // indexer omits every path with a dot segment (`Dl` in 1.13.4's
+        // app.js walks the segments): <vault>/.gitignore, but also
+        // `notes/.gitkeep` and `notes/.hidden/x.md`. The dot-space scan
+        // (readRootGitignore + walkDotDir) is the production codepath
+        // that picks the opted-in ones up; mirroring the gap here
+        // ensures unit tests catch any code path that wrongly assumes
+        // getFiles() returns dot-files. (Until GITKEEP step 1 only the
+        // ROOT level was skipped.)
+        if (entry.name.startsWith(".")) continue;
         if (entry.isFile()) {
           const fullPath = path.join(this.rootPath, childRel);
           const s = statSync(fullPath);

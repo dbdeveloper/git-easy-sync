@@ -151,6 +151,7 @@ export async function isSyncable(
       path === configDir || path.startsWith(`${configDir}/`);
     if (!underConfigDir) {
       const discoverable =
+        isOrdinaryFolderGitkeep(path) ||
         optIn.dotFiles.has(path) ||
         underWalkTarget(path, optIn.walkTargets);
       if (!discoverable) return false;
@@ -162,6 +163,18 @@ export async function isSyncable(
 // Any segment starting with a dot makes it a dot-path (DOT-FILES §2).
 export function isDotPath(path: string): boolean {
   return path.split("/").some((seg) => seg.startsWith("."));
+}
+
+// A `.gitkeep` in an ORDINARY folder (no dot segment, not the root) —
+// the folder journal's, never this detector's (GITKEEP I9). D7 lets it
+// through by its path: push takes these paths from the journal, not from
+// a scan, so "permitted" and "discoverable" still coincide (GITKEEP §8).
+// A `.gitkeep` in a dot-folder or at the root is NOT one of these: there
+// it is an ordinary file the detector monitors (I8).
+export function isOrdinaryFolderGitkeep(path: string): boolean {
+  const slash = path.lastIndexOf("/");
+  if (slash < 0 || path.slice(slash + 1) !== ".gitkeep") return false;
+  return !isDotPath(path.slice(0, slash));
 }
 
 // True for a `.gitignore` outside the three locations D5 reads.
@@ -648,6 +661,9 @@ export default class ChangeDetector {
     // First-ever sync (watermark === null) treats every file as a
     // candidate so the initial bootstrap walks the whole vault once.
     for (const file of allFiles) {
+      // GITKEEP I9: the journal's, not ours. Obsidian's index never lists
+      // a dot-file, so this only holds the line if that ever changes.
+      if (isOrdinaryFolderGitkeep(file.path)) continue;
       if (watermark !== null && file.stat.mtime <= watermark) {
         const snap = await this.baselines.get(file.path);
         // Cache-hit short-circuit only when the snapshot's recorded
@@ -740,6 +756,13 @@ export default class ChangeDetector {
     const removals: string[] = [];
     await this.baselines.forEachBucket(async (files) => {
       for (const [path, snap] of files) {
+        // GITKEEP I9: an ordinary-folder `.gitkeep` is never seen by Pass
+        // 1, and its record belongs to the folder journal. Reading it as
+        // "gone" here would send one deletion per folder on the second
+        // commit after the upgrade — every folder gone on every device;
+        // reading it as "out of scope" would silently drop the record the
+        // journal relies on. So: neither.
+        if (isOrdinaryFolderGitkeep(path)) continue;
         if (seenSyncable.has(path)) continue;
         if (seenIgnored.has(path)) {
           removals.push(path);

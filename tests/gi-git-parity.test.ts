@@ -165,7 +165,7 @@ describe.skipIf(!gitAvailable())("GI ↔ real git parity", () => {
   // than importing the constants is deliberate — an edit to the shipped
   // rules must surface as a failing parity test to be re-measured
   // against git, not ride along silently.
-  const ROOT_TOP = ".*\n.*/\n!/.gitignore\n";
+  const ROOT_TOP = ".*\n.*/\n!/.gitignore\n!.gitkeep\n";
   const ROOT_BOTTOM =
     "!/.obsidian/\n*.conflict-from-*\n*.ges-tmp*\n*.ges-bak*\n";
   const ROOT_DEFAULTS = "*.log\n.DS_Store\n.trash/\n";
@@ -199,6 +199,16 @@ describe.skipIf(!gitAvailable())("GI ↔ real git parity", () => {
     "note.conflict-from-Mac-2026-01-01T00-00-00Z.md": "sibling",
     "git-easy-sync.log": "log",
     ".trash/gone.md": "trashed",
+    // GITKEEP I8/I35: ordinary folders, a synced dot folder (configDir),
+    // a plugin folder (hidden by `plugins/*/*`), an unsynced dot folder,
+    // a dot folder inside an ordinary one, and the root.
+    "notes/.gitkeep": "",
+    "notes/deep/.gitkeep": "",
+    ".obsidian/snippets/.gitkeep": "",
+    ".obsidian/plugins/brat/.gitkeep": "",
+    ".trash/.gitkeep": "",
+    "notes/.hidden/.gitkeep": "",
+    ".gitkeep": "",
   };
 
   it("the shipped layout at syncConfigDir=ON", () => {
@@ -267,6 +277,21 @@ describe.skipIf(!gitAvailable())("GI ↔ real git parity", () => {
     expect(bothVerdicts(old).git.get(P), `git TRACKS ${P} unanchored`).toBe(
       false,
     );
+  });
+
+  it("GITKEEP I34/I35: a user rule below the top block hides an excluded folder's .gitkeep", () => {
+    // `!.gitkeep` sits in the overridable TOP block on purpose: a folder
+    // the user excludes must keep its name off the server, whether the
+    // rule names the directory or its contents.
+    expectParity({
+      ".gitignore": ROOT_TOP + "private/\npriv2/*\n" + ROOT_BOTTOM,
+      ".obsidian/.gitignore": CONFIG_DEFAULTS + CONFIG_FINAL_ON,
+      "private/.gitkeep": "",
+      "private/a.md": "a",
+      "priv2/.gitkeep": "",
+      "priv2/a.md": "a",
+      "open/.gitkeep": "",
+    });
   });
 
   it("a user rule between the two root sections: overrides the top, not the bottom", () => {
