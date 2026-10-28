@@ -18,7 +18,7 @@ import FileBaselinesStore, {
   bucketIdForPath,
 } from "./file-baselines";
 import { FileChange } from "./types";
-import { canonicalizeBytes, shouldCanonicalize } from "./text-normalize";
+import { canonicalizeForPath, shouldCanonicalize } from "./text-normalize";
 import { PIN_OWNER_COMMIT } from "./sync-store";
 import WorkerClient from "../worker/worker-client";
 
@@ -1119,7 +1119,8 @@ export default class ChangeDetector {
     if (t) t.readMs += readMs;
     if (raw === null) return null;
     this.stats?.record("read", raw.byteLength, readMs);
-    const canon = canonicalizeBytes(
+    const canon = canonicalizeForPath(
+      path,
       raw,
       shouldCanonicalize(path, this.configDir) && this.autoCanonicalize(),
     );

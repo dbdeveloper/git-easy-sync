@@ -127,6 +127,7 @@ import {
 import { buildConflictBranchName } from "./conflict-branch";
 import { toGitAuthorDate } from "./commit-message";
 import { freeNameFor, needsSanitization, sanitizeFilename } from "./cross-platform";
+import { GITKEEP_SHA, isGitkeep } from "./text-normalize";
 
 export interface DrainClient {
   getGuardedHead(): Promise<string | null>;
@@ -572,6 +573,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     localSha: string,
   ): Promise<{ abort: DrainResult | null; same: boolean }> => {
     if (localSha === remoteSha) return { abort: null, same: true };
+    // GITKEEP I5: a pull of any `.gitkeep` writes the empty file, so the
+    // answer needs no bytes from the server. (Pull-side question only:
+    // whether OUR push is still due is decided by the sha rules, I5b.)
+    if (isGitkeep(path)) return { abort: null, same: localSha === GITKEEP_SHA };
     const vf = deps.vaultFiles;
     if (vf.canonicalizesOnWrite?.(path) !== true || vf.canonicalize === undefined) {
       return { abort: null, same: false };

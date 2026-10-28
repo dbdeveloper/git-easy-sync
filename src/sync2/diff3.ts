@@ -33,7 +33,7 @@ import {
 import { hasTextExtension } from "../utils";
 import { DELETED_SHA_HASH } from "./discovery";
 import SyncStore from "./sync-store";
-import { utf8RoundTrip } from "./text-normalize";
+import { isGitkeep, utf8RoundTrip } from "./text-normalize";
 import { highestVersionIn, restampVersionLines, withoutVersionLines } from "./gitignore-markers";
 import { compareSemver } from "./semver";
 import { mergeText, type MergeOutcome } from "./three-way-merge";
@@ -335,6 +335,26 @@ export async function _diff3(
     // Unreachable: at least one sha is non-null past 2.b, and a side
     // with content always carries its path.
     throw new CompareWrongFilesError("_diff3: no side carries a path");
+  }
+
+  // 2.c — GITKEEP I5c (docs/tasks/GITKEEP.md): the content of a
+  // `.gitkeep` means nothing (it is always empty, I4), so a content
+  // change on one side never beats a deletion on the other — the
+  // deletion wins, silently, in every folder. Without it, the window
+  // between a GitHub edit of a `.gitkeep` and our commit that empties it
+  // again (record = the server's non-empty sha, disk empty) turned a
+  // folder deleted on GitHub into one kept alive by our marker alone,
+  // and a folder the user deleted came back. Only with a LIVE base: a
+  // re-creation after a deleted (or absent) base is a real folder
+  // re-creation and takes the ordinary rules.
+  if (
+    isGitkeep(path) &&
+    base.sha !== null &&
+    base.mode !== DELETED &&
+    base.sha !== DELETED_SHA_HASH
+  ) {
+    if (remote.mode === DELETED) return { kind: "file", file: remote };
+    if (local.mode === DELETED) return { kind: "file", file: local };
   }
 
   // ── §II.1 п.3 — the .obsidian/ special branch ───────────────────

@@ -1366,3 +1366,66 @@ describe("_diff3 totality — every (base, local, remote) combination", () => {
     expect(problems).toEqual([]);
   });
 });
+
+// GITKEEP I5c (docs/tasks/GITKEEP.md): the content of a `.gitkeep` means
+// nothing, so a content change on one side never beats a deletion on the
+// other — the deletion wins, silently, in any folder. Only when the base
+// exists: a re-creation after a deleted base is a real folder
+// re-creation and takes the ordinary rules.
+describe("_diff3 — GITKEEP: a deletion beats a content change (I5c)", () => {
+  const deps = (): Diff3Deps => ({
+    syncStore: null as never,
+    verifiedShas: new Set(),
+    getBlobFromRepo: async () => null,
+    getContentsMetadataAtRef: async () => null,
+    maxAutoMergeFileSize: () => 10_000_000,
+    mergeBlobs: mergeBlobsWithMainThreadDiff3,
+    computeSha: calculateGitBlobSHA,
+    configDir: ".obsidian",
+    selfPluginId: PLUGIN_ID,
+  });
+  const auto: string[] = [];
+  const withAuto = (): Diff3Deps => ({
+    ...deps(),
+    onAutoResolve: (_p, how) => auto.push(how),
+  });
+  beforeEach(() => {
+    auto.length = 0;
+  });
+
+  for (const p of ["notes/.gitkeep", ".mydir/.gitkeep", ".obsidian/snippets/.gitkeep", ".gitkeep"]) {
+    it(`🔑 ${p}: remote deleted, local differs from base → the deletion wins`, async () => {
+      // The heal window: record = the server's non-empty sha, disk empty.
+      const base = side(p, "junk");
+      const remote = deletedSide(p);
+      const local = side(p, "");
+      const r = await _diff3(withAuto(), { base, remote }, local, HEAD);
+      expect(r.kind).toBe("file");
+      expect((r as { file: FileInfo }).file.mode).toBe(DELETED);
+      expect(auto).toEqual([]); // silent — no "conflict resolved" line
+    });
+
+    it(`🔑 ${p}: local deleted, remote changed its content → the deletion wins`, async () => {
+      const base = side(p, "");
+      const remote = side(p, "junk");
+      const local = deletedSide(p);
+      const r = await _diff3(withAuto(), { base, remote }, local, HEAD);
+      expect(r).not.toEqual({ kind: "manual-conflict" });
+      expect((r as { file: FileInfo }).file.mode).toBe(DELETED);
+      expect(auto).toEqual([]);
+    });
+  }
+
+  it("no base: a remote deletion of a .gitkeep this device has but never recorded — ordinary rules", async () => {
+    const local = side("notes/.gitkeep", "");
+    const r = await _diff3(deps(), { base: emptyFileInfo(), remote: deletedSide("notes/.gitkeep") }, local, HEAD);
+    expect(r).toEqual({ kind: "file", file: local }); // 4.1.c
+  });
+
+  it("a file merely NAMED like it (`x.gitkeep`) keeps the ordinary rules", async () => {
+    const base = side("notes/x.gitkeep", "a");
+    const local = side("notes/x.gitkeep", "b");
+    const r = await _diff3(deps(), { base, remote: deletedSide("notes/x.gitkeep") }, local, HEAD);
+    expect(r).toEqual({ kind: "file", file: local }); // 4.6.a edit beats delete
+  });
+});

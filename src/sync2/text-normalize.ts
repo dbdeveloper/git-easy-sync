@@ -128,3 +128,28 @@ export function canonicalizeBytes(
     content,
   };
 }
+
+// GITKEEP I4/I5 (docs/tasks/GITKEEP.md): a `.gitkeep` — in any folder,
+// dot-folders and the root included — is ALWAYS zero-length. Its
+// canonical form is the empty file, past every gate canonicalizeBytes
+// has (it has no text extension, the user toggle may be off, it may sit
+// in <configDir>). Text someone put into one is truncated, never
+// committed, never written from a pull, and a .gitkeep never conflicts.
+export const GITKEEP_SHA = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"; // git's empty blob
+
+export function isGitkeep(path: string): boolean {
+  return path === ".gitkeep" || path.endsWith("/.gitkeep");
+}
+
+// canonicalizeBytes with the `.gitkeep` rule in front of it — the one
+// function every byte-transforming site calls, so commit, pull and the
+// detector cannot disagree about it.
+export function canonicalizeForPath(
+  path: string,
+  bytes: ArrayBuffer,
+  eligible: boolean,
+): CanonicalBytes {
+  if (!isGitkeep(path)) return canonicalizeBytes(bytes, eligible);
+  if (bytes.byteLength === 0) return { bytes, changed: false, content: null };
+  return { bytes: new ArrayBuffer(0), changed: true, content: "" };
+}

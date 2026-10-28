@@ -2969,6 +2969,12 @@ def _diff3(tracked: FileInfo, local: FileInfo, head_hash: string):  # return (Fi
     if local.sha is null and remote.sha is null:
        return (base, null)                                                            # 2.b (2-ге базове правило рівності)   
 
+    if path.filename == ".gitkeep" and base.sha is not null and base.mode != DELETED:  # 2.c (GITKEEP I5c, 2026-10-28)
+       # вміст .gitkeep нічого не означає (він завжди порожній), тож зміна вмісту з одного боку
+       # НІКОЛИ не перемагає видалення з іншого — тихо виграє видалення, у будь-якій теці
+       if remote.mode == DELETED: return (remote, null)
+       if local.mode == DELETED:  return (local, null)
+
     if path startsWith ".obsidian/":
        if path startsWith ".obsidian/plugins/.*/" and path.filename in ("manifest.json", "main.js", "styles.css"):
           # Обробляємо конфлікти для plugins (see SYNC2.md та SYNC2-PLUGIN-UPDATE-COMPAT.md)
@@ -5995,7 +6001,7 @@ base); паралелізм між MAIN-push/CONFLICT-push і між парам�
 
 | вимога | вердикт | де в коді |
 |---|---|---|
-| §II.1 таблиця правил `_diff3` | ✅ MATCHES (структурно) | `diff3.ts` — кожне нумероване правило має підписану гілку: 2.a/2.b, 3.a, 3.b.1.a/b, 3.b.2.a/b, 3.b.\*.e, 4.1.a-d, 4.2, 4.3, 4.4, 4.5.a/b/c/d (c/d — 2026-10-05), 4.6.a/b, 4.7 |
+| §II.1 таблиця правил `_diff3` | ✅ MATCHES (структурно) | `diff3.ts` — кожне нумероване правило має підписану гілку: 2.a/2.b/2.c (2.c — 2026-10-28, GITKEEP), 3.a, 3.b.1.a/b, 3.b.2.a/b, 3.b.\*.e, 4.1.a-d, 4.2, 4.3, 4.4, 4.5.a/b/c/d (c/d — 2026-10-05), 4.6.a/b, 4.7 |
 | §II.2-II.5 сценарії drain | ✅ MATCHES | `drain.ts:22,29,554` |
 | §II.6 manual-conflict машинерія | ✅ MATCHES | 13 сайтів, `drain.ts` + `drain-journal.ts` |
 | §II.7 ім'я ПЕРЕД мережею, голова — жива | ✅ MATCHES | `ensureConflictBranch()` у `drain.ts` (§II.7.1 — пара «мінт+персист → мережа» переїхала туди цілою, 2026-09-23); `drain-journal.ts:12` (голови НЕ персистяться). Пін G.5 сформульований як інваріант, тому переїзд пережив без правок — ре-проба на новому місці: обидві мутації (персист знято / персист ПІСЛЯ мережі) валять саме його |

@@ -128,6 +128,37 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
       expect(cfg[0]).toBe(0xef);
     });
 
+    // GITKEEP I4/I5/I5a/I27: a `.gitkeep` is always empty on disk and
+    // always READS as empty — whatever came from the server or sits on
+    // disk. The server's non-empty one is not written; ours stays.
+    it("🔑 GITKEEP: a non-empty .gitkeep from the server is written EMPTY, with its own WARN", async () => {
+      const r = makeVaultFileReader({
+        selfPluginId: "git-easy-sync",
+        vault: vault as never,
+        autoCanonicalize: () => false,
+        computeSha: calculateGitBlobSHA,
+        logger: { warn: (m) => warnings.push(m) },
+      });
+      expect(r.canonicalizesOnWrite?.("notes/.gitkeep")).toBe(true);
+      expect(r.canonicalize?.("notes/.gitkeep", enc("junk")).byteLength).toBe(0);
+      await r.write("notes/.gitkeep", enc("junk"));
+      expect((await vault.adapter.readBinary("notes/.gitkeep")).byteLength).toBe(0);
+      expect(warnings).toEqual([
+        ".gitkeep from the server is not empty — keeping the empty one and sending it back",
+      ]);
+      warnings.length = 0;
+      await r.write("other/.gitkeep", new ArrayBuffer(0));
+      expect(warnings).toEqual([]); // an empty one is not news
+    });
+
+    it("🔑 GITKEEP I5a: a .gitkeep READS as empty, whatever is on disk", async () => {
+      await vault.adapter.write("notes/.gitkeep", "text a user put here");
+      const got = await reader().read("notes/.gitkeep");
+      expect(got?.sha).toBe("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+      expect(got?.blob.byteLength).toBe(0);
+      expect(got?.size).toBe(0);
+    });
+
     // Owner, 2026-10-05: a deletion that ARRIVES FROM THE SERVER must not
     // remove our own plugin. A remote clean-up of the repo deleted
     // main.js / manifest.json / styles.css locally and the running sync

@@ -2206,6 +2206,27 @@ describe("GITKEEP — who owns a .gitkeep (I8, I9)", () => {
     );
   });
 
+  it("🔑 GITKEEP I4: a dot-folder .gitkeep is hashed in its EMPTY form — text in it only asks for the truncation", async () => {
+    // Same verdict as any canonical write-back: the file is emitted so
+    // the commit truncates it on disk (with its WARN), and what it would
+    // send IS the record — the push then has nothing to do.
+    writeFile(f.root, ".gitignore", ROOT + "!/.mydir/\n");
+    writeFile(f.root, ".mydir/.gitkeep", "someone wrote here");
+    await record(".mydir/.gitkeep"); // record: empty
+    const out = await f.detector.findChanges();
+    const c = out.find((x) => x.path === ".mydir/.gitkeep");
+    expect(c).toMatchObject({ kind: "modified", previousRemoteSha: EMPTY_SHA });
+    expect((c as { sha?: string }).sha ?? EMPTY_SHA).toBe(EMPTY_SHA);
+  });
+
+  it("GITKEEP I4: a dot-folder .gitkeep whose RECORD is the server's non-empty sha → modified (heals the server)", async () => {
+    writeFile(f.root, ".gitignore", ROOT + "!/.mydir/\n");
+    writeFile(f.root, ".mydir/.gitkeep", "");
+    await f.store.set(".mydir/.gitkeep", { baselineSha: await shaOf("junk"), mtime: 1, size: 4 });
+    const out = await f.detector.findChanges();
+    expect(out).toContainEqual(expect.objectContaining({ kind: "modified", path: ".mydir/.gitkeep" }));
+  });
+
   it("a hand-placed root /.gitkeep is monitored by the detector", async () => {
     writeFile(f.root, ".gitignore", ROOT);
     writeFile(f.root, ".gitkeep", "");

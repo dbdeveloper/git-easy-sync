@@ -1330,6 +1330,22 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(fs.readFileSync(path.join(dir, "note.md"), "utf8")).toBe("good\n");
   });
 
+  it("🔑 GITKEEP I7: the zero-byte guard never restores a .gitkeep — it is empty by definition", async () => {
+    // The server once held a non-empty .gitkeep (record = its sha); the
+    // plugin truncated the local one. Restoring it would undo exactly that.
+    const junk = new TextEncoder().encode("junk").buffer as ArrayBuffer;
+    const sha = await calculateGitBlobSHA(junk);
+    await deps.syncStore.saveBlobToSyncStore(sha, junk);
+    await deps.baselines.setMany([
+      { path: ".mydir/.gitkeep", baselineSha: sha, mtime: 10, size: 4 },
+    ]);
+    put(".mydir/.gitkeep", "");
+    findChangesResult = [modified(".mydir/.gitkeep", 0)];
+    await manager.commitOnly();
+    expect(writtenBatches).toHaveLength(1); // the empty one goes out
+    expect(fs.readFileSync(path.join(dir, ".mydir/.gitkeep"), "utf8")).toBe("");
+  });
+
   it("a genuinely-new 0-byte file (no baseline) commits normally — the guard only fires on a collapse", async () => {
     put("fresh.md", "");
     findChangesResult = [

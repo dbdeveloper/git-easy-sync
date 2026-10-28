@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   canonicalizeBytes,
+  canonicalizeForPath,
+  GITKEEP_SHA,
+  isGitkeep,
   normalizeText,
   shouldCanonicalize,
 } from "../../src/sync2/text-normalize";
@@ -300,5 +303,43 @@ describe("canonicalizeBytes — the commit side's one canonical form (COMMIT-PAS
     const r = canonicalizeBytes(cp1251.buffer as ArrayBuffer, true);
     expect(r.changed).toBe(false);
     expect(new Uint8Array(r.bytes)).toEqual(cp1251);
+  });
+});
+
+// GITKEEP I4/I5: a `.gitkeep` is always zero-length — its canonical form
+// is the empty file, whatever the extension gate, the user toggle or the
+// folder says.
+describe("canonicalizeForPath — .gitkeep is always empty", () => {
+  const enc = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
+
+  it("🔑 non-empty .gitkeep → empty bytes, changed, content ''", () => {
+    for (const p of ["notes/.gitkeep", ".gitkeep", ".obsidian/snippets/.gitkeep"]) {
+      for (const eligible of [true, false]) {
+        const r = canonicalizeForPath(p, enc("keep me"), eligible);
+        expect(r.bytes.byteLength).toBe(0);
+        expect(r.changed).toBe(true);
+        expect(r.content).toBe("");
+      }
+    }
+  });
+
+  it("an empty .gitkeep is unchanged", () => {
+    const empty = new ArrayBuffer(0);
+    const r = canonicalizeForPath("notes/.gitkeep", empty, false);
+    expect(r).toEqual({ bytes: empty, changed: false, content: null });
+  });
+
+  it("any other path is exactly canonicalizeBytes", () => {
+    const b = enc("a\r\nb");
+    expect(canonicalizeForPath("n.md", b, true)).toEqual(canonicalizeBytes(b, true));
+    expect(canonicalizeForPath("notes/x.gitkeep", b, false)).toEqual(canonicalizeBytes(b, false));
+  });
+
+  it("isGitkeep: the exact basename only", () => {
+    expect(isGitkeep("a/b/.gitkeep")).toBe(true);
+    expect(isGitkeep(".gitkeep")).toBe(true);
+    expect(isGitkeep("a/x.gitkeep")).toBe(false);
+    expect(isGitkeep("a/.gitkeep.bak")).toBe(false);
+    expect(GITKEEP_SHA).toBe("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
   });
 });

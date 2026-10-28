@@ -734,6 +734,27 @@ describe("BatchWriter (Phase 2 group B)", () => {
     expect(fs.readFileSync(path.join(dir, "ua.md"), "utf8")).toBe(canonical);
   });
 
+  it("🔑 GITKEEP I4: a non-empty .gitkeep is truncated to zero ON DISK and committed empty, with its own WARN", async () => {
+    for (const p of ["notes/.gitkeep", ".mydir/.gitkeep"]) {
+      warnings = [];
+      putVaultFile(p, "keep me");
+      // Toggle OFF: .gitkeep is empty regardless of the user's setting.
+      const id = await makeWriter({ autoCanonicalize: false }).writeBatch([modified(p)]);
+      const entry = readMeta(id!).entries[0];
+      expect(entry.sha).toBe("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+      expect(entry.size).toBe(0);
+      expect(fs.readFileSync(path.join(dir, p)).byteLength).toBe(0);
+      expect(warnings).toEqual([".gitkeep must be empty — truncated to zero bytes"]);
+    }
+  });
+
+  it("GITKEEP: an empty .gitkeep is committed as is — no write-back, no WARN", async () => {
+    putVaultFile("notes/.gitkeep", "");
+    const id = await makeWriter().writeBatch([modified("notes/.gitkeep")]);
+    expect(readMeta(id!).entries[0].sha).toBe("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+    expect(warnings).toEqual([]);
+  });
+
   it("autoCanonicalize off → byte-exact snapshot, no write-back", async () => {
     putVaultFile("raw.md", "a\r\nb");
     const id = await makeWriter({ autoCanonicalize: false }).writeBatch([

@@ -361,6 +361,74 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(warns2.filter((w) => /resolved automatically/.test(w))).toEqual([]);
   });
 
+  // GITKEEP I4/I5/I5a/I5b/I5c (docs/tasks/GITKEEP.md).
+  describe("GITKEEP — always empty, never a conflict, the empty one goes back", () => {
+    const K = "notes/.gitkeep";
+    const EMPTY = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+    const seed = async (): Promise<void> => {
+      baseCommit = await world.commitFiles({ [K]: "", "notes/a.md": V0 });
+      baselines.set(K, { baselineSha: EMPTY, mtime: 50, size: 0 });
+      baselines.set("notes/a.md", { baselineSha: await sha(V0), mtime: 50, size: enc(V0).byteLength });
+      vaultFiles.files.set(K, { content: "", mtime: 50 });
+      vaultFiles.files.set("notes/a.md", { content: V0, mtime: 50 });
+    };
+
+    it("🔑 I5b: text put into .gitkeep on GitHub → kept empty here, then our empty one replaces it on the server", async () => {
+      await seed();
+      await world.commitFiles({ [K]: "junk" }); // someone on GitHub
+      const r1 = await drainOnce(makeDeps());
+      expect(r1.status).toBe("ok");
+      expect(vaultFiles.files.get(K)?.content).toBe(""); // never the server's bytes
+      expect(baselines.get(K)?.baselineSha).toBe(await sha("junk")); // record = server (I6)
+      expect((await conflictStore.load()).entries.size).toBe(0);
+
+      // The heal commit (step 3 emits it): the empty file, queued.
+      baseCommit = world.head!;
+      await stageBatch({ [K]: "" });
+      const r2 = await drainOnce(makeDeps());
+      expect(r2.status).toBe("ok");
+      expect(world.headFiles().get(K)?.sha).toBe(EMPTY);
+    });
+
+    it("🔑 I5a: text in the LOCAL .gitkeep + the folder deleted on GitHub → deleted here, no conflict", async () => {
+      await seed();
+      vaultFiles.files.set(K, { content: "a user wrote here", mtime: 60 });
+      await world.commitFiles({ [K]: null, "notes/a.md": null });
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.files.has(K)).toBe(false);
+      expect(vaultFiles.files.has("notes/a.md")).toBe(false);
+      expect((await conflictStore.load()).entries.size).toBe(0);
+    });
+
+    it("🔑 I5c: record = the server's junk, disk empty, then the folder deleted on GitHub → deleted, no conflict", async () => {
+      await seed();
+      await world.commitFiles({ [K]: "junk" });
+      expect((await drainOnce(makeDeps())).status).toBe("ok");
+      baseCommit = world.head!;
+      await world.commitFiles({ [K]: null, "notes/a.md": null });
+      const warns: string[] = [];
+      const r = await drainOnce(makeDeps({ logger: { info: () => {}, warn: (m: string) => warns.push(m) } }));
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.files.has(K)).toBe(false);
+      expect((await conflictStore.load()).entries.size).toBe(0);
+      expect(warns.filter((w) => /resolved automatically/.test(w))).toEqual([]);
+    });
+
+    it("I5c mirror: the folder deleted HERE, the .gitkeep edited on GitHub → our deletion goes out", async () => {
+      await seed();
+      vaultFiles.files.delete(K);
+      vaultFiles.files.delete("notes/a.md");
+      await stageBatch({ [K]: null, "notes/a.md": null });
+      await world.commitFiles({ [K]: "junk" });
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(world.headFiles().has(K)).toBe(false);
+      expect(vaultFiles.files.has(K)).toBe(false);
+      expect((await conflictStore.load()).entries.size).toBe(0);
+    });
+  });
+
   describe("holding a plugin update this Obsidian cannot load", () => {
     const ID = "templater-obsidian";
     const DIR = `.obsidian/plugins/${ID}`;

@@ -53,7 +53,7 @@
 import { normalizePath, type Vault } from "obsidian";
 import type WorkerClient from "../worker/worker-client";
 import SyncStore, { PIN_OWNER_COMMIT } from "./sync-store";
-import { canonicalizeBytes, shouldCanonicalize } from "./text-normalize";
+import { canonicalizeForPath, isGitkeep, shouldCanonicalize } from "./text-normalize";
 import { newBatchId, parseTimestampId } from "./timestamp-id";
 import { FileChange } from "./types";
 import {
@@ -369,7 +369,9 @@ export default class BatchWriter {
   ): Promise<ArrayBuffer | null> {
     if (!(await this.vault.adapter.exists(path))) return null;
     const raw = await this.vault.adapter.readBinary(path);
-    const canon = canonicalizeBytes(
+    const previousSize = raw.byteLength; // before hashing may move `raw`
+    const canon = canonicalizeForPath(
+      path,
       raw,
       shouldCanonicalize(path, this.vault.configDir) &&
         this.autoCanonicalize(),
@@ -377,7 +379,12 @@ export default class BatchWriter {
     if (canon.changed && writeBack) {
       await this.vault.adapter.write(path, canon.content as string);
       // WARN (ARCHITECTURE "Log levels"): the file changed without a person.
-      this.logger?.warn("Text file canonicalized by the plugin (line endings / BOM / final newline)", { path });
+      if (isGitkeep(path)) {
+        // GITKEEP I4 (owner, 2026-10-28): its own words, not "canonicalized".
+        this.logger?.warn(".gitkeep must be empty — truncated to zero bytes", { path, previousSize });
+      } else {
+        this.logger?.warn("Text file canonicalized by the plugin (line endings / BOM / final newline)", { path });
+      }
     }
     return canon.bytes;
   }

@@ -338,6 +338,16 @@ TD4.3) — тобто стирав би правду журналу на кож�
 питає тоді, коли сканування вже закрите (I23); `findChangeForPath` такий `.gitkeep` не віддає.
 `mock-obsidian` `getFiles()` тепер ховає dot-імена на будь-якій глибині, як індекс Obsidian (`Dl`).
 
+**Крок 2 — зроблено.** Одна функція `canonicalizeForPath` (`text-normalize.ts`) — `.gitkeep` у будь-якій
+теці стає порожнім — у всіх трьох місцях, що перетворюють байти: детектор (`hashCandidate`), коміт
+(`readCanonicalBytes` — обрізає на диску з WARN `.gitkeep must be empty — truncated to zero bytes`),
+прийом (`vault-file-reader`: `canonicalizesOnWrite` завжди «так» для `.gitkeep`, запис порожній, WARN
+`.gitkeep from the server is not empty — keeping the empty one and sending it back`; `read` віддає порожній
+sha і байти). `samePulledForm` для `.gitkeep` відповідає без отримання байтів. Захист від нульового
+розміру пропускає `.gitkeep`. diff3 — правило 2.c (SYNC2-NEW-DRAIN §II.1). Відкрито до кроку 3: позначка
+теки, коли з сервера прийшов непорожній `.gitkeep` у ЗВИЧАЙНІЙ теці (журналу ще немає), — до того сервер
+лікується лише в dot-теках (детектор) або коли теку позначить щось інше.
+
 ## 6. Перевірити під час реалізації
 
 - Проба на телефоні: `adapter.write` у відсутню теку — падає чи створює (I24/I25); чи дають події Obsidian

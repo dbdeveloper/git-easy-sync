@@ -4,7 +4,7 @@
 // branches; two independent eyes (truth vs discoveryAnswer) are the
 // callers' business — the world only serves truth.
 
-import { canonicalizeBytes, shouldCanonicalize } from "../../src/sync2/text-normalize";
+import { canonicalizeForPath, GITKEEP_SHA, isGitkeep, shouldCanonicalize } from "../../src/sync2/text-normalize";
 import { calculateGitBlobSHA } from "../../src/utils";
 import { DrainClient } from "../../src/sync2/drain";
 import { ValidationError } from "../../src/errors";
@@ -293,6 +293,8 @@ export class FakeVaultFiles {
     const f = this.files.get(p);
     if (!f) return null;
     this.reads += 1;
+    // As the production reader (GITKEEP I5a): a .gitkeep reads empty.
+    if (isGitkeep(p)) return { size: 0, mtime: f.mtime, sha: GITKEEP_SHA, blob: new ArrayBuffer(0) };
     const bytes = enc(f.content);
     return {
       size: bytes.byteLength,
@@ -308,11 +310,11 @@ export class FakeVaultFiles {
   canonicalizeOn = false;
 
   canonicalizesOnWrite(p: string): boolean {
-    return this.canonicalizeOn && shouldCanonicalize(p, ".obsidian");
+    return isGitkeep(p) || (this.canonicalizeOn && shouldCanonicalize(p, ".obsidian"));
   }
 
   canonicalize(p: string, bytes: ArrayBuffer): ArrayBuffer {
-    return canonicalizeBytes(bytes, this.canonicalizesOnWrite(p)).bytes;
+    return canonicalizeForPath(p, bytes, this.canonicalizesOnWrite(p)).bytes;
   }
 
   async write(p: string, bytes: ArrayBuffer): Promise<void> {

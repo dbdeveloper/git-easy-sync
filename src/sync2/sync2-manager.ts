@@ -57,6 +57,7 @@ import HotMetadataStore from "./hot-metadata";
 import FileBaselinesStore from "./file-baselines";
 import { freeNameFor, needsSanitization, sanitizeFilename } from "./cross-platform";
 import { newBatchId } from "./timestamp-id";
+import { isGitkeep } from "./text-normalize";
 import { AuthError, NetworkError } from "../errors";
 import type { TrashHooks } from "./trash-hooks";
 import { normalizePath } from "obsidian";
@@ -1284,6 +1285,9 @@ export class Sync2Manager {
       const c = changes[i];
       if (c.kind !== "modified" && c.kind !== "added") continue;
       if (c.size !== 0) continue;
+      // GITKEEP I7: empty by definition — "emptied" is never corruption
+      // for it, and restoring would undo the truncation of I4.
+      if (isGitkeep(c.path)) continue;
       const baseline = await this.deps.baselines.get(c.path);
       if (!baseline || baseline.size === 0) continue; // new OR was-empty
       let bytes: ArrayBuffer | null = null;

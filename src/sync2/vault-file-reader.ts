@@ -28,7 +28,7 @@
 
 import { normalizePath, type Vault } from "obsidian";
 import { atomicWriteFile } from "./atomic-write";
-import { canonicalizeBytes, shouldCanonicalize } from "./text-normalize";
+import { canonicalizeForPath, GITKEEP_SHA, isGitkeep, shouldCanonicalize } from "./text-normalize";
 import type { TrashHooks } from "./trash-hooks";
 import type { VaultFileReader } from "./drain";
 import {
@@ -86,11 +86,14 @@ export function makeVaultFileReader(
   // the vault with the repo the way the user sees them (with "Auto-
   // canonicalize text files" on, CRLF and LF are the same file). `write`
   // below goes through the very same two functions.
+  // A `.gitkeep` is always written empty (GITKEEP I4/I5), whatever the
+  // toggle says — so for it the answer is always "yes".
   const canonicalizesOnWrite = (path: string): boolean =>
-    deps.autoCanonicalize?.() === true &&
-    shouldCanonicalize(normalizePath(path), deps.vault.configDir);
+    isGitkeep(normalizePath(path)) ||
+    (deps.autoCanonicalize?.() === true &&
+      shouldCanonicalize(normalizePath(path), deps.vault.configDir));
   const canonicalize = (path: string, bytes: ArrayBuffer): ArrayBuffer =>
-    canonicalizeBytes(bytes, canonicalizesOnWrite(path)).bytes;
+    canonicalizeForPath(normalizePath(path), bytes, canonicalizesOnWrite(path)).bytes;
 
   return {
     // ⚠️ OUR OWN plugin's loadable files are STAGED, never written.
@@ -148,6 +151,12 @@ export function makeVaultFileReader(
       const normalized = normalizePath(path);
       const s = await deps.vault.adapter.stat(normalized);
       if (s === null || s.type !== "file") return null;
+      // GITKEEP I5a: a `.gitkeep` READS as the empty file, whatever is
+      // on disk — the drain compares it in its canonical form, as the
+      // commit does, so text in one never makes a conflict.
+      if (isGitkeep(normalized)) {
+        return { size: 0, mtime: s.mtime, sha: GITKEEP_SHA, blob: new ArrayBuffer(0) };
+      }
       const blob = await deps.vault.adapter.readBinary(normalized);
       return {
         // Sizes from the bytes actually read (the truth), mtime from
@@ -174,7 +183,18 @@ export function makeVaultFileReader(
       // passed raw on the other would re-sync forever.
       const out = canonicalize(normalized, bytes);
       await atomicWriteFile(deps.vault, normalized, out);
-      if (out !== bytes && !sameBytes(out, bytes)) {
+      if (isGitkeep(normalized)) {
+        // GITKEEP I4/I27 (owner, 2026-10-28): the server's non-empty one
+        // is not written — ours stays empty and goes back with the next
+        // commit (the record now holds the server's sha, so the empty
+        // file reads as a change). Its own WARN, not "canonicalized".
+        if (bytes.byteLength > 0) {
+          deps.logger?.warn(
+            ".gitkeep from the server is not empty — keeping the empty one and sending it back",
+            { path: normalized, serverSize: bytes.byteLength },
+          );
+        }
+      } else if (out !== bytes && !sameBytes(out, bytes)) {
         // WARN (ARCHITECTURE "Log levels"): written not as it came from the server.
         deps.logger?.warn("Pulled text file stored canonicalized (line endings / BOM / final newline)", {
           path: normalized,
