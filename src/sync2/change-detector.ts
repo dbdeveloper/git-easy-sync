@@ -132,7 +132,11 @@ export async function isSyncable(
   // to every device. Losing the anchor off `!/.myconfig/` — one
   // character — would wipe the directory everywhere. So "permitted" and
   // "discoverable" are ONE set.
-  if (isDotPath(path)) {
+  // GITKEEP §8: an ordinary-folder `.gitkeep` is admitted by its PATH,
+  // with no scan — the folder journal asks outside any scan scope (the
+  // `.gitkeep` phase runs even when findChanges found nothing). gi below
+  // keeps the last word.
+  if (isDotPath(path) && !isOrdinaryFolderGitkeep(path)) {
     if (optIn === null) {
       // FAIL LOUD (§5). Silently answering "false" here would be worse
       // than a crash: the whole dot-space would quietly leave scope,
@@ -151,7 +155,6 @@ export async function isSyncable(
       path === configDir || path.startsWith(`${configDir}/`);
     if (!underConfigDir) {
       const discoverable =
-        isOrdinaryFolderGitkeep(path) ||
         optIn.dotFiles.has(path) ||
         underWalkTarget(path, optIn.walkTargets);
       if (!discoverable) return false;
@@ -950,6 +953,8 @@ export default class ChangeDetector {
   // Returns null when the path has no work to push: identical to
   // snapshot, missing on both sides, ignored, or hardcoded-blocked.
   async findChangeForPath(path: string): Promise<FileChange | null> {
+    // GITKEEP I9: the folder journal's, never ours — in either direction.
+    if (isOrdinaryFolderGitkeep(path)) return null;
     // syncFile (the one-file ribbon action) is its own operation, so it
     // establishes its own scope — otherwise it would be the fail-loud's
     // first victim rather than its beneficiary.

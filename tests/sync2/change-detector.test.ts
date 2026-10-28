@@ -2260,6 +2260,38 @@ describe("GITKEEP — sync membership of a .gitkeep (I8, I34, I35)", () => {
     ).toBe(true);
   });
 
+  it("🔑 asked OUTSIDE a scan it answers by path + .gitignore, it does not throw", async () => {
+    // The .gitkeep phase of a commit runs even when findChanges found
+    // nothing — the scan scope is closed by then (GITKEEP I23).
+    expect(await ask("notes/.gitkeep", giWith(ROOT), null as never)).toBe(true);
+    expect(await ask("private/.gitkeep", giWith(ROOT + "private/\n"), null as never)).toBe(false);
+    // ...while any other dot-path still fails loud (TD7.5).
+    await expect(ask(".mydir/.gitkeep", giWith(ROOT), null as never)).rejects.toThrow(/beginScan/);
+  });
+
+  it("findChangeForPath never emits an ordinary-folder .gitkeep", async () => {
+    const root = path.join(os.tmpdir(), `gk-fcp-${crypto.randomBytes(4).toString("hex")}`);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, ".gitignore"), ROOT);
+    fs.mkdirSync(path.join(root, "notes"));
+    fs.writeFileSync(path.join(root, "notes/.gitkeep"), "");
+    const vault = new Vault(root);
+    const hot = new HotMetadataStore({ vault: vault as never, selfPluginId: "git-easy-sync" });
+    await hot.load();
+    const detector = new ChangeDetector({
+      vault: vault as never,
+      hotMeta: hot,
+      baselines: new FileBaselinesStore({ vault: vault as never, selfPluginId: "git-easy-sync" }),
+      gi: new GI(root),
+      configDir: CD,
+      selfPluginId: "git-easy-sync",
+      vaultRoot: root,
+      syncConfigDir: () => true,
+    });
+    expect(await detector.findChangeForPath("notes/.gitkeep")).toBeNull();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it("only the exact basename — `x.gitkeep`, `.gitkeep.bak` are not it", async () => {
     expect(await ask("notes/.gitkeep.bak", giWith(ROOT))).toBe(false);
     expect(isOrdinaryFolderGitkeep("notes/x.gitkeep")).toBe(false);
