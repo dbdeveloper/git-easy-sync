@@ -1494,6 +1494,19 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       expect(await manager.scanFolders()).toBe(0);
     });
 
+    it("🔑 I25a: while a drain removes a folder's .gitkeep, the commit does not put one back there", async () => {
+      withLog();
+      mkdir("notes");
+      put("notes/.gitkeep", "");
+      const built = (manager as unknown as { buildDeps(): { vaultFiles: { remove(p: string): Promise<void> } } }).buildDeps();
+      await built.vaultFiles.remove("notes/.gitkeep"); // the drain's Vault step, mid-run
+      manager.markFolder("notes");
+      await manager.commitOnly();
+      expect(exists("notes/.gitkeep")).toBe(false);
+      expect(writtenBatches.flat()).toEqual([]);
+      expect([...manager.markedFolders()]).toEqual(["notes"]); // looked at again next time
+    });
+
     it("I4 wiring: the drain's reader marks into THIS manager's journal (buildDeps → buildDrainDeps → reader)", async () => {
       const built = (manager as unknown as { buildDeps(): { vaultFiles: { write(p: string, b: ArrayBuffer): Promise<void> } } }).buildDeps();
       await built.vaultFiles.write("notes/.gitkeep", new TextEncoder().encode("junk").buffer as ArrayBuffer);

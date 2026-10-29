@@ -56,6 +56,10 @@ export interface VaultFileReaderDeps {
   // non-empty `.gitkeep` from the server in an ORDINARY folder must go
   // back empty with the next commit. Marking only; the commit writes.
   markFolder?: (folder: string) => void;
+  // GITKEEP I25a: every `.gitkeep` this drain removes is added here, so
+  // a commit running beside the drain does not put one straight back.
+  // The owner (Sync2Manager) clears it when the drain ends.
+  gitkeepsBeingRemoved?: Set<string>;
 }
 
 async function ensureParentDir(vault: Vault, filePath: string): Promise<void> {
@@ -212,6 +216,29 @@ export function makeVaultFileReader(
       }
     },
 
+    // GITKEEP I29 — the sweep's two primitives. `list` names direct
+    // entries, dot-files included (adapter.list sees them; Obsidian's
+    // index does not), so a `.DS_Store` keeps its folder.
+    // ⚠️ There is no "remove only if empty" on any platform (1.13.4):
+    // desktop rmdir(p, false) refuses even an EMPTY folder (Node rm,
+    // EISDIR), Capacitor's rmdir is always recursive. So the emptiness
+    // check is ours, right before a recursive rmdir, nothing in between
+    // — the list-then-rmdir Obsidian Sync itself uses.
+    async listFolder(folder) {
+      const normalized = normalizePath(folder);
+      if (!(await deps.vault.adapter.exists(normalized))) return null;
+      const { files, folders } = await deps.vault.adapter.list(normalized);
+      return [...files, ...folders].map((p) => p.slice(p.lastIndexOf("/") + 1));
+    },
+
+    async removeFolderIfEmpty(folder) {
+      const normalized = normalizePath(folder);
+      const { files, folders } = await deps.vault.adapter.list(normalized);
+      if (files.length > 0 || folders.length > 0) return false;
+      await deps.vault.adapter.rmdir(normalized, true);
+      return true;
+    },
+
     async remove(path) {
       const normalized = normalizePath(path);
       if (!(await deps.vault.adapter.exists(normalized))) return;
@@ -270,6 +297,7 @@ export function makeVaultFileReader(
         );
         return;
       }
+      if (isGitkeep(normalized)) deps.gitkeepsBeingRemoved?.add(normalized);
       // GITKEEP I38: an empty marker is not worth a place in the Deleted
       // bin — N copies per deleted folder would be noise.
       if (deps.trashHooks && !isGitkeep(normalized)) {

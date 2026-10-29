@@ -305,6 +305,10 @@ export class Sync2Manager {
   // GITKEEP I11-I14: the folders worth a look at the next commit — in
   // memory only, rebuilt by the start scan after a restart.
   private readonly folderJournal = new FolderJournal();
+  // GITKEEP I25a: .gitkeep paths the running drain has removed; the
+  // commit does not put one back there while the drain runs. Cleared
+  // when the drain returns.
+  private readonly gitkeepsBeingRemoved = new Set<string>();
 
   // The "N sent, M received" of the sync summary — what the drains of
   // THIS user-visible operation really changed (owner, 2026-10-05).
@@ -1065,6 +1069,12 @@ export class Sync2Manager {
     const failed = new Set<string>();
     for (const folder of plan.visited) {
       const path = `${folder}/.gitkeep`;
+      // I25a: the drain running beside us just removed this one — the
+      // folder is probably on its way out; look again next commit.
+      if (this.gitkeepsBeingRemoved.has(path)) {
+        failed.add(folder);
+        continue;
+      }
       try {
         const stat = await adapter.stat(path);
         if (stat !== null && stat.size === 0) continue;
@@ -1237,7 +1247,12 @@ export class Sync2Manager {
       // §II.19: a commit pass may be replaying the progress log right now;
       // drainOnce replays (and then appends to) the same file itself.
       if (this.progressReplay !== null) await this.progressReplay;
-      const r = await (this.deps.drainFn ?? drainOnce)(this.buildDeps());
+      let r: DrainResult;
+      try {
+        r = await (this.deps.drainFn ?? drainOnce)(this.buildDeps());
+      } finally {
+        this.gitkeepsBeingRemoved.clear();
+      }
 
       // Vault-step outcome → UI signals (independent of status: the
       // writes that DID land are real even on a later abort).
@@ -1382,6 +1397,7 @@ export class Sync2Manager {
       cancelSignal: this.deps.cancelSignal,
       trashHooks: this.deps.trashHooks,
       markFolder: (f) => this.folderJournal.mark(f),
+      gitkeepsBeingRemoved: this.gitkeepsBeingRemoved,
       gitignoreSeeds: this.deps.gitignoreSeeds,
       deletedBinReferencedShas: this.deps.deletedBin
         ? () => this.deps.deletedBin!.referencedShas()

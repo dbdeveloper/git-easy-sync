@@ -128,6 +128,7 @@ import { buildConflictBranchName } from "./conflict-branch";
 import { toGitAuthorDate } from "./commit-message";
 import { freeNameFor, needsSanitization, sanitizeFilename } from "./cross-platform";
 import { GITKEEP_SHA, isGitkeep } from "./text-normalize";
+import { sweepEmptyFolders } from "./folder-sweep";
 
 export interface DrainClient {
   getGuardedHead(): Promise<string | null>;
@@ -245,6 +246,11 @@ export interface VaultFileReader {
   // Vault-step apply: write merged/remote bytes, or delete the path.
   write(path: string, bytes: ArrayBuffer): Promise<void>;
   remove(path: string): Promise<void>;
+  // GITKEEP I29 — the empty-folder sweep: a folder's direct entries
+  // (null = it does not exist), and removing a folder that is EMPTY.
+  // Optional: absent = no sweep (test fakes that do not model folders).
+  listFolder?(folder: string): Promise<string[] | null>;
+  removeFolderIfEmpty?(folder: string): Promise<boolean>;
   // ⚠️ OUR OWN plugin's loadable files (main.js, manifest.json,
   // styles.css) never take the two calls above. They are staged beside
   // the live file with a completion marker, and the BOOTLOADER applies
@@ -261,6 +267,9 @@ export interface VaultFileReader {
 }
 
 export interface DrainDeps {
+  // GITKEEP I31/C13: mark a folder in the commit's folder journal (the
+  // sweep's survivors). Marking only — the commit writes.
+  markFolder?: (folder: string) => void;
   vault: Vault;
   selfPluginId: string;
   client: DrainClient;
@@ -513,6 +522,10 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   const pushedCommits: string[] = [];
   const vaultStepWrites: string[] = [];
   const vaultStepRemoves: string[] = [];
+  // GITKEEP I30: EVERY deletion this run applies — removed now or found
+  // already gone (a redo after a dead battery) — so the sweep at the end
+  // of the Vault step looks at the same folders either way.
+  const sweepFrom: string[] = [];
   // §II.19 — the progress log: one line per path whose outcome this run
   // has fixed (base == remote), appended AFTER the vault write / removal
   // or the confirmed push, never before. Any exit short of the epilogue —
@@ -813,6 +826,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         .map((b: { path: string }) => b.path)
         .filter((p: string) => !seen.has(p));
       for (const p of gone) {
+        sweepFrom.push(p);
         if ((await deps.vaultFiles.stat(p)) !== null) {
           await deps.vaultFiles.remove(p);
           vaultStepRemoves.push(p);
@@ -2888,6 +2902,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       continue;
     }
     if (v.mode === DELETED || v.sha === DELETED_SHA_HASH) {
+      sweepFrom.push(path);
       if (vaultEntry !== null) {
         await deps.vaultFiles.remove(path);
         vaultStepRemoves.push(path);
@@ -2995,6 +3010,31 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     if (tracked.remote.size === null) tracked.remote.size = bytes.byteLength;
     tracked.base = tracked.remote;
     await noteProgress([path]); // AFTER the write (§II.19)
+  }
+
+  // ── GITKEEP I29-I31 — the empty-folder sweep, at the END of the
+  // Vault step and BEFORE the epilogue: the records of the deleted files
+  // are still in place, and a crash anywhere up to the epilogue redoes
+  // the Vault step AND this sweep (the journal lives until then). Swept
+  // after the records went, a dead battery in between would leave an
+  // empty visible folder with no record — the scan would call it new and
+  // the commit would bring a folder the user deleted back everywhere.
+  if (sweepFrom.length > 0 && deps.vaultFiles.listFolder && deps.vaultFiles.removeFolderIfEmpty) {
+    const vf = deps.vaultFiles;
+    const { removed } = await sweepEmptyFolders({
+      deletedPaths: sweepFrom,
+      configDir,
+      list: (f) => vf.listFolder!(f),
+      removeIfEmpty: (f) => vf.removeFolderIfEmpty!(f),
+      hasRecord: async (p) => (await deps.baselines.get(p)) !== undefined,
+      mark: (f) => deps.markFolder?.(f),
+    });
+    if (removed.length > 0) {
+      deps.logger?.info("Empty folders removed after the server's deletions", {
+        count: removed.length,
+        folders: removed,
+      });
+    }
   }
 
   // ── EPILOGUE (§III steps 1-4; step 5 = the sync_store sweep).

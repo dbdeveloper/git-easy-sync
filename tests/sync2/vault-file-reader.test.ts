@@ -182,6 +182,19 @@ describe.each([{ platform: "desktop" as const }, { platform: "mobile" as const }
       expect(marked).toEqual(["notes/sub"]);
     });
 
+    it("🔑 GITKEEP I29: listFolder sees dot-files (a .DS_Store keeps its folder); removeFolderIfEmpty never empties one", async () => {
+      await vault.adapter.write("a/.DS_Store", "finder");
+      await vault.adapter.mkdir("a/sub");
+      await vault.adapter.mkdir("empty");
+      const r = reader();
+      expect((await r.listFolder!("a"))!.sort()).toEqual([".DS_Store", "sub"]);
+      expect(await r.listFolder!("missing")).toBeNull();
+      expect(await r.removeFolderIfEmpty!("a")).toBe(false);
+      expect(await vault.adapter.exists("a/.DS_Store")).toBe(true);
+      expect(await r.removeFolderIfEmpty!("empty")).toBe(true);
+      expect(await vault.adapter.exists("empty")).toBe(false);
+    });
+
     it("🔑 GITKEEP I5a: a .gitkeep READS as empty, whatever is on disk", async () => {
       await vault.adapter.write("notes/.gitkeep", "text a user put here");
       const got = await reader().read("notes/.gitkeep");

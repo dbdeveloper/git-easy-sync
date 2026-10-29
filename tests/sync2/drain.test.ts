@@ -445,6 +445,66 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     });
   });
 
+  // GITKEEP I29-I32, C12, C13 — the empty-folder sweep on a receiver.
+  describe("GITKEEP — the folders a deletion empties", () => {
+    const EMPTY = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+    const seedNotes = async (): Promise<void> => {
+      baseCommit = await world.commitFiles({ "notes/.gitkeep": "", "notes/a.md": V0, "keep.md": V0 });
+      baselines.set("notes/.gitkeep", { baselineSha: EMPTY, mtime: 50, size: 0 });
+      baselines.set("notes/a.md", { baselineSha: await sha(V0), mtime: 50, size: enc(V0).byteLength });
+      baselines.set("keep.md", { baselineSha: await sha(V0), mtime: 50, size: enc(V0).byteLength });
+      vaultFiles.files.set("notes/.gitkeep", { content: "", mtime: 50 });
+      vaultFiles.files.set("notes/a.md", { content: V0, mtime: 50 });
+      vaultFiles.files.set("keep.md", { content: V0, mtime: 50 });
+    };
+
+    it("🔑 a folder deleted on the server goes here too, once its files went", async () => {
+      await seedNotes();
+      await world.commitFiles({ "notes/.gitkeep": null, "notes/a.md": null });
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.removedFolders).toEqual(["notes"]);
+    });
+
+    it("🔑 dead battery at the sweep: the next drain redoes the Vault step AND the sweep, then the records go", async () => {
+      await seedNotes();
+      await world.commitFiles({ "notes/.gitkeep": null, "notes/a.md": null });
+      vaultFiles.failRemoveFolder = () => true;
+      await expect(drainOnce(makeDeps())).rejects.toThrow(/power loss/);
+      // Before the epilogue: the records are still there.
+      expect(baselines.has("notes/.gitkeep")).toBe(true);
+      vaultFiles.failRemoveFolder = null;
+      const r = await drainOnce(makeDeps());
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.removedFolders).toEqual(["notes"]);
+      expect(baselines.has("notes/.gitkeep")).toBe(false);
+    });
+
+    it("🔑 C12: something left in it (a .DS_Store) → the folder stays, nothing inside is touched, it is marked", async () => {
+      await seedNotes();
+      vaultFiles.files.set("notes/.DS_Store", { content: "finder", mtime: 50 });
+      await world.commitFiles({ "notes/.gitkeep": null, "notes/a.md": null });
+      const marked: string[] = [];
+      const r = await drainOnce(makeDeps({ markFolder: (f: string) => marked.push(f) }));
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.removedFolders).toEqual([]);
+      expect(vaultFiles.files.has("notes/.DS_Store")).toBe(true);
+      expect(marked).toEqual(["notes"]);
+    });
+
+    it("🔑 C13: emptied by the server, but its .gitkeep record lives (removed here by hand) → alive, marked", async () => {
+      await seedNotes();
+      vaultFiles.files.delete("notes/.gitkeep"); // the user, silently
+      vaultFiles.folders.add("notes");
+      await world.commitFiles({ "notes/a.md": null }); // the folder lives on the server
+      const marked: string[] = [];
+      const r = await drainOnce(makeDeps({ markFolder: (f: string) => marked.push(f) }));
+      expect(r.status).toBe("ok");
+      expect(vaultFiles.removedFolders).toEqual([]);
+      expect(marked).toEqual(["notes"]);
+    });
+  });
+
   describe("holding a plugin update this Obsidian cannot load", () => {
     const ID = "templater-obsidian";
     const DIR = `.obsidian/plugins/${ID}`;

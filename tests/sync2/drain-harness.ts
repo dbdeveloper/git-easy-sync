@@ -325,6 +325,39 @@ export class FakeVaultFiles {
   async remove(p: string): Promise<void> {
     this.removed.push(p);
     this.files.delete(p);
+    // A real file system keeps the emptied folder (GITKEEP I29).
+    for (let d = p.slice(0, Math.max(0, p.lastIndexOf("/"))); d !== ""; d = d.slice(0, Math.max(0, d.lastIndexOf("/")))) {
+      this.folders.add(d);
+    }
+  }
+
+  // Folders as a file system has them: implied by the files, plus the
+  // ones that exist empty (seeded by a test, or left behind by remove).
+  readonly folders = new Set<string>();
+  removedFolders: string[] = [];
+  failRemoveFolder: ((folder: string) => boolean) | null = null;
+
+  async listFolder(folder: string): Promise<string[] | null> {
+    const prefix = `${folder}/`;
+    const names = new Set<string>();
+    let exists = this.folders.has(folder);
+    for (const p of [...this.files.keys(), ...this.folders]) {
+      if (!p.startsWith(prefix)) continue;
+      exists = true;
+      names.add(p.slice(prefix.length).split("/")[0]);
+    }
+    return exists ? [...names] : null;
+  }
+
+  // As production: list, and remove only when empty (the platforms'
+  // rmdir itself is recursive or refuses everything — no guarantee).
+  async removeFolderIfEmpty(folder: string): Promise<boolean> {
+    if (this.failRemoveFolder?.(folder)) throw new Error(`power loss at rmdir ${folder}`);
+    const entries = await this.listFolder(folder);
+    if (entries !== null && entries.length > 0) return false;
+    this.folders.delete(folder);
+    this.removedFolders.push(folder);
+    return true;
   }
 }
 
