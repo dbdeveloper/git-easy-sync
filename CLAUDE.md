@@ -58,6 +58,7 @@ For anything with consequences, do not start coding on the first message. First:
 ## Refactoring is not a default action
 
 - **Never** rename, restructure, or rewrite existing code on your own initiative. Refactoring happens **only** on an explicit human command that says "refactor".
+- **Found dead code? Ask — at once.** When you notice production code that production no longer calls (only tests, or nothing), raise it to the human as a refactor question in the same session: what it is, who still calls it, "remove / move?". Do not settle for a "this is dead, don't revive it" comment, and do not delete or move it yourself. Tests are never a reason to keep unused code in `src/` — what they need moves to test helpers.
 - Even on command, refactor only when the affected area is covered by tests that could actually catch a mistake — especially tests for real edge cases. Green tests are the **precondition**, not an afterthought.
 - A refactor must preserve behavior. If your change alters what the code *does*, it is not a refactor — stop and raise it as a separate decision.
 - Renaming a function, file, or public interface is a structural change. Same rule: only by explicit command.
