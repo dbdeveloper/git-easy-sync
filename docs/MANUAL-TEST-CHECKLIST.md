@@ -656,19 +656,26 @@ keeps a copy when History deletes a file; these items wait for the UI.
       no false local edit; the log had `applied self-update settled in the baseline`.)*
 - [ ] **Click-enabling the plugin while an update waits staged** raises no `TypeError` in the
       dev console (the instance that applies the stage exits early; a new one takes over).
-- [ ] 🌐 **Other plugins: one toast each, with the version.** An ENABLED plugin updated by a
+- [x] 🌐 **Other plugins: one toast each, with the version.** An ENABLED plugin updated by a
       sync is reloaded and gets its own 3 s toast, `Plugin "cmdr" updated to 0.5.5` (no
       "to …" for a rebuild of the same version). No aggregated "N plugins updated" toast.
       A DISABLED plugin gets no toast.
-- [ ] 🌐 **Summary plugin lines.** Under "Sync done — …": `N plugins updated` and/or
+      *(Field 2026-10-28: toast `Plugin "cmdr" updated to 0.5.6`; the disabled `immersive-translate`
+      got no toast, only an INFO "reload skipped" in the log.)*
+- [x] 🌐 **Summary plugin lines.** Under "Sync done — …": `N plugins updated` and/or
       `N plugins removed`, counting ALL plugins whose files changed, enabled or not — a first
       pull into an empty vault shows e.g. "9 plugins updated".
-- [ ] 🌐 **A plugin removed from the repo is unloaded at once.** Delete an ENABLED plugin's
+      *(Field 2026-10-28: the summary showed `2 plugins updated`.)*
+- [x] 🌐 **A plugin removed from the repo is unloaded at once.** Delete an ENABLED plugin's
       folder on device A and sync; on B, sync: a toast `Plugin "<id>" removed`, the plugin
       stops working immediately (not only after a restart), and it is OFF in Settings →
       Community plugins (`disablePluginAndSave` — re-enabling is a deliberate act).
-- [ ] 🌐 **A plugin that exists only on the server is simply installed** — on a first pull the
+      *(Field 2026-10-28: toast `Plugin "obsidian-importer" removed`; B's log `WARN Plugin removed by
+      sync: unloaded`; the plugin was taken out of `community-plugins.json`.)*
+- [x] 🌐 **A plugin that exists only on the server is simply installed** — on a first pull the
       log has NO `plugin-core collision … (local=?)` lines for plugins the device never had.
+      *(Field 2026-10-28: `obsidian-importer` came back silently and disabled; no
+      `plugin-core collision … (local=?)` lines.)*
 
 ## 8. Crash / recovery / edge cases (🖥️📱)
 
