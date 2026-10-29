@@ -94,6 +94,7 @@ import SiblingTx from "./sync2/sibling-tx";
 import BatchHistorySource from "./sync2/batch-history-source";
 import { ConflictAnalyzer } from "./sync2/conflict-analyzer";
 import { ConflictWatcher } from "./sync2/conflict-watcher";
+import { FolderWatcher } from "./sync2/folder-watcher";
 import {
   buildStatusMenu,
   diffTooltip,
@@ -442,6 +443,8 @@ export default class GitHubSyncPlugin extends Plugin {
   syncStore!: SyncStore;
   githubClient: GithubClient | null = null;
   conflictWatcher!: ConflictWatcher;
+  // GITKEEP I15 — folder events mark the commit's folder journal.
+  private folderWatcher: FolderWatcher | null = null;
   conflictAnalyzer!: ConflictAnalyzer;
   // diff2 trash subsystem (see docs/DIFF2_IMPLEMENTATION_PLAN.md §R3).
   private trashWatcher: TrashWatcher | null = null;
@@ -730,6 +733,21 @@ export default class GitHubSyncPlugin extends Plugin {
           // §4.5.3 (B1) — after the restore settled, wipe orphaned history/deleted dirs.
           void this.sweepHistoryDeletedOrphans();
         });
+
+        // GITKEEP I15/I16 — folder events first, then the start scan in the
+        // background: both mark the same journal, so a folder made while
+        // the scan runs is not lost. Here and not in onload: Obsidian
+        // fires `create` for every existing item while the vault loads.
+        if (this.sync2Manager) {
+          this.folderWatcher = new FolderWatcher({
+            vault: this.app.vault,
+            mark: (f) => this.sync2Manager.markFolder(f),
+          });
+          this.folderWatcher.start();
+          void this.sync2Manager.scanFolders().catch((err) =>
+            this.logger.warn(".gitkeep: start scan failed", { err: `${err}` }),
+          );
+        }
 
         if (this.settings.showStatusBarItem) this.showStatusBarItem();
         if (this.settings.showSyncRibbonButton) this.showSyncRibbonIcon();
@@ -1024,6 +1042,8 @@ export default class GitHubSyncPlugin extends Plugin {
       this.vaultRenameListener = null;
     }
     this.conflictWatcher?.stop();
+    this.folderWatcher?.stop();
+    this.folderWatcher = null;
     // Restore vault.delete/trash to whatever they were when our
     // install() ran. Other plugins that patched on top of us stay
     // untouched (LIFO unwrap — see TrashWatcher class doc).

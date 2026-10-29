@@ -86,4 +86,18 @@ describe.skipIf(!integrationEnabled())("sync2 GK1 — folders travel through .gi
     expect(fs.existsSync(b("notes/sub/deep/.gitkeep"))).toBe(false);
     expect(fs.existsSync(b("notes/sub/note.md"))).toBe(true);
   });
+
+  it("GK2: the start scan alone finds every folder; a second scan after the sync finds nothing", async () => {
+    deviceA = await createSync2Client({ branch });
+    const a = (p: string) => path.join(deviceA!.vaultPath, p);
+    fs.mkdirSync(a("x/y"), { recursive: true });
+    fs.mkdirSync(a("z"), { recursive: true });
+    fs.writeFileSync(a("z/n.md"), "n\n");
+    expect(await deviceA.manager.scanFolders()).toBe(3);
+    await sync2AllAndAssertNoErrors(deviceA);
+    for (const p of ["x/.gitkeep", "x/y/.gitkeep", "z/.gitkeep"]) {
+      expect(await getRemoteFileSha(branch, p), p).toBe(EMPTY);
+    }
+    expect(await deviceA.manager.scanFolders()).toBe(0);
+  });
 });

@@ -59,6 +59,7 @@ import { freeNameFor, needsSanitization, sanitizeFilename } from "./cross-platfo
 import { newBatchId } from "./timestamp-id";
 import { GITKEEP_TRUNCATED, isGitkeep } from "./text-normalize";
 import FolderJournal from "./folder-journal";
+import { scanFolders } from "./folder-scan";
 import { planGitkeeps } from "./gitkeep-plan";
 import { isOrdinaryFolderGitkeep } from "./change-detector";
 import { DELETED_SHA_HASH } from "./discovery";
@@ -593,6 +594,38 @@ export class Sync2Manager {
 
   markedFolders(): IterableIterator<string> {
     return this.folderJournal.paths();
+  }
+
+  // GITKEEP I16-I19: the start scan — run in the background after the
+  // folder events are listened to (both feed the same journal, so
+  // nothing done meanwhile is lost). Marks only.
+  async scanFolders(): Promise<number> {
+    const t0 = performance.now();
+    const folders = (
+      this.deps.vault as unknown as { getAllFolders(): Array<{ path: string }> }
+    )
+      .getAllFolders()
+      .map((f) => f.path);
+    const records = await this.ordinaryGitkeepRecords();
+    const adapter = this.deps.vault.adapter;
+    const marked = await scanFolders({
+      folders,
+      records,
+      stat: async (p) => {
+        const s = await adapter.stat(p);
+        return s === null ? null : { size: s.size };
+      },
+      mark: (f) => this.folderJournal.mark(f),
+      pause: () => new Promise((resolve) => setTimeout(resolve, 0)),
+    });
+    if (marked > 0) {
+      this.deps.logger.info(".gitkeep: start scan marked folders for the next commit", {
+        marked,
+        folders: folders.length,
+        ms: Math.round(performance.now() - t0),
+      });
+    }
+    return marked;
   }
 
   async commitOnly(): Promise<void> {

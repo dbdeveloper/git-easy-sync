@@ -1480,6 +1480,20 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       expect(JSON.stringify(committed ?? "")).toContain("x/y/.gitkeep");
     });
 
+    it("🔑 the start scan marks; the next commit places and sends — a second scan finds nothing", async () => {
+      withLog();
+      mkdir("a/b");
+      mkdir("c");
+      expect(await manager.scanFolders()).toBe(3);
+      await manager.commitOnly();
+      expect(batchPaths()).toEqual(["added a/.gitkeep", "added a/b/.gitkeep", "added c/.gitkeep"]);
+      // The drain would record them; simulate the epilogue's baselines.
+      await baselinesRef.setMany(
+        ["a/.gitkeep", "a/b/.gitkeep", "c/.gitkeep"].map((p) => ({ path: p, baselineSha: EMPTY, mtime: 1, size: 0 })),
+      );
+      expect(await manager.scanFolders()).toBe(0);
+    });
+
     it("I4 wiring: the drain's reader marks into THIS manager's journal (buildDeps → buildDrainDeps → reader)", async () => {
       const built = (manager as unknown as { buildDeps(): { vaultFiles: { write(p: string, b: ArrayBuffer): Promise<void> } } }).buildDeps();
       await built.vaultFiles.write("notes/.gitkeep", new TextEncoder().encode("junk").buffer as ArrayBuffer);
