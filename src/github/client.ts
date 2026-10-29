@@ -18,11 +18,6 @@ import {
 // new location.
 import { encodePathForGithub } from "src/sync2/cross-platform";
 
-export type RepoContent = {
-  files: { [key: string]: GetTreeResponseItem };
-  sha: string;
-};
-
 /**
  * Represents a single item in a tree response from the GitHub API.
  */
@@ -268,72 +263,6 @@ export default class GithubClient {
       return;
     }
     this.logHttp("warn", `HTTP ${method} ${label} failed after ${dt}ms: ${String(err)}`);
-  }
-
-  /**
-   * Gets the content of the repo.
-   *
-   * @param retry Whether to retry the request on failure (default: false)
-   * @param maxRetries Maximum number of retry attempts (default: 5)
-   * @returns Array of files in the directory in the remote repo
-   */
-  async getRepoContent({
-    retry = false,
-    maxRetries = 5,
-  } = {}): Promise<RepoContent> {
-    const response = await this.retryUntil(
-      async () => {
-        return this.timed(
-          {
-            url: `https://api.github.com/repos/${this.settings.githubOwner}/${this.settings.githubRepo}/git/trees/${this.settings.githubBranch}?recursive=1`,
-            headers: this.headers(),
-            throw: false,
-          },
-          "tree?recursive=1",
-        );
-      },
-      (res) => !isRetriableStatus(res.status),
-      retry ? maxRetries : 0, // Use 0 retries if retry is false
-    );
-
-    if (response.status < 200 || response.status >= 400) {
-      // 404/409 specifically mean "no commits in this repo yet" — that's
-      // how analyzeRemoteState detects a bare repo. It's an expected
-      // signal, not an error, so log at info level to avoid noise in the
-      // log file. Anything else really is unexpected and stays at error.
-      //
-      // ⚠️ LANDMINE if this method is ever revived. Nothing in src/ calls
-      // it any more (only integration tests do) — but the equivalence
-      // "404 here ⇒ bare repo" is FALSE, and dangerously so: a branch
-      // whose every file was deleted points at git's empty tree, which
-      // GitHub also answers 404 for (see EMPTY_TREE_SHA and
-      // getRepoTree's handling of it). A repo with real history would
-      // then be read as brand-new and take the bootstrap path. Before
-      // putting this back on a live path, disambiguate the two the way
-      // getRepoTree does.
-      if (response.status === 404 || response.status === 409) {
-        this.logger.info("Repo has no commits yet (bare)", {
-          status: response.status,
-        });
-      } else {
-        this.logger.error("Failed to get repo content", response);
-      }
-      throw makeGithubAPIError(
-        response.status,
-        `Failed to get repo content, status ${response.status}`,
-      );
-    }
-
-    const files = response.json.tree
-      .filter((file: GetTreeResponseItem) => file.type === "blob")
-      .reduce(
-        (
-          acc: { [key: string]: GetTreeResponseItem },
-          file: GetTreeResponseItem,
-        ) => ({ ...acc, [file.path]: file }),
-        {},
-      );
-    return { files, sha: response.json.sha };
   }
 
   /**
@@ -973,9 +902,7 @@ export default class GithubClient {
   /**
    * Full recursive tree at an ARBITRARY commit/tree sha — the data
    * source of `fullTreeDiffAgainstColdBaseline` (NEW-DRAIN §II.12,
-   * Phase 3). Differs from `getRepoContent` (branch-pinned, ignores
-   * `truncated`) in exactly the two ways the new drain needs:
-   * takes a sha, and READS the `truncated` flag (SPIKE-TREES-LIMIT
+   * Phase 3). It takes a sha, and it READS the `truncated` flag (SPIKE-TREES-LIMIT
    * §4.2: the response caps at a documented 100k entries OR 7 MB —
    * ~5.6 MB already at 20k entries — so the flag is load-bearing,
    * not theoretical). Callers must treat `truncated: true` as a hard
@@ -1284,7 +1211,7 @@ export default class GithubClient {
    * Creates a new branch reference pointing at a commit. Used when
    * bootstrapping a bare repo: after we've made the root commit via
    * createCommit (no parent), we still need to publish a ref so HEAD
-   * resolves and the next sync's getRepoContent finds the tree.
+   * resolves and the next sync's tree read finds it.
    */
   async createReference({
     ref,
@@ -1695,8 +1622,8 @@ export default class GithubClient {
    * Git Data API for everything that follows.
    *
    * Returns the SHAs the API gave us in the response — using these
-   * directly avoids the eventual-consistency race that biting
-   * getRepoContent right after a write would have.
+   * directly avoids the eventual-consistency race that a tree read
+   * right after a write would hit.
    *
    * @param path Path to create in the repo
    * @param content Base64 encoded content of the file

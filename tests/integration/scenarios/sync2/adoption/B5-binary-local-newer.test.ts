@@ -22,6 +22,7 @@ import {
   integrationEnabled,
   uniqueBranchName,
   writeRemoteFile,
+  getRemoteFileSha,
 } from "../../../helpers";
 import {
   createSync2Client,
@@ -103,12 +104,11 @@ describe.skipIf(!integrationEnabled())(
         // verification. Here we just confirm the local push happened
         // by checking the file exists on remote with a NEW SHA.)
         // Simplest check: re-read via the test client's GithubClient.
-        const { files } = await client.client.getRepoContent({ retry: true });
-        const remoteImg = files["attachments/img.png"];
-        expect(remoteImg, "img.png still on remote").toBeDefined();
+        const remoteImgSha = await getRemoteFileSha(branch, "attachments/img.png");
+        expect(remoteImgSha, "img.png still on remote").not.toBeNull();
 
         const remoteBlob = await client.client.getBlob({
-          sha: remoteImg.sha,
+          sha: remoteImgSha!,
           retry: true,
         });
         const remoteFinalBytes = Buffer.from(remoteBlob.content, "base64");

@@ -15,6 +15,7 @@ import {
   getDefaultBranchHead,
   integrationEnabled,
   uniqueBranchName,
+  getRemoteFileSha,
 } from "../../../helpers";
 import {
   createSync2Client,
@@ -123,10 +124,9 @@ describe.skipIf(!integrationEnabled())(
         expect(bytesEqual(fs.readFileSync(bImgPath), bBytes)).toBe(true);
 
         // Remote still has A's bytes (B's push skipped the path).
-        const { files: filesAfterRegister } =
-          await deviceB.client.getRepoContent({ retry: true });
+        const shaAfterRegister = await getRemoteFileSha(branch, "img.png");
         const blobAfter = await deviceB.client.getBlob({
-          sha: filesAfterRegister["img.png"].sha,
+          sha: shaAfterRegister!,
           retry: true,
         });
         expect(
@@ -142,10 +142,9 @@ describe.skipIf(!integrationEnabled())(
 
         await sync2AllAndAssertNoErrors(deviceB);
 
-        const { files: filesAfterResolve } =
-          await deviceB.client.getRepoContent({ retry: true });
+        const shaAfterResolve = await getRemoteFileSha(branch, "img.png");
         const blobResolved = await deviceB.client.getBlob({
-          sha: filesAfterResolve["img.png"].sha,
+          sha: shaAfterResolve!,
           retry: true,
         });
         expect(

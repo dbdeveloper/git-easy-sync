@@ -136,7 +136,7 @@ export function isRetriableStatus(status: number): boolean {
  * Write-endpoint retry predicate. Identical to `isRetriableStatus`
  * plus 409.
  *
- * READ endpoints (`getRepoContent`, `getBranchHeadSha`, …) must NOT
+ * READ endpoints (`getRepoTree`, `getBranchHeadSha`, …) must NOT
  * retry 409: GitHub uses 404/409 to signal "Git Repository is empty"
  * on a bare repo, and sync2's bootstrap relies on getting that
  * signal back immediately. Burning retry slots there just delays

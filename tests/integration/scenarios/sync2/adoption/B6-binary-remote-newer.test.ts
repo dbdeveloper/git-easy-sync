@@ -20,6 +20,7 @@ import {
   integrationEnabled,
   uniqueBranchName,
   writeRemoteFile,
+  getRemoteFileSha,
 } from "../../../helpers";
 import {
   createSync2Client,
@@ -93,11 +94,10 @@ describe.skipIf(!integrationEnabled())(
         expect(localAfter.equals(localBytes)).toBe(true);
 
         // Remote unchanged.
-        const { files } = await client.client.getRepoContent({ retry: true });
-        const remoteImg = files["attachments/img.png"];
-        expect(remoteImg).toBeDefined();
+        const remoteImgSha = await getRemoteFileSha(branch, "attachments/img.png");
+        expect(remoteImgSha).not.toBeNull();
         const remoteBlob = await client.client.getBlob({
-          sha: remoteImg.sha,
+          sha: remoteImgSha!,
           retry: true,
         });
         const remoteFinalBytes = Buffer.from(remoteBlob.content, "base64");

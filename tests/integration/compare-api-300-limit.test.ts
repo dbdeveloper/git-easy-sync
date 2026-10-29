@@ -34,10 +34,8 @@ import * as crypto from "crypto";
 //     `files[]` also cap at 300, and does it expose anything the
 //     Compare API doesn't?
 //   - `GET /repos/{o}/{r}/git/trees/{sha}?recursive=1` (Git Data API,
-//     the same endpoint `GithubClient.getRepoContent` already calls)
-//     — does it expose a `truncated` flag Compare lacks, and does our
-//     own `getRepoContent` currently read it (spoiler: no — see the
-//     assertion below, which is itself a finding).
+//     the endpoint `GithubClient.getRepoTree` calls) — does it expose a
+//     `truncated` flag Compare lacks.
 describe.skipIf(!integrationEnabled())(
   "GitHub Compare/Commits/Trees API truncation behaviour (SPIKE-COMPARE-300 regression pins)",
   () => {
@@ -188,21 +186,6 @@ describe.skipIf(!integrationEnabled())(
         // NOT share Compare's 300-file cap.
         expect((treeJson.tree ?? []).length).toBeGreaterThanOrEqual(FILE_COUNT);
 
-        // ---- Probe D: does our OWN getRepoContent() read `truncated`? ----
-        // (finding, not a GitHub-behaviour probe) — see client.ts
-        // getRepoContent: it destructures response.json.tree and
-        // response.json.sha only. This assertion exists so a future
-        // read of this test file states the gap in code, not just in
-        // the spike doc's prose.
-        const repoContentSrc = fs.readFileSync(
-          path.join(__dirname, "../../src/github/client.ts"),
-          "utf8",
-        );
-        const getRepoContentBody = repoContentSrc.slice(
-          repoContentSrc.indexOf("async getRepoContent("),
-          repoContentSrc.indexOf("async createTree("),
-        );
-        expect(getRepoContentBody).not.toContain("truncated");
       } finally {
         await deleteBranchIfExists(branch);
         try {
