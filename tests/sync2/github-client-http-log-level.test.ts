@@ -97,6 +97,33 @@ describe("GithubClient — the HTTP line's level", () => {
     expect(line?.message).toContain("status=404");
   });
 
+  it("🔑 the other 'does it exist?' reads: their 404 (and a bare repo's 409) is INFO", async () => {
+    const cases: Array<[number, (c: GithubClient) => Promise<unknown>, string]> = [
+      [404, (c) => c.getBranchHeadShaByName({ branch: "git-easy-sync-conflicts-x" }), "HTTP GET branch head git-easy-sync-conflicts-x"],
+      [409, (c) => c.getBranchHeadShaByName({ branch: "git-easy-sync-conflicts-x" }), "HTTP GET branch head git-easy-sync-conflicts-x"],
+      [404, (c) => c.getMatchingRefs({ prefix: "heads/x-" }), "HTTP GET matching-refs"],
+      [404, (c) => c.getBranchHeadSha({}), "HTTP GET branch head "],
+      [409, (c) => c.getBranchHeadSha({}), "HTTP GET branch head "],
+    ];
+    for (const [status, call, prefix] of cases) {
+      const f = makeClient();
+      reply({ status, body: "" });
+      await call(f.client).catch(() => null);
+      const line = f.calls.find((c) => c.message.startsWith(prefix));
+      expect(line?.level, `${prefix} ${status}`).toBe("info");
+      installRequestFaultInjector(null);
+      f.cleanup();
+    }
+  });
+
+  it("a 404 that is NOT the question stays a WARN (a version's contents — the 2026-10-08 rule)", async () => {
+    const f = makeClient();
+    cleanup = f.cleanup;
+    reply({ status: 404, body: "" });
+    await f.client.getRepoTree({ sha: "ac4d3de0ac4d3de0ac4d3de0ac4d3de0ac4d3de0" }).catch(() => null);
+    expect(f.calls.find((c) => c.message.startsWith("HTTP GET tree/"))?.level).toBe("warn");
+  });
+
   it("the same HEAD answering 401 / 500 keeps its own level", async () => {
     const f = makeClient();
     cleanup = f.cleanup;

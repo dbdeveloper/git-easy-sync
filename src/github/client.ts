@@ -175,10 +175,11 @@ export default class GithubClient {
   private async timed(
     opts: Parameters<typeof requestUrl>[0],
     label: string,
-    // A caller whose QUESTION is "does it exist?" may treat 404 as an
-    // ordinary answer (owner, 2026-10-29): its line is INFO, not WARN.
-    // Every other status keeps httpLogLevel's verdict.
-    notFoundIsAnswer = false,
+    // Statuses that are an ORDINARY ANSWER to this caller's question
+    // (owner, 2026-10-29): "does this path / branch exist?" — 404, and
+    // on a bare repo 409 — is routine there, so its line is INFO, not
+    // WARN. Every other status keeps httpLogLevel's verdict.
+    answers: readonly number[] = [],
   ): Promise<ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never> {
     const method = (opts as { method?: string }).method ?? "GET";
     const body = (opts as { body?: string | ArrayBuffer }).body;
@@ -221,7 +222,7 @@ export default class GithubClient {
       }
       const dt = Date.now() - t0;
       this.logHttp(
-        notFoundIsAnswer && wr.status === 404 ? "info" : httpLogLevel(wr.status, wr.headers),
+        answers.includes(wr.status) ? "info" : httpLogLevel(wr.status, wr.headers),
         `HTTP ${method} ${label} duration=${dt}ms status=${wr.status} reqKB=${(reqBytes / 1024).toFixed(1)} respKB=${(wr.text.length / 1024).toFixed(1)}`,
       );
       // Shape the worker response to match requestUrl's
@@ -247,7 +248,7 @@ export default class GithubClient {
     const dt = Date.now() - t0;
     const respBytes = res.arrayBuffer?.byteLength ?? 0;
     this.logHttp(
-      notFoundIsAnswer && res.status === 404 ? "info" : httpLogLevel(res.status, res.headers),
+      answers.includes(res.status) ? "info" : httpLogLevel(res.status, res.headers),
       `HTTP ${method} ${label} duration=${dt}ms status=${res.status} reqKB=${(reqBytes / 1024).toFixed(1)} respKB=${(respBytes / 1024).toFixed(1)}`,
     );
     return res;
@@ -581,6 +582,9 @@ export default class GithubClient {
             throw: false,
           },
           `branch head ${branch}`,
+          // "Does the conflict branch exist?" — no (404), or a bare repo
+          // (409), is the answer this read is for.
+          [404, 409],
         );
       },
       (res) => !isRetriableStatus(res.status),
@@ -1132,7 +1136,7 @@ export default class GithubClient {
           `contents-head/${filePath}@${ref.slice(0, 7)}`,
           // "Is this path on the server at that ref?" — for a new file
           // "no" (404) is the routine answer, not a deviation.
-          true,
+          [404],
         );
       },
       (res) => !isRetriableStatus(res.status),
@@ -1173,6 +1177,7 @@ export default class GithubClient {
             throw: false,
           },
           `contents-meta-fallback/${filePath}@${ref.slice(0, 7)}`,
+          [404], // the same question as the HEAD above
         );
       },
       (res) => !isRetriableStatus(res.status),
@@ -1433,6 +1438,7 @@ export default class GithubClient {
             throw: false,
           },
           `matching-refs ${prefix}`,
+          [404], // no matches
         );
       },
       (res) => !isRetriableStatus(res.status),
@@ -1485,6 +1491,9 @@ export default class GithubClient {
             throw: false,
           },
           "branch head",
+          // The designed cold-start signal: a bare repo (409) or no such
+          // branch yet (404) — see the comment below.
+          [404, 409],
         );
       },
       (res) => !isRetriableStatus(res.status),
