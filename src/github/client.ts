@@ -175,6 +175,10 @@ export default class GithubClient {
   private async timed(
     opts: Parameters<typeof requestUrl>[0],
     label: string,
+    // A caller whose QUESTION is "does it exist?" may treat 404 as an
+    // ordinary answer (owner, 2026-10-29): its line is INFO, not WARN.
+    // Every other status keeps httpLogLevel's verdict.
+    notFoundIsAnswer = false,
   ): Promise<ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never> {
     const method = (opts as { method?: string }).method ?? "GET";
     const body = (opts as { body?: string | ArrayBuffer }).body;
@@ -217,7 +221,7 @@ export default class GithubClient {
       }
       const dt = Date.now() - t0;
       this.logHttp(
-        httpLogLevel(wr.status, wr.headers),
+        notFoundIsAnswer && wr.status === 404 ? "info" : httpLogLevel(wr.status, wr.headers),
         `HTTP ${method} ${label} duration=${dt}ms status=${wr.status} reqKB=${(reqBytes / 1024).toFixed(1)} respKB=${(wr.text.length / 1024).toFixed(1)}`,
       );
       // Shape the worker response to match requestUrl's
@@ -243,7 +247,7 @@ export default class GithubClient {
     const dt = Date.now() - t0;
     const respBytes = res.arrayBuffer?.byteLength ?? 0;
     this.logHttp(
-      httpLogLevel(res.status, res.headers),
+      notFoundIsAnswer && res.status === 404 ? "info" : httpLogLevel(res.status, res.headers),
       `HTTP ${method} ${label} duration=${dt}ms status=${res.status} reqKB=${(reqBytes / 1024).toFixed(1)} respKB=${(respBytes / 1024).toFixed(1)}`,
     );
     return res;
@@ -1126,6 +1130,9 @@ export default class GithubClient {
             throw: false,
           },
           `contents-head/${filePath}@${ref.slice(0, 7)}`,
+          // "Is this path on the server at that ref?" — for a new file
+          // "no" (404) is the routine answer, not a deviation.
+          true,
         );
       },
       (res) => !isRetriableStatus(res.status),

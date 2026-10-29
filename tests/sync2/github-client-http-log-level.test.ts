@@ -85,6 +85,26 @@ describe("GithubClient — the HTTP line's level", () => {
     expect(line?.message).toContain("status=404");
   });
 
+  it("🔑 404 on the 'is it on the server?' HEAD → INFO: 'not there yet' is that question's normal answer", async () => {
+    // Owner, 2026-10-29: pushing a new file asks GitHub whether the path
+    // exists; for a new file "no" is routine, not a deviation.
+    const f = makeClient();
+    cleanup = f.cleanup;
+    reply({ status: 404, body: "" });
+    expect(await f.client.getContentsMetadataAtRef({ path: "new/.gitkeep", ref: "ac4d3de0" })).toBeNull();
+    const line = f.calls.find((c) => c.message.startsWith("HTTP HEAD"));
+    expect(line?.level).toBe("info");
+    expect(line?.message).toContain("status=404");
+  });
+
+  it("the same HEAD answering 401 / 500 keeps its own level", async () => {
+    const f = makeClient();
+    cleanup = f.cleanup;
+    reply({ status: 401, body: "" });
+    await f.client.getContentsMetadataAtRef({ path: "a.md", ref: "ac4d3de0" }).catch(() => null);
+    expect(f.calls.find((c) => c.message.startsWith("HTTP HEAD"))?.level).toBe("error");
+  });
+
   it("🔑 401 → the HTTP line is an ERROR", async () => {
     const f = makeClient();
     cleanup = f.cleanup;
