@@ -87,6 +87,40 @@ describe.skipIf(!integrationEnabled())("sync2 GK1 — folders travel through .gi
     expect(fs.existsSync(b("notes/sub/note.md"))).toBe(true);
   });
 
+  it("GK3: a folder deleted on A disappears on B; one holding a .DS_Store on B stays and comes back to A", async () => {
+    deviceA = await createSync2Client({ branch });
+    const a = (p: string) => path.join(deviceA!.vaultPath, p);
+    fs.mkdirSync(a("gone/inner"), { recursive: true });
+    fs.writeFileSync(a("gone/inner/n.md"), "n\n");
+    fs.mkdirSync(a("phoenix"), { recursive: true });
+    fs.writeFileSync(a("phoenix/p.md"), "p\n");
+    await deviceA.manager.scanFolders();
+    await sync2AllAndAssertNoErrors(deviceA);
+
+    deviceB = await createSync2Client({ branch });
+    const b = (p: string) => path.join(deviceB!.vaultPath, p);
+    await sync2AllAndAssertNoErrors(deviceB);
+    expect(fs.existsSync(b("gone/inner/n.md"))).toBe(true);
+    fs.writeFileSync(b("phoenix/.DS_Store"), "finder"); // Finder was here
+
+    // A deletes both folders whole.
+    fs.rmSync(a("gone"), { recursive: true, force: true });
+    fs.rmSync(a("phoenix"), { recursive: true, force: true });
+    deviceA.manager.markFolder("gone");
+    deviceA.manager.markFolder("phoenix");
+    await sync2AllAndAssertNoErrors(deviceA);
+    expect(await getRemoteFileSha(branch, "gone/.gitkeep")).toBeNull();
+
+    await sync2AllAndAssertNoErrors(deviceB);
+    expect(fs.existsSync(b("gone"))).toBe(false); // swept, folder and subfolder
+    expect(fs.existsSync(b("phoenix/.DS_Store"))).toBe(true); // nothing inside is touched
+    // ...and B's next sync gives it a .gitkeep back: the folder returns.
+    await sync2AllAndAssertNoErrors(deviceB);
+    expect(await getRemoteFileSha(branch, "phoenix/.gitkeep")).toBe(EMPTY);
+    await sync2AllAndAssertNoErrors(deviceA);
+    expect(fs.statSync(a("phoenix/.gitkeep")).size).toBe(0);
+  });
+
   it("GK2: the start scan alone finds every folder; a second scan after the sync finds nothing", async () => {
     deviceA = await createSync2Client({ branch });
     const a = (p: string) => path.join(deviceA!.vaultPath, p);
