@@ -1368,17 +1368,17 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       ]);
     });
 
-    it("🔑 I37: .gitkeep is not counted — only .gitkeep → the user sees 'nothing to commit'", async () => {
+    it("🔑 I37 (owner, 2026-10-29): .gitkeep counts like any file — the true number", async () => {
       withLog();
       mkdir("notes");
       manager.markFolder("notes");
       await manager.commitOnly();
       expect(writtenBatches.flat()).toHaveLength(1);
-      expect(notices.committed).toEqual([]);
-      expect(notices.noChanges).toBe(1);
+      expect(notices.committed).toEqual([1]);
+      expect(notices.noChanges).toBe(0);
     });
 
-    it("I37: with a real change beside it, the count is the real change only", async () => {
+    it("I37: with a real change beside it, both are counted", async () => {
       withLog();
       mkdir("notes");
       put("a.md", "x");
@@ -1386,7 +1386,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       manager.markFolder("notes");
       await manager.commitOnly();
       expect(batchPaths()).toEqual(["added notes/.gitkeep", "modified a.md"]);
-      expect(notices.committed).toEqual([1]);
+      expect(notices.committed).toEqual([2]);
     });
 
     it("🔑 I1/I35: an excluded subfolder gets its .gitkeep on disk, but it is not sent", async () => {
@@ -1463,7 +1463,7 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       expect([...manager.markedFolders()]).toEqual(["b"]);
     });
 
-    it("I36: ONE info line for the phase, only when something was done; nothing per file", async () => {
+    it("I36: ONE info line for the phase, only when something was done; the committed line lists the paths", async () => {
       withLog();
       await manager.commitOnly();
       expect(infos.filter(([m]) => m.startsWith(".gitkeep"))).toEqual([]);
@@ -1474,9 +1474,10 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
       const lines = infos.filter(([m]) => m.startsWith(".gitkeep"));
       expect(lines).toHaveLength(1);
       expect(lines[0][1]).toMatchObject({ placed: 2, added: 2 });
-      // The ordinary "committed" line does not list .gitkeep paths.
+      // The ordinary "committed" line lists them, like any file — so a
+      // user who wonders about the count finds the answer in the log.
       const committed = infos.find(([m]) => m === "Sync2 commit pass: committed");
-      expect(JSON.stringify(committed ?? "")).not.toContain(".gitkeep");
+      expect(JSON.stringify(committed ?? "")).toContain("x/y/.gitkeep");
     });
 
     it("I4 wiring: the drain's reader marks into THIS manager's journal (buildDeps → buildDrainDeps → reader)", async () => {

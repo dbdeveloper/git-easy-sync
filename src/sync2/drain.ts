@@ -1147,7 +1147,6 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
   };
 
   const countPull = (path: string): boolean => {
-    if (isGitkeep(path)) return false; // GITKEEP I37: not counted
     if (!remoteChanged.has(path) || pullCounted.has(path)) return false;
     pullCounted.add(path);
     pullDone += 1;
@@ -1285,8 +1284,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         for (const f of remoteFiles) {
           if (!remoteChanged.has(f.path)) {
             remoteChanged.add(f.path);
-            // GITKEEP I37: the plugin's own marker is not counted.
-            if (!isGitkeep(f.path)) pullTotal += 1;
+            pullTotal += 1;
           }
         }
         // Layer 2's free answer source for THIS head (§II.13 below).
@@ -1448,8 +1446,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     // as "the plugin is sending something I did not ask for".
     pushDoneBeforeBatch = pushDone;
     pushTotalBeforeBatch = pushTotal;
-    // GITKEEP I37: the plugin's own marker is not counted.
-    pushTotal += claimed.meta.entries.filter((e) => !isGitkeep(e.path)).length;
+    pushTotal += claimed.meta.entries.length;
 
     // BARE REPO: seed BEFORE any Git Data call (they all 409 while
     // the repo has no ref — gate finding). The seed content is one of
@@ -1704,7 +1701,7 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
       // the progress bar is not worth a single extra request. Fired
       // BEFORE the work, so the number names what is happening now.
       processed += 1;
-      if (!isGitkeep(entry.path)) pushDone += 1; // GITKEEP I37
+      pushDone += 1;
       // A path that is BOTH in this batch and changed remotely is one
       // pull unit too — counted here, before the short-circuit below
       // can skip it (§II.16).

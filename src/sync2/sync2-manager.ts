@@ -968,7 +968,6 @@ export class Sync2Manager {
       if (id !== null) enqueued += slice.length;
       if (total > 0) {
         for (const c of slice) {
-          if (isGitkeep(c.path)) continue; // GITKEEP I37: not counted
           if (c.kind === "deleted") stage3 += 1;
           else if (c.kind === "added" && c.sha === undefined && unhashedLeft > 0) {
             unhashedLeft -= 1;
@@ -983,20 +982,15 @@ export class Sync2Manager {
     this.logCommitTiming(target, ph, t0, changes.length);
     this.queueIndex = null; // the queue just changed — rebuild lazily
     await this.fireQueueDepth();
-    // GITKEEP I36/I37: .gitkeep is the plugin's own housekeeping — not
-    // counted for the user and not listed per file (the phase has its
-    // own single line). A pass that sent ONLY .gitkeep reads as "nothing
-    // to commit" to the user.
-    const visible = changes.filter((c) => !isGitkeep(c.path));
-    const shown = enqueued - (changes.length - visible.length);
-    if (shown > 0) {
-      this.deps.onLocalCommitted?.(shown);
+    // GITKEEP I37 (owner, 2026-10-29): .gitkeep counts like any file —
+    // the true number, and the paths in the log line, so a user who
+    // wonders why "430" and not "400" finds the answer there.
+    if (enqueued > 0) {
+      this.deps.onLocalCommitted?.(enqueued);
       this.deps.logger.info("Sync2 commit pass: committed", {
-        count: shown,
-        changes: visible.map((c) => `${c.kind} ${c.path}`),
+        count: enqueued,
+        changes: changes.map((c) => `${c.kind} ${c.path}`),
       });
-    } else if (enqueued > 0) {
-      this.deps.onNoLocalChanges?.((await this.listQueueIds()).length > 0);
     }
     return enqueued;
   }
@@ -1215,10 +1209,9 @@ export class Sync2Manager {
       // Vault-step outcome → UI signals (independent of status: the
       // writes that DID land are real even on a later abort).
       const touched = [...r.vaultStepWrites, ...r.vaultStepRemoves];
-      // GITKEEP I37: "N sent / M received" leave the plugin's marker out.
-      for (const p of touched) if (!isGitkeep(p)) this.receivedThisSync.add(p);
+      for (const p of touched) this.receivedThisSync.add(p);
       for (const p of r.selfUpdateStaged) this.receivedThisSync.add(p);
-      for (const p of r.pushedPaths) if (!isGitkeep(p)) this.sentThisSync.add(p);
+      for (const p of r.pushedPaths) this.sentThisSync.add(p);
       // A STAGED self-update must reload us too (regression 2026-10-05):
       // since 86c808e our own loadable files are staged, not written, and
       // the bootloader applies them at the top of onload — the onload

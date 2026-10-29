@@ -415,7 +415,7 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       expect(warns.filter((w) => /resolved automatically/.test(w))).toEqual([]);
     });
 
-    it("🔑 I37: .gitkeep is not counted — neither pulled nor pushed", async () => {
+    it("🔑 I37 (owner, 2026-10-29): .gitkeep is counted like any file, pulled and pushed", async () => {
       baseCommit = await world.commitFiles({ "x.md": V0 });
       await world.commitFiles({ "new/.gitkeep": "", "new/a.md": "a", "new/sub/.gitkeep": "" });
       await stageBatch({ "mine/.gitkeep": "", "mine/b.md": "b" });
@@ -423,10 +423,10 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
       const r = await drainOnce(makeDeps({ onProgress: (p) => snaps.push({ ...p }) }));
       expect(r.status).toBe("ok");
       const last = snaps[snaps.length - 1];
-      expect(last.pullTotal).toBe(1); // new/a.md
-      expect(last.pullDone).toBe(1);
-      expect(last.pushTotal).toBe(1); // mine/b.md
-      expect(last.pushDone).toBe(1);
+      expect(last.pullTotal).toBe(3); // new/a.md + two .gitkeep
+      expect(last.pullDone).toBe(3);
+      expect(last.pushTotal).toBe(2); // mine/b.md + mine/.gitkeep
+      expect(last.pushDone).toBe(2);
       expect(vaultFiles.files.has("new/sub/.gitkeep")).toBe(true); // still pulled
       expect(world.headFiles().has("mine/.gitkeep")).toBe(true); // still pushed
     });
