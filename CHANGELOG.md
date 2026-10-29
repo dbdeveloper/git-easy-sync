@@ -68,6 +68,13 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   pauses Sync until you resolve it, exactly like a conflict in the
   vault's root `.gitignore`. A difference only in the plugin's own
   version lines is never a conflict.
+- **Hundreds of `.gitkeep` files appear in your repo** (2.0.9-beta).
+  The plugin puts an empty `.gitkeep` into every folder of the vault
+  (not into folders whose name — or a parent's — starts with a dot)
+  so that git, which keeps no empty folders, can carry them. The
+  first sync after the upgrade sends one per folder, counted in the
+  sync numbers like any file: a vault with 400 notes in 30 folders
+  sends 430 files. There is no switch to turn this off.
 - **Root dot-files other than `.gitignore` stop syncing.** Earlier
   versions picked up every dot-file at the vault root
   (`.gitattributes`, `.editorconfig`, …) whether or not you asked
@@ -160,6 +167,19 @@ that cannot break Obsidian, and GitHub's real file-size limit.
 
 ### Added
 
+- **Empty folders sync, and a deleted folder disappears on your
+  other devices** (2.0.9-beta). Every folder carries an empty
+  `.gitkeep`, so an emptied folder stays and syncs, and a folder you
+  delete is removed on the other devices once the files in it are
+  gone. Nothing inside a folder is ever deleted for this: if a
+  folder still holds anything there — a `.DS_Store`, a file kept out
+  of sync by `.gitignore`, a note not committed yet — it stays, and
+  comes back to the other devices empty. Delete it on the device
+  where it is not empty to make it go for good. To keep a folder's
+  NAME off GitHub, exclude it as `/folder/`; `/folder/*` hides only
+  what is inside and leaves the folder visible. A `.gitkeep` is
+  always empty: text put into one is cut away (with a warning in the
+  log), so it never causes a conflict.
 - **Conflicts in dot-space are visible at last.** A conflict on a
   file inside `.obsidian/` or an opted-in dot-folder used to be
   invisible in the conflicts panel even though the engine had

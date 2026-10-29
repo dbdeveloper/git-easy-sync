@@ -799,6 +799,7 @@ difference between them is deliberate:
 
 # ===== git-easy-sync final v2.0.2-beta - DO NOT EDIT =====
 !/.obsidian/             ← these cannot be overridden
+!.gitkeep                ← every folder's .gitkeep (see "Empty folders")
 *.conflict-from-*
 *.ges-tmp*
 *.ges-bak*
@@ -843,9 +844,48 @@ leave your other devices governed by rules they never received. A
 `.gitignore` outside those three places is, for the plugin, a file
 you did not write.
 
+### Empty folders and `.gitkeep`
+
+git — and so GitHub — keeps no empty folders, so another device
+could never tell a folder you emptied from a folder you deleted. The
+plugin settles this with an empty file, `.gitkeep`, in **every**
+folder of the vault:
+
+- an emptied folder still holds its `.gitkeep`, so it stays — and
+  syncs — everywhere;
+- a deleted folder takes its `.gitkeep` along; on your other devices
+  the folder goes once the files in it are gone.
+
+What to know:
+
+- **Every ordinary folder gets one, unconditionally** — also folders
+  your `.gitignore` excludes (there it stays on the device). Folders
+  whose name, or a parent's, starts with a dot (`.obsidian/`,
+  `.trash/`, `notes/.drafts/`) get none; a `.gitkeep` you put into
+  such a folder yourself syncs like an ordinary file.
+- **Hiding a folder's name.** `!.gitkeep` sits in the bottom block of
+  the root `.gitignore`, so no rule can block it. What decides is the
+  form of your rule: `/private/` hides the folder whole — its name
+  never reaches GitHub; `/private/*` hides only what is inside, and
+  the folder shows on GitHub, empty.
+- **Nothing inside a folder is ever deleted for this.** If on some
+  device a deleted folder still holds anything — a `.DS_Store`, a
+  file `.gitignore` keeps out of sync, a note not committed yet — it
+  stays there, gets a new `.gitkeep`, and comes back to the other
+  devices, empty. Delete it on that device to make it go for good.
+- **A `.gitkeep` is always empty.** Text put into one is cut away and
+  the log says so; one arriving non-empty from GitHub is not written,
+  the empty one goes back. So it never causes a conflict.
+- It counts like any file in the sync numbers, and the log lists it.
+
 ### Upgrading from an earlier version
 
-Two changes are worth knowing about, because both are silent:
+Three changes are worth knowing about, because all are silent:
+
+- **Hundreds of `.gitkeep` files appear in your repo** (2.0.9-beta) —
+  one per folder, sent with the first sync after the upgrade and
+  counted in its numbers. See "Empty folders and `.gitkeep`" above.
+  There is no switch to turn this off.
 
 - **Root dot-files other than `.gitignore` stop syncing.** Earlier
   versions synced every dot-file at the vault root

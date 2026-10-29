@@ -65,6 +65,7 @@ trigger model:
 | **Sync engine**                    | Detects local changes; pushes to GitHub; pulls from GitHub.  | On `[Sync]` click, on interval tick, on plugin load.                      | Yes            |
 | **Conflict counter** (UI badge)    | Counts pending unresolved conflicts for status-bar + ribbon. | On any vault `delete` / `modify` / `rename` event affecting a known path. | **No**         |
 | **Conflict resolution detection**  | Detects user-completed resolutions; finalises the branch.    | At the start of every `drain()` call.                                     | Yes            |
+| **Folder journal** (`.gitkeep`)    | Marks folders worth a look at the next commit.               | On a folder `create` / `delete` / `rename` event, and by the start scan.   | **No** — the commit pass writes |
 
 The strict separation of "things that mutate state" from "things that
 only read state" is the most important architectural property of the
@@ -98,6 +99,15 @@ drain():
   if store.records.length == 0 and conflict branch exists:
       finalise: marker commit, merge-commit on main, deleteRef branch
 ```
+
+The folder journal (2026-10-29, `docs/tasks/GITKEEP.md`) follows the
+same rule from the other side: `FolderWatcher` and the start scan only
+MARK folders in an in-memory set; the commit pass computes the truth
+for each marked folder (`planGitkeeps`) and is the one that writes
+`.gitkeep` files. A missed event costs nothing — the start scan
+rebuilds the set after any restart — and the drain's empty-folder
+sweep runs at the end of its Vault step, before the epilogue, so a
+crash redoes it with the deletions.
 
 In ninety percent of `drain()` invocations the store is empty and
 the conflict-related code path is skipped entirely; the conflict
