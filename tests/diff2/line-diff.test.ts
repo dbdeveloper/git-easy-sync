@@ -36,6 +36,16 @@ function pairWithGroups(n: number): { base: string; sibling: string } {
   return { base, sibling };
 }
 
+// The parts a comparison of an `n`-group pair returns — built directly, so a
+// limit test does not spend minutes comparing (10 000 groups take ~80 s).
+function partsWithGroups(n: number) {
+  const parts: { value: string; added?: boolean; removed?: boolean }[] = [];
+  for (let i = 0; i < n; i++) {
+    parts.push({ value: `same ${i}\n` }, { value: `mine ${i}\n`, removed: true }, { value: `theirs ${i}\n`, added: true });
+  }
+  return parts;
+}
+
 afterEach(() => {
   clearLineDiffCache();
   realDiff.mockClear();
@@ -64,16 +74,16 @@ describe("prepareLineDiff — limits", () => {
   });
 
   it("🔑 more diff groups than the editor may show → DiffTooLargeError 'groups' with the count", async () => {
-    const { base, sibling } = pairWithGroups(MAX_DIFF_GROUPS + 1);
-    const err = await prepareLineDiff(base, sibling, runReal, new AbortController().signal).catch((e) => e);
+    const over: LineDiffRunner = async () => partsWithGroups(MAX_DIFF_GROUPS + 1);
+    const err = await prepareLineDiff("a\n", "b\n", over, new AbortController().signal).catch((e) => e);
     expect(err).toBeInstanceOf(DiffTooLargeError);
     expect((err as DiffTooLargeError).reason).toBe("groups");
     expect((err as DiffTooLargeError).groups).toBe(MAX_DIFF_GROUPS + 1);
   });
 
   it("exactly the limit still opens", async () => {
-    const { base, sibling } = pairWithGroups(MAX_DIFF_GROUPS);
-    const r = await prepareLineDiff(base, sibling, runReal, new AbortController().signal);
+    const at: LineDiffRunner = async () => partsWithGroups(MAX_DIFF_GROUPS);
+    const r = await prepareLineDiff("a\n", "b\n", at, new AbortController().signal);
     expect(r.groups).toBe(MAX_DIFF_GROUPS);
   });
 });

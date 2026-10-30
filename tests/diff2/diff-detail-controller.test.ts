@@ -486,6 +486,19 @@ describe("DiffDetailController host seam (S2)", () => {
     ctl.dispose();
   });
 
+  it("🔑 the message stays until the user closes it: [Close] → back (the host leaves the detail)", async () => {
+    const { entry } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+    const host = recordingHost();
+    const ctl = new DiffDetailController({} as unknown as App, limitDeps(async () => null), host);
+    await ctl.mount(container, entry);
+    expect(host.leaveCount).toBe(0); // nothing closes on its own
+    const btn = container.querySelector(".diff2-detail-too-big button") as HTMLButtonElement | null;
+    expect(btn?.textContent).toBe("Close");
+    btn!.click();
+    expect(host.leaveCount).toBe(1);
+    ctl.dispose();
+  });
+
   it("the next pair in the same view gets its toolbar back", async () => {
     const big = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
     const first = new DiffDetailController({} as unknown as App, limitDeps(async () => null), recordingHost());
@@ -512,14 +525,16 @@ describe("DiffDetailController host seam (S2)", () => {
   });
 
   it("🔑 more diff groups than the limit → the message names the count and the limit", async () => {
-    let base = "";
-    let sibling = "";
-    for (let i = 0; i < MAX_DIFF_GROUPS + 1; i++) {
-      base += `same ${i}\nmine ${i}\n`;
-      sibling += `same ${i}\ntheirs ${i}\n`;
-    }
-    const { entry, conflictId } = await writeInputs(base, sibling);
-    const ctl = new DiffDetailController({} as unknown as App, limitDeps(realLines), recordingHost());
+    const { entry, conflictId } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+    // The comparison's answer, built directly (a real one of this size takes minutes).
+    const over: NonNullable<DiffEditViewDeps["diffLines"]> = async () => {
+      const parts: { value: string; added?: boolean; removed?: boolean }[] = [];
+      for (let i = 0; i < MAX_DIFF_GROUPS + 1; i++) {
+        parts.push({ value: `same ${i}\n` }, { value: `m${i}\n`, removed: true }, { value: `t${i}\n`, added: true });
+      }
+      return parts;
+    };
+    const ctl = new DiffDetailController({} as unknown as App, limitDeps(over), recordingHost());
     await ctl.mount(container, entry);
 
     const msg = container.querySelector(".diff2-detail-too-big")?.textContent ?? "";
