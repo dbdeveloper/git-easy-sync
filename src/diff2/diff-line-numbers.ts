@@ -10,10 +10,10 @@
 //     An EOL-less last line (terminal that doubles as a content line) DOES carry a
 //     number (it's real content).
 //
-// `computeLineLabels` is the pure §2.2.10 logic (caret-independent ⇒ the gutter
-// never renumbers as the cursor moves). The CM6 gutter caches it in a StateField
-// (O(lines) per change, O(1) per line lookup) rather than the per-line on-the-fly
-// formula — same result; the formula is a future optimisation for huge docs.
+// `computeLineLabels` is the pure §2.2.10 logic as a full walk (caret-independent
+// ⇒ the gutter never renumbers as the cursor moves) — the tests' oracle. The CM6
+// gutter uses the per-line §2.2.10 formula over an index built once per structure
+// change (lineNumberIndex): O(log groups) per visible line.
 
 import { type EditorState, type Extension, type Text } from "@codemirror/state";
 import { gutter, GutterMarker } from "@codemirror/view";
@@ -91,37 +91,69 @@ function blockGeoms(doc: Text, ranges: VerRange[]): BlockGeom[] {
   });
 }
 
-// Pure core over precomputed block geometry — the gutter caches `blocks` per
-// structure (below) so a 25k-line file does NOT rebuild them per visible line.
-// Returns null for a bare-terminal line (no number) — same as the walk skipping it.
-function diffLineNumberFromBlocks(blocks: BlockGeom[], cm6: number): LineLabel | null {
-  const own = blocks.find((b) => cm6 >= b.firstLine && cm6 <= b.termLine);
-  if (own && own.bare && cm6 === own.termLine) return null; // bare terminal → no number
-  // Bare lines strictly above (both sides) — they consume a CM6 line but no number.
-  const bareAbove = blocks.filter((b) => b.bare && b.termLine < cm6).length;
-  if (own && own.ver === 1) {
-    // ver1: parallel from the line above ⇒ subtract only ver1 numbered lines in
-    // ver1 blocks STRICTLY ABOVE this block (this block's own lines excluded).
-    const ver1Prior = blocks
-      .filter((b) => b.ver === 1 && b.termLine < own.firstLine)
-      .reduce((s, b) => s + b.numbered, 0);
-    return { text: String(cm6 - ver1Prior - bareAbove), side: "ver1" };
+// The index over the block geometry (owner, 2026-10-30). The §2.2.10 note below
+// assumed "1-10 groups above, often ≤2 — no precompute", so the lookup scanned
+// EVERY block for each visible line; a History diff with 1648 groups (~3300
+// blocks) then cost ~0.5 s per scroll step. Built once per structure: blocks in
+// document order (ranges never overlap), their first lines for a binary search,
+// and prefix sums of the two corrections the formula subtracts.
+export interface LineNumberIndex {
+  blocks: BlockGeom[];
+  firstLines: number[];
+  ver1Before: number[]; // numbered ver1 lines in blocks[0..i-1]
+  bareBefore: number[]; // bare blocks in blocks[0..i-1]
+}
+export function lineNumberIndex(doc: Text, ranges: VerRange[]): LineNumberIndex {
+  const blocks = blockGeoms(doc, ranges);
+  const firstLines: number[] = [];
+  const ver1Before: number[] = [0];
+  const bareBefore: number[] = [0];
+  for (const b of blocks) {
+    firstLines.push(b.firstLine);
+    ver1Before.push(ver1Before[ver1Before.length - 1] + (b.ver === 1 ? b.numbered : 0));
+    bareBefore.push(bareBefore[bareBefore.length - 1] + (b.bare ? 1 : 0));
   }
-  // normal or ver2: the through number ⇒ subtract ALL ver1 numbered lines above
-  // (cm6 is not in a ver1 block, so ver1 blocks are wholly above or below).
-  const ver1Above = blocks
-    .filter((b) => b.ver === 1 && b.termLine < cm6)
-    .reduce((s, b) => s + b.numbered, 0);
-  const side: LineSide = own ? "ver2" : "normal";
-  return { text: String(cm6 - ver1Above - bareAbove), side };
+  return { blocks, firstLines, ver1Before, bareBefore };
+}
+
+// How many blocks start at or above `cm6` (binary search).
+function blocksStartingBy(ix: LineNumberIndex, cm6: number): number {
+  let lo = 0;
+  let hi = ix.firstLines.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (ix.firstLines[mid] <= cm6) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+// §2.2.10: the diff line number = the CM6 line number − the ver1 lines above it −
+// the bare lines above it. Every block before the last one starting at or above
+// `cm6` ends above it; that last one is either `own` or wholly above too.
+// Returns null for a bare-terminal line (no number) — same as the walk skipping it.
+function diffLineNumberAt(ix: LineNumberIndex, cm6: number): LineLabel | null {
+  const k = blocksStartingBy(ix, cm6);
+  if (k === 0) return { text: String(cm6), side: "normal" };
+  const last = ix.blocks[k - 1];
+  const own = cm6 <= last.termLine ? last : null;
+  if (own && own.bare && cm6 === own.termLine) return null; // bare terminal → no number
+  const bareAbove = ix.bareBefore[k - 1] + (last.bare && last.termLine < cm6 ? 1 : 0);
+  if (own && own.ver === 1) {
+    // ver1: parallel from the line above ⇒ only ver1 blocks STRICTLY ABOVE this one.
+    return { text: String(cm6 - ix.ver1Before[k - 1] - bareAbove), side: "ver1" };
+  }
+  // normal or ver2: the through number ⇒ ALL ver1 numbered lines above.
+  const ver1Above = ix.ver1Before[k - 1] + (last.ver === 1 && last.termLine < cm6 ? last.numbered : 0);
+  return { text: String(cm6 - ver1Above - bareAbove), side: own ? "ver2" : "normal" };
 }
 
 // The "almost-pure" §2.2.10 lookup the user named — getDiffLineNumber(cm6) over a
-// RangeSet. Pure (rebuilds block geometry each call), so the property test can pin
+// RangeSet. Pure (rebuilds the index each call), so the property test can pin
 // it EQUAL to the §1.10 full walk (computeLineLabels). The gutter uses the cached
-// path below; this is the canonical/tested definition.
+// index below; this is the canonical/tested definition.
 export function getDiffLineNumber(doc: Text, ranges: VerRange[], cm6: number): LineLabel | null {
-  return diffLineNumberFromBlocks(blockGeoms(doc, ranges), cm6);
+  return diffLineNumberAt(lineNumberIndex(doc, ranges), cm6);
 }
 
 // The gutter cell for one CM6 line: the numbered label, OR — for a ver-block's
@@ -130,28 +162,29 @@ export function getDiffLineNumber(doc: Text, ranges: VerRange[], cm6: number): L
 // ours/theirs tint. Without this a FOCUSED (expanded) empty ver-block showed a
 // WHITE gutter cell (getDiffLineNumber returns null for bare terminals → no
 // marker). Numbering is unchanged (empty text consumes no number). Pure → tested.
-function gutterCellFromBlocks(blocks: BlockGeom[], cm6: number): LineLabel | null {
-  const label = diffLineNumberFromBlocks(blocks, cm6);
+export function gutterCellAt(ix: LineNumberIndex, cm6: number): LineLabel | null {
+  const label = diffLineNumberAt(ix, cm6);
   if (label) return label;
-  const bare = blocks.find((b) => b.bare && b.termLine === cm6);
-  return bare ? { text: "", side: bare.ver === 1 ? "ver1" : "ver2" } : null;
+  // null only on a bare terminal line — the last block starting at or above it.
+  const b = ix.blocks[blocksStartingBy(ix, cm6) - 1];
+  return { text: "", side: b.ver === 1 ? "ver1" : "ver2" };
 }
 export function gutterCell(doc: Text, ranges: VerRange[], cm6: number): LineLabel | null {
-  return gutterCellFromBlocks(blockGeoms(doc, ranges), cm6);
+  return gutterCellAt(lineNumberIndex(doc, ranges), cm6);
 }
 
-// Gutter cache: block geometry keyed by the structure RangeSet (stable per state),
-// so a 25k-line file computes the geometry ONCE per structure change, not once per
-// visible gutter line. The viewport renders ~tens of lines → O(viewport × #ranges).
-const blockCache = new WeakMap<object, BlockGeom[]>();
-function cachedBlocks(state: EditorState): BlockGeom[] {
+// Gutter cache: the index keyed by the structure RangeSet (stable per state), so
+// it is built ONCE per structure change, not once per visible gutter line; each
+// line is then a binary search.
+const indexCache = new WeakMap<object, LineNumberIndex>();
+function cachedIndex(state: EditorState): LineNumberIndex {
   const set = state.field(structureField) as unknown as object;
-  let blocks = blockCache.get(set);
-  if (!blocks) {
-    blocks = blockGeoms(state.doc, fromRangeSet(state.field(structureField)));
-    blockCache.set(set, blocks);
+  let ix = indexCache.get(set);
+  if (!ix) {
+    ix = lineNumberIndex(state.doc, fromRangeSet(state.field(structureField)));
+    indexCache.set(set, ix);
   }
-  return blocks;
+  return ix;
 }
 
 // Tint the whole gutter CELL to the line's side colour (elementClass → the
@@ -219,7 +252,7 @@ export const diffLineNumbersGutter: Extension = gutter({
   class: "diff2-line-number-gutter",
   lineMarker(view, line) {
     const cm6 = view.state.doc.lineAt(line.from).number;
-    const label = gutterCellFromBlocks(cachedBlocks(view.state), cm6);
+    const label = gutterCellAt(cachedIndex(view.state), cm6);
     return label ? new LineLabelMarker(label.text, label.side) : null;
   },
   widgetMarker(_view, widget) {

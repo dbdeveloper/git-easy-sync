@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { Text } from "@codemirror/state";
 import { buildModel } from "../../src/diff2/diff-model";
-import { computeLineLabels, getDiffLineNumber, gutterCell } from "../../src/diff2/diff-line-numbers";
+import { computeLineLabels, getDiffLineNumber, gutterCell, gutterCellAt, lineNumberIndex } from "../../src/diff2/diff-line-numbers";
 import type { VerRange } from "../../src/diff2/diff-model";
 
 function model(base: string, sibling: string): { doc: Text; ranges: VerRange[] } {
@@ -113,4 +113,87 @@ describe("diff-line-numbers — gutterCell (bare-terminal ver-blocks carry the s
     expect(gutterCell(doc, ranges, 5)).toEqual({ text: "", side: "ver2" });
     expect(gutterCell(doc, ranges, 6)).toEqual({ text: "3", side: "normal" }); // "c"
   });
+});
+
+// Field 2026-10-30 (owner): a History diff with 1648 groups scrolled at ~0.5 s a
+// step — the gutter scanned EVERY block (~3300) several times for EACH visible
+// line. The §2.2.10 formula stays; "which blocks are above" now comes from an
+// index built once per structure (binary search + prefix sums).
+describe("diff-line-numbers — the index: same cells, without scanning every block", () => {
+  // The previous per-line lookup (a linear scan over all blocks), kept here as the
+  // oracle: the index must give exactly its answers.
+  function referenceCell(doc: Text, ranges: VerRange[], cm6: number) {
+    const blocks = ranges.map((r) => {
+      const firstLine = doc.lineAt(r.from).number;
+      const termLine = doc.lineAt(r.to - 1).number;
+      const bare = doc.line(termLine).length === 0;
+      return { ver: r.ver, firstLine, termLine, bare, numbered: termLine - firstLine + 1 - (bare ? 1 : 0) };
+    });
+    const own = blocks.find((b) => cm6 >= b.firstLine && cm6 <= b.termLine);
+    let label: { text: string; side: string } | null;
+    if (own && own.bare && cm6 === own.termLine) label = null;
+    else {
+      const bareAbove = blocks.filter((b) => b.bare && b.termLine < cm6).length;
+      if (own && own.ver === 1) {
+        const prior = blocks.filter((b) => b.ver === 1 && b.termLine < own.firstLine).reduce((s, b) => s + b.numbered, 0);
+        label = { text: String(cm6 - prior - bareAbove), side: "ver1" };
+      } else {
+        const above = blocks.filter((b) => b.ver === 1 && b.termLine < cm6).reduce((s, b) => s + b.numbered, 0);
+        label = { text: String(cm6 - above - bareAbove), side: own ? "ver2" : "normal" };
+      }
+    }
+    if (label) return label;
+    const bare = blocks.find((b) => b.bare && b.termLine === cm6);
+    return bare ? { text: "", side: bare.ver === 1 ? "ver1" : "ver2" } : null;
+  }
+
+  // A pseudo-random pair with every group shape: changed, added, removed, multi-line,
+  // blank content lines, and an EOL-less last line.
+  function randomPair(seed: number, n: number): [string, string] {
+    let s = seed;
+    const rnd = () => ((s = (s * 1103515245 + 12345) % 2147483648) / 2147483648);
+    let base = "";
+    let sib = "";
+    for (let i = 0; i < n; i++) {
+      base += `same ${i}\n`;
+      sib += `same ${i}\n`;
+      const k = Math.floor(rnd() * 6);
+      if (k === 1) { base += `mine ${i}\n`; sib += `theirs ${i}\n`; }
+      if (k === 2) sib += `added ${i}\nadded2 ${i}\n`;
+      if (k === 3) base += `removed ${i}\n\n`;
+      if (k === 4) { base += `\n`; sib += `x ${i}\n\n\n`; }
+    }
+    return rnd() < 0.5 ? [base + "tail", sib + "TAIL"] : [base, sib];
+  }
+
+  it("🔑 gutterCell === the previous linear lookup on every line of many random docs", () => {
+    for (let seed = 1; seed <= 40; seed++) {
+      const { doc, ranges } = model(...randomPair(seed, 60));
+      for (let n = 1; n <= doc.lines; n++) {
+        expect(gutterCell(doc, ranges, n)).toEqual(referenceCell(doc, ranges, n));
+      }
+    }
+  });
+
+  it("getDiffLineNumber === the full walk on a doc with thousands of groups", () => {
+    const { doc, ranges } = model(...randomPair(7, 1500));
+    const walk = computeLineLabels(doc, ranges);
+    const ix = lineNumberIndex(doc, ranges);
+    for (let n = 1; n <= doc.lines; n++) {
+      const cell = gutterCellAt(ix, n);
+      const want = walk.get(n);
+      if (want) expect(cell).toEqual(want);
+      else expect(cell === null || cell.text === "").toBe(true);
+    }
+  }, 30_000);
+
+  it("🔑 one line costs a binary search: every line of a 2500-group doc in well under a second", () => {
+    const { doc, ranges } = model(...randomPair(3, 3000));
+    expect(new Set(ranges.map((r) => r.group)).size).toBeGreaterThan(1500);
+    const ix = lineNumberIndex(doc, ranges);
+    const t0 = performance.now();
+    for (let n = 1; n <= doc.lines; n++) gutterCellAt(ix, n);
+    // The old scan: ~doc.lines × 4 × #blocks ≈ 10^8 steps (seconds). The index: ms.
+    expect(performance.now() - t0).toBeLessThan(500);
+  }, 30_000);
 });
