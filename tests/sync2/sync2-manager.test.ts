@@ -1324,10 +1324,18 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     ]);
     put("note.md", "");
     findChangesResult = [modified("note.md", 0)];
+    const warns: Array<[string, unknown]> = [];
+    deps.logger = { info: () => {}, warn: (m: string, d?: unknown) => warns.push([m, d]), error: () => {} };
+    manager = new Sync2Manager(deps);
 
     await manager.commitOnly();
     expect(writtenBatches).toEqual([]); // change dropped
     expect(fs.readFileSync(path.join(dir, "note.md"), "utf8")).toBe("good\n");
+    // Owner, 2026-10-30: the log line says what happened.
+    expect(warns).toContainEqual([
+      "Sync2 detected an unexpected zero-byte file — the last good version restored by the guard",
+      expect.objectContaining({ path: "note.md", source: expect.stringMatching(/^sync_store:/) }),
+    ]);
   });
 
   // ── GITKEEP: the folder journal inside the commit pass (I20-I26, I36, I37)

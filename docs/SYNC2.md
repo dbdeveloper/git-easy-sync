@@ -570,7 +570,7 @@ guard itself.
 
 Restoration overwrites a local file, so it is surfaced: the
 `onZeroByteRestored` callback fires a user-visible Notice
-("Restored *path* — the local copy was empty…") and a log line
+("*name* suddenly became empty — restored the previous version from GitHub.") and a log line
 records the decision (path, previous size, restored size, restore
 source). A defensible automatic recovery must still tell the user
 their vault changed and why.

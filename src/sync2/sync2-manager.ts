@@ -1528,7 +1528,7 @@ export class Sync2Manager {
       await atomicWriteFile(this.deps.vault, c.path, bytes);
       changes.splice(i, 1); // restored == baseline → nothing to commit
       this.deps.logger.warn(
-        "Sync2 zero-byte restore: restored last good version",
+        "Sync2 detected an unexpected zero-byte file — the last good version restored by the guard",
         { path: c.path, source },
       );
       this.deps.onZeroByteRestored?.(c.path);

@@ -1926,13 +1926,16 @@ export default class GitHubSyncPlugin extends Plugin {
           path,
         });
       },
+      // Owner, 2026-10-30: say plainly what happened — a file emptying
+      // by itself means something on the device is wrong, worth knowing.
+      // The engine's WARN carries the full path and the source; no second
+      // log line here.
       onZeroByteRestored: (path: string) => {
+        const name = path.slice(path.lastIndexOf("/") + 1);
         new Notice(
-          `Restored "${path}" — the local copy was empty (likely ` +
-            `corruption). The empty version was NOT uploaded.`,
-          10000,
+          `"${name}" suddenly became empty — restored the previous version from GitHub.`,
+          6000,
         );
-        this.logger?.warn("Zero-byte file restored by guard", { path });
       },
     });
 
