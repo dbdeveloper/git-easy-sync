@@ -762,7 +762,8 @@ describe("WorkerClient + CancelSignal — a request in flight stops at once", ()
   // and "Cancel sync" waited for it — only HTTP requests listened to the
   // signal. A pure computation cannot be told to stop, so the worker that
   // runs it is terminated and a fresh one takes its place in the pool.
-  const big = "x".repeat(WorkerClient.MERGE_WORKER_THRESHOLD + 1);
+  // Any merge goes to a worker now (DIFF3-MYERS step C), however small.
+  const big = "x\n";
   const cpuClient = (signal: CancelSignal) =>
     new WorkerClient({
       hardwareConcurrency: 4, // pool of 3

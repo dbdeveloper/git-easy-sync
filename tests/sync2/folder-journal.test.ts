@@ -132,8 +132,10 @@ describe("FolderJournal — cost grows with the input, not its square (I14)", ()
       tenSmall(); // warm-up
       const small = best(tenSmall, 5);
       const large = best(shape(20000), 5);
-      // Linear ≈ 1, quadratic ≈ 10; 5 leaves room for a GC pause.
-      expect(large / small).toBeLessThan(5);
+      // Linear ≈ 1, quadratic ≈ 10 in theory — and measured far beyond:
+      // an injected whole-set scan per mark took 21 s against tens of ms
+      // (≈ 1000×). 8 leaves room for the parallel suite (5 flaked twice).
+      expect(large / small).toBeLessThan(8);
     });
   }
 });

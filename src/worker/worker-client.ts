@@ -384,8 +384,9 @@ export default class WorkerClient {
   // Typed convenience wrappers around dispatch — Stage 4 surface.
   //
   // Below each threshold (BASE64_WORKER_THRESHOLD,
-  // SHA_WORKER_THRESHOLD, MERGE_WORKER_THRESHOLD) the call runs on
-  // the main thread instead. Reasoning:
+  // SHA_WORKER_THRESHOLD) the call runs on the main thread instead.
+  // MERGES have no threshold: every merge goes to a worker (DIFF3-MYERS
+  // step C — a merge's cost follows its edits, not its bytes). Reasoning:
   //   - Worker round-trip costs ~5-10 ms of postMessage + structured
   //     clone. For small inputs the work itself is ~1 ms — the
   //     overhead dominates.
@@ -399,7 +400,6 @@ export default class WorkerClient {
 
   static readonly BASE64_WORKER_THRESHOLD = 2 * 1024 * 1024; // 2 MB
   static readonly SHA_WORKER_THRESHOLD = 100 * 1024; // 100 KB
-  static readonly MERGE_WORKER_THRESHOLD = 100 * 1024; // 100 KB — NOT used for merges since step C
   // DIFF3-MYERS step C (owner): a merge may run one minute, then its
   // worker is stopped and the file becomes a manual conflict.
   static readonly MERGE_TIMEOUT_MS = 60_000;
