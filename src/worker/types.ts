@@ -33,7 +33,7 @@ export type WorkerRequest =
   // or "crypto.subtle" (its silent fallback). Asked once at start, for
   // the log (owner, 2026-10-11).
   | { id: string; op: "sha1-engine" }
-  // Run node-diff3 three-way merge on three text strings. Used by
+  // Run the three-way merge (three-way-merge.ts) on three text strings. Used by
   // reconcile when ours/base/theirs all differ on a text file.
   // Result mirrors `MergeOutcome` from three-way-merge.ts.
   | {

@@ -162,7 +162,8 @@ export interface GitHubSyncSettings {
   // attemptAutoMerge dance and pushes the local bytes as-is —
   // documented loss of automated 3-way merge for big files, in
   // exchange for sidestepping (a) the node-diff3 scaling cliff
-  // (~85 s at 4.6 MB on mobile) and (b) the multi-MB base64 decode
+  // (~85 s at 4.6 MB on mobile; node-diff3's comparison is gone since
+  // 2026-10-30, docs/tasks/DIFF3-MYERS.md) and (b) the multi-MB base64 decode
   // bridge stalls observed in the May 2026 field investigation.
   //
   // Defaults to 1_000_000 (1 MB), matching the Stage 8 perf-test

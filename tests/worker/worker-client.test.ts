@@ -817,3 +817,34 @@ describe("WorkerClient + CancelSignal — a request in flight stops at once", ()
     client.terminate();
   });
 });
+
+// docs/tasks/DIFF3-MYERS.md B2: ONE merge for every path. The main-thread
+// fallback kept its own copy of node-diff3 with the OLD end-of-line rule
+// ("CRLF if any input has CRLF"), fixed elsewhere on 2026-08-28: a CRLF
+// remote turned a local LF note into CRLF. It now runs mergeText itself —
+// Myers, and the local file's own line endings.
+describe("WorkerClient fallback merge = mergeText", () => {
+  it("🔑 an LF local file stays LF when the remote side is CRLF", async () => {
+    const client = new WorkerClient({ workerCtor: undefined as unknown as typeof Worker });
+    expect(client.isFallback).toBe(true);
+    // Edits one unchanged line apart (adjacent lines would conflict).
+    const base = "a\nb\nc\nd\ne\n";
+    const ours = "a\nB\nc\nd\ne\n";
+    const theirs = "a\r\nb\r\nc\r\nD\r\ne\r\n";
+    const r = await client.mergeText(ours, base, theirs);
+    expect(r).toEqual({ kind: "clean", content: "a\nB\nc\nD\ne\n" });
+  });
+
+  it("a big blank-heavy note merges at once (Myers, not node-diff3)", async () => {
+    const client = new WorkerClient({ workerCtor: undefined as unknown as typeof Worker });
+    const lines = Array.from({ length: 4000 }, (_, i) => (i % 2 === 0 ? "" : `paragraph ${i}`));
+    const ours = [...lines];
+    const theirs = [...lines];
+    ours[3] = "OURS";
+    theirs[3995] = "THEIRS";
+    const t0 = performance.now();
+    const r = await client.mergeText(ours.join("\n"), lines.join("\n"), theirs.join("\n"));
+    expect(r.kind).toBe("clean");
+    expect(performance.now() - t0).toBeLessThan(2000); // node-diff3: ~40 s
+  });
+});

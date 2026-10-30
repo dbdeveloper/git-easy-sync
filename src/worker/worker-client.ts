@@ -13,7 +13,7 @@ import type {
   HttpRequestResult,
 } from "./types";
 import { workerKindForOp } from "./types";
-import { merge as diff3Merge } from "node-diff3";
+import { mergeText as sharedMergeText } from "../sync2/three-way-merge";
 
 // Worker orchestra controller — main-thread side. Holds the CPU
 // worker pool + the single dedicated network worker and exposes a
@@ -109,29 +109,16 @@ async function fallbackComputeGitBlobSHA(
     .join("");
 }
 
-// Main-thread fallback for `merge-text`. Same node-diff3 call the
-// worker would make, same options.
-function fallbackPickSeparator(...inputs: string[]): string {
-  for (const s of inputs) {
-    if (s.includes("\r\n")) return "\r\n";
-  }
-  return "\n";
-}
+// Main-thread fallback for `merge-text`: THE merge (three-way-merge.ts),
+// the same one the worker runs (docs/tasks/DIFF3-MYERS.md B2). It used to
+// be its own node-diff3 copy with the old "CRLF if any input has CRLF"
+// rule, fixed elsewhere on 2026-08-28.
 function fallbackMergeText(
   ours: string,
   base: string,
   theirs: string,
 ): MergeTextResult {
-  const result = diff3Merge(ours, base, theirs, {
-    excludeFalseConflicts: true,
-    stringSeparator: /\r?\n/,
-  });
-  const sep = fallbackPickSeparator(ours, base, theirs);
-  const joined = result.result.join(sep);
-  if (!result.conflict) {
-    return { kind: "clean", content: joined };
-  }
-  return { kind: "conflict", conflictMarkedContent: joined };
+  return sharedMergeText(ours, base, theirs);
 }
 
 const FALLBACK_HANDLERS: Record<WorkerRequest["op"], FallbackHandler> = {
@@ -487,7 +474,7 @@ export default class WorkerClient {
     return await this.dispatch<string>({ id: this.newRequestId(), op: "sha1-engine" });
   }
 
-  // Three-way text merge via node-diff3. Routes to the CPU pool
+  // Three-way text merge (three-way-merge.ts). Routes to the CPU pool
   // when the largest input is big enough that the merge itself
   // would dominate the round-trip cost; otherwise runs inline.
   async mergeText(

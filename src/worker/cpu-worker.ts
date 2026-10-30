@@ -20,13 +20,8 @@
 // turns into a Blob URL at runtime. No ES module syntax at the top
 // level after bundling.
 
-import type {
-  WorkerRequest,
-  WorkerResponse,
-  MergeTextResult,
-} from "./types";
-import { merge as diff3Merge } from "node-diff3";
-import { detectEol, restoreEol } from "../sync2/eol";
+import type { WorkerRequest, WorkerResponse } from "./types";
+import { mergeText } from "../sync2/three-way-merge";
 
 // Worker `self` is `DedicatedWorkerGlobalScope` — but bundling
 // against the standard TS dom lib drags in Window types. We type
@@ -104,29 +99,10 @@ async function computeGitBlobSHA(bytes: ArrayBuffer): Promise<string> {
     .join("");
 }
 
-// node-diff3 three-way text merge. Mirrors src/sync2/three-way-merge.ts
-// mergeText — same options (excludeFalseConflicts + LF-tolerant
-// stringSeparator), same EOL restoration (ours' own dominant style, not
-// "any input has CRLF" — NEW-DRAIN.md §III _diff3 CRLF residual case,
-// 2026-08-28). Result shape matches MergeTextResult for postMessage
-// transit. Keep this in sync with three-way-merge.ts by hand — this file
-// is bundled standalone (esbuild IIFE) and can't share a runtime import
-// with the main-thread module, only the source-level helper (../sync2/eol).
-function mergeText(
-  ours: string,
-  base: string,
-  theirs: string,
-): MergeTextResult {
-  const result = diff3Merge(ours, base, theirs, {
-    excludeFalseConflicts: true,
-    stringSeparator: /\r?\n/,
-  });
-  const joined = restoreEol(result.result.join("\n"), detectEol(ours));
-  if (!result.conflict) {
-    return { kind: "clean", content: joined };
-  }
-  return { kind: "conflict", conflictMarkedContent: joined };
-}
+// The three-way merge is THE one in src/sync2/three-way-merge.ts (our
+// diff3 on Myers, docs/tasks/DIFF3-MYERS.md B2) — bundled into this worker
+// by esbuild like ../sync2/eol already was, so there is no copy to keep
+// in sync by hand any more.
 
 w.addEventListener("message", async (e) => {
   const msg = e.data;
