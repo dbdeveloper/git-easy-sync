@@ -705,7 +705,10 @@ keeps a copy when History deletes a file; these items wait for the UI.
       *(Field 2026-10-30, A: `zz-crash/fwd.md`, synced, emptied by hand → Commit restored it from GitHub
       (`source: github:0a5db31`, the sync_store copy was already swept after the push), WARN `zero-byte restore:
       restored last good version`; the commit queued nothing.)*
-- [ ] Out-of-band drift (another tool changed the repo) reconciles correctly.
+- [x] Out-of-band drift (another tool changed the repo) reconciles correctly.
+      *(Field 2026-10-30, A: three commits straight through the GitHub API — `zz-crash/back.md` edited,
+      `drift-new.md` added, `after-crash.md` deleted; Sync pulled all three (`pulled: 2, removed: 1`), no conflict
+      copy, nothing pushed back.)*
 - [ ] Disabling then re-enabling the plugin mid-sync causes no double-run or corruption.
 
 ## 9. Performance (📱)
