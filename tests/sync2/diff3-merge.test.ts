@@ -185,3 +185,14 @@ describe("mergeText — big notes with few changes are fast (Myers)", () => {
     });
   }
 });
+
+describe("mergeText — a merge too big for its budget is a conflict, not a hang (step C)", () => {
+  it("🔑 past the edit cap: kind 'conflict' (the engine makes it a manual conflict)", () => {
+    // Many edits, all far apart: a clean merge without a cap.
+    const o = Array.from({ length: 3000 }, (_, i) => `line-${i}`);
+    const a = o.map((x, i) => (i % 10 === 0 ? `a-${i}` : x));
+    const b = o.map((x, i) => (i % 10 === 5 ? `b-${i}` : x));
+    expect(mergeText(a.join("\n"), o.join("\n"), b.join("\n")).kind).toBe("clean");
+    expect(mergeText(a.join("\n"), o.join("\n"), b.join("\n"), { maxEditLength: 100 }).kind).toBe("conflict");
+  });
+});

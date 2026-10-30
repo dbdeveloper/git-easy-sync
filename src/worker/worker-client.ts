@@ -3,7 +3,7 @@
 // AGPL-3.0 — see LICENSE.
 
 import type { CancelSignal } from "../cancel-signal";
-import { CancelledError } from "../errors";
+import { CancelledError, MergeTimeoutError } from "../errors";
 import type {
   WorkerRequest,
   WorkerResponse,
@@ -118,7 +118,7 @@ function fallbackMergeText(
   base: string,
   theirs: string,
 ): MergeTextResult {
-  return sharedMergeText(ours, base, theirs);
+  return sharedMergeText(ours, base, theirs, { timeout: WorkerClient.MERGE_SIDE_TIMEOUT_MS });
 }
 
 const FALLBACK_HANDLERS: Record<WorkerRequest["op"], FallbackHandler> = {
@@ -212,6 +212,7 @@ export default class WorkerClient {
   private readonly fallbackAborts = new Map<string, AbortController>();
   // Kept to spawn a replacement for a CPU worker stopped by a cancel.
   private workerCtor: (new (url: string) => Worker) | null = null;
+  private readonly mergeTimeoutMs: number;
 
   // Constructor opts let tests inject mock worker sources and a
   // mock Worker constructor without involving the real Web Worker
@@ -226,8 +227,12 @@ export default class WorkerClient {
     workerCtor?: new (url: string) => Worker;
     // "Cancel sync": aborts requests in flight, refuses new ones until reset.
     cancelSignal?: CancelSignal;
+    // The longest a merge may run before its worker is stopped
+    // (DIFF3-MYERS step C; tests shorten it).
+    mergeTimeoutMs?: number;
   }) {
     this.cancelSignal = opts?.cancelSignal;
+    this.mergeTimeoutMs = opts?.mergeTimeoutMs ?? WorkerClient.MERGE_TIMEOUT_MS;
     this.cancelSignal?.onCancel(() => this.cancelCpuJobs());
     const poolSize = computeCpuPoolSize(
       opts?.hardwareConcurrency ?? globalThis.navigator?.hardwareConcurrency,
@@ -288,19 +293,23 @@ export default class WorkerClient {
   private cancelCpuJobs(): void {
     const hit = new Set<PooledWorker>();
     for (const [, p] of this.pending) if (p.cpu) hit.add(p.cpu);
-    for (const entry of hit) {
-      try {
-        entry.worker.terminate();
-      } catch {
-        // ignore
-      }
-      const i = this.cpuPool.indexOf(entry);
-      if (i >= 0) this.cpuPool[i] = this.spawnCpuWorker();
-      for (const [id, p] of this.pending) {
-        if (p.cpu !== entry) continue;
-        this.pending.delete(id);
-        p.reject(new CancelledError());
-      }
+    for (const entry of hit) this.stopCpuWorker(entry, () => new CancelledError());
+  }
+
+  // Terminate one CPU worker, put a fresh one in its place, and reject
+  // every job it held with the given error.
+  private stopCpuWorker(entry: PooledWorker, error: () => Error): void {
+    try {
+      entry.worker.terminate();
+    } catch {
+      // ignore
+    }
+    const i = this.cpuPool.indexOf(entry);
+    if (i >= 0) this.cpuPool[i] = this.spawnCpuWorker();
+    for (const [id, p] of this.pending) {
+      if (p.cpu !== entry) continue;
+      this.pending.delete(id);
+      p.reject(error());
     }
   }
 
@@ -390,7 +399,14 @@ export default class WorkerClient {
 
   static readonly BASE64_WORKER_THRESHOLD = 2 * 1024 * 1024; // 2 MB
   static readonly SHA_WORKER_THRESHOLD = 100 * 1024; // 100 KB
-  static readonly MERGE_WORKER_THRESHOLD = 100 * 1024; // 100 KB
+  static readonly MERGE_WORKER_THRESHOLD = 100 * 1024; // 100 KB — NOT used for merges since step C
+  // DIFF3-MYERS step C (owner): a merge may run one minute, then its
+  // worker is stopped and the file becomes a manual conflict.
+  static readonly MERGE_TIMEOUT_MS = 60_000;
+  // The merge's OWN budget per two-way comparison (the library gives up
+  // and the merge answers "conflict" — the worker survives). Two sides
+  // must fit inside MERGE_TIMEOUT_MS with room for the rest.
+  static readonly MERGE_SIDE_TIMEOUT_MS = 25_000;
 
   // Decode a base64 string to bytes. Routes the work to the CPU
   // pool when the input is large enough to make the round-trip
@@ -482,17 +498,23 @@ export default class WorkerClient {
     base: string,
     theirs: string,
   ): Promise<MergeTextResult> {
-    const maxLen = Math.max(ours.length, base.length, theirs.length);
-    if (this.fallbackMode || maxLen < WorkerClient.MERGE_WORKER_THRESHOLD) {
-      return fallbackMergeText(ours, base, theirs);
+    // DIFF3-MYERS step C: EVERY merge goes to a worker (owner,
+    // 2026-10-30). Bytes were the wrong measure — a 93 KB note with blank
+    // lines merged for 40 s on the main thread under node-diff3 — and only
+    // off the main thread can Cancel and the time limit stop a merge.
+    // Without workers (fallback mode) there is no choice but inline.
+    if (this.fallbackMode) return fallbackMergeText(ours, base, theirs);
+    const id = this.newRequestId();
+    const job = this.dispatch<MergeTextResult>({ id, op: "merge-text", ours, base, theirs });
+    const timer = setTimeout(() => {
+      const entry = this.pending.get(id)?.cpu;
+      if (entry) this.stopCpuWorker(entry, () => new MergeTimeoutError());
+    }, this.mergeTimeoutMs);
+    try {
+      return await job;
+    } finally {
+      clearTimeout(timer);
     }
-    return await this.dispatch<MergeTextResult>({
-      id: this.newRequestId(),
-      op: "merge-text",
-      ours,
-      base,
-      theirs,
-    });
   }
 
   // Stage 6: dispatch an HTTP request through the dedicated network

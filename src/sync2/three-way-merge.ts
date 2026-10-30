@@ -2,7 +2,7 @@
 // Vladyslav Kozlovskyy <dbdevelop@gmail.com>, 2026.
 // AGPL-3.0 — see LICENSE.
 
-import { mergeLines } from "./diff3-merge";
+import { mergeLines, type MergeLimits } from "./diff3-merge";
 import { detectEol, restoreEol } from "./eol";
 
 // Outcome of a 3-way merge attempt. "clean" means non-overlapping
@@ -25,13 +25,17 @@ export function mergeText(
   ours: string,
   base: string,
   theirs: string,
+  // DIFF3-MYERS step C: a merge too big for its budget gives up and is a
+  // conflict for the user — never a hang.
+  limits: MergeLimits = {},
 ): MergeOutcome {
   // Our diff3 (docs/tasks/DIFF3-MYERS.md): node-diff3's region walk on
   // Myers comparisons — same semantics, without node-diff3's blow-up on
   // repeated lines. Argument order (a=ours, o=base, b=theirs); both sides
   // making the identical change is a clean merge, not a conflict.
   const sep = /\r?\n/;
-  const result = mergeLines(ours.split(sep), base.split(sep), theirs.split(sep))!;
+  const result = mergeLines(ours.split(sep), base.split(sep), theirs.split(sep), limits);
+  if (result === null) return { kind: "conflict", conflictMarkedContent: ours };
   // result.result is an array of strings (with conflict markers already
   // inlined when result.conflict is true), joined with `\n` then restored
   // to `ours`' (local's) OWN dominant EOL style — NOT "any input has

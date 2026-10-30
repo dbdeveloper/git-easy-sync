@@ -23,6 +23,10 @@
 import type { WorkerRequest, WorkerResponse } from "./types";
 import { mergeText } from "../sync2/three-way-merge";
 
+// Keep equal to WorkerClient.MERGE_SIDE_TIMEOUT_MS (this file is bundled
+// on its own and does not import the client).
+const MERGE_SIDE_TIMEOUT_MS = 25_000;
+
 // Worker `self` is `DedicatedWorkerGlobalScope` — but bundling
 // against the standard TS dom lib drags in Window types. We type
 // the post side narrowly and assert.
@@ -149,7 +153,10 @@ w.addEventListener("message", async (e) => {
         return;
       }
       case "merge-text": {
-        const out = mergeText(msg.ours, msg.base, msg.theirs);
+        // The merge's own budget per side (DIFF3-MYERS step C): too big →
+        // "conflict", and this worker survives. The client stops the
+        // worker only if even that does not end it within its limit.
+        const out = mergeText(msg.ours, msg.base, msg.theirs, { timeout: MERGE_SIDE_TIMEOUT_MS });
         w.postMessage({ id: msg.id, ok: true, result: out });
         return;
       }

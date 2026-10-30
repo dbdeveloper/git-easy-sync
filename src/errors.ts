@@ -85,6 +85,16 @@ export class CancelledError extends SyncError {
   }
 }
 
+// A three-way merge ran past its time limit (docs/tasks/DIFF3-MYERS.md
+// step C, owner 2026-10-30: one minute). Its worker was stopped; the
+// engine treats the file as a manual conflict. NOT a CancelledError: the
+// user did not leave, the merge was just too big.
+export class MergeTimeoutError extends SyncError {
+  constructor(message = "Merge took too long") {
+    super(message);
+  }
+}
+
 // ── GitHub HTTP responses ─────────────────────────────────────────
 
 // Generic HTTP-error envelope from GitHub. Carries `status` and the

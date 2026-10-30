@@ -15,6 +15,7 @@ import {
 } from "../../src/sync2/diff3";
 import { DELETED_SHA_HASH } from "../../src/sync2/discovery";
 import {
+  MergeTimeoutError,
   BaseFileNotInRepoError,
   CompareWrongFilesError,
   LocalFileNotFoundError,
@@ -1364,6 +1365,30 @@ describe("_diff3 totality — every (base, local, remote) combination", () => {
       rmSync(dir, { recursive: true, force: true });
     }
     expect(problems).toEqual([]);
+  });
+});
+
+// DIFF3-MYERS step C (owner, 2026-10-30): a merge stopped by its time
+// limit is a manual conflict — while a user's Cancel still ends the drain.
+describe("_diff3 — a merge past its time limit is a manual conflict", () => {
+  it("🔑 MergeTimeoutError from the merge → manual-conflict", async () => {
+    const deps: Diff3Deps = {
+      syncStore: null as never,
+      verifiedShas: new Set(),
+      getBlobFromRepo: async () => null,
+      getContentsMetadataAtRef: async () => null,
+      maxAutoMergeFileSize: () => 10_000_000,
+      mergeBlobs: async () => {
+        throw new MergeTimeoutError();
+      },
+      computeSha: calculateGitBlobSHA,
+      configDir: ".obsidian",
+      selfPluginId: PLUGIN_ID,
+    };
+    const base = side("n.md", "a\nb\nc\n");
+    const local = side("n.md", "A\nb\nc\n");
+    const remote = side("n.md", "a\nb\nC\n");
+    expect(await _diff3(deps, { base, remote }, local, HEAD)).toEqual({ kind: "manual-conflict" });
   });
 });
 

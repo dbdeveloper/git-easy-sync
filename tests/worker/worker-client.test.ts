@@ -2,8 +2,10 @@
 // Vladyslav Kozlovskyy <dbdevelop@gmail.com>, 2026.
 // AGPL-3.0 — see LICENSE.
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { CancelSignal } from "../../src/cancel-signal";
+import { MergeTimeoutError } from "../../src/errors";
+import { mergeText as realMergeText } from "../../src/sync2/three-way-merge";
 import { CancelledError } from "../../src/errors";
 import WorkerClient, {
   computeCpuPoolSize,
@@ -28,7 +30,8 @@ class FakeWorker {
     | "error"
     | "noop"
     | "swap-id"
-    | "drop" = "pong";
+    | "drop"
+    | "merge" = "pong";
 
   url: string;
   terminated = false;
@@ -72,6 +75,12 @@ class FakeWorker {
         case "swap-id":
           reply = { id: "wrong-id", ok: true, result: "stray" };
           break;
+        case "merge": {
+          // A worker that really merges — what cpu-worker.ts does.
+          const m = msg as Extract<WorkerRequest, { op: "merge-text" }>;
+          reply = { id: msg.id, ok: true, result: realMergeText(m.ours, m.base, m.theirs) };
+          break;
+        }
         case "drop":
         case "noop":
           // Don't reply at all.
@@ -493,6 +502,9 @@ describe("WorkerClient.mergeText", () => {
   beforeEach(() => {
     setupGlobals();
     resetGlobals();
+    // Since DIFF3-MYERS step C every merge goes to a worker, small ones
+    // too: the fake worker really merges.
+    FakeWorker.replyMode = "merge";
   });
 
   it("clean merge of non-overlapping edits", async () => {
@@ -557,8 +569,8 @@ describe("WorkerClient.mergeText", () => {
   });
 
   it("worker and fallback paths produce identical results", async () => {
-    // Both clients run through fallback because the test inputs
-    // are short, but the test asserts the algorithm is the same.
+    // One merges in a (fake, really merging) worker, the other inline in
+    // fallback mode — both run the same mergeText.
     const workerClient = new WorkerClient({
       hardwareConcurrency: 4,
       cpuWorkerSource: FAKE_CPU,
@@ -846,5 +858,83 @@ describe("WorkerClient fallback merge = mergeText", () => {
     const r = await client.mergeText(ours.join("\n"), lines.join("\n"), theirs.join("\n"));
     expect(r.kind).toBe("clean");
     expect(performance.now() - t0).toBeLessThan(2000); // node-diff3: ~40 s
+  });
+});
+
+// docs/tasks/DIFF3-MYERS.md step C (owner, 2026-10-30): every merge runs
+// in a CPU worker — so Obsidian never freezes and Cancel / the time limit
+// always apply — and a merge that runs past one minute stops: its worker
+// is terminated and replaced, the merge rejects with MergeTimeoutError,
+// which the engine turns into a manual conflict.
+describe("WorkerClient merge — always in a worker, never longer than the limit", () => {
+  it("🔑 a SMALL merge goes to a worker too (no main-thread merge any more)", async () => {
+    FakeWorker.instances = [];
+    FakeWorker.replyMode = "echo";
+    const posted: WorkerRequest[] = [];
+    class RecordingWorker extends FakeWorker {
+      postMessage(msg: WorkerRequest): void {
+        posted.push(msg);
+        super.postMessage(msg);
+      }
+    }
+    const client = new WorkerClient({
+      hardwareConcurrency: 4,
+      cpuWorkerSource: FAKE_CPU,
+      networkWorkerSource: FAKE_NETWORK,
+      workerCtor: RecordingWorker as unknown as typeof Worker,
+    });
+    void client.mergeText("a\n", "a\n", "b\n").catch(() => {});
+    await Promise.resolve();
+    expect(posted.some((m) => m.op === "merge-text")).toBe(true);
+    client.terminate();
+  });
+
+  it("🔑 past the limit: MergeTimeoutError, its worker terminated and replaced", async () => {
+    vi.useFakeTimers();
+    try {
+      FakeWorker.instances = [];
+      FakeWorker.replyMode = "drop"; // a merge that never ends
+      const client = new WorkerClient({
+        hardwareConcurrency: 4,
+        cpuWorkerSource: FAKE_CPU,
+        networkWorkerSource: FAKE_NETWORK,
+        workerCtor: FakeWorker as unknown as typeof Worker,
+        mergeTimeoutMs: 60_000,
+      });
+      const before = FakeWorker.instances.length;
+      const p = client.mergeText("a\n", "a\n", "b\n");
+      const caught = p.catch((e) => e);
+      vi.advanceTimersByTime(59_000);
+      expect(FakeWorker.instances.filter((w) => w.terminated)).toHaveLength(0);
+      vi.advanceTimersByTime(2_000);
+      expect(await caught).toBeInstanceOf(MergeTimeoutError);
+      expect(FakeWorker.instances.filter((w) => w.terminated)).toHaveLength(1);
+      expect(FakeWorker.instances.length).toBe(before + 1);
+      expect(client.cpuPoolSize).toBe(3);
+      client.terminate();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a merge that answers in time is not touched by the limit", async () => {
+    vi.useFakeTimers();
+    try {
+      FakeWorker.instances = [];
+      FakeWorker.replyMode = "pong";
+      const client = new WorkerClient({
+        hardwareConcurrency: 4,
+        cpuWorkerSource: FAKE_CPU,
+        networkWorkerSource: FAKE_NETWORK,
+        workerCtor: FakeWorker as unknown as typeof Worker,
+        mergeTimeoutMs: 60_000,
+      });
+      await expect(client.mergeText("a\n", "a\n", "b\n")).resolves.toBe("pong");
+      vi.advanceTimersByTime(120_000);
+      expect(FakeWorker.instances.filter((w) => w.terminated)).toHaveLength(0);
+      client.terminate();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
