@@ -270,6 +270,7 @@ Use it, and note which runs you did.
       wrote: its log has `gitignore section anomaly` / `yielded-to-newer`, the file keeps the newer version lines, and a
       second Sync makes NO `.gitignore` commit. *(Field 2026-10-24: verified with REAL builds — T3 below, and again
       2.0.4/2.0.5/2.0.6. On one device it can still be simulated by changing `plugin version:` lines to `9.9.9`.)*
+
 #### Three vaults, one repo — the version bump to `2.0.3-beta` and the two-block `<configDir>/.gitignore` (new 2026-10-24)
 
 Vaults (all connected to repo `obsidian8`):
@@ -552,10 +553,10 @@ keeps a copy when History deletes a file; these items wait for the UI.
 
 ## 6. Settings & lifecycle (🖥️📱)
 
-- [ ] Token / owner / repo / branch fields trim input; invalid values produce a clear error (not a silent 404).
-- [ ] The settings connection test works and does not disturb sync state.
+- [x] Token / owner / repo / branch fields trim input; invalid values produce a clear error (not a silent 404).
+- [x] The settings connection test works and does not disturb sync state.
 - [x] **Reset** (type the confirmation phrase) wipes the token, repo settings, sync history, pending local commits, conflicts, unsaved conflict-editor edits, and the plugin trash (the whole `.runtime/`); vault files are NOT touched — conflict-copy files stay in place and are re-detected as conflicts on re-enable. A `.reset-in-progress` marker in the plugin dir makes an interrupted reset finish on the next load.
-- [ ] Toggling **"sync config folder"** includes/excludes `.obsidian/*` accordingly.
+- [x] Toggling **"sync config folder"** includes/excludes `.obsidian/*` accordingly.
 - [x] **"Clean logs" shows the live log size (new 2026-10-07, TODO п.36).** With logging on,
       the row reads `Truncate the log. Current log size is 1.2 MB (1 234 567 bytes).`; the
       number grows while the plugin logs (run a Sync with the page open), and right after
@@ -618,7 +619,7 @@ keeps a copy when History deletes a file; these items wait for the UI.
         viewer (tab, window, 📱 modal) closes.
 - [x] **Changing a switch never scrolls the page (new 2026-10-07).** *(Field 2026-10-26: owner — the page stays put.)* Scroll down to *Logging* and toggle **Enable logging** on and off: the page stays where it is, and the *Clean logs* row appears/disappears in place. (Tab/Shift-Tab between fields is not expected to work — Obsidian's settings behave that way for every plugin.)
 - [x] Changing the **device label** makes new commits carry the new `(label)` suffix.
-- [ ] Switching repositories resets state correctly. ⚠️ **Change it in the SETTINGS UI,
+- [x] Switching repositories resets state correctly. ⚠️ **Change it in the SETTINGS UI,
       not by editing `data.json`.** A hand edit while Obsidian runs does nothing: the
       plugin holds its settings in memory and never re-reads that file, so the sync goes
       to the OLD repo with the OLD token and reports a perfectly healthy "0 pushed" —
@@ -630,11 +631,11 @@ keeps a copy when History deletes a file; these items wait for the UI.
       anchor stops being an ancestor, `compare` 404s, and discovery falls back to a
       full-tree diff.)
 - [ ] The **max auto-merge size** setting prevents very large files from being auto-merged.
-- [ ] **Token expired (§35)** — with a bad token, a manual Sync opens the recovery dialog **every time** (closing `[X]` then Sync re-opens it — not a silent toast); the raw "…status 401" toast does NOT appear.
-- [ ] **Token expired — sticky + red UI (§35)** — the marker survives a plugin reload: after reload the **GitHub** status-bar word + **Sync** ribbon icon are red (tooltip "Token expired"), **Sync All** / **Pull from repo…** are greyed, and the **GitHub sync status** box shows the 401 ("invalid or expired") vs 403 ("lacks permissions") message. It clears only on a token/owner/repo edit **or** a successful **Test connection** (a normal successful Sync does NOT clear it).
+- [x] **Token expired (§35)** — with a bad token, a manual Sync opens the recovery dialog **every time** (closing `[X]` then Sync re-opens it — not a silent toast); the raw "…status 401" toast does NOT appear.
+- [x] **Token expired — sticky + red UI (§35)** — the marker survives a plugin reload: after reload the **GitHub** status-bar word + **Sync** ribbon icon are red (tooltip "Token expired"), **Sync All** / **Pull from repo…** are greyed, and the **GitHub sync status** box shows the 401 ("invalid or expired") vs 403 ("lacks permissions") message. It clears only on a token/owner/repo edit **or** a successful **Test connection** (a normal successful Sync does NOT clear it).
 - [x] **Token expired — history (§35)** — opening a file's history shows **"TOKEN EXPIRED! …"** above the local-only versions. *(Field 2026-10-26: owner, with a broken token.)*
 - [x] **Token expired — automatic (§35)** — an interval/startup sync flashes **"Sync skipped: token expired"** (no modal). *(Owner: verified earlier.)*
-- [ ] 📱 **Token expired — mobile modal (§35)** — the recovery dialog is the shorter mobile layout and its buttons wrap + center (none pushed off-screen).
+- [x] 📱 **Token expired — mobile modal (§35)** — the recovery dialog is the shorter mobile layout and its buttons wrap + center (none pushed off-screen).
 
 ## 7. Self-update and plugin updates (🖥️📱🌐)
 
