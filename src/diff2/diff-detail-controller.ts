@@ -74,7 +74,6 @@ import WorkerClient from "../worker/worker-client";
 import {
   DiffTooLargeError,
   MAX_DIFF_GROUPS,
-  clearLineDiffCache,
   prepareLineDiff,
   type LineDiffRunner,
 } from "./line-diff";
@@ -245,7 +244,6 @@ export class DiffDetailController {
     this.deps.logger?.info("diff2 disposeOwner", { hadOwner: !!this.owner, hadToolbar: !!this.toolbarHandle });
     this.mountAbort?.abort();
     this.mountAbort = null;
-    clearLineDiffCache();
     this.owner?.dispose();
     this.owner = null;
     this.toolbarHandle = null; // §2.2.15 — toolbar DOM is rebuilt on the next mount
@@ -428,6 +426,7 @@ export class DiffDetailController {
     // runs in the `finally` below → always swaps both out (success / error / early
     // return). classList (not Obsidian's addClass) so the happy-dom test host works too.
     parent.classList.add("diff2-detail-loading");
+    parent.classList.remove("diff2-detail-too-big-host"); // a previous pair's message
     let loadingOverlay: HTMLElement | null = null;
     let loadingText: HTMLElement | null = null;
     const showLoadingTimer = setTimeout(() => {

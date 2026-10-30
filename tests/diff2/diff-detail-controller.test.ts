@@ -17,7 +17,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { diffLines as jsdiffLines } from "diff";
 import { CancelledError } from "../../src/errors";
-import { MAX_DIFF_GROUPS, clearLineDiffCache } from "../../src/diff2/line-diff";
+import { MAX_DIFF_GROUPS, cachedLineDiff, clearLineDiffCache } from "../../src/diff2/line-diff";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -483,6 +483,31 @@ describe("DiffDetailController host seam (S2)", () => {
     expect(container.classList.contains("diff2-detail-too-big-host")).toBe(true); // hides the toolbar
     expect(container.querySelector(".diff2-detail-loading-overlay")).toBeNull();
     expect(await fx.vault.adapter.exists(autosaveDir(conflictId))).toBe(false);
+    ctl.dispose();
+  });
+
+  it("the next pair in the same view gets its toolbar back", async () => {
+    const big = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+    const first = new DiffDetailController({} as unknown as App, limitDeps(async () => null), recordingHost());
+    await first.mount(container, big.entry);
+    expect(container.classList.contains("diff2-detail-too-big-host")).toBe(true);
+    first.dispose();
+    container.replaceChildren();
+    const second = new DiffDetailController({} as unknown as App, limitDeps(realLines), recordingHost());
+    await second.mount(container, big.entry);
+    expect(container.classList.contains("diff2-detail-too-big-host")).toBe(false);
+    expect(second.getView()).not.toBeNull();
+    second.dispose();
+  });
+
+  it("closing ANOTHER tab does not drop this tab's prepared comparison", async () => {
+    const { entry } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+    const spy = vi.fn(realLines);
+    const other = new DiffDetailController({} as unknown as App, limitDeps(spy), recordingHost());
+    const ctl = new DiffDetailController({} as unknown as App, limitDeps(spy), recordingHost());
+    await ctl.mount(container, entry);
+    other.dispose(); // another editor tab closes
+    expect(cachedLineDiff("a\nMINE\nc\n", "a\nTHEIRS\nc\n")).toBeDefined();
     ctl.dispose();
   });
 
