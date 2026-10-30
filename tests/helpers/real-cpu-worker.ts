@@ -74,12 +74,13 @@ class RealCpuWorker {
   terminate(): void {}
 }
 
-export function makeRealCpuWorkerClient(): WorkerClient {
+export function makeRealCpuWorkerClient(opts?: { diffTimeoutMs?: number }): WorkerClient {
   return new WorkerClient({
     hardwareConcurrency: 4,
     cpuWorkerSource: "/* real cpu-worker.ts is loaded by the fake */",
     networkWorkerSource: "/* unused */",
     workerCtor: RealCpuWorker as unknown as typeof Worker,
+    ...opts,
   });
 }
 

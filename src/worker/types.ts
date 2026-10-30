@@ -43,6 +43,9 @@ export type WorkerRequest =
       base: string;
       theirs: string;
     }
+  // The diff editor's line comparison (DIFF-EDITOR-V2.md §2.1.1): off the
+  // main thread, giving up after `timeout` ms (result null).
+  | { id: string; op: "diff-lines"; a: string; b: string; timeout: number }
   // Stage 6 — network worker. Sends one HTTP request and returns
   // the response payload along with retry-loop state. The actual
   // retry policy lives main-thread-side (per-call: getContentsAtRef
@@ -73,6 +76,13 @@ export type WorkerResponse =
 export type MergeTextResult =
   | { kind: "clean"; content: string }
   | { kind: "conflict"; conflictMarkedContent: string };
+
+// One part of a line comparison, as `diffLines` from `diff` reports it.
+export interface LineDiffPart {
+  value: string;
+  added?: boolean;
+  removed?: boolean;
+}
 
 // Result of the hash-git-blob op: the SHA plus the very buffer that
 // was sent, transferred back to the caller.
@@ -109,6 +119,7 @@ export function workerKindForOp(op: WorkerRequest["op"]): WorkerKind {
     case "hash-git-blob":
     case "sha1-engine":
     case "merge-text":
+    case "diff-lines":
       return "cpu";
     case "http-request":
     case "http-abort":

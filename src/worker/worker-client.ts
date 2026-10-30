@@ -12,7 +12,9 @@ import type {
   HashedBlob,
   HttpRequestResult,
 } from "./types";
+import type { LineDiffPart } from "./types";
 import { workerKindForOp } from "./types";
+import { diffLines } from "diff";
 import { mergeText as sharedMergeText } from "../sync2/three-way-merge";
 
 // Worker orchestra controller — main-thread side. Holds the CPU
@@ -64,6 +66,8 @@ interface PendingRequest {
   // The CPU worker running it — so "Cancel sync" can stop exactly that
   // worker (a pure computation cannot be told to stop).
   cpu?: PooledWorker;
+  // A diff-editor job: its tab stops it, not "Cancel sync".
+  ui?: boolean;
 }
 
 // A single CPU worker plus its work-queue depth. The pool picks
@@ -121,6 +125,11 @@ function fallbackMergeText(
   return sharedMergeText(ours, base, theirs, { timeout: WorkerClient.MERGE_SIDE_TIMEOUT_MS });
 }
 
+// Main-thread fallback for `diff-lines`: the same call the worker makes.
+function fallbackDiffLines(a: string, b: string, timeout: number): LineDiffPart[] | null {
+  return diffLines(a, b, { timeout }) ?? null;
+}
+
 const FALLBACK_HANDLERS: Record<WorkerRequest["op"], FallbackHandler> = {
   ping: async () => "pong-main-fallback",
   echo: async (req) =>
@@ -145,6 +154,10 @@ const FALLBACK_HANDLERS: Record<WorkerRequest["op"], FallbackHandler> = {
   "merge-text": async (req) => {
     const r = req as Extract<WorkerRequest, { op: "merge-text" }>;
     return fallbackMergeText(r.ours, r.base, r.theirs);
+  },
+  "diff-lines": async (req) => {
+    const r = req as Extract<WorkerRequest, { op: "diff-lines" }>;
+    return fallbackDiffLines(r.a, r.b, r.timeout);
   },
   // Aborting is the client's business (abortHttp); nothing to do here.
   "http-abort": async () => null,
@@ -213,6 +226,7 @@ export default class WorkerClient {
   // Kept to spawn a replacement for a CPU worker stopped by a cancel.
   private workerCtor: (new (url: string) => Worker) | null = null;
   private readonly mergeTimeoutMs: number;
+  private readonly diffTimeoutMs: number;
 
   // Constructor opts let tests inject mock worker sources and a
   // mock Worker constructor without involving the real Web Worker
@@ -230,9 +244,13 @@ export default class WorkerClient {
     // The longest a merge may run before its worker is stopped
     // (DIFF3-MYERS step C; tests shorten it).
     mergeTimeoutMs?: number;
+    // The diff editor's comparison budget (DIFF-EDITOR-V2.md §2.1.1;
+    // tests shorten it).
+    diffTimeoutMs?: number;
   }) {
     this.cancelSignal = opts?.cancelSignal;
     this.mergeTimeoutMs = opts?.mergeTimeoutMs ?? WorkerClient.MERGE_TIMEOUT_MS;
+    this.diffTimeoutMs = opts?.diffTimeoutMs ?? WorkerClient.DIFF_TIMEOUT_MS;
     this.cancelSignal?.onCancel(() => this.cancelCpuJobs());
     const poolSize = computeCpuPoolSize(
       opts?.hardwareConcurrency ?? globalThis.navigator?.hardwareConcurrency,
@@ -289,10 +307,12 @@ export default class WorkerClient {
   // started after the cancel (the UI hashing a file) runs normally.
   // ⚠️ The client is one per plugin load and shared with the UI: a UI
   // job that happens to be in flight on the same worker dies with it
-  // (the caller sees CancelledError; rare, and harmless to retry).
+  // (the caller sees CancelledError; rare, and harmless to retry). A
+  // worker that holds ONLY diff-editor jobs is left alone — its tab
+  // stops them.
   private cancelCpuJobs(): void {
     const hit = new Set<PooledWorker>();
-    for (const [, p] of this.pending) if (p.cpu) hit.add(p.cpu);
+    for (const [, p] of this.pending) if (p.cpu && !p.ui) hit.add(p.cpu);
     for (const entry of hit) this.stopCpuWorker(entry, () => new CancelledError());
   }
 
@@ -407,6 +427,11 @@ export default class WorkerClient {
   // and the merge answers "conflict" — the worker survives). Two sides
   // must fit inside MERGE_TIMEOUT_MS with room for the rest.
   static readonly MERGE_SIDE_TIMEOUT_MS = 25_000;
+  // DIFF-EDITOR-V2.md §2.1.1 (owner, 2026-10-30): the diff editor compares
+  // for at most one minute, on the phone too. The library gives up on its
+  // own; a worker silent DIFF_GRACE_MS after that is stopped and replaced.
+  static readonly DIFF_TIMEOUT_MS = 60_000;
+  static readonly DIFF_GRACE_MS = 5_000;
 
   // Decode a base64 string to bytes. Routes the work to the CPU
   // pool when the input is large enough to make the round-trip
@@ -514,6 +539,39 @@ export default class WorkerClient {
       return await job;
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  // The diff editor's line comparison (DIFF-EDITOR-V2.md §2.1.1), off the
+  // main thread so Obsidian and the loading spinner stay alive. null =
+  // gave up (over the time budget). `signal` = the tab closed: the worker
+  // is stopped and replaced at once, the call rejects with CancelledError.
+  async diffLines(a: string, b: string, signal?: AbortSignal): Promise<LineDiffPart[] | null> {
+    if (signal?.aborted) throw new CancelledError();
+    if (this.fallbackMode) return fallbackDiffLines(a, b, this.diffTimeoutMs);
+    const id = this.newRequestId();
+    const job = this.dispatch<LineDiffPart[] | null>({ id, op: "diff-lines", a, b, timeout: this.diffTimeoutMs });
+    const entry = this.pending.get(id);
+    if (entry) entry.ui = true;
+    const stop = (error: () => Error): void => {
+      const cpu = this.pending.get(id)?.cpu;
+      if (cpu) this.stopCpuWorker(cpu, error);
+    };
+    const onAbort = (): void => stop(() => new CancelledError());
+    signal?.addEventListener("abort", onAbort);
+    let silent = false;
+    const timer = setTimeout(() => {
+      silent = true;
+      stop(() => new CancelledError());
+    }, this.diffTimeoutMs + WorkerClient.DIFF_GRACE_MS);
+    try {
+      return await job;
+    } catch (err) {
+      if (silent && !signal?.aborted) return null;
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
     }
   }
 

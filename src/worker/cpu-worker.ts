@@ -21,6 +21,7 @@
 // level after bundling.
 
 import type { WorkerRequest, WorkerResponse } from "./types";
+import { diffLines } from "diff";
 import { mergeText } from "../sync2/three-way-merge";
 
 // Keep equal to WorkerClient.MERGE_SIDE_TIMEOUT_MS (this file is bundled
@@ -158,6 +159,16 @@ w.addEventListener("message", async (e) => {
         // worker only if even that does not end it within its limit.
         const out = mergeText(msg.ours, msg.base, msg.theirs, { timeout: MERGE_SIDE_TIMEOUT_MS });
         w.postMessage({ id: msg.id, ok: true, result: out });
+        return;
+      }
+      case "diff-lines": {
+        // The diff editor's comparison (DIFF-EDITOR-V2.md §2.1.1). The
+        // library gives up after `timeout` → null; plain parts cross back.
+        const parts = diffLines(msg.a, msg.b, { timeout: msg.timeout });
+        const result = parts === undefined
+          ? null
+          : parts.map((p) => ({ value: p.value, added: p.added, removed: p.removed }));
+        w.postMessage({ id: msg.id, ok: true, result });
         return;
       }
     }

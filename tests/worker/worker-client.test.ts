@@ -939,3 +939,105 @@ describe("WorkerClient merge — always in a worker, never longer than the limit
     }
   });
 });
+
+// DIFF-EDITOR-V2.md §2.1.1 (owner, 2026-10-30): the diff editor's line
+// comparison runs in a CPU worker — Obsidian stays alive and the loading
+// spinner turns — within one minute; closing the tab stops it at once.
+describe("WorkerClient diffLines — the diff editor's comparison, off the main thread", () => {
+  function client(extra?: { diffTimeoutMs?: number }) {
+    return new WorkerClient({
+      hardwareConcurrency: 4,
+      cpuWorkerSource: FAKE_CPU,
+      networkWorkerSource: FAKE_NETWORK,
+      workerCtor: FakeWorker as unknown as typeof Worker,
+      ...extra,
+    });
+  }
+
+  it("🔑 posts a diff-lines job carrying the one-minute budget", async () => {
+    FakeWorker.instances = [];
+    FakeWorker.replyMode = "drop";
+    const posted: WorkerRequest[] = [];
+    class RecordingWorker extends FakeWorker {
+      postMessage(msg: WorkerRequest): void {
+        posted.push(msg);
+        super.postMessage(msg);
+      }
+    }
+    const c = new WorkerClient({
+      hardwareConcurrency: 4,
+      cpuWorkerSource: FAKE_CPU,
+      networkWorkerSource: FAKE_NETWORK,
+      workerCtor: RecordingWorker as unknown as typeof Worker,
+    });
+    void c.diffLines("a\n", "b\n").catch(() => {});
+    await Promise.resolve();
+    const job = posted.find((m) => m.op === "diff-lines") as Extract<WorkerRequest, { op: "diff-lines" }> | undefined;
+    expect(job).toBeDefined();
+    expect(job!.timeout).toBe(60_000);
+    c.terminate();
+  });
+
+  it("🔑 closing the tab (abort) stops the job at once: CancelledError, worker replaced", async () => {
+    FakeWorker.instances = [];
+    FakeWorker.replyMode = "drop"; // a comparison that never ends
+    const c = client();
+    const before = FakeWorker.instances.length;
+    const abort = new AbortController();
+    const caught = c.diffLines("a\n", "b\n", abort.signal).catch((e) => e);
+    await Promise.resolve();
+    abort.abort();
+    expect(await caught).toBeInstanceOf(CancelledError);
+    expect(FakeWorker.instances.filter((w) => w.terminated)).toHaveLength(1);
+    expect(FakeWorker.instances.length).toBe(before + 1);
+    expect(c.cpuPoolSize).toBe(3);
+    c.terminate();
+  });
+
+  it("an already-aborted signal never posts the job", async () => {
+    FakeWorker.instances = [];
+    FakeWorker.replyMode = "drop";
+    const c = client();
+    const abort = new AbortController();
+    abort.abort();
+    await expect(c.diffLines("a\n", "b\n", abort.signal)).rejects.toBeInstanceOf(CancelledError);
+    expect(FakeWorker.instances.filter((w) => w.terminated)).toHaveLength(0);
+    c.terminate();
+  });
+
+  it("🔑 a worker silent past the budget: stopped and replaced, the answer is 'gave up' (null)", async () => {
+    vi.useFakeTimers();
+    try {
+      FakeWorker.instances = [];
+      FakeWorker.replyMode = "drop";
+      const c = client({ diffTimeoutMs: 60_000 });
+      const p = c.diffLines("a\n", "b\n");
+      vi.advanceTimersByTime(60_000);
+      expect(FakeWorker.instances.filter((w) => w.terminated)).toHaveLength(0);
+      vi.advanceTimersByTime(6_000);
+      await expect(p).resolves.toBeNull();
+      expect(FakeWorker.instances.filter((w) => w.terminated)).toHaveLength(1);
+      expect(c.cpuPoolSize).toBe(3);
+      c.terminate();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("without workers (fallback) it compares inline", async () => {
+    const c = new WorkerClient({
+      hardwareConcurrency: 4,
+      cpuWorkerSource: "",
+      networkWorkerSource: "",
+      workerCtor: FakeWorker as unknown as typeof Worker,
+    });
+    expect(c.isFallback).toBe(true);
+    const parts = await c.diffLines("a\nb\n", "a\nc\n");
+    expect(parts?.map((p) => [p.added ?? false, p.removed ?? false, p.value])).toEqual([
+      [false, false, "a\n"],
+      [false, true, "b\n"],
+      [true, false, "c\n"],
+    ]);
+    c.terminate();
+  });
+});
