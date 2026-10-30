@@ -701,7 +701,10 @@ keeps a copy when History deletes a file; these items wait for the UI.
       *(Field 2026-10-30, A: a staged dir holding only `.attempted-commit` laid out by hand; the restart logged
       `WARN recoverStaleCommitClaims: staged batch dir(s) left by a crashed commit — removed` with that dir; the
       next Commit queued one ordinary batch with the waiting changes, `zz-crash/.gitkeep` included.)*
-- [ ] **Zero-byte restore guard:** a file that had content but accidentally became 0 bytes is restored to its last good version, and the empty copy never reaches the server.
+- [x] **Zero-byte restore guard:** a file that had content but accidentally became 0 bytes is restored to its last good version, and the empty copy never reaches the server.
+      *(Field 2026-10-30, A: `zz-crash/fwd.md`, synced, emptied by hand → Commit restored it from GitHub
+      (`source: github:0a5db31`, the sync_store copy was already swept after the push), WARN `zero-byte restore:
+      restored last good version`; the commit queued nothing.)*
 - [ ] Out-of-band drift (another tool changed the repo) reconciles correctly.
 - [ ] Disabling then re-enabling the plugin mid-sync causes no double-run or corruption.
 
