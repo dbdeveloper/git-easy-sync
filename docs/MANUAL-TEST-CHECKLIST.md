@@ -663,8 +663,12 @@ keeps a copy when History deletes a file; these items wait for the UI.
       onto that build cannot show it.
       *(Field 2026-10-26: owner — self-update on B (from A, configs ON): no restart, one toast, no re-ask,
       no false local edit; the log had `applied self-update settled in the baseline`.)*
-- [ ] **Click-enabling the plugin while an update waits staged** raises no `TypeError` in the
+- [x] **Click-enabling the plugin while an update waits staged** raises no `TypeError` in the
       dev console (the instance that applies the stage exits early; a new one takes over).
+      *(Field 2026-10-30, T3 desktop: plugin disabled on 2.0.9-beta, the real 2.0.10-beta build staged by hand
+      (`main.ges-tmp.js`, `manifest.ges-tmp.json` + their sha markers); click-enable → no error in the console,
+      the staging files gone, `main.js` byte-identical to the 2.0.10 build; the log's first line is `Plugin
+      onload start {"version": "2.0.10-beta"}` followed by `applied self-update settled in the baseline`.)*
 - [x] 🌐 **Other plugins: one toast each, with the version.** An ENABLED plugin updated by a
       sync is reloaded and gets its own 3 s toast, `Plugin "cmdr" updated to 0.5.5` (no
       "to …" for a rebuild of the same version). No aggregated "N plugins updated" toast.
