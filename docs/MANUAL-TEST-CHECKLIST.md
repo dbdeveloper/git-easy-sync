@@ -709,7 +709,11 @@ keeps a copy when History deletes a file; these items wait for the UI.
       *(Field 2026-10-30, A: three commits straight through the GitHub API — `zz-crash/back.md` edited,
       `drift-new.md` added, `after-crash.md` deleted; Sync pulled all three (`pulled: 2, removed: 1`), no conflict
       copy, nothing pushed back.)*
-- [ ] Disabling then re-enabling the plugin mid-sync causes no double-run or corruption.
+- [x] Disabling then re-enabling the plugin mid-sync causes no double-run or corruption.
+      *(Field 2026-10-30: A committed 402 files (5 batches) and was disabled twice mid-push — once while GitHub
+      was creating a commit; the third Sync finished, exactly 5 commits on GitHub, A == repo file by file (405).
+      B was disabled mid-pull after ~390 files; on re-enable `progress log replayed into the baselines {"lines":
+      397}` and the next Sync pulled only the last 8; A == B file by file.)*
 
 ## 9. Performance (📱)
 
