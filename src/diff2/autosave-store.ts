@@ -213,6 +213,10 @@ export async function startSession(
   // owner, 2026-10-08). `bytes` is then empty, and baseExistedAtStart=false
   // records it in the meta, so a deletion survives a restart mid-session.
   readOnlyBase?: { bytes: ArrayBuffer; absent?: boolean },
+  // DIFF-EDITOR-V2.md §2.1.1 — compare the pair off the main thread and
+  // within the editor's limits BEFORE the fingerprint needs it (throws
+  // DiffTooLargeError / CancelledError before any dir is created).
+  prepare?: (base: string, sibling: string) => Promise<unknown>,
 ): Promise<AutosaveMeta> {
   // Steps 2–5.5 — read inputs ONCE, derive every fingerprint from those bytes.
   // An ABSENT base is a legit delete-vs-modify input — read it as 0 bytes rather
@@ -239,6 +243,7 @@ export async function startSession(
   const siblingStr = utf8Decode(siblingBytes);
   const siblingEol = detectEol(siblingStr);
   const eol = baseExistedAtStart ? commonEol(detectEol(baseStr), siblingEol) : siblingEol;
+  await prepare?.(toLf(baseStr), toLf(siblingStr));
   const joinedDocSha = await joinedDocShaV2(toLf(baseStr), toLf(siblingStr)); // §2.5 — normalized
 
   await ensureDir(vault, autosaveDir(conflictId)); // step 1 (idempotent), after buildModel
@@ -340,6 +345,8 @@ export async function classifyReopen(
   // the SIBLING content and spuriously classify vault-changed. Only the sibling is
   // re-checked against the vault. Default-off ⇒ the conflict path is unchanged.
   ignoreBase: boolean = false,
+  // DIFF-EDITOR-V2.md §2.1.1 — as startSession's.
+  prepare?: (base: string, sibling: string) => Promise<unknown>,
 ): Promise<ReopenStatus> {
   const meta = await readMeta(vault, conflictId);
   if (!meta) return { kind: "fresh" };
@@ -383,14 +390,15 @@ export async function classifyReopen(
   // check in the view-swap session; kept here so P6.1 leaves the classifier
   // branch structure untouched. A `\0` in an input is now ordinary text → it
   // shifts the fingerprint and classifies as `vault-changed`, not `sentinel`.
+  const currentBase = toLf(utf8Decode(baseBytes));
+  const currentSibling = toLf(utf8Decode(siblingBytes));
+  // Outside the try below: a limit or a closed tab is not a "sentinel".
+  await prepare?.(currentBase, currentSibling);
   let currentJoinedSha: string;
   try {
     // bug-59 — normalize to `\n` to match the stored (normalized) meta.joinedDocSha; a
     // CRLF file must not shift the replay-validity fingerprint on its own.
-    currentJoinedSha = await joinedDocShaV2(
-      toLf(utf8Decode(baseBytes)),
-      toLf(utf8Decode(siblingBytes)),
-    );
+    currentJoinedSha = await joinedDocShaV2(currentBase, currentSibling);
   } catch {
     return { kind: "sentinel", meta };
   }

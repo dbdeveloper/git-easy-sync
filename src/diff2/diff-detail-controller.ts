@@ -68,6 +68,23 @@ import { type DiffToolbarHandle, renderDiffToolbar } from "./diff-toolbar";
 import type { DiffEditViewDeps } from "./diff-panel-view";
 import { calculateGitBlobSHA } from "../utils";
 import { isConflictPair } from "../sync2/conflict-siblings";
+import { diffLines } from "diff";
+import { CancelledError } from "../errors";
+import WorkerClient from "../worker/worker-client";
+import {
+  DiffTooLargeError,
+  MAX_DIFF_GROUPS,
+  clearLineDiffCache,
+  prepareLineDiff,
+  type LineDiffRunner,
+} from "./line-diff";
+
+// No worker at hand (test fixtures): compare inline, within the same budget.
+const inlineLineDiff: LineDiffRunner = async (base, sibling) =>
+  diffLines(base, sibling, { timeout: WorkerClient.DIFF_TIMEOUT_MS }) ?? null;
+
+// DIFF-EDITOR-V2.md §2.1.1 — the spinner says what is slow after this long.
+const SLOW_COMPARE_MS = 3_000;
 
 // The navigation seam. Composition, NOT a base class: the controller asks the host
 // to perform the parts that differ between the single-tab panel host and the
@@ -160,6 +177,9 @@ export class DiffDetailController {
   // EditorView + the shared ReplayFlag + the HistoryWriterV2 sink + the cursor
   // scheduler (§0.5 / P6.3).
   private owner: DiffPaneOwner | null = null;
+  // The open in progress (DIFF-EDITOR-V2.md §2.1.1): closing the tab aborts
+  // it — the comparison in the worker stops, no document, no session.
+  private mountAbort: AbortController | null = null;
   // Autosave session bound to the active owner: the conflict's autosave id + the
   // meta startSession wrote + whether this mount REPLAYED prior edits. Set at mount,
   // consumed by the `[←]` commit7Step, cleared on dispose. Null when no detail editor
@@ -223,6 +243,9 @@ export class DiffDetailController {
     // authoritative; a resumed session is handled by `hadPriorEdits` below.
     const netEdits = this.owner?.inMemoryNetEdits() ?? 0;
     this.deps.logger?.info("diff2 disposeOwner", { hadOwner: !!this.owner, hadToolbar: !!this.toolbarHandle });
+    this.mountAbort?.abort();
+    this.mountAbort = null;
+    clearLineDiffCache();
     this.owner?.dispose();
     this.owner = null;
     this.toolbarHandle = null; // §2.2.15 — toolbar DOM is rebuilt on the next mount
@@ -406,15 +429,69 @@ export class DiffDetailController {
     // return). classList (not Obsidian's addClass) so the happy-dom test host works too.
     parent.classList.add("diff2-detail-loading");
     let loadingOverlay: HTMLElement | null = null;
+    let loadingText: HTMLElement | null = null;
     const showLoadingTimer = setTimeout(() => {
       loadingOverlay = parent.createDiv({ cls: "diff2-detail-loading-overlay" });
       loadingOverlay.createDiv({ cls: "diff2-detail-spinner" });
-      loadingOverlay.createDiv({ cls: "diff2-detail-loading-text", text: "Loading…" });
+      loadingText = loadingOverlay.createDiv({ cls: "diff2-detail-loading-text", text: "Loading…" });
     }, 150);
+    // DIFF-EDITOR-V2.md §2.1.1 — a comparison past 3 s says so, with the
+    // seconds (the worker keeps this thread free, so the timer ticks).
+    const tMount = performance.now();
+    let comparing = 0;
+    const slowTimer = setInterval(() => {
+      const s = Math.floor((performance.now() - tMount) / 1000);
+      if (loadingText && comparing > 0 && s * 1000 >= SLOW_COMPARE_MS) {
+        loadingText.textContent = `Large file with many changes — comparing… ${s} s`;
+      }
+    }, 1000);
     const revealReady = (): void => {
       clearTimeout(showLoadingTimer);
+      clearInterval(slowTimer);
       loadingOverlay?.remove();
       parent.classList.remove("diff2-detail-loading");
+    };
+
+    // DIFF-EDITOR-V2.md §2.1.1 — every pair this open shows is compared ONCE,
+    // in the worker, within the limits, before anything builds a document.
+    this.mountAbort?.abort();
+    const abort = new AbortController();
+    this.mountAbort = abort;
+    const runDiff: LineDiffRunner = this.deps.diffLines ?? inlineLineDiff;
+    const prepare = async (base: string, sibling: string): Promise<void> => {
+      comparing += 1;
+      try {
+        const r = await prepareLineDiff(base, sibling, runDiff, abort.signal);
+        if (r.compared) {
+          this.deps.logger?.info("diff2 diff computed", { base: entry.basePath, ms: r.ms, groups: r.groups });
+        }
+      } finally {
+        comparing -= 1;
+      }
+    };
+    // A limit or a closed tab ends the open here: true = handled.
+    const stopped = (err: unknown): boolean => {
+      if (err instanceof CancelledError && abort.signal.aborted) return true; // the tab closed
+      if (!(err instanceof DiffTooLargeError)) return false;
+      const why =
+        err.reason === "time"
+          ? "the comparison took over a minute"
+          : `${err.groups} changed places, more than the ${MAX_DIFF_GROUPS} the editor can show`;
+      this.deps.logger?.info("diff2 too many changes to show", {
+        base: entry.basePath,
+        reason: err.reason,
+        groups: err.groups,
+      });
+      parent.classList.add("diff2-detail-too-big-host"); // the toolbar stays hidden
+      body.createEl("p", {
+        cls: "diff2-detail-too-big",
+        text: history
+          ? `Too many changes to show this version (${why}).`
+          : `Too many changes to show this conflict (${why}). Resolve it by deleting the conflict ` +
+            "copy (keeps your version) or by renaming the copy over the original (keeps the other " +
+            "device's version).",
+      });
+      return true;
     };
 
     const adapter = this.deps.vault.adapter;
@@ -470,6 +547,7 @@ export class DiffDetailController {
           entry.basePath,
           entry.siblingPath,
           history !== undefined, // Contract A — History base is snapshot-only.
+          prepare,
         ),
       );
       this.deps.logger?.info("diff2 reopenAction", { kind: action.kind, base: entry.basePath, hasToolbar: !!this.toolbarHandle });
@@ -514,7 +592,9 @@ export class DiffDetailController {
           entry.siblingPath,
           undefined,
           readOnlyBase,
+          prepare,
         );
+        await prepare(ours, theirs); // the editor's pair — the same one, as a rule
         this.deps.logger?.info("diff2 fresh-mount", {
           base: entry.basePath,
           history: history !== undefined,
@@ -551,6 +631,7 @@ export class DiffDetailController {
         sess: ResumeSession,
         meta: AutosaveMeta,
       ): Promise<void> => {
+        await prepare(sess.base, sess.sibling);
         const owner = new DiffPaneOwner(
           this.deps.vault,
           conflictId,
@@ -625,6 +706,7 @@ export class DiffDetailController {
             // ResumeRecoveryModal (a "*" marks the changed file — no scary "files
             // changed" dialog; it is just crash recovery).
             const sess = await readResumeSession(this.deps.vault, conflictId);
+            await prepare(sess.base, sess.sibling);
             // §3.5 + bug-56 pre-flight: how many edits would ACTUALLY recover (dry-run,
             // stops safely). 0 → nothing to restore (empty OR a fully un-replayable log)
             // → skip the modal, start fresh from the CURRENT vault (which reflects the
@@ -685,12 +767,16 @@ export class DiffDetailController {
               conflictId,
               entry.basePath,
               entry.siblingPath,
+              undefined,
+              undefined,
+              prepare,
             );
             // A brand-new session mounted from the just-written snapshots — no replay
             // into the live view → hadPriorEdits:false (the restored work is already
             // durable in the unchanged-side file).
             this.activeSession = { conflictId, meta, hadPriorEdits: false };
             const fresh = await readResumeSession(this.deps.vault, conflictId);
+            await prepare(fresh.base, fresh.sibling);
             this.owner = new DiffPaneOwner(
               this.deps.vault,
               conflictId,
@@ -728,6 +814,7 @@ export class DiffDetailController {
             // un-replayable / corrupt log) → skip the pointless modal, start fresh (wipe
             // + fresh session). This also subsumes the old `.empty` skip and silently
             // drops a broken history.jsonl.
+            await prepare(sess.base, sess.sibling);
             const recoverable = this.dryRunRecoverableEdits(sess.base, sess.sibling, sess.jsonl);
             if (recoverable === 0) {
               this.deps.logger?.info("diff2 resume → fresh (0 recoverable)", { base: entry.basePath });
@@ -770,6 +857,7 @@ export class DiffDetailController {
         // already focused).
         this.owner?.focus();
       } catch (err) {
+        if (stopped(err)) return;
         if (await this.copyIsGone(entry)) return;
         this.deps.logger?.error("diff2: could not start the edit session", { base: entry.basePath, err: String(err) });
         body.createEl("p", {
@@ -779,6 +867,7 @@ export class DiffDetailController {
         return;
       }
     } catch (err) {
+      if (stopped(err)) return;
       if (await this.copyIsGone(entry)) return;
       this.deps.logger?.error("diff2: failed to load the diff", { base: entry.basePath, err: String(err) });
       body.createEl("p", {

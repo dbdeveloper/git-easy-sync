@@ -14,7 +14,10 @@
 // discard, no-session leave. The Resume/Empty/Alt modals need real `app` wiring and aren't
 // worth faking here; their decisions are pinned by diff-panel-view-v2-glue.test.ts.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { diffLines as jsdiffLines } from "diff";
+import { CancelledError } from "../../src/errors";
+import { MAX_DIFF_GROUPS, clearLineDiffCache } from "../../src/diff2/line-diff";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -112,6 +115,7 @@ describe("DiffDetailController host seam (S2)", () => {
     document.body.appendChild(container); // owner mounts a real CM6 view → needs layout
   });
   afterEach(() => {
+    clearLineDiffCache();
     container.remove();
     fs.rmSync(fx.root, { recursive: true, force: true });
   });
@@ -453,6 +457,135 @@ describe("DiffDetailController host seam (S2)", () => {
     expect(host.commitCount).toBe(0);
     expect(host.leaveCount).toBe(0);
     expect(await fx.vault.adapter.exists(autosaveDir(conflictId))).toBe(true); // resume KEEPS the dir
+    ctl.dispose();
+  });
+
+  // ── DIFF-EDITOR-V2.md §2.1.1 (owner, 2026-10-30) ─────────────────────────────
+  // Field: a 2 MB note with ~12 500 changed lines froze Obsidian for minutes on
+  // open — the line comparison ran with no limit, on the main thread, twice. Now
+  // it runs in a worker (deps.diffLines), once per pair, within a time limit and
+  // a limit on diff groups; over a limit the tab shows a message, no session.
+
+  function limitDeps(diffLines: NonNullable<DiffEditViewDeps["diffLines"]>): DiffEditViewDeps {
+    return { vault: fx.vault, autoFocus: () => false, diffLines } as unknown as DiffEditViewDeps;
+  }
+  const realLines: NonNullable<DiffEditViewDeps["diffLines"]> = async (a, b) => jsdiffLines(a, b);
+
+  it("🔑 the comparison gives up (time) → a message instead of the editor, no session, toolbar hidden", async () => {
+    const { entry, conflictId } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+    const ctl = new DiffDetailController({} as unknown as App, limitDeps(async () => null), recordingHost());
+    await ctl.mount(container, entry);
+
+    const msg = container.querySelector(".diff2-detail-too-big")?.textContent ?? "";
+    expect(msg).toContain("took over a minute");
+    expect(msg).toContain("deleting the conflict copy");
+    expect(ctl.getView()).toBeNull();
+    expect(container.classList.contains("diff2-detail-too-big-host")).toBe(true); // hides the toolbar
+    expect(container.querySelector(".diff2-detail-loading-overlay")).toBeNull();
+    expect(await fx.vault.adapter.exists(autosaveDir(conflictId))).toBe(false);
+    ctl.dispose();
+  });
+
+  it("🔑 more diff groups than the limit → the message names the count and the limit", async () => {
+    let base = "";
+    let sibling = "";
+    for (let i = 0; i < MAX_DIFF_GROUPS + 1; i++) {
+      base += `same ${i}\nmine ${i}\n`;
+      sibling += `same ${i}\ntheirs ${i}\n`;
+    }
+    const { entry, conflictId } = await writeInputs(base, sibling);
+    const ctl = new DiffDetailController({} as unknown as App, limitDeps(realLines), recordingHost());
+    await ctl.mount(container, entry);
+
+    const msg = container.querySelector(".diff2-detail-too-big")?.textContent ?? "";
+    expect(msg).toContain(`${MAX_DIFF_GROUPS + 1} changed places`);
+    expect(msg).toContain(`${MAX_DIFF_GROUPS}`);
+    expect(ctl.getView()).toBeNull();
+    expect(await fx.vault.adapter.exists(autosaveDir(conflictId))).toBe(false);
+    ctl.dispose();
+  });
+
+  it("🔑 closing the tab mid-comparison stops it: no session, no editor, no message", async () => {
+    const { entry, conflictId } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+    let started!: () => void;
+    const running = new Promise<void>((r) => (started = r));
+    let aborted = false;
+    const never: NonNullable<DiffEditViewDeps["diffLines"]> = (_a, _b, signal) =>
+      new Promise((_res, rej) => {
+        started();
+        signal?.addEventListener("abort", () => {
+          aborted = true;
+          rej(new CancelledError());
+        });
+      });
+    const host = recordingHost();
+    const ctl = new DiffDetailController({} as unknown as App, limitDeps(never), host);
+    const mounting = ctl.mount(container, entry);
+    await running;
+    ctl.dispose(); // the tab closes
+    await mounting;
+
+    expect(aborted).toBe(true);
+    expect(ctl.getView()).toBeNull();
+    expect(container.querySelector(".diff2-detail-too-big")).toBeNull();
+    expect(container.querySelector(".diff2-detail-error")).toBeNull();
+    expect(await fx.vault.adapter.exists(autosaveDir(conflictId))).toBe(false);
+    expect(host.leaveCount).toBe(0);
+  });
+
+  it("🔑 a comparison past 3 s says so under the spinner, with the seconds", async () => {
+    const { entry } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+    let started!: () => void;
+    const running = new Promise<void>((r) => (started = r));
+    let finish!: () => void;
+    const slow: NonNullable<DiffEditViewDeps["diffLines"]> = (a, b) =>
+      new Promise((res) => {
+        started();
+        finish = () => res(jsdiffLines(a, b));
+      });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] });
+    try {
+      const ctl = new DiffDetailController({} as unknown as App, limitDeps(slow), recordingHost());
+      const mounting = ctl.mount(container, entry);
+      await running;
+      vi.advanceTimersByTime(1_000);
+      const text = () => container.querySelector(".diff2-detail-loading-overlay")?.textContent ?? "";
+      expect(text()).toContain("Loading");
+      expect(text()).not.toContain("comparing");
+      vi.advanceTimersByTime(2_500);
+      expect(text()).toContain("Large file with many changes — comparing… 3 s");
+      vi.advanceTimersByTime(2_000);
+      expect(text()).toContain("comparing… 5 s");
+      finish();
+      vi.useRealTimers();
+      await mounting;
+      expect(container.querySelector(".diff2-detail-loading-overlay")).toBeNull();
+      expect(ctl.getView()).not.toBeNull();
+      ctl.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("🔑 a normal open compares ONCE (session fingerprint and the editor share it)", async () => {
+    const { entry } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+    const spy = vi.fn(realLines);
+    const ctl = new DiffDetailController({} as unknown as App, limitDeps(spy), recordingHost());
+    await ctl.mount(container, entry);
+    expect(ctl.getView()).not.toBeNull();
+    expect(spy).toHaveBeenCalledTimes(1);
+    ctl.dispose();
+  });
+
+  it("🔑 the restore path (session snapshots) is limited too", async () => {
+    const base = "a\nMINE\nc\n";
+    const sibling = "a\nTHEIRS\nc\n";
+    const { basePath, siblingPath, entry } = await writeInputs(base, sibling);
+    await startSession(fx.vault, autosaveIdForEntry(entry), basePath, siblingPath);
+    const ctl = new DiffDetailController({} as unknown as App, limitDeps(async () => null), recordingHost());
+    await ctl.mount(container, entry, { silentResume: true });
+    expect(container.querySelector(".diff2-detail-too-big")).not.toBeNull();
+    expect(ctl.getView()).toBeNull();
     ctl.dispose();
   });
 });

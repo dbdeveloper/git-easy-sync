@@ -4893,6 +4893,8 @@ export default class GitHubSyncPlugin extends Plugin {
       touchOnly: () => this.settings.diffEditorTouchMode ?? false,
       // Diff highlight mode: "words" → word-level, else char-level (default).
       diffWordLevel: () => this.settings.diffEditorDiffMode === "words",
+      // DIFF-EDITOR-V2.md §2.1.1 — the editor's line comparison, off the main thread.
+      diffLines: (base, sibling, signal) => this.workerClient.diffLines(base, sibling, signal),
       // §2.2.15 / TODO §17 Auto-focus default — PER-MODE (toggleable per-document in the
       // toolbar). conflict → on, history/deleted → off; an old bool value is ignored.
       autoFocus: (mode) =>

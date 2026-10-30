@@ -21,6 +21,7 @@
 //   - docs/DIFF2_IMPLEMENTATION_PLAN.md §R2.2 (conflicts list), §R2.7.5 (default tab)
 //   - docs/tasks/SPLIT-PANEL-EDITOR-FEASIBILITY.md §12 (the split), R-A/R-D (panel/[←])
 
+import type { LineDiffPart } from "../worker/types";
 import { ItemView, type Vault, WorkspaceLeaf } from "obsidian";
 import { holdEscapeWhileActive } from "../ui/esc-scope";
 import { keepLeafFocus } from "../ui/keep-focus";
@@ -93,6 +94,11 @@ export interface DiffEditViewDeps {
   touchOnly?: () => boolean;
   // Diff highlight granularity: true → word-level, false → char-level (default). Read at open.
   diffWordLevel?: () => boolean;
+  // DIFF-EDITOR-V2.md §2.1.1 — the line comparison off the main thread (the
+  // CPU worker): null = gave up (over a minute); rejects with CancelledError
+  // when `signal` aborts. Optional (test fixtures omit it → compared inline,
+  // within the same limits).
+  diffLines?: (base: string, sibling: string, signal?: AbortSignal) => Promise<LineDiffPart[] | null>;
   // §2.2.15 Auto-focus default (scroll to the first remaining conflict on each resolve). Read
   // at open; toggled per-session in the toolbar. TODO §17 — PER-MODE default (conflict on /
   // history+deleted off): reviewing versions shouldn't auto-jump to the first diff.

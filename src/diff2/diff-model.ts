@@ -22,9 +22,12 @@
 // because split() drops exactly the terminal `\n` it added.
 //
 // Diff library: `diff` (jsdiff), default `diffLines` (no options) — same call
-// the old joined-doc used (DIFF-EDITOR.md §1.4).
+// the old joined-doc used (DIFF-EDITOR.md §1.4). A pair the editor prepared
+// (line-diff.ts, DIFF-EDITOR-V2.md §2.1.1 — compared once, off the main
+// thread, within limits) takes that result instead of comparing again.
 
 import { diffLines } from "diff";
+import { cachedLineDiff } from "./line-diff";
 
 export interface VerRange {
   from: number;
@@ -42,7 +45,7 @@ export interface DiffModel {
 // ver1 (base side), added into ver2 (sibling side); a common part flushes the
 // pending diff region as one group, then is appended verbatim as normal text.
 export function buildModel(base: string, sibling: string): DiffModel {
-  const parts = diffLines(base, sibling);
+  const parts = cachedLineDiff(base, sibling) ?? diffLines(base, sibling);
   let doc = "";
   const ranges: VerRange[] = [];
   let group = -1;
