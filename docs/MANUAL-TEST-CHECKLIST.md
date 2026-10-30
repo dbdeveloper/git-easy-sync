@@ -640,7 +640,10 @@ keeps a copy when History deletes a file; these items wait for the UI.
 ## 7. Self-update and plugin updates (🖥️📱🌐)
 
 - [x] Updating the plugin through itself: it completes and restarts after the update.
-- [ ] 📱 On mobile the plugin auto-reloads (disable + enable) after a self-update, with no manual step.
+- [x] 📱 On mobile the plugin auto-reloads (disable + enable) after a self-update, with no manual step.
+      *(Field 2026-10-29, Pixel, 2.0.8 → 2.0.9-beta: `self-update staged` → `BRAT-style reload scheduled` →
+      `BRAT-style reload done` → `Plugin onload start {"version": "2.0.9-beta"}` → `applied self-update settled in
+      the baseline`, all within 13 s of the sync, nothing done by hand on the phone; again at 06:23.)*
 - [x] 🌐 **Our plugin updates ITSELF on the receiving device — no restart (regression fixed
       2026-10-05).** Device A pushes a new build; on device B press Sync and do nothing else.
       The log shows `self-update staged`, then `BRAT-style reload scheduled ["git-easy-sync"]`
