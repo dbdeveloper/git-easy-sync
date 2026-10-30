@@ -2,7 +2,7 @@
 // Vladyslav Kozlovskyy <dbdevelop@gmail.com>, 2026.
 // AGPL-3.0 — see LICENSE.
 
-import { merge as diff3Merge } from "node-diff3";
+import { mergeLines } from "./diff3-merge";
 import { detectEol, restoreEol } from "./eol";
 
 // Outcome of a 3-way merge attempt. "clean" means non-overlapping
@@ -26,13 +26,12 @@ export function mergeText(
   base: string,
   theirs: string,
 ): MergeOutcome {
-  // node-diff3.merge() argument order: (a=ours, o=base, b=theirs).
-  // excludeFalseConflicts collapses "both sides made the identical
-  // change" into a clean merge instead of flagging it.
-  const result = diff3Merge(ours, base, theirs, {
-    excludeFalseConflicts: true,
-    stringSeparator: /\r?\n/,
-  });
+  // Our diff3 (docs/tasks/DIFF3-MYERS.md): node-diff3's region walk on
+  // Myers comparisons — same semantics, without node-diff3's blow-up on
+  // repeated lines. Argument order (a=ours, o=base, b=theirs); both sides
+  // making the identical change is a clean merge, not a conflict.
+  const sep = /\r?\n/;
+  const result = mergeLines(ours.split(sep), base.split(sep), theirs.split(sep))!;
   // result.result is an array of strings (with conflict markers already
   // inlined when result.conflict is true), joined with `\n` then restored
   // to `ours`' (local's) OWN dominant EOL style — NOT "any input has
