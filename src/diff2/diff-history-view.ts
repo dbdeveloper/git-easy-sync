@@ -154,8 +154,9 @@ export class DiffHistoryView extends ItemView {
 
   getDisplayText(): string {
     // `state.path` is available synchronously from setState (no async entry like the
-    // editor), so the title needs no refreshHeader hack. Full path per the user.
-    return this.state.path ? `${this.state.path} History` : "History";
+    // editor). Full path per the user. setState also writes it into the title inside
+    // the tab, which Obsidian sets only once, before the state arrives.
+    return this.state.path ? `History of ${this.state.path}` : "History";
   }
 
   // The path this leaf shows, or null when its state hasn't resolved yet (transient
@@ -194,6 +195,13 @@ export class DiffHistoryView extends ItemView {
       this.selectedKey = this.state.selectedKey;
     }
     await super.setState(state, result as never);
+    // The title INSIDE the tab (owner, 2026-10-30: with many tabs the tab's
+    // own label is too narrow to read). Obsidian writes it ONCE, when the
+    // view loads — before this state, so it said just "History" — and
+    // afterwards refreshes only the tab label (checked in app.js 1.13.4:
+    // ItemView.load → titleEl.setText; setViewState → leaf.updateHeader).
+    const title = this.containerEl.querySelector(".view-header-title");
+    if (title) title.textContent = this.getDisplayText();
     void this.render();
   }
 
