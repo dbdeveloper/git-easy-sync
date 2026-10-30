@@ -692,7 +692,11 @@ keeps a copy when History deletes a file; these items wait for the UI.
 
 ## 8. Crash / recovery / edge cases (🖥️📱)
 
-- [ ] A crash between atomic-write steps is completed forward by the recovery sweep on the next launch.
+- [x] A crash between atomic-write steps is completed forward by the recovery sweep on the next launch.
+      *(Field 2026-10-30, A: three interrupted writes laid out by hand in `zz-crash/` — modify-in-place with its
+      marker → forward-completed (`fwd.md` = the new bytes); rename strategy with only `.ges-bak` left → rolled back
+      (`back.md` = the old bytes); a lone `.ges-tmp` → dropped. Log: `AtomicWriteRecovery sweep {"cleaned": 1,
+      "restored": 2, "appliedPaths": ["zz-crash/fwd.md"]}`.)*
 - [ ] A commit killed between creating its staged batch folder and moving it into the queue leaves `.runtime/push-queue-staging/<id>/` (holding only `.attempted-commit`); the next plugin start removes it with a `staged batch dir(s) left by a crashed commit — removed` warning in the log, and the changes are picked up by the next commit.
 - [ ] **Zero-byte restore guard:** a file that had content but accidentally became 0 bytes is restored to its last good version, and the empty copy never reaches the server.
 - [ ] Out-of-band drift (another tool changed the repo) reconciles correctly.
