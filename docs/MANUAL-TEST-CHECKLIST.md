@@ -376,7 +376,7 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       resolved; the diff editor shows ONLY the rule lines — never our `plugin version` lines, even when the two vaults
       run different versions (161d98e). Rules at DIFFERENT spots merge cleanly. *(Field: three desktop vaults,
       2.0.5–2.0.7-beta.)*
-- [ ] **A difference only in version lines is never a conflict (new 2026-10-24).** A vault on an OLDER build with
+- [x] **A difference only in version lines is never a conflict (new 2026-10-24).** A vault on an OLDER build with
       Sync configs OFF, whose `.obsidian/.gitignore` rules are identical to the repo's, switches Sync configs ON →
       no conflict copy; the newer version lines are taken (1c29476). *(Unit-tested.)* ⏳ **Run it at the NEXT REAL
       version bump** (e.g. `2.0.8-beta`): A on the new build pushes; B still on the old build with Sync configs OFF
@@ -384,6 +384,11 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       `9.9.9` in the repo, `9.9.8` on B): a file whose version lines are NEWER than the build makes the plugin keep its
       hands off the blocks (`yielded-to-newer`), so B's `final` block was never switched to the ON rules — the guard
       for real version skew, not the case under test. A real older build never has a newer version in its own file.
+      *(Field 2026-10-30, real skew: A on 2.0.10-beta pushed; B on 2.0.9-beta switched Sync configs ON → B committed
+      its own `.obsidian/.gitignore` (2.0.9 version lines) as an addition, the drain took the server's — no conflict
+      copy, no conflict line in the log; B's file ended byte-identical to A's (2.0.10 lines) and the new build arrived
+      by self-update. T3, left OFF on 2.0.9, kept its `.obsidian/.gitignore` and yielded on the root one
+      (`yielded-to-newer`), as designed.)*
 - [x] **A plugin's own `.gitignore` conflicts too.** Edit `.obsidian/plugins/<some plugin>/.gitignore` differently on
       two vaults (Sync configs ON on both) → a conflict copy next to it, Sync paused, the resolution syncs.
       *(Field 2026-10-24, `github-gitless-sync`: B pushed `*.b-plugin-rule`, A's `*.a-plugin-rule` got the copy
