@@ -12,8 +12,11 @@
 
 import type { LineDiffPart } from "../worker/types";
 
-// Starting value — to be tuned in the field (the phone may need less).
-export const MAX_DIFF_GROUPS = 1000;
+// Starting value 1000 — to be tuned in the field (the phone may need less).
+// TEMPORARILY 10 000 (owner, 2026-10-30): the field test opens files of
+// different sizes to find where the editor gets slow; set the real value
+// from those numbers.
+export const MAX_DIFF_GROUPS = 10_000;
 
 // (base, sibling, signal) → the parts, or null = gave up (time limit).
 // Rejects with CancelledError when `signal` aborts (the tab closed).
