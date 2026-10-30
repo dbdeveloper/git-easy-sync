@@ -146,3 +146,42 @@ describe("mergeLines — gives up instead of running forever", () => {
     expect(mergeLines(a, o, b, { maxEditLength: 100000 })).not.toBeNull();
   });
 });
+
+// DIFF3-MYERS B3 — the field case and its neighbours, through mergeText.
+// node-diff3 needed 0.7 s / 4.8 s / 40 s for the 1 000 / 2 000 / 4 000-line
+// notes and more than 16 minutes for the 2 MB one. Bounds are generous
+// (the suite runs files in parallel); the work itself is milliseconds.
+import { mergeText } from "../../src/sync2/three-way-merge";
+describe("mergeText — big notes with few changes are fast (Myers)", () => {
+  const note = (n: number) => Array.from({ length: n }, (_, i) => (i % 2 === 0 ? "" : `paragraph ${i} with its own text`));
+  // Shaped like the owner's 2 MB note: ~31 % empty, ~12 % four spaces,
+  // a few separators, the rest prose with modest repetition.
+  const lado = (n: number) =>
+    Array.from({ length: n }, (_, i) => {
+      const r = (i * 7919) % 100;
+      return r < 31 ? "" : r < 43 ? "    " : r < 47 ? "---" : `рядок ${i % 997} тексту про ладовіру`;
+    });
+  const time = <T>(f: () => T) => {
+    const t0 = performance.now();
+    const v = f();
+    return { v, ms: performance.now() - t0 };
+  };
+
+  for (const [label, doc, edit] of [
+    ["4 000-line note, edits at both ends", note(4000), (o: string[], t: string[]) => { o[3] = "OURS"; t[3995] = "THEIRS"; }],
+    ["29 000-line 'Ladosofia', compact edits mid-file", lado(29000), (o: string[], t: string[]) => { o[14000] = "OURS"; t[14010] = "THEIRS"; }],
+    ["29 000-line 'Ladosofia', edits at both ends", lado(29000), (o: string[], t: string[]) => { o[2] = "OURS"; t[28990] = "THEIRS"; }],
+  ] as const) {
+    it(`🔑 ${label}: clean, both edits kept, well under a second`, () => {
+      const o = [...doc];
+      const t = [...doc];
+      (edit as (o: string[], t: string[]) => void)(o, t);
+      const { v, ms } = time(() => mergeText(o.join("\n"), doc.join("\n"), t.join("\n")));
+      expect(v.kind).toBe("clean");
+      const content = (v as { content: string }).content;
+      expect(content).toContain("OURS");
+      expect(content).toContain("THEIRS");
+      expect(ms).toBeLessThan(1000);
+    });
+  }
+});
