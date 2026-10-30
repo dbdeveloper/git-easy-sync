@@ -45,9 +45,6 @@ importers:
       ignore:
         specifier: ^7.0.5
         version: 7.0.5
-      node-diff3:
-        specifier: ^3.2.0
-        version: 3.2.0
       react:
         specifier: ^19.0.0
         version: 19.0.0
@@ -91,6 +88,9 @@ importers:
       happy-dom:
         specifier: ^20.9.0
         version: 20.9.0
+      node-diff3:
+        specifier: ^3.2.0
+        version: 3.2.0
       obsidian:
         specifier: ^1.7.2
         version: 1.7.2(@codemirror/state@6.6.0)(@codemirror/view@6.36.2)
