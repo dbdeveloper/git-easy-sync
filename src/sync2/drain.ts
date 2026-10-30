@@ -1946,7 +1946,15 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
         const abort = await fillRemoteMtime(entry.path, tracked);
         if (abort !== null) return abort;
       }
-      let verdict = await _diff3(diff3Deps, tracked, local, headHash);
+      let verdict: Diff3Result;
+      try {
+        verdict = await _diff3(diff3Deps, tracked, local, headHash);
+      } catch (e) {
+        // "Cancel sync" stopped the merge (field 2026-10-30): the ordinary
+        // cancelled exit. Anything else propagates loudly, as before.
+        if (e instanceof CancelledError) return statusFromError(e, result);
+        throw e;
+      }
       if (verdict.kind === "plugin-dispatch") {
         // §28 — the version decides, the clock is only the fallback.
         const r = await resolvePluginCollision(entry.path, local, tracked);
@@ -2549,7 +2557,9 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
           );
         }
       } catch (e) {
-        if (e instanceof NetworkError || e instanceof AuthError) {
+        // A cancel stopping the merge ends the drain like any cancel —
+        // never a per-file skip (field 2026-10-30).
+        if (e instanceof NetworkError || e instanceof AuthError || e instanceof CancelledError) {
           return statusFromError(e, result); // abort — journal stays (§II.6 п.8)
         }
         // NOT_FOUND class with siblings ≠ [] → skip only, NO mode
@@ -2787,7 +2797,8 @@ export async function drainOnce(deps: DrainDeps): Promise<DrainResult> {
     try {
       verdict = await _diff3(diff3Deps, tracked, local, headHash);
     } catch (e) {
-      if (e instanceof NetworkError || e instanceof AuthError) {
+      // ...and so does "Cancel sync" stopping the merge (field 2026-10-30).
+      if (e instanceof NetworkError || e instanceof AuthError || e instanceof CancelledError) {
         // Finding #2 (owner): abort, never per-file skip — the journal
         // stays, the next drain repeats the WHOLE Vault-step.
         return statusFromError(e, result);

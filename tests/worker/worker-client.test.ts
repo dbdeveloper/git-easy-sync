@@ -745,4 +745,75 @@ describe("WorkerClient + CancelSignal — a request in flight stops at once", ()
     expect(posted.some((m) => m.op === "http-abort" && (m as { target: string }).target === sent.id)).toBe(true);
     client.terminate();
   });
+
+  // Field 2026-10-30: a 3-way merge of a 2 MB note ran on in a CPU worker
+  // and "Cancel sync" waited for it — only HTTP requests listened to the
+  // signal. A pure computation cannot be told to stop, so the worker that
+  // runs it is terminated and a fresh one takes its place in the pool.
+  const big = "x".repeat(WorkerClient.MERGE_WORKER_THRESHOLD + 1);
+  const cpuClient = (signal: CancelSignal) =>
+    new WorkerClient({
+      hardwareConcurrency: 4, // pool of 3
+      cpuWorkerSource: FAKE_CPU,
+      networkWorkerSource: FAKE_NETWORK,
+      workerCtor: FakeWorker as unknown as typeof Worker,
+      cancelSignal: signal,
+    });
+
+  it("🔑 cancel stops a CPU job in flight: rejected at once, its worker terminated and replaced", async () => {
+    const signal = new CancelSignal();
+    FakeWorker.instances = [];
+    FakeWorker.replyMode = "drop"; // the merge never answers on its own
+    const client = cpuClient(signal);
+    const before = FakeWorker.instances.length; // 3 cpu + 1 network
+    const p = client.mergeText(big, big, big);
+    signal.cancel();
+    await expect(p).rejects.toBeInstanceOf(CancelledError);
+    const dead = FakeWorker.instances.filter((w) => w.terminated);
+    expect(dead).toHaveLength(1); // only the worker that ran it
+    expect(FakeWorker.instances.length).toBe(before + 1); // a replacement
+    expect(client.cpuPoolSize).toBe(3);
+    client.terminate();
+  });
+
+  it("🔑 every CPU kind is covered: hash, sha, base64 decode", async () => {
+    for (const call of [
+      (c: WorkerClient) => c.hashGitBlob(new ArrayBuffer(WorkerClient.SHA_WORKER_THRESHOLD + 1)),
+      (c: WorkerClient) => c.computeGitBlobSHA(new ArrayBuffer(WorkerClient.SHA_WORKER_THRESHOLD + 1)),
+      (c: WorkerClient) => c.decodeBase64("A".repeat(WorkerClient.BASE64_WORKER_THRESHOLD + 4)),
+    ]) {
+      const signal = new CancelSignal();
+      FakeWorker.instances = [];
+      FakeWorker.replyMode = "drop";
+      const client = cpuClient(signal);
+      const p = call(client);
+      signal.cancel();
+      await expect(p).rejects.toBeInstanceOf(CancelledError);
+      client.terminate();
+    }
+  });
+
+  it("after a cancel the pool keeps working — the next job runs on a live worker", async () => {
+    const signal = new CancelSignal();
+    FakeWorker.instances = [];
+    FakeWorker.replyMode = "drop";
+    const client = cpuClient(signal);
+    const p = client.mergeText(big, big, big);
+    signal.cancel();
+    await expect(p).rejects.toBeInstanceOf(CancelledError);
+    signal.reset();
+    FakeWorker.replyMode = "pong";
+    await expect(client.computeGitBlobSHA(new ArrayBuffer(WorkerClient.SHA_WORKER_THRESHOLD + 1))).resolves.toBe("pong");
+    client.terminate();
+  });
+
+  it("a CPU job started AFTER a cancel (UI hashing a file) is not refused — only jobs in flight are stopped", async () => {
+    const signal = new CancelSignal();
+    FakeWorker.instances = [];
+    FakeWorker.replyMode = "pong";
+    const client = cpuClient(signal);
+    signal.cancel();
+    await expect(client.computeGitBlobSHA(new ArrayBuffer(WorkerClient.SHA_WORKER_THRESHOLD + 1))).resolves.toBe("pong");
+    client.terminate();
+  });
 });

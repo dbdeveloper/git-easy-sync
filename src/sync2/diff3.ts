@@ -25,6 +25,7 @@
 // this algorithm keys on shas.
 
 import {
+  CancelledError,
   BaseFileNotInRepoError,
   CompareWrongFilesError,
   LocalFileNotFoundError,
@@ -644,7 +645,12 @@ export async function _diff3(
       versioned !== null && highest !== null
         ? enc(restampVersionLines(new TextDecoder().decode(outcome.merged), highest))
         : outcome.merged;
-  } catch {
+  } catch (err) {
+    // "Cancel sync" stopped the merge (field 2026-10-30): that is the
+    // user leaving, not a merge that failed — it must end the drain as a
+    // cancel. Turned into a conflict it would leave a conflict copy the
+    // user never caused.
+    if (err instanceof CancelledError) throw err;
     return { kind: "manual-conflict" };
   }
 

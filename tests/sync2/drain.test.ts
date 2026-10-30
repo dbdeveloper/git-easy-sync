@@ -361,6 +361,37 @@ describe("drainOnce (§VIII B + P + L + E)", () => {
     expect(warns2.filter((w) => /resolved automatically/.test(w))).toEqual([]);
   });
 
+  // Field 2026-10-30: "Cancel sync" during a long 3-way merge. The worker
+  // now rejects the merge with CancelledError; the drain must end as an
+  // ordinary cancel — never record it as a per-file error and carry on.
+  describe("Cancel sync while a merge runs", () => {
+    const cancelledMerge = async (): Promise<never> => {
+      throw new CancelledError();
+    };
+    const seedTwoSided = async (): Promise<void> => {
+      baseCommit = await world.commitFiles({ "n.md": "a\nb\nc\n" });
+      baselines.set("n.md", { baselineSha: await sha("a\nb\nc\n"), mtime: 50, size: 6 });
+      await world.commitFiles({ "n.md": "A\nb\nc\n" }); // remote edits line 1
+    };
+
+    it("🔑 in the batch loop (a queued local edit meets a remote one): status cancelled", async () => {
+      await seedTwoSided();
+      vaultFiles.files.set("n.md", { content: "a\nb\nC\n", mtime: 60 });
+      await stageBatch({ "n.md": "a\nb\nC\n" });
+      const r = await drainOnce(makeDeps({ mergeBlobs: cancelledMerge }));
+      expect(r.status).toBe("cancelled");
+      expect(r.vaultStepErrors).toEqual([]);
+    });
+
+    it("🔑 in the Vault step (an uncommitted local edit meets a remote one): status cancelled, not a per-file error", async () => {
+      await seedTwoSided();
+      vaultFiles.files.set("n.md", { content: "a\nb\nC\n", mtime: 60 }); // not committed
+      const r = await drainOnce(makeDeps({ mergeBlobs: cancelledMerge }));
+      expect(r.status).toBe("cancelled");
+      expect(r.vaultStepErrors).toEqual([]);
+    });
+  });
+
   // GITKEEP I4/I5/I5a/I5b/I5c (docs/tasks/GITKEEP.md).
   describe("GITKEEP — always empty, never a conflict, the empty one goes back", () => {
     const K = "notes/.gitkeep";

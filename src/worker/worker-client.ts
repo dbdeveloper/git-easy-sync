@@ -61,6 +61,9 @@ function getInjectedNetworkSource(): string {
 interface PendingRequest {
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
+  // The CPU worker running it — so "Cancel sync" can stop exactly that
+  // worker (a pure computation cannot be told to stop).
+  cpu?: PooledWorker;
 }
 
 // A single CPU worker plus its work-queue depth. The pool picks
@@ -220,6 +223,8 @@ export default class WorkerClient {
   private readonly cancelSignal: CancelSignal | undefined;
   // Fallback mode's in-flight http requests, so a cancel can abort them.
   private readonly fallbackAborts = new Map<string, AbortController>();
+  // Kept to spawn a replacement for a CPU worker stopped by a cancel.
+  private workerCtor: (new (url: string) => Worker) | null = null;
 
   // Constructor opts let tests inject mock worker sources and a
   // mock Worker constructor without involving the real Web Worker
@@ -236,6 +241,7 @@ export default class WorkerClient {
     cancelSignal?: CancelSignal;
   }) {
     this.cancelSignal = opts?.cancelSignal;
+    this.cancelSignal?.onCancel(() => this.cancelCpuJobs());
     const poolSize = computeCpuPoolSize(
       opts?.hardwareConcurrency ?? globalThis.navigator?.hardwareConcurrency,
     );
@@ -261,12 +267,9 @@ export default class WorkerClient {
       this.networkBlobUrl = URL.createObjectURL(
         new Blob([networkSource], { type: "application/javascript" }),
       );
+      this.workerCtor = WorkerCtor;
       for (let i = 0; i < poolSize; i++) {
-        const w = new WorkerCtor(this.cpuBlobUrl);
-        w.addEventListener("message", (e: MessageEvent) =>
-          this.onMessage(e.data as WorkerResponse),
-        );
-        this.cpuPool.push({ worker: w, inFlight: 0 });
+        this.cpuPool.push(this.spawnCpuWorker());
       }
       this.networkWorker = new WorkerCtor(this.networkBlobUrl);
       this.networkWorker.addEventListener("message", (e: MessageEvent) =>
@@ -275,6 +278,42 @@ export default class WorkerClient {
     } catch {
       this.fallbackMode = true;
       this.cleanupBlobUrls();
+    }
+  }
+
+  private spawnCpuWorker(): PooledWorker {
+    const w = new this.workerCtor!(this.cpuBlobUrl!);
+    w.addEventListener("message", (e: MessageEvent) =>
+      this.onMessage(e.data as WorkerResponse),
+    );
+    return { worker: w, inFlight: 0 };
+  }
+
+  // "Cancel sync" for CPU jobs (field 2026-10-30: a 3-way merge of a 2 MB
+  // note ran on for many minutes and the cancel waited for it). A job in
+  // flight cannot be told to stop, so every CPU worker that holds one is
+  // TERMINATED and a fresh worker takes its place; its jobs reject with
+  // CancelledError at once. Only jobs in flight are stopped — a job
+  // started after the cancel (the UI hashing a file) runs normally.
+  // ⚠️ The client is one per plugin load and shared with the UI: a UI
+  // job that happens to be in flight on the same worker dies with it
+  // (the caller sees CancelledError; rare, and harmless to retry).
+  private cancelCpuJobs(): void {
+    const hit = new Set<PooledWorker>();
+    for (const [, p] of this.pending) if (p.cpu) hit.add(p.cpu);
+    for (const entry of hit) {
+      try {
+        entry.worker.terminate();
+      } catch {
+        // ignore
+      }
+      const i = this.cpuPool.indexOf(entry);
+      if (i >= 0) this.cpuPool[i] = this.spawnCpuWorker();
+      for (const [id, p] of this.pending) {
+        if (p.cpu !== entry) continue;
+        this.pending.delete(id);
+        p.reject(new CancelledError());
+      }
     }
   }
 
@@ -322,6 +361,9 @@ export default class WorkerClient {
       });
       const kind = workerKindForOp(op.op);
       const target = this.pickTarget(kind);
+      if (kind === "cpu" && target !== null) {
+        this.pending.get(id)!.cpu = this.cpuPool.find((p) => p.worker === target);
+      }
       if (target === null) {
         this.pending.delete(id);
         reject(
