@@ -631,6 +631,11 @@ keeps a copy when History deletes a file; these items wait for the UI.
       anchor stops being an ancestor, `compare` 404s, and discovery falls back to a
       full-tree diff.)
 - [ ] The **max auto-merge size** setting prevents very large files from being auto-merged.
+      ⚠️ **Re-test after the own diff3 (docs/tasks/DIFF3-MYERS.md, 2026-10-30).** At 1024 KB a 2 MB note changed on
+      both sides became a manual conflict at once (correct); at 4000 KB the OLD merge hung for many minutes. Pass
+      criterion now: 2 MB note, compact edits on both sides, limit 4000 KB → **clean merge in seconds**, Obsidian
+      responsive; a file changed almost everywhere on both sides → **manual conflict within a minute**, no freeze;
+      **Cancel sync** during a long merge stops at once.
 - [x] **Token expired (§35)** — with a bad token, a manual Sync opens the recovery dialog **every time** (closing `[X]` then Sync re-opens it — not a silent toast); the raw "…status 401" toast does NOT appear.
 - [x] **Token expired — sticky + red UI (§35)** — the marker survives a plugin reload: after reload the **GitHub** status-bar word + **Sync** ribbon icon are red (tooltip "Token expired"), **Sync All** / **Pull from repo…** are greyed, and the **GitHub sync status** box shows the 401 ("invalid or expired") vs 403 ("lacks permissions") message. It clears only on a token/owner/repo edit **or** a successful **Test connection** (a normal successful Sync does NOT clear it).
 - [x] **Token expired — history (§35)** — opening a file's history shows **"TOKEN EXPIRED! …"** above the local-only versions. *(Field 2026-10-26: owner, with a broken token.)*
