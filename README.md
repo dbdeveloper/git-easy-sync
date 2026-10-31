@@ -599,6 +599,18 @@ completed is not sent again.
   conflicts, off for history and deleted by default; also switchable
   per document.
 
+**Very large comparisons.** The editor compares the two files in the
+background, so Obsidian stays responsive and a spinner shows the
+seconds while it works; closing the tab stops the comparison at once.
+A comparison that still runs after **three minutes** is stopped, and
+the tab tells you so — for a conflict, with how to resolve it by hand
+(delete the conflict copy, or rename it over the original) — until you
+press `Close`. The number of changes is not limited: a 2 MB note with
+almost 10 000 changed places opens. On desktop, scrolling a document
+with thousands of changes needs **Obsidian 1.14.5 or newer** — older
+versions carry an editor bug that makes such a document scroll in
+jerks.
+
 ### Conflict resolution settings
 
 - **Max size of auto-merged files (KB)** — when the same text file
