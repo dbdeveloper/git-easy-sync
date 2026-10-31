@@ -115,8 +115,13 @@ While the hold is in place, edit the probe's `main.js` locally (any
 change — this stands in for installing an older build by hand) and
 **Sync**.
 
-**Expected**: the log says `batch entry skipped: plugin update held`,
-and GitHub still shows version B. This is the one change the plugin
+**Expected**: the commit pass does not see the edit at all — the log
+says `Sync2 commit pass: nothing to commit` (`changes:0`) — and GitHub
+still shows version B. A held folder is not syncable in either
+direction (§5.3), so the edit never reaches a batch. The line
+`batch entry skipped: plugin update held` is NOT expected here: it is
+the backstop for a batch staged BEFORE the hold began (§5.12.2), which
+this fixture does not stage (field run 2026-10-31). This is the one change the plugin
 deliberately does NOT push (owner, 2026-10-01): under a hold the only
 version installable by hand is a COMPATIBLE, i.e. OLDER, one, and
 letting it travel would roll the update back on every healthy device.

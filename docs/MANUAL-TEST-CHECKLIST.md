@@ -485,9 +485,14 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       vault A: run in two steps — the future `manifest.json` alone (`HELD … files=1`, the
       disk kept 1.0.0), then `main-v2.js` pushed while held (never landed, no `version B`
       in the console). No commit from A in either step.)*
-- [ ] **Фаза 2, symmetry:** while a hold is on, editing that plugin's files locally does
-      NOT push them — the log says `batch entry skipped: plugin update held`. Letting an
-      older copy travel would roll the update back on every healthy device. (Run 4.)
+- [x] **Фаза 2, symmetry:** while a hold is on, editing that plugin's files locally does
+      NOT push them — the commit pass does not see the edit at all (`nothing to commit`,
+      `changes:0`): a held folder is not syncable in either direction. Letting an older
+      copy travel would roll the update back on every healthy device. (Run 4.) The log line
+      `batch entry skipped: plugin update held` belongs to a narrower backstop — a batch
+      staged BEFORE the hold began — which this fixture cannot stage; it is unit-tested only.
+      *(Field 2026-10-31, 2.0.10-beta, desktop, Obsidian 1.13.4, vault A: probe `main.js`
+      edited locally under the hold, Sync → nothing committed, repo kept version B.)*
 - [ ] **Фаза 2, the lift:** when the condition clears, the files land, the baselines are
       restored, and **the next sync is quiet** — no commit, no re-download. A commit here
       means the baselines were not restored. (Run 5.)
