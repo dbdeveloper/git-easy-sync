@@ -1008,7 +1008,9 @@ you; other devices stay protected from your half-resolved state.
 
 The same holds for syncing. A Sync you start by hand while a conflict
 is open asks first — `Resolve` (opens the conflicts panel), `Sync
-anyway` or `Cancel`. An automatic sync (on interval or at startup) has
+anyway` or `Cancel`; so does *Pull from repo and push stored commits*.
+A Commit does not ask: it only records your changes on this device and
+sends nothing. An automatic sync (on interval or at startup) has
 nobody to ask, so it goes ahead as `Sync anyway` would: one open
 conflict never stops the rest of your vault from syncing. Only an
 unresolved `.gitignore` conflict stops every sync, automatic ones

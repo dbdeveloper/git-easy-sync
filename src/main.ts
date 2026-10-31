@@ -2708,9 +2708,24 @@ export default class GitHubSyncPlugin extends Plugin {
   // so in the log. Whether a background tick SHOULD proceed instead is a
   // separate question about §24's semantics, and not one to settle as a
   // side effect of removing a dialog.
+  //
+  // Two questions, two owners (owner, 2026-10-31): the .gitignore gate
+  // (gitignoreGate below — the rules decide WHAT a commit picks, so it
+  // fronts Commit too) and the tracked-conflict reminder (this function —
+  // "not visible on other devices" is about SENDING, so it fronts only a
+  // user-started drain: Sync, Sync current file, "Pull … push stored
+  // commits"; never a Commit, which sends nothing).
   private async confirmPendingConflictsBeforeSync(
     origin: "user" | "auto" = "user",
   ): Promise<boolean> {
+    if (!this.conflictStoreV2) return true;
+    if (!(await this.gitignoreGate(origin))) return false;
+    return await this.confirmTrackedConflicts(origin);
+  }
+
+  // The .gitignore gate: the one-time analysis must be done and no
+  // .gitignore may be in dispute. Fronts every sync AND every commit.
+  private async gitignoreGate(origin: "user" | "auto" = "user"): Promise<boolean> {
     if (!this.conflictStoreV2) return true;
 
     // §8.1.5b — the one-time analysis must FINISH before a sync runs. The
@@ -2853,6 +2868,12 @@ export default class GitHubSyncPlugin extends Plugin {
       // conflict gate, which is the pre-existing behaviour.
       this.logger.warn("gitignore gate check failed", { err: `${err}` });
     }
+    return true;
+  }
+
+  // The tracked-conflict reminder before a user-started drain.
+  private async confirmTrackedConflicts(origin: "user" | "auto"): Promise<boolean> {
+    if (!this.conflictStoreV2) return true;
     // Source of truth = pendingConflictSummary → findAllConflicts (live vault siblings) —
     // the SAME source the diff-panel, badge, status bar and menu use — NOT the raw
     // ConflictStore records. A conflict the user already resolved (sibling deleted + base
@@ -3936,14 +3957,15 @@ export default class GitHubSyncPlugin extends Plugin {
   // without triggering drain. Uses Sync2Manager.commitOnly() which
   // runs the change-detection + enqueue path and stops there.
   async commit(): Promise<void> {
-    // ⚠️ The SAME gate as a sync, and for the same reason (owner,
-    // 2026-09-28): a commit builds its batch FROM the .gitignore rules, so
-    // committing while those rules are in dispute — or while the one-time
-    // analysis is still deciding them — enqueues files chosen by rules
-    // that are about to change. This path used to skip the gate entirely,
-    // which is also how a [Commit] during the background analysis could
-    // put a second enforce() on the same files.
-    if (!(await this.confirmPendingConflictsBeforeSync())) return;
+    // ⚠️ The .gitignore gate, as before a sync (owner, 2026-09-28): a
+    // commit builds its batch FROM the .gitignore rules, so committing
+    // while those rules are in dispute — or while the one-time analysis is
+    // still deciding them — enqueues files chosen by rules that are about
+    // to change. This path used to skip the gate entirely, which is also
+    // how a [Commit] during the background analysis could put a second
+    // enforce() on the same files. NOT the tracked-conflict reminder (owner,
+    // 2026-10-31): a commit sends nothing, and that window is about sending.
+    if (!(await this.gitignoreGate())) return;
     try {
       await this.sync2Manager.commitOnly();
     } catch (err) {
@@ -4023,8 +4045,8 @@ export default class GitHubSyncPlugin extends Plugin {
       return;
     }
     // Same gate as commit() above — one file or all of them, the rules
-    // deciding what may travel are the same rules.
-    if (!(await this.confirmPendingConflictsBeforeSync())) return;
+    // deciding what may travel are the same rules (and no reminder either).
+    if (!(await this.gitignoreGate())) return;
     try {
       const outcome = await this.sync2Manager.commitFile(path);
       if (outcome.kind === "ignored") {

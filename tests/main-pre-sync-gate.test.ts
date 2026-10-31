@@ -467,6 +467,88 @@ describe("§8.1.5a the .gitignore gate is a MODAL and blocks unconditionally", (
 });
 
 
+// Owner, 2026-10-31: the "N file(s) still in tracked conflict" window warns
+// that conflicted files do not reach other devices — that is about SENDING
+// (a drain), so it comes before every user-started drain (Sync, Sync current
+// file, "Pull … push stored commits") and never before a Commit, which sends
+// nothing. The .gitignore gate is a different question — a commit picks its
+// files BY those rules (owner, 2026-09-28) — and stays on Commit.
+describe("the tracked-conflict reminder is for sending, not for Commit", () => {
+  let fx: ReturnType<typeof fixture>;
+  beforeEach(async () => {
+    fx = fixture();
+    await fx.store.load();
+    modal.constructed = 0;
+    modal.decision = "sync-anyway";
+    giModal.constructed = 0;
+    giModal.decision = "dismiss";
+  });
+  afterEach(() => {
+    if (fs.existsSync(fx.root)) fs.rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  function withEntryPoints(plugin: GateHandle) {
+    const commitOnly = vi.fn(async () => {});
+    const commitFile = vi.fn(async () => ({ kind: "committed" }));
+    const resumeQueue = vi.fn(async () => {});
+    Object.assign(plugin, {
+      sync2Manager: { commitOnly, commitFile, resumeQueue, isSyncBusy: () => false },
+      isConfigured: () => true,
+      activeFilePath: () => "note.md",
+      gateOnTokenExpired: () => false,
+      clearSyncNotice: () => {},
+    });
+    return plugin as GateHandle & {
+      commit(): Promise<void>;
+      commitFile(): Promise<void>;
+      uploadOnly(): Promise<void>;
+    } & { spies: { commitOnly: typeof commitOnly; commitFile: typeof commitFile; resumeQueue: typeof resumeQueue } } & Record<string, unknown>;
+  }
+
+  async function tracked() {
+    writeFile(fx.root, "note.md", "ours");
+    await createTracked(fx, "note.md", "Phone");
+  }
+
+  it("🔑 [Commit] with an open tracked conflict: no window, the commit runs", async () => {
+    await tracked();
+    const { plugin } = makeGate(fx.vault, fx.store);
+    const p = withEntryPoints(plugin);
+    await p.commit();
+    expect(modal.constructed).toBe(0);
+    expect((p.sync2Manager as { commitOnly: ReturnType<typeof vi.fn> }).commitOnly).toHaveBeenCalledTimes(1);
+  });
+
+  it("🔑 Commit current file with an open tracked conflict: no window, the commit runs", async () => {
+    await tracked();
+    const { plugin } = makeGate(fx.vault, fx.store);
+    const p = withEntryPoints(plugin);
+    await p.commitFile();
+    expect(modal.constructed).toBe(0);
+    expect((p.sync2Manager as { commitFile: ReturnType<typeof vi.fn> }).commitFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("🔑 [Commit] is still stopped by a .gitignore in conflict", async () => {
+    writeFile(fx.root, ".gitignore", ".*\n");
+    writeFile(fx.root, ".gitignore.conflict-from-Old gitignore files-2026-09-28T10-00-00Z", "proposed\n");
+    const { plugin } = makeGate(fx.vault, fx.store);
+    const p = withEntryPoints(plugin);
+    await p.commit();
+    expect(giModal.constructed).toBe(1);
+    expect((p.sync2Manager as { commitOnly: ReturnType<typeof vi.fn> }).commitOnly).not.toHaveBeenCalled();
+  });
+
+  it("🔑 'Pull … push stored commits' (a drain) asks first, and [Cancel] stops it", async () => {
+    await tracked();
+    const { plugin } = makeGate(fx.vault, fx.store);
+    const p = withEntryPoints(plugin);
+    modal.decision = "cancel";
+    await p.uploadOnly();
+    expect(modal.constructed).toBe(1);
+    expect((p.sync2Manager as { resumeQueue: ReturnType<typeof vi.fn> }).resumeQueue).not.toHaveBeenCalled();
+  });
+});
+
 const ANALYSIS_QUIET_MS = 3000; // mirrors main.ts
 
 describe("§8.1.5b the analysis wait", () => {

@@ -26,7 +26,9 @@ import { App, Modal } from "obsidian";
 //   - "sync-anyway" — user accepts the warning; sync proceeds.
 //   - "cancel"      — bail; sync skipped.
 //
-// Modal is fired by manual sync() / syncCurrentFile() only.
+// Modal is fired before a user-started DRAIN only: manual sync() (before its
+// optional commit), syncCurrentFile() and uploadOnly() ("Pull … push stored
+// commits"). Never before a Commit — it sends nothing (owner, 2026-10-31).
 // Background drains (interval tick, watchdog, onload startup) skip
 // the modal — they're not user-driven and a blocking dialog would
 // surprise the user.

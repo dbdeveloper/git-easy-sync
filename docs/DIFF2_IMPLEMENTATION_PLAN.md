@@ -666,6 +666,15 @@ Diff2 widget **повторює** цю поведінку:
   показує список pending конфліктів, дозволяє `[Resolve]` / `[Sync anyway]` (продовжити, edit-while-in-conflict
   path) / `[Cancel]`. Diff2 не дублює цю модалку.
 
+  **Коли саме (власник, 2026-10-31).** Модалка — про ВІДПРАВКУ («not visible on other devices»), тож вона стоїть
+  перед кожним drain, який запустив КОРИСТУВАЧ: `[Sync]` (на самому початку, ДО необов'язкового commit — за
+  «Sync starts with commit»), «Sync current file» і «Pull from repo and push stored commits». **Перед `[Commit]` /
+  «Commit current file» її НЕМАЄ** — commit нічого не відправляє, і текст модалки там нерелевантний. Перед Commit
+  лишається тільки ворота `.gitignore` (аналіз правил не завершено / `.gitignore` у конфлікті → стоп; власник,
+  2026-09-28: commit вибирає файли САМЕ за цими правилами). У коді — дві функції: `gitignoreGate` (sync і commit) і
+  `confirmTrackedConflicts` (лише drain). Автоматичний sync модалки не показує (2026-10-10, «шлях Sync anyway»);
+  постійне нагадування для нього — лічильник `N ⁇` у рядку стану та значок панелі.
+
   **§24 (TODO §24, 2026-07-05) — модалка стосується ТІЛЬКИ tracked-конфліктів.** Джерело —
   `pendingConflictSummary(vault, store)` (у `synthetic-detector.ts`), яка фільтрує через
   `findAllConflicts` (той самий source, що panel/badge/status-bar) і повертає **лише tracked**
