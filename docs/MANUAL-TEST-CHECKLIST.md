@@ -777,7 +777,14 @@ keeps a copy when History deletes a file; these items wait for the UI.
 
 ## 9. Performance (📱)
 
-- [ ] **Mobile autosave benchmark** (Settings → *Run mobile autosave benchmark*): run on a mid-tier Android and on iOS; collect the p50/p95/p99 figures and send the log so the autosave timing can be tuned.
+- [x] **Mobile autosave benchmark** — Android done, values pinned, button removed. *(Android
+      mid-tier, n=200, 2026-06-03: single append p95 3.10 ms, cursor rewrite p95 28.01 ms →
+      history appends per transaction with no coalescing, cursor saved every 2500 ms while
+      typing / 6000 ms while navigating — `src/diff2/cursor-timer.ts`. The Settings button
+      *Run mobile autosave benchmark* was a temporary tool and is GONE since `a7b057c`.)*
+      **iOS — open question for the future, no device yet (owner, 2026-10-31):** to measure
+      it, restore the benchmark from git (`a7b057c^`: `src/diff2/autosave-benchmark.ts` + the
+      Settings button) and re-check the numbers against the §6.2 rules in DIFF-EDITOR.md.
 - [x] A large conflict (hundreds of change blocks) in the diff editor stays responsive on mobile. *(Field
       2026-10-30/31: 1 648 change blocks scroll fluently on the phone; desktop needed Obsidian ≥ 1.14.4.)*
 - [x] 📱🖥️ **The FIRST sync after a large pull — the self-heal pass.** Pull several
