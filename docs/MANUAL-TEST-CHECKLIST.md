@@ -469,8 +469,8 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       whose `manifest.json` demands a newer Obsidian is now HELD before it reaches the disk,
       so the reload gate never sees it: fixture run 2 produces `plugin update HELD`, not
       `reload skipped` *(field 2026-10-31, 2.0.10-beta, desktop, Obsidian 1.14.5)*. The
-      `minAppVersion` half of the gate stays as a backstop for when the hold misses. It WAS
-      seen in the field once, through fixture run 5: the staged lift puts the 99.0.0
+      `minAppVersion` half of the gate stays as a backstop for when the hold misses. It IS
+      seen in the field through fixture run 5 (2026-10-02 and 2026-10-31): the staged lift puts the 99.0.0
       manifest on disk, and the reload logged `reload skipped … needs Obsidian 99.0.0, this
       is 1.14.5` with the probe still running. Its other half — `isDesktopOnly` — is NOT
       covered by the hold and is the 📱 item below. *(Owner, 2026-10-31: re-worded rather
@@ -509,11 +509,17 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       branches of the resolver ran — B drain-only (pull side), T3 with commit (2.5.0 already
       in a batch, reconcile side): `plugin-core collision resolved by VERSION … winner=remote`
       for main.js and manifest.json alike, 3.0.0 on disk, nothing pushed, no conflict.)*
-- [ ] 📱 **`isDesktopOnly` on a phone — the ONE Фаза 1 branch never run on real
+- [x] 📱 **`isDesktopOnly` on a phone — the ONE Фаза 1 branch never run on real
       hardware.** A plugin that is RUNNING on mobile because an older version had no
       such flag sits in `enabledPlugins`, so the "skip disabled" filter never fires and
       a reload would kill it. Our gate is supposed to skip it instead. Recorded as
-      outstanding in BUILDLOG; it had no checklist line until 2026-10-03.
+      outstanding in BUILDLOG; it had no checklist line until 2026-10-03. *(Field
+      2026-10-31, 2.0.10-beta, Pixel 6 Pro / Android, Obsidian 1.14.4: probe 3.0.0 enabled
+      and running, 3.1.0 with `isDesktopOnly: true` pushed; Sync logged `BRAT-style reload
+      skipped reason="the new version is desktop-only and this is mobile"`. Checked over
+      CDP: still running, 3.0.0 in memory, 3.1.0 on disk — the hold does not look at this
+      flag, so the files land and only the gate saves the running instance. No FAILED
+      line, no "updated" toast.)*
 - [ ] **Self-update writes through the bootloader.** Updating THIS plugin stages the new
       bytes beside the live `main.js` and applies them at the next load — the file
       Obsidian is running is never overwritten underneath it. Verify on mobile too
