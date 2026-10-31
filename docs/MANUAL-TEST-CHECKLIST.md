@@ -246,6 +246,19 @@ Use it, and note which runs you did.
       result, the changed one keeps its new content, the conflict stays in the Diff Panel. **Both changed** → the
       window "Saved files changed — keep your resolution?": *Save* under another name (a new conflict to resolve
       later) / *Discard* / *Cancel* (stay in the editor).
+- [x] **A very large comparison never freezes Obsidian** (DIFF-EDITOR-V2 §2.1.1). The comparison runs in the
+      background: Obsidian stays usable, the spinner turns and, after 3 s, says *Large file with many changes —
+      comparing… N s* (wrapped lines stay centred). Past **three minutes** the tab shows a message that stays until
+      **[Close]** — worded for a conflict (delete the copy / rename it over the original), a History version, or two
+      files. Closing the tab mid-comparison stops it. *(Field 2026-10-30/31, A: a 2 MB note with every "а" replaced
+      → the message; a ~2 MB note with 9 571 changed places opened in just under three minutes; 1 648 places on the
+      phone and on desktop scroll fluently.)* ⚠️ On desktop a document with thousands of changes needs **Obsidian
+      1.14.4 or newer** — older builds carry a CodeMirror bug that makes it scroll in jerks.
+- [x] **Settings → Diff Editor, per situation.** *Editor mode*, *Auto-focus* and *Diff highlight mode* (Char /
+      Word) each show one row Conflicts · History · Other; on the phone the columns wrap. Defaults with nothing
+      stored: editing on for Conflicts/Other on desktop, off everywhere on the phone; Auto-focus on; Word. A
+      Deleted version always opens read-only, without auto-focus, highlighting words. *(Field 2026-10-31, A + phone.)*
+- [x] **History tab title** reads *History of <path>* in the tab AND inside it. *(Field 2026-10-31.)*
 
 ## 5b. Managed `.gitignore` — the dot-space rules (🖥️📱🌐 · DOT-FILES)
 
@@ -540,6 +553,9 @@ Sync "Nothing to commit" holds until the drain's summary takes both lines away t
       sync asks about that path again even though no commit mentions it (the
       `.runtime/.recheck-paths` note). Easiest check: the file catches up on sync #2
       without you touching it.
+- [x] **A Sync without a commit ends in the full summary.** With *Sync starts with commit* off (or *Pull from repo
+      and push stored commits*), the closing notice lists sent / received / conflicts and *N plugin(s) updated*,
+      exactly like a Sync with commit; a background drain ends in a short *Sync done*. *(Field 2026-10-31, phone.)*
 
 ## 5e. Deleted bin (🖥️📱 · HISTORY-DELETED)
 
@@ -630,17 +646,24 @@ keeps a copy when History deletes a file; these items wait for the UI.
       (A switch made through the UI is handled as the force-push class — §6.4: the stale
       anchor stops being an ancestor, `compare` 404s, and discovery falls back to a
       full-tree diff.)
-- [ ] The **max auto-merge size** setting prevents very large files from being auto-merged.
+- [x] The **max auto-merge size** setting prevents very large files from being auto-merged.
       ⚠️ **Re-test after the own diff3 (docs/tasks/DIFF3-MYERS.md, 2026-10-30).** At 1024 KB a 2 MB note changed on
       both sides became a manual conflict at once (correct); at 4000 KB the OLD merge hung for many minutes. Pass
       criterion now: 2 MB note, compact edits on both sides, limit 4000 KB → **clean merge in seconds**, Obsidian
       responsive; a file changed almost everywhere on both sides → **manual conflict within a minute**, no freeze;
-      **Cancel sync** during a long merge stops at once.
+      **Cancel sync** during a long merge stops at once. *(Field 2026-10-30, A/B: the 2 MB note merged cleanly in
+      ~0.3 s, twice; every "а" → "А" on one side became a manual conflict after ~26 s with Obsidian responsive.
+      Default is now 2048 KB.)*
 - [x] **Token expired (§35)** — with a bad token, a manual Sync opens the recovery dialog **every time** (closing `[X]` then Sync re-opens it — not a silent toast); the raw "…status 401" toast does NOT appear.
 - [x] **Token expired — sticky + red UI (§35)** — the marker survives a plugin reload: after reload the **GitHub** status-bar word + **Sync** ribbon icon are red (tooltip "Token expired"), **Sync All** / **Pull from repo…** are greyed, and the **GitHub sync status** box shows the 401 ("invalid or expired") vs 403 ("lacks permissions") message. It clears only on a token/owner/repo edit **or** a successful **Test connection** (a normal successful Sync does NOT clear it).
 - [x] **Token expired — history (§35)** — opening a file's history shows **"TOKEN EXPIRED! …"** above the local-only versions. *(Field 2026-10-26: owner, with a broken token.)*
 - [x] **Token expired — automatic (§35)** — an interval/startup sync flashes **"Sync skipped: token expired"** (no modal). *(Owner: verified earlier.)*
 - [x] 📱 **Token expired — mobile modal (§35)** — the recovery dialog is the shorter mobile layout and its buttons wrap + center (none pushed off-screen).
+- [x] **Commit is quiet.** With a tracked conflict open, `[Commit]` / *Commit current file* commit without the
+      "N file(s) still in tracked conflict" window; Sync and *Pull from repo and push stored commits* still ask
+      first. A `.gitignore` in conflict still stops a Commit. *(Field 2026-10-31.)*
+- [x] **The ribbon order survives a plugin disable + enable.** Drag `[Commit]` after `[Sync]`, keep a diff tab
+      open, disable and enable the plugin: the icons stay where you put them. *(Field 2026-10-31, B.)*
 
 ## 7. Self-update and plugin updates (🖥️📱🌐)
 
@@ -723,8 +746,9 @@ keeps a copy when History deletes a file; these items wait for the UI.
 ## 9. Performance (📱)
 
 - [ ] **Mobile autosave benchmark** (Settings → *Run mobile autosave benchmark*): run on a mid-tier Android and on iOS; collect the p50/p95/p99 figures and send the log so the autosave timing can be tuned.
-- [ ] A large conflict (hundreds of change blocks) in the diff editor stays responsive on mobile.
-- [ ] 📱🖥️ **The FIRST sync after a large pull — the self-heal pass.** Pull several
+- [x] A large conflict (hundreds of change blocks) in the diff editor stays responsive on mobile. *(Field
+      2026-10-30/31: 1 648 change blocks scroll fluently on the phone; desktop needed Obsidian ≥ 1.14.4.)*
+- [x] 📱🖥️ **The FIRST sync after a large pull — the self-heal pass.** Pull several
       hundred files from another device, then sync again, and time the commit phase (the
       "Checking N of M files" line; exact numbers in the log's `Sync2 commit pass timing`). ⚠️ It is EXPECTED to be slow once, and the second sync after it must be
       fast again — that pair is the pass condition, not any single number.
