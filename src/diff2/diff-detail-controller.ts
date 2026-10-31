@@ -485,12 +485,16 @@ export class DiffDetailController {
       // The message stays until the user closes it (owner, 2026-10-30: a tab
       // that vanished by itself left "what was there?" unanswered).
       const box = body.createDiv({ cls: "diff2-detail-too-big" });
+      // The words fit why the editor was opened (owner, 2026-10-31).
       box.createEl("p", {
         text: history
-          ? `Too many changes to show this version (${why}).`
-          : `Too many changes to show this conflict (${why}). Resolve it by deleting the conflict ` +
-            "copy (keeps your version) or by renaming the copy over the original (keeps the other " +
-            "device's version).",
+          ? `Too many changes to compare this version with the current file (${why}). ` +
+            "Another version from the history may differ less."
+          : isConflictPair(entry.basePath, entry.siblingPath)
+            ? `Too many changes to show this conflict (${why}). Resolve it by deleting the conflict ` +
+              "copy (keeps your version) or by renaming the copy over the original (keeps the other " +
+              "device's version)."
+            : `Too many changes to compare these two files (${why}).`,
       });
       const close = box.createEl("button", { cls: "mod-cta", text: "Close" });
       close.addEventListener("click", () => this.host.onLeaveDetail());

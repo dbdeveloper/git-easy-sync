@@ -96,12 +96,16 @@ normal-line* ver1 ver2  normal-line+  ver1 ver2  normal-line+  …  ver1 ver2  n
    - конфлікт: *Too many changes to show this conflict (…). Resolve it by deleting the conflict copy (keeps your
      version) or by renaming the copy over the original (keeps the other device's version).* — у дужках «more than
      1000 changed places» або «the comparison took over a minute»;
-   - історія: *Too many changes to show this version (…).*
+   - історія: *Too many changes to compare this version with the current file (…). Another version from the history
+     may differ less.* (поза редактором History не вміє відновити версію — порадити нема чого, крім іншої версії);
+   - два звичайні файли (порівняння довільних файлів — у планах): *Too many changes to compare these two files (…).*
+   - Текст відповідає тому, НАВІЩО відкрито редактор (власник, 2026-10-31): слово «conflict» — лише для конфлікту.
    - Під текстом — кнопка **[Close]**; повідомлення лишається, доки користувач її не натисне (власник,
      2026-10-30: вкладка, що зникла сама, поки він дивився в інше вікно, лишила питання «що там було?»).
      [Close] закриває вкладку; конфлікт → фокус у Diff Panel (як `[←]` без сесії).
 5. **Крутилка:** як була — через 150 мс; після 3 с під нею рядок *Large file with many changes — comparing… N s* з
-   лічильником секунд.
+   лічильником секунд. Рядок, що не влазить у вкладку, переноситься, і КОЖЕН його рядок центрований (власник,
+   2026-10-31).
 6. **Закриття вкладки зупиняє відкриття:** порівняння в потоці зупиняється (потік замінюється), документ не
    будується, сесія не створюється.
 7. Стосується КОЖНОГО шляху відкриття: свіжий, історія, відновлення після аварії (з знімків сесії).

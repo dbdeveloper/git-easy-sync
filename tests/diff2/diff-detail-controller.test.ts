@@ -486,6 +486,34 @@ describe("DiffDetailController host seam (S2)", () => {
     ctl.dispose();
   });
 
+  // Owner, 2026-10-31: the message must fit WHY the editor was opened.
+  it("🔑 History: the message speaks of this version and the current file, not of a conflict copy", async () => {
+    const path = "Notes/h.md";
+    await fx.vault.adapter.writeBinary(path, enc("a\nNOW\nc\n"));
+    const entry: ConflictEntry = { basePath: path, siblingPath: path, deviceLabel: "", isoTimestamp: "2026-06-03T10-30-00Z", kind: "synthetic" };
+    const ctl = new DiffDetailController({} as unknown as App, limitDeps(async () => null), recordingHost());
+    await ctl.mount(container, entry, {
+      history: { versionSha: "v1", fetchBytes: async () => ({ bytes: enc("a\nTHEN\nc\n"), deleted: false }) },
+    });
+    const msg = container.querySelector(".diff2-detail-too-big p")?.textContent ?? "";
+    expect(msg).toContain("this version with the current file");
+    expect(msg).toContain("took over a minute");
+    expect(msg).not.toContain("conflict");
+    ctl.dispose();
+  });
+
+  it("🔑 two ordinary files: the message speaks of the two files, never of a conflict", async () => {
+    await fx.vault.adapter.writeBinary("Notes/one.md", enc("a\nX\nc\n"));
+    await fx.vault.adapter.writeBinary("Notes/two.md", enc("a\nY\nc\n"));
+    const entry: ConflictEntry = { basePath: "Notes/one.md", siblingPath: "Notes/two.md", deviceLabel: "", isoTimestamp: "2026-06-03T10-30-00Z", kind: "synthetic" };
+    const ctl = new DiffDetailController({} as unknown as App, limitDeps(async () => null), recordingHost());
+    await ctl.mount(container, entry);
+    const msg = container.querySelector(".diff2-detail-too-big p")?.textContent ?? "";
+    expect(msg).toContain("these two files");
+    expect(msg).not.toContain("conflict");
+    ctl.dispose();
+  });
+
   it("🔑 the message stays until the user closes it: [Close] → back (the host leaves the detail)", async () => {
     const { entry } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
     const host = recordingHost();

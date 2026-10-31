@@ -182,6 +182,9 @@
 .diff2-detail-loading-text {
     color: var(--text-muted);
     font-size: 0.9em;
+    /* A line too long for the tab wraps — every wrapped line stays centred (owner, 2026-10-31). */
+    text-align: center;
+    padding: 0 16px;
 }
 
 /* bug-23 — the detail body fills the remaining height; the CM6 editor inside it
