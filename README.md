@@ -607,7 +607,7 @@ the tab tells you so — for a conflict, with how to resolve it by hand
 (delete the conflict copy, or rename it over the original) — until you
 press `Close`. The number of changes is not limited: a 2 MB note with
 almost 10 000 changed places opens. On desktop, scrolling a document
-with thousands of changes needs **Obsidian 1.14.5 or newer** — older
+with thousands of changes needs **Obsidian 1.14.4 or newer** — older
 versions carry an editor bug that makes such a document scroll in
 jerks.
 
