@@ -826,31 +826,36 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
           });
 
       // TODO §17 — per-mode auto-focus default (conflict ON, history/deleted OFF). Each is
-      // still toggleable per-document in the diff-editor toolbar.
+      // still toggleable per-document in the diff-editor toolbar. ONE block with one
+      // description and a row of labelled switches (owner, 2026-10-31 — three blocks
+      // repeated the same text); the row wraps one column at a time on a narrow screen.
+      // A future "Other" (comparing two files) is one more entry in the list.
       const autoFocusModes: Array<{
           mode: "conflict" | "history" | "deleted";
-          name: string;
+          label: string;
           def: boolean;
       }> = [
-          { mode: "conflict", name: "Auto-focus conflicts", def: true },
-          { mode: "history", name: "Auto-focus history", def: false },
-          { mode: "deleted", name: "Auto-focus deleted", def: false },
+          { mode: "conflict", label: "Conflicts", def: true },
+          { mode: "history", label: "History", def: false },
+          { mode: "deleted", label: "Deleted", def: false },
       ];
-      for (const { mode, name, def } of autoFocusModes) {
-          new Setting(containerEl)
-              .setName(name)
-              .setDesc(
-                  "On open/each resolve, scroll the diff-editor to the FIRST remaining " +
-                  "difference (cursor at its start). Toggleable per-document in the toolbar.",
-              )
-              .addToggle((toggle) => {
-                  toggle
-                      .setValue(this.plugin.settings.diffEditorAutoFocus?.[mode] ?? def)
-                      .onChange(async (value) => {
-                          const cur = this.plugin.settings.diffEditorAutoFocus ?? {};
-                          this.plugin.settings.diffEditorAutoFocus = { ...cur, [mode]: value };
-                          await this.plugin.saveSettings();
-                      });
+      const autoFocus = new Setting(containerEl)
+          .setName("Auto-focus")
+          .setDesc(
+              "On opening, and after each resolve, scroll the diff editor to the first " +
+              "remaining difference (cursor at its start). Each document can switch it " +
+              "in its toolbar.",
+          );
+      const row = autoFocus.infoEl.createDiv({ cls: "ges-autofocus-row" });
+      for (const { mode, label, def } of autoFocusModes) {
+          const col = row.createDiv({ cls: "ges-autofocus-col" });
+          col.createDiv({ cls: "ges-autofocus-label", text: label });
+          new ToggleComponent(col)
+              .setValue(this.plugin.settings.diffEditorAutoFocus?.[mode] ?? def)
+              .onChange(async (value) => {
+                  const cur = this.plugin.settings.diffEditorAutoFocus ?? {};
+                  this.plugin.settings.diffEditorAutoFocus = { ...cur, [mode]: value };
+                  await this.plugin.saveSettings();
               });
       }
 

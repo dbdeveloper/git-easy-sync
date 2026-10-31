@@ -594,8 +594,9 @@ completed is not sent again.
 - **Diff highlight mode** — `Characters` (default) marks only the
   differing characters inside a changed line, `Words` marks whole
   words. Large blocks always use words.
-- **Auto-focus conflicts / history / deleted** — on opening, and after
-  each resolve, scroll to the first remaining difference. On for
+- **Auto-focus** — on opening, and after each resolve, scroll to the
+  first remaining difference. One switch each for `Conflicts`,
+  `History` and `Deleted`, side by side under one description; on for
   conflicts, off for history and deleted by default; also switchable
   per document.
 
