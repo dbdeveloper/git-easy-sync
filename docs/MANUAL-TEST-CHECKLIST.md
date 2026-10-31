@@ -250,9 +250,10 @@ Use it, and note which runs you did.
       background: Obsidian stays usable, the spinner turns and, after 3 s, says *Large file with many changes —
       comparing… N s* (wrapped lines stay centred). Past **three minutes** the tab shows a message that stays until
       **[Close]** — worded for a conflict (delete the copy / rename it over the original), a History version, or two
-      files. Closing the tab mid-comparison stops it. *(Field 2026-10-30/31, A: a 2 MB note with every "а" replaced
-      → the message; a ~2 MB note with 9 571 changed places opened in just under three minutes; 1 648 places on the
-      phone and on desktop scroll fluently.)* ⚠️ On desktop a document with thousands of changes needs **Obsidian
+      files. Closing the tab mid-comparison stops it. *(Field 2026-10-30/31, A: under the first one-minute limit a
+      ~2 MB note with every "а" replaced by "А" ended in the message; with the three-minute limit the same note —
+      ~10 000 changed places (9 571 counted) — opens in about 2–3 minutes, and after that the editor is fluent:
+      the changes can be scrolled, reviewed and edited. 1 648 places scroll fluently on the phone and on desktop.)* ⚠️ On desktop a document with thousands of changes needs **Obsidian
       1.14.4 or newer** — older builds carry a CodeMirror bug that makes it scroll in jerks.
 - [x] **Settings → Diff Editor, per situation.** *Editor mode*, *Auto-focus* and *Diff highlight mode* (Char /
       Word) each show one row Conflicts · History · Other; on the phone the columns wrap. Defaults with nothing
