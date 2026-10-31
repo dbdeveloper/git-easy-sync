@@ -468,20 +468,22 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
 - [x] **Фаза 1, the gate — superseded on desktop by the Фаза 2 hold.** An incoming plugin
       whose `manifest.json` demands a newer Obsidian is now HELD before it reaches the disk,
       so the reload gate never sees it: fixture run 2 produces `plugin update HELD`, not
-      `reload skipped` *(field 2026-10-31, 2.0.10-beta, desktop, Obsidian 1.13.4)*. The
-      `minAppVersion` half of the gate stays as a backstop that only fires if the hold
-      misses; it cannot be staged without bypassing the hold, so it has no field test. Its
-      other half — `isDesktopOnly` — is NOT covered by the hold and is the 📱 item below.
-      *(Owner, 2026-10-31: re-worded rather than left open.)*
+      `reload skipped` *(field 2026-10-31, 2.0.10-beta, desktop, Obsidian 1.14.5)*. The
+      `minAppVersion` half of the gate stays as a backstop for when the hold misses. It WAS
+      seen in the field once, through fixture run 5: the staged lift puts the 99.0.0
+      manifest on disk, and the reload logged `reload skipped … needs Obsidian 99.0.0, this
+      is 1.14.5` with the probe still running. Its other half — `isDesktopOnly` — is NOT
+      covered by the hold and is the 📱 item below. *(Owner, 2026-10-31: re-worded rather
+      than left open.)*
 - [x] **Фаза 1, the honest report:** a plugin that genuinely fails to load after an
       update produces `reload FAILED` plus a Notice naming it and asking for a restart —
       never a silent "updated" toast. (Fixture run 1.) *(Field 2026-10-31, 2.0.10-beta, desktop
-      macOS, Obsidian 1.13.4, vault A: `reload FAILED reason="enablePlugin returned false"` + the
+      macOS, Obsidian 1.14.5, vault A: `reload FAILED reason="enablePlugin returned false"` + the
       restart Notice, no "done"/"updated".)*
 - [x] **⚠️ Фаза 2, the hold:** an update meant for a newer Obsidian must **never reach
       the disk**. The log says `plugin update HELD for this Obsidian`, `main.js` on disk
       is unchanged, the plugin keeps running, and **the repo is untouched by this
-      device**. (Fixture run 3.) *(Field 2026-10-31, 2.0.10-beta, desktop, Obsidian 1.13.4,
+      device**. (Fixture run 3.) *(Field 2026-10-31, 2.0.10-beta, desktop, Obsidian 1.14.5,
       vault A: run in two steps — the future `manifest.json` alone (`HELD … files=1`, the
       disk kept 1.0.0), then `main-v2.js` pushed while held (never landed, no `version B`
       in the console). No commit from A in either step.)*
@@ -491,11 +493,15 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       copy travel would roll the update back on every healthy device. (Run 4.) The log line
       `batch entry skipped: plugin update held` belongs to a narrower backstop — a batch
       staged BEFORE the hold began — which this fixture cannot stage; it is unit-tested only.
-      *(Field 2026-10-31, 2.0.10-beta, desktop, Obsidian 1.13.4, vault A: probe `main.js`
+      *(Field 2026-10-31, 2.0.10-beta, desktop, Obsidian 1.14.5, vault A: probe `main.js`
       edited locally under the hold, Sync → nothing committed, repo kept version B.)*
-- [ ] **Фаза 2, the lift:** when the condition clears, the files land, the baselines are
+- [x] **Фаза 2, the lift:** when the condition clears, the files land, the baselines are
       restored, and **the next sync is quiet** — no commit, no re-download. A commit here
-      means the baselines were not restored. (Run 5.)
+      means the baselines were not restored. (Run 5.) *(Field 2026-10-31, 2.0.10-beta,
+      desktop, Obsidian 1.14.5, vault A: `hold LIFTED`, `pulled:2` — version B and the 2.0.0
+      manifest on disk, `heldPluginUpdates` emptied; the next Sync `pulled:0`, nothing
+      committed. The probe was NOT reloaded — the gate refused the 99.0.0 manifest, which is
+      correct for this staging; see the gate item above.)*
 - [ ] **§28 — plugin collisions are decided by SEMVER, not mtime.** Two devices update
       the same third-party plugin: the HIGHER `manifest.json` version wins regardless of
       which was written later.

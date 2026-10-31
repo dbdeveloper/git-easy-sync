@@ -148,11 +148,17 @@ are indistinguishable, since the record is its only input:
 plugin update hold LIFTED   id=... minAppVersion=1.0.0
 ```
 
-- `main.js` on disk is now version B, and the console says
-  `version B (THE HOLD DID NOT HOLD)` — here that line means the lift
-  worked, not that the hold failed;
-- the probe was reloaded (it is in the affected set), so no restart was
-  needed;
+- `main.js` on disk is now version B and `manifest.json` is 2.0.0;
+- the probe is NOT reloaded: the log says `BRAT-style reload skipped …
+  needs Obsidian 99.0.0, this is <v>`. That is correct for this staging
+  — only the hold RECORD was moved to 1.0.0, the manifest that landed
+  still demands 99.0.0, and the Фаза 1 gate reads the manifest on disk.
+  The probe keeps running version A from memory; `version B (THE HOLD
+  DID NOT HOLD)` appears in the console only after an Obsidian restart
+  (Obsidian never checks `minAppVersion` at load), and there it means
+  the lift worked, not that the hold failed. (Field run 2026-10-31.)
+  This is also the one place the gate's `minAppVersion` half can be
+  seen on desktop: run 2 is now stopped earlier, by the hold;
 - the next Sync is quiet: no commits, no re-download. That is the
   baselines having been restored correctly — if they had not been, this
   sync would push version A back and you would see a commit.
