@@ -8,6 +8,8 @@ import {
   Setting,
   TextComponent,
   ToggleComponent,
+  DropdownComponent,
+  Platform,
   Notice,
   Modal,
   requestUrl,
@@ -17,6 +19,13 @@ import { formatSyncMessage } from "src/sync2/commit-message";
 import { renderTokenHelpBox } from "src/sync2/views/token-help";
 import { pluginsDataJsonToggleState } from "src/settings/toggle-rules";
 import { autoMergeSizeKbFromInput, DEFAULT_AUTO_MERGE_KB } from "src/settings/auto-merge-size";
+import {
+  DIFF_EDITOR_SITUATIONS,
+  autoFocusFor,
+  editingFor,
+  highlightFor,
+  type DiffEditorSituation,
+} from "src/settings/diff-editor-defaults";
 import { cleanLogsDescription } from "src/settings/log-size";
 import { deconflictDeviceLabel } from "src/sync2/conflict-siblings";
 import { tokenExpiredMessage } from "src/token-expired-flag";
@@ -786,78 +795,83 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       // ── Diff Editor ─────────────────────────────────────────────────
       new Setting(containerEl).setName("Diff Editor").setHeading();
 
-      new Setting(containerEl)
-          .setName("Editor mode (enable editing)")
-          .setDesc(
-              "Open the conflict diff-editor with editing ENABLED: type/edit freely as " +
-              "well as resolve with the on-screen buttons. When OFF the editor is read-only " +
-              "— resolve via the buttons only, typing is disabled and the mobile soft " +
-              "keyboard is suppressed (selection, copy and undo/redo still work), which is " +
-              "convenient on small touch screens. Default: on for desktop, off for mobile. " +
-              "Toggle per-document with the 'Edit' checkbox in the editor toolbar.",
-          )
-          // The stored setting stays read-only-positive (diffEditorTouchMode); "Editor mode"
-          // is its inverse, so display + persist the negation here.
-          .addToggle((toggle) => {
-              toggle
-                  .setValue(!(this.plugin.settings.diffEditorTouchMode ?? false))
+      // Editor mode, Diff highlight mode and Auto-focus each hold one value per situation
+      // the editor is opened in (owner, 2026-10-31): ONE block per setting, one description,
+      // and a row of columns — label above, control below; a column that does not fit wraps
+      // to the next line. A situation with no stored value shows its default
+      // (diff-editor-defaults.ts: per situation, per platform).
+      const situationLabels: Record<DiffEditorSituation, string> = {
+          conflict: "Conflicts",
+          history: "History",
+          deleted: "Deleted",
+          other: "Other",
+      };
+      const situationRow = (
+          name: string,
+          desc: string,
+          control: (col: HTMLElement, situation: DiffEditorSituation) => void,
+      ): void => {
+          const block = new Setting(containerEl).setName(name).setDesc(desc);
+          const row = block.infoEl.createDiv({ cls: "ges-situation-row" });
+          for (const situation of DIFF_EDITOR_SITUATIONS) {
+              const col = row.createDiv({ cls: "ges-situation-col" });
+              col.createDiv({ cls: "ges-situation-label", text: situationLabels[situation] });
+              control(col, situation);
+          }
+      };
+      const settings = this.plugin.settings;
+
+      situationRow(
+          "Editor mode (enable editing)",
+          "Open the diff editor with editing enabled: type and edit freely as well as " +
+          "resolve with the on-screen buttons. When off the editor is read-only — resolve " +
+          "with the buttons only; typing is disabled and the phone keyboard stays down " +
+          "(selection, copy and undo/redo still work). Each document can switch it with " +
+          "'Edit' in its toolbar.",
+          (col, situation) => {
+              new ToggleComponent(col)
+                  .setValue(editingFor(settings, situation, Platform.isMobile))
                   .onChange(async (value) => {
-                      this.plugin.settings.diffEditorTouchMode = !value;
+                      settings.diffEditorEditing = { ...(settings.diffEditorEditing ?? {}), [situation]: value };
                       await this.plugin.saveSettings();
                   });
-          });
+          },
+      );
 
-      new Setting(containerEl)
-          .setName("Diff highlight mode")
-          .setDesc(
-              "How the changed parts INSIDE a conflict line are highlighted: " +
-              "'Characters' marks only the differing characters (precise); 'Words' " +
-              "marks whole changed words. Large diff-groups always fall back to word-level " +
-              "(per-character is too slow on big blocks).",
-          )
-          .addDropdown((dd) => {
-              dd.addOption("characters", "Characters")
+      situationRow(
+          "Diff highlight mode",
+          "How the changed parts inside a line are highlighted: 'Characters' marks only " +
+          "the differing characters, 'Words' marks whole changed words. Large blocks " +
+          "always use words.",
+          (col, situation) => {
+              new DropdownComponent(col)
+                  .addOption("characters", "Characters")
                   .addOption("words", "Words")
-                  .setValue(this.plugin.settings.diffEditorDiffMode ?? "characters")
+                  .setValue(highlightFor(settings, situation))
                   .onChange(async (value) => {
-                      this.plugin.settings.diffEditorDiffMode = value === "words" ? "words" : "characters";
+                      settings.diffEditorHighlight = {
+                          ...(settings.diffEditorHighlight ?? {}),
+                          [situation]: value === "characters" ? "characters" : "words",
+                      };
                       await this.plugin.saveSettings();
                   });
-          });
+          },
+      );
 
-      // TODO §17 — per-mode auto-focus default (conflict ON, history/deleted OFF). Each is
-      // still toggleable per-document in the diff-editor toolbar. ONE block with one
-      // description and a row of labelled switches (owner, 2026-10-31 — three blocks
-      // repeated the same text); the row wraps one column at a time on a narrow screen.
-      // A future "Other" (comparing two files) is one more entry in the list.
-      const autoFocusModes: Array<{
-          mode: "conflict" | "history" | "deleted";
-          label: string;
-          def: boolean;
-      }> = [
-          { mode: "conflict", label: "Conflicts", def: true },
-          { mode: "history", label: "History", def: false },
-          { mode: "deleted", label: "Deleted", def: false },
-      ];
-      const autoFocus = new Setting(containerEl)
-          .setName("Auto-focus")
-          .setDesc(
-              "On opening, and after each resolve, scroll the diff editor to the first " +
-              "remaining difference (cursor at its start). Each document can switch it " +
-              "in its toolbar.",
-          );
-      const row = autoFocus.infoEl.createDiv({ cls: "ges-autofocus-row" });
-      for (const { mode, label, def } of autoFocusModes) {
-          const col = row.createDiv({ cls: "ges-autofocus-col" });
-          col.createDiv({ cls: "ges-autofocus-label", text: label });
-          new ToggleComponent(col)
-              .setValue(this.plugin.settings.diffEditorAutoFocus?.[mode] ?? def)
-              .onChange(async (value) => {
-                  const cur = this.plugin.settings.diffEditorAutoFocus ?? {};
-                  this.plugin.settings.diffEditorAutoFocus = { ...cur, [mode]: value };
-                  await this.plugin.saveSettings();
-              });
-      }
+      situationRow(
+          "Auto-focus",
+          "On opening, and after each resolve, scroll the diff editor to the first " +
+          "remaining difference (cursor at its start). Each document can switch it " +
+          "in its toolbar.",
+          (col, situation) => {
+              new ToggleComponent(col)
+                  .setValue(autoFocusFor(settings, situation))
+                  .onChange(async (value) => {
+                      settings.diffEditorAutoFocus = { ...(settings.diffEditorAutoFocus ?? {}), [situation]: value };
+                      await this.plugin.saveSettings();
+                  });
+          },
+      );
 
       // ── Conflict resolution ────────────────────────────────────────
       // Its own group, replacing "Performance" (owner, 2026-10-11): since

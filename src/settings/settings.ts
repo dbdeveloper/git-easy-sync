@@ -5,6 +5,8 @@
 // Plugin settings shape. Older data.json files may contain fields
 // no longer declared here; Object.assign loads them into memory but
 // nothing reads them, and saving normalises back to the shape below.
+import type { DiffEditorSituationSettings } from "./diff-editor-defaults";
+
 export interface GitHubSyncSettings {
   // GitHub repo coordinates.
   githubToken: string;
@@ -62,20 +64,19 @@ export interface GitHubSyncSettings {
   // OFF keeps the accent tint (still shows "syncing") but suppresses the rotation — a
   // motion/battery preference (idea borrowed from Obsidian Sync's battery note).
   spinSyncIcon?: boolean;
-  // §2.2.14 — diff-editor read-only mode: open conflict views read-only (resolve via buttons
-  // only; edits/typing blocked; mobile soft keyboard suppressed; selection + copy + undo/redo
-  // still work). Stored read-only-positive (true = read-only); the UI shows the INVERSE
-  // "Editor mode" toggle (checked = editing enabled). Platform-dependent default (see main.ts).
-  diffEditorTouchMode?: boolean;
-  // Intra-chunk diff highlight granularity: "characters" (precise per-character; default)
-  // or "words" (whole changed words). Large diff-groups auto-fall-back to word-level
-  // regardless (char-level is O(n·m)). Default "characters".
-  diffEditorDiffMode?: "characters" | "words";
-  // §2.2.15 / TODO §17 — Auto-focus: on each resolve, scroll the diff-editor to the FIRST
-  // remaining conflict (caret at its ver1.from). PER-MODE default: ON for conflict (fast
-  // sequential resolve), OFF for history/deleted (you review versions, not resolve). An old
-  // boolean value from a pre-§17 install is ignored → per-mode defaults apply.
-  diffEditorAutoFocus?: { conflict?: boolean; history?: boolean; deleted?: boolean };
+  // The diff editor's three per-SITUATION settings (owner, 2026-10-31) — one value each for
+  // conflict / history / deleted / other; a missing one takes the platform default in
+  // diff-editor-defaults.ts (no migration of the old single-value diffEditorTouchMode /
+  // diffEditorDiffMode, which are no longer read).
+  //   - diffEditorEditing: §2.2.14 editing enabled (false = read-only: resolve via the
+  //     buttons, no typing, no mobile soft keyboard; selection, copy, undo/redo still work).
+  //   - diffEditorHighlight: intra-line highlight, "characters" or "words" (large blocks fall
+  //     back to words regardless).
+  //   - diffEditorAutoFocus: §2.2.15 scroll to the first remaining difference on open and
+  //     after each resolve.
+  diffEditorEditing?: DiffEditorSituationSettings["diffEditorEditing"];
+  diffEditorHighlight?: DiffEditorSituationSettings["diffEditorHighlight"];
+  diffEditorAutoFocus?: DiffEditorSituationSettings["diffEditorAutoFocus"];
 
   enableLogging: boolean;
   // LOG-VIEWER §2.23 (owner, 2026-10-25): register the "log" extension so
@@ -217,10 +218,8 @@ export const DEFAULT_SETTINGS: GitHubSyncSettings = {
   showCommitRibbonButton: false,
   showDiffRibbonButton: true,
   spinSyncIcon: true,
-  // diffEditorTouchMode is intentionally ABSENT here — its default is platform-dependent
-  // (desktop=false, mobile=true), applied in main.ts loadSettings when unset.
-  diffEditorDiffMode: "characters",
-  diffEditorAutoFocus: { conflict: true, history: false, deleted: false },
+  // The diff editor's per-situation settings are ABSENT here on purpose: their defaults are
+  // per situation and per platform (diff-editor-defaults.ts), read when a key is missing.
   enableLogging: false,
   openLogFilesInViewer: false,
   consolidateCommits: false,

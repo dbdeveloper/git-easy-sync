@@ -514,6 +514,46 @@ describe("DiffDetailController host seam (S2)", () => {
     ctl.dispose();
   });
 
+  // Owner, 2026-10-31: Editor mode, Diff highlight mode and Auto-focus are read for the
+  // situation the editor was opened in.
+  it("🔑 each open reads the three settings for ITS situation: conflict / history / other", async () => {
+    const seen: string[] = [];
+    const sDeps = (): DiffEditViewDeps =>
+      ({
+        vault: fx.vault,
+        touchOnly: (s: string) => (seen.push(`edit:${s}`), false),
+        diffWordLevel: (s: string) => (seen.push(`hl:${s}`), false),
+        autoFocus: (s: string) => (seen.push(`af:${s}`), false),
+      }) as unknown as DiffEditViewDeps;
+
+    const conflict = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
+    let ctl = new DiffDetailController({} as unknown as App, sDeps(), recordingHost());
+    await ctl.mount(container, conflict.entry);
+    ctl.dispose();
+    expect(new Set(seen)).toEqual(new Set(["edit:conflict", "hl:conflict", "af:conflict"]));
+
+    seen.length = 0;
+    container.replaceChildren();
+    await fx.vault.adapter.writeBinary("Notes/h.md", enc("a\nNOW\nc\n"));
+    const hist: ConflictEntry = { basePath: "Notes/h.md", siblingPath: "Notes/h.md", deviceLabel: "", isoTimestamp: "2026-06-03T10-30-00Z", kind: "synthetic" };
+    ctl = new DiffDetailController({} as unknown as App, sDeps(), recordingHost());
+    await ctl.mount(container, hist, {
+      history: { versionSha: "v1", fetchBytes: async () => ({ bytes: enc("a\nTHEN\nc\n"), deleted: false }) },
+    });
+    ctl.dispose();
+    expect(new Set(seen)).toEqual(new Set(["edit:history", "hl:history", "af:history"]));
+
+    seen.length = 0;
+    container.replaceChildren();
+    await fx.vault.adapter.writeBinary("Notes/one.md", enc("a\nX\nc\n"));
+    await fx.vault.adapter.writeBinary("Notes/two.md", enc("a\nY\nc\n"));
+    const two: ConflictEntry = { basePath: "Notes/one.md", siblingPath: "Notes/two.md", deviceLabel: "", isoTimestamp: "2026-06-03T10-30-00Z", kind: "synthetic" };
+    ctl = new DiffDetailController({} as unknown as App, sDeps(), recordingHost());
+    await ctl.mount(container, two);
+    ctl.dispose();
+    expect(new Set(seen)).toEqual(new Set(["edit:other", "hl:other", "af:other"]));
+  });
+
   it("🔑 the message stays until the user closes it: [Close] → back (the host leaves the detail)", async () => {
     const { entry } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
     const host = recordingHost();

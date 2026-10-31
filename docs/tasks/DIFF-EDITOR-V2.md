@@ -1693,6 +1693,24 @@ Default теж інвертований у цій термінології: desk
 mobile — Editor mode OFF (read-only). Інверсія `editorMode = !touchOnly` живе лише на двох UI-межах
 (settings-tab + controller→toolbar); facet/owner/збережений ключ не змінюються.
 
+**Окремо для кожної ситуації (власник, 2026-10-31).** Editor mode, Diff highlight mode і Auto-focus мають по
+значенню на кожну ситуацію, в якій відкрито редактор: Conflicts / History / Deleted / Other (Other — порівняння двох
+звичайних файлів; самого режиму ще нема, але налаштування вже є і контролер його розпізнає: не історія і не пара
+«файл + його копія конфлікту»). Зберігаються позитивно: `diffEditorEditing` / `diffEditorHighlight` /
+`diffEditorAutoFocus` — мапи `{conflict, history, deleted, other}`; старі одиночні ключі `diffEditorTouchMode` і
+`diffEditorDiffMode` більше НЕ читаються (без перенесення — власник). Ситуація без збереженого значення бере
+default (`src/settings/diff-editor-defaults.ts`):
+
+| | Conflicts | History | Deleted | Other |
+|---|---|---|---|---|
+| Editor mode — desktop | on | off | off | on |
+| Editor mode — mobile | off | off | off | off |
+| Diff highlight (обидві) | Words | Words | Words | Words |
+| Auto-focus (обидві) | on | on | on | on |
+
+У Settings кожне — один блок з одним описом і рядком колонок (підпис над перемикачем / списком), колонки, що не
+влазять, переносяться.
+
 
 #### 2.2.15. Toolbar для diff-еditor-v2
 

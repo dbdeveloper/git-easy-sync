@@ -69,6 +69,7 @@ import type { DiffEditViewDeps } from "./diff-panel-view";
 import { calculateGitBlobSHA } from "../utils";
 import { isConflictPair } from "../sync2/conflict-siblings";
 import { diffLines } from "diff";
+import type { DiffEditorSituation } from "../settings/diff-editor-defaults";
 import { CancelledError } from "../errors";
 import WorkerClient from "../worker/worker-client";
 import {
@@ -178,6 +179,8 @@ export class DiffDetailController {
   // The open in progress (DIFF-EDITOR-V2.md §2.1.1): closing the tab aborts
   // it — the comparison in the worker stops, no document, no session.
   private mountAbort: AbortController | null = null;
+  // The situation of the open in progress (set at the start of mount).
+  private situation: DiffEditorSituation = "conflict";
   // Autosave session bound to the active owner: the conflict's autosave id + the
   // meta startSession wrote + whether this mount REPLAYED prior edits. Set at mount,
   // consumed by the `[←]` commit7Step, cleared on dispose. Null when no detail editor
@@ -399,6 +402,13 @@ export class DiffDetailController {
     // the standard "YYYY-MM-DD HH:MM:SS" form — NOT the deviceLabel (which the user reads off
     // the history/deleted LIST). ver2 = "Actual" (the current file).
     const mode: DiffEditorMode = history ? "history" : "conflict";
+    // Why the editor was opened — picks the per-situation Settings (owner, 2026-10-31).
+    // Two ordinary files are "other" (that mode is not built yet; it renders as a conflict).
+    this.situation = history
+      ? "history"
+      : isConflictPair(entry.basePath, entry.siblingPath)
+        ? "conflict"
+        : "other";
     const localSideLabel =
       mode === "conflict" ? "Local" : formatConflictTimestamp(entry.isoTimestamp);
     const remoteSideLabel = mode === "conflict" ? entry.deviceLabel : "Actual";
@@ -560,8 +570,8 @@ export class DiffDetailController {
         date: entry.isoTimestamp,
         isMarkdown: isMarkdownPath(entry.basePath),
         mode, // TODO §17 — drives ver-block button verbs + Join gate
-        touchOnly: this.deps.touchOnly?.() ?? false, // §2.2.14 read-only mode (Settings)
-        wordLevelDiff: this.deps.diffWordLevel?.() ?? false, // word vs char highlight (Settings)
+        touchOnly: this.deps.touchOnly?.(this.situation) ?? false, // §2.2.14 read-only mode (Settings)
+        wordLevelDiff: this.deps.diffWordLevel?.(this.situation) ?? false, // word vs char highlight (Settings)
       };
 
       // Clear any prior dir, open a fresh session, and mount the owner from the CURRENT
@@ -898,7 +908,7 @@ export class DiffDetailController {
     // `<device>` at <date>".
     // TODO §17 — auto-focus default is PER-MODE (conflict on / history+deleted off): you review
     // versions in history, you don't want an auto-jump to the first diff.
-    this.autoFocus = this.deps.autoFocus?.(mode) ?? mode === "conflict";
+    this.autoFocus = this.deps.autoFocus?.(this.situation) ?? mode === "conflict";
     const joinOpts = { label: entry.deviceLabel, date: entry.isoTimestamp };
     this.toolbarHandle = renderDiffToolbar(
       toolbar,
@@ -909,9 +919,9 @@ export class DiffDetailController {
         mode,
         // §2.2.14 — the toolbar shows the POSITIVE face (Editor mode = editing enabled);
         // deps.touchOnly is the read-only setting, so editorModeOn = !touchOnly.
-        editorModeOn: !(this.deps.touchOnly?.() ?? false),
+        editorModeOn: !(this.deps.touchOnly?.(this.situation) ?? false),
         autoFocusOn: this.autoFocus,
-        diffMode: this.deps.diffWordLevel?.() ? "words" : "characters",
+        diffMode: this.deps.diffWordLevel?.(this.situation) ? "words" : "characters",
       },
       {
         onBack: () => void this.exit(entry),

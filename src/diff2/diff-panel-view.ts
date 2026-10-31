@@ -22,6 +22,7 @@
 //   - docs/tasks/SPLIT-PANEL-EDITOR-FEASIBILITY.md §12 (the split), R-A/R-D (panel/[←])
 
 import type { LineDiffPart } from "../worker/types";
+import type { DiffEditorSituation } from "../settings/diff-editor-defaults";
 import { ItemView, type Vault, WorkspaceLeaf } from "obsidian";
 import { holdEscapeWhileActive } from "../ui/esc-scope";
 import { keepLeafFocus } from "../ui/keep-focus";
@@ -88,21 +89,19 @@ export interface DiffEditViewDeps {
   // Local device label for the top-marker / "Keep all local
   // (<label>)" button text. Falls back to "local" when undefined.
   localDeviceLabel?: () => string;
-  // §2.2.14 — read the current read-only setting at view open (stored as diffEditorTouchMode;
-  // surfaced to the user as the inverse "Editor mode" toggle). Optional (test fixtures omit it
-  // → editable as before).
-  touchOnly?: () => boolean;
-  // Diff highlight granularity: true → word-level, false → char-level (default). Read at open.
-  diffWordLevel?: () => boolean;
+  // §2.2.14 — read-only (the inverse of Settings' "Editor mode") for the situation the editor
+  // was opened in; read at view open. Optional (test fixtures omit it → editable).
+  touchOnly?: (situation: DiffEditorSituation) => boolean;
+  // Diff highlight granularity for the situation: true → word-level. Read at open.
+  diffWordLevel?: (situation: DiffEditorSituation) => boolean;
   // DIFF-EDITOR-V2.md §2.1.1 — the line comparison off the main thread (the
   // CPU worker): null = gave up (over three minutes); rejects with CancelledError
   // when `signal` aborts. Optional (test fixtures omit it → compared inline,
   // within the same limits).
   diffLines?: (base: string, sibling: string, signal?: AbortSignal) => Promise<LineDiffPart[] | null>;
-  // §2.2.15 Auto-focus default (scroll to the first remaining conflict on each resolve). Read
-  // at open; toggled per-session in the toolbar. TODO §17 — PER-MODE default (conflict on /
-  // history+deleted off): reviewing versions shouldn't auto-jump to the first diff.
-  autoFocus?: (mode: "conflict" | "history" | "deleted") => boolean;
+  // §2.2.15 Auto-focus for the situation (scroll to the first remaining difference on each
+  // resolve). Read at open; toggled per-session in the toolbar.
+  autoFocus?: (situation: DiffEditorSituation) => boolean;
   // Plugin logger — the §5.0.e one-side-silent exit logs here instead of
   // nagging the user with a Notice (no-op when logging is disabled). Optional
   // in test fixtures.

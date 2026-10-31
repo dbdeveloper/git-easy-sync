@@ -586,19 +586,23 @@ completed is not sent again.
 
 ### Diff Editor
 
-- **Editor mode (enable editing)** — open the conflict editor with
-  typing enabled. When off it is read-only: you resolve with the
-  on-screen buttons, and the phone keyboard stays down. Default: on
-  for desktop, off for mobile; each document has its own `Edit`
-  switch in the toolbar.
-- **Diff highlight mode** — `Characters` (default) marks only the
-  differing characters inside a changed line, `Words` marks whole
+Each of these three settings has one value per situation the editor
+is opened in — `Conflicts`, `History`, `Deleted` and `Other`
+(comparing two ordinary files) — shown side by side under one
+description.
+
+- **Editor mode (enable editing)** — open the editor with typing
+  enabled. When off it is read-only: you resolve with the on-screen
+  buttons, and the phone keyboard stays down. Default on desktop: on
+  for conflicts and other, off for history and deleted; on a phone:
+  off everywhere. Each document has its own `Edit` switch in the
+  toolbar.
+- **Diff highlight mode** — `Characters` marks only the differing
+  characters inside a changed line, `Words` (default) marks whole
   words. Large blocks always use words.
 - **Auto-focus** — on opening, and after each resolve, scroll to the
-  first remaining difference. One switch each for `Conflicts`,
-  `History` and `Deleted`, side by side under one description; on for
-  conflicts, off for history and deleted by default; also switchable
-  per document.
+  first remaining difference. On by default; also switchable per
+  document.
 
 **Very large comparisons.** The editor compares the two files in the
 background, so Obsidian stays responsive and a spinner shows the

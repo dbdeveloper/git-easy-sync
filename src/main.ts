@@ -119,6 +119,7 @@ import {
 } from "./sync-progress-model";
 import WorkerClient from "./worker/worker-client";
 import { PreSyncConflictModal } from "./sync2/views/pre-sync-conflict-modal";
+import { autoFocusFor, editingFor, highlightFor } from "./settings/diff-editor-defaults";
 import { TrashWatcher } from "./diff2/trash-watcher";
 import { recoverAutosaveDirs } from "./diff2/onload-recovery";
 import { setAutosaveRoot, AUTOSAVE_ROOT, autosaveDir } from "./diff2/autosave-store";
@@ -1078,15 +1079,6 @@ export default class GitHubSyncPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const raw = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, raw);
-
-    // §2.2.14 — diffEditorTouchMode has a PLATFORM-DEPENDENT default (desktop=false,
-    // mobile=true) that a static DEFAULT_SETTINGS can't express. Apply + persist it the
-    // first time the setting is created (absent from data.json — fresh install or the
-    // pre-feature data.json). Once written, the stored value (incl. a user toggle) wins.
-    if (this.settings.diffEditorTouchMode === undefined) {
-      this.settings.diffEditorTouchMode = Platform.isMobile;
-      await this.saveSettings();
-    }
 
     // Stage 7 manual data.json migration detection. The user base
     // is currently one person with two devices; the maintainer
@@ -4910,17 +4902,14 @@ export default class GitHubSyncPlugin extends Plugin {
       // §5.0.e one-side-silent exit logs here instead of a Notice.
       logger: this.logger,
       localDeviceLabel: () => this.settings.deviceLabel ?? "Obsidian",
-      // §2.2.14 — live-read the read-only setting at each view open (UI surfaces its inverse
-      // as the "Editor mode" toggle; stored read-only-positive).
-      touchOnly: () => this.settings.diffEditorTouchMode ?? false,
-      // Diff highlight mode: "words" → word-level, else char-level (default).
-      diffWordLevel: () => this.settings.diffEditorDiffMode === "words",
+      // The three per-situation settings (owner, 2026-10-31), read at each view open for
+      // the situation the editor was opened in (diff-editor-defaults.ts).
+      touchOnly: (situation) => !editingFor(this.settings, situation, Platform.isMobile),
+      diffWordLevel: (situation) => highlightFor(this.settings, situation) === "words",
       // DIFF-EDITOR-V2.md §2.1.1 — the editor's line comparison, off the main thread.
       diffLines: (base, sibling, signal) => this.workerClient.diffLines(base, sibling, signal),
-      // §2.2.15 / TODO §17 Auto-focus default — PER-MODE (toggleable per-document in the
-      // toolbar). conflict → on, history/deleted → off; an old bool value is ignored.
-      autoFocus: (mode) =>
-        this.settings.diffEditorAutoFocus?.[mode] ?? mode === "conflict",
+      // §2.2.15 Auto-focus, per situation (toggleable per-document in the toolbar).
+      autoFocus: (situation) => autoFocusFor(this.settings, situation),
       // S4 — the panel's conflicts-list routes a row-click here instead of its own
       // (now-bypassed, S6-deleted) detail-mode.
       openEditor: (entry, toRight) => void this.openEditorForPair(entry, toRight),
