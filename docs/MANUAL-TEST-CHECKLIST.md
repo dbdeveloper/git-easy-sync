@@ -468,9 +468,11 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
 - [ ] **Фаза 1, the gate:** an incoming plugin whose `manifest.json` demands a newer
       Obsidian than this one is NOT reloaded — the log says `reload skipped … needs
       Obsidian <v>` and the running plugin **keeps working**. (Fixture run 2.)
-- [ ] **Фаза 1, the honest report:** a plugin that genuinely fails to load after an
+- [x] **Фаза 1, the honest report:** a plugin that genuinely fails to load after an
       update produces `reload FAILED` plus a Notice naming it and asking for a restart —
-      never a silent "updated" toast. (Fixture run 1.)
+      never a silent "updated" toast. (Fixture run 1.) *(Field 2026-10-31, 2.0.10-beta, desktop
+      macOS, Obsidian 1.13.4, vault A: `reload FAILED reason="enablePlugin returned false"` + the
+      restart Notice, no "done"/"updated".)*
 - [ ] **⚠️ Фаза 2, the hold:** an update meant for a newer Obsidian must **never reach
       the disk**. The log says `plugin update HELD for this Obsidian`, `main.js` on disk
       is unchanged, the plugin keeps running, and **the repo is untouched by this
