@@ -10,7 +10,7 @@
 // production), within a time limit; every later `buildModel` of that pair
 // takes the result from here. The number of diff groups is NOT a limit
 // (owner, 2026-10-31): the slowness a 1000-group cap guarded against was a
-// CM6 bug in Obsidian < 1.14.5 desktop; with it fixed, ~5000 groups in a
+// CM6 bug in Obsidian < 1.14.4 desktop; with it fixed, ~5000 groups in a
 // 1.3 MB file scroll fluently.
 
 import type { LineDiffPart } from "../worker/types";
