@@ -465,18 +465,26 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
 > most of it — `tests/fixtures/reload-probe/README.md`, runs 1-5 — use it rather than
 > improvising, and record which run you did.
 
-- [ ] **Фаза 1, the gate:** an incoming plugin whose `manifest.json` demands a newer
-      Obsidian than this one is NOT reloaded — the log says `reload skipped … needs
-      Obsidian <v>` and the running plugin **keeps working**. (Fixture run 2.)
+- [x] **Фаза 1, the gate — superseded on desktop by the Фаза 2 hold.** An incoming plugin
+      whose `manifest.json` demands a newer Obsidian is now HELD before it reaches the disk,
+      so the reload gate never sees it: fixture run 2 produces `plugin update HELD`, not
+      `reload skipped` *(field 2026-10-31, 2.0.10-beta, desktop, Obsidian 1.13.4)*. The
+      `minAppVersion` half of the gate stays as a backstop that only fires if the hold
+      misses; it cannot be staged without bypassing the hold, so it has no field test. Its
+      other half — `isDesktopOnly` — is NOT covered by the hold and is the 📱 item below.
+      *(Owner, 2026-10-31: re-worded rather than left open.)*
 - [x] **Фаза 1, the honest report:** a plugin that genuinely fails to load after an
       update produces `reload FAILED` plus a Notice naming it and asking for a restart —
       never a silent "updated" toast. (Fixture run 1.) *(Field 2026-10-31, 2.0.10-beta, desktop
       macOS, Obsidian 1.13.4, vault A: `reload FAILED reason="enablePlugin returned false"` + the
       restart Notice, no "done"/"updated".)*
-- [ ] **⚠️ Фаза 2, the hold:** an update meant for a newer Obsidian must **never reach
+- [x] **⚠️ Фаза 2, the hold:** an update meant for a newer Obsidian must **never reach
       the disk**. The log says `plugin update HELD for this Obsidian`, `main.js` on disk
       is unchanged, the plugin keeps running, and **the repo is untouched by this
-      device**. (Fixture run 3.)
+      device**. (Fixture run 3.) *(Field 2026-10-31, 2.0.10-beta, desktop, Obsidian 1.13.4,
+      vault A: run in two steps — the future `manifest.json` alone (`HELD … files=1`, the
+      disk kept 1.0.0), then `main-v2.js` pushed while held (never landed, no `version B`
+      in the console). No commit from A in either step.)*
 - [ ] **Фаза 2, symmetry:** while a hold is on, editing that plugin's files locally does
       NOT push them — the log says `batch entry skipped: plugin update held`. Letting an
       older copy travel would roll the update back on every healthy device. (Run 4.)
