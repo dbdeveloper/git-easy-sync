@@ -18,7 +18,10 @@ export function autoMergeSizeKbFromInput(raw: string): number {
   return Math.round(kb);
 }
 
-export const DEFAULT_AUTO_MERGE_KB = 1024;
+// 2048 since 2026-10-31 (owner; 1024 before): a merge now runs in a worker,
+// is cut at one minute, and its cost follows the number of changes, not
+// the file's size (docs/tasks/DIFF3-MYERS.md).
+export const DEFAULT_AUTO_MERGE_KB = 2048;
 
 // The engine's byte limit. Like every other key, a missing one takes the
 // default. The byte-valued `maxAutoMergeSizeBytes` older builds left in

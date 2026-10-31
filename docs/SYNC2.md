@@ -1913,8 +1913,12 @@ fallback-mode CPU operations.
 ### 8.6 Size guard (`maxAutoMergedFileSizeKb`, formerly `maxAutoMergeSizeBytes`)
 
 Defense in depth even with Worker offload. Above the configured
-limit (default 1024 KB, Settings → Conflict resolution → *Max size of
-auto-merged files*), the engine skips the merge. *(Corrected
+limit (default 2048 KB since 2026-10-31, 1024 KB before; Settings →
+Conflict resolution → *Max size of auto-merged files*), the engine skips
+the merge. *(2026-10-31: the merge is our own diff3 on Myers, always in a
+worker, cut at one minute → manual conflict; its cost follows the number
+of changes, so reason 1 below — node-diff3 wall-clock — no longer holds.
+DIFF3-MYERS.md.)* *(Corrected
 2026-10-11: since THE SWITCH a skipped merge is a MANUAL CONFLICT
 (NEW-DRAIN §II.1 rule 7), not "ours wins" — the text below about
 uploading the local bytes describes the pre-SWITCH engine. 0 turns

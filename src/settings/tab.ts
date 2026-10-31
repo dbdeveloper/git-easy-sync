@@ -864,12 +864,13 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       new Setting(containerEl)
           .setName("Max size of auto-merged files (KB)")
           .setDesc(
-              "When the same file changed on both sides, the plugin tries to merge " +
-              "the two versions by itself. That merge is expensive on big files, so " +
-              "choose the largest size to auto-merge when possible; a bigger file " +
-              "changed on both sides becomes a conflict for you to resolve. Set 0 " +
-              "for full manual control: every conflict is then left to you. " +
-              "Default 1024 KB (1 MB); above ~2 MB a merge may hang noticeably.",
+              "When the same file changed on both sides, the plugin merges the two " +
+              "versions by itself. It tries only up to this size; a bigger file " +
+              "changed on both sides becomes a conflict for you to resolve. Merging " +
+              "runs in the background and is given up after a minute — the file then " +
+              "becomes a conflict instead of a stuck sync. If Sync still spends " +
+              "longer on merges than you like, lower the number; 0 turns auto-merge " +
+              "off and leaves every conflict to you. Default 2048 KB (2 MB).",
           )
           .addText((text) => {
               const current =

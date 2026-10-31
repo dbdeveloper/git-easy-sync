@@ -236,5 +236,5 @@ export const DEFAULT_SETTINGS: GitHubSyncSettings = {
   // the safe behavior and lets users who actually want canonical
   // text on disk turn it on knowingly.
   autoCanonicalizeTextFiles: false,
-  maxAutoMergedFileSizeKb: 1024,
+  maxAutoMergedFileSizeKb: 2048, // = DEFAULT_AUTO_MERGE_KB (auto-merge-size.ts)
 };

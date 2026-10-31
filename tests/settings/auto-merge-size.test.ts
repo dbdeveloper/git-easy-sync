@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  DEFAULT_AUTO_MERGE_KB,
   autoMergeSizeKbFromInput,
   autoMergeLimitBytes,
 } from "../../src/settings/auto-merge-size";
@@ -36,12 +37,14 @@ describe("autoMergeSizeKbFromInput", () => {
   });
 });
 
-// Like every other key: a missing one takes the default, 1024 KB = 1 MB.
+// Like every other key: a missing one takes the default, 2048 KB = 2 MB
+// (owner, 2026-10-31; 1024 KB before the own diff3).
 // The old byte-valued `maxAutoMergeSizeBytes` of older builds is ignored.
 describe("autoMergeLimitBytes", () => {
-  it("defaults to 1024 KB = 1 MB", () => {
-    expect(DEFAULT_SETTINGS.maxAutoMergedFileSizeKb).toBe(1024);
-    expect(autoMergeLimitBytes({})).toBe(1_048_576);
+  it("defaults to 2048 KB = 2 MB, the same in both places that hold it", () => {
+    expect(DEFAULT_SETTINGS.maxAutoMergedFileSizeKb).toBe(2048);
+    expect(DEFAULT_AUTO_MERGE_KB).toBe(2048);
+    expect(autoMergeLimitBytes({})).toBe(2_097_152);
   });
 
   it("KB → bytes; 0 stays 0, the engine's 'every conflict is manual'", () => {
@@ -51,6 +54,6 @@ describe("autoMergeLimitBytes", () => {
 
   it("the old byte-valued key is ignored", () => {
     const legacy = { maxAutoMergeSizeBytes: 5 } as Record<string, unknown>;
-    expect(autoMergeLimitBytes(legacy)).toBe(1_048_576);
+    expect(autoMergeLimitBytes(legacy)).toBe(2_097_152);
   });
 });
