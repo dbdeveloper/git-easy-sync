@@ -840,13 +840,13 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
 
       situationRow(
           "Diff highlight mode",
-          "How the changed parts inside a line are highlighted: 'Characters' marks only " +
-          "the differing characters, 'Words' marks whole changed words. Large blocks " +
+          "How the changed parts inside a line are highlighted: 'Char' marks only " +
+          "the differing characters, 'Word' marks whole changed words. Large blocks " +
           "always use words.",
           (col, situation) => {
               new DropdownComponent(col)
-                  .addOption("characters", "Characters")
-                  .addOption("words", "Words")
+                  .addOption("characters", "Char") // the same words as the editor's toolbar
+                  .addOption("words", "Word")
                   .setValue(highlightFor(settings, situation))
                   .onChange(async (value) => {
                       settings.diffEditorHighlight = {
