@@ -3,6 +3,7 @@ import {
   isEphemeralAutosaveId,
   historyDeletedOrphans,
   isLayoutRestoreFresh,
+  layoutForRestore,
 } from "../../src/diff2/history-deleted-lifecycle";
 
 describe("isEphemeralAutosaveId", () => {
@@ -52,5 +53,26 @@ describe("isLayoutRestoreFresh (TTL)", () => {
   });
   it("future savedAt (clock skew) → false", () => {
     expect(isLayoutRestoreFresh(5000, 1000, TTL)).toBe(false);
+  });
+});
+
+// Owner, 2026-10-31 (B): after a plugin disable+enable the [Commit] ribbon
+// icon jumped to the top and a drag-reorder was lost. The fast-reload
+// snapshot (getLayout) carries "left-ribbon"; changeLayout re-applied that
+// STALE icon order (Obsidian sorts an id missing from it to the top). The
+// restore is for our WINDOWS only — the ribbon order stays as it is now.
+describe("layoutForRestore — windows only, never the ribbon order", () => {
+  it("🔑 drops left-ribbon, keeps every window part", () => {
+    const snap = {
+      main: { id: "m" },
+      left: { id: "l" },
+      right: { id: "r" },
+      "left-ribbon": { hiddenItems: { "git-easy-sync:Commit local changes": false } },
+      active: "x",
+    };
+    const out = layoutForRestore(snap) as Record<string, unknown>;
+    expect(out["left-ribbon"]).toBeUndefined();
+    expect(out).toEqual({ main: { id: "m" }, left: { id: "l" }, right: { id: "r" }, active: "x" });
+    expect(snap["left-ribbon"]).toBeDefined(); // the saved snapshot itself is untouched
   });
 });

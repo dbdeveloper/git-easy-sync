@@ -53,3 +53,17 @@ export function isLayoutRestoreFresh(
 ): boolean {
   return nowMs >= savedAtMs && nowMs - savedAtMs < ttlMs;
 }
+
+/**
+ * §4.5.3 — what the fast-reload restore hands to `changeLayout`: the saved
+ * snapshot WITHOUT "left-ribbon" (owner, 2026-10-31). The restore exists to
+ * bring our windows back; the snapshot's ribbon order is stale by design
+ * (taken before any drag after it), and Obsidian sorts an icon missing from it
+ * to the top — the [Commit] icon jumped to the top after every disable+enable
+ * and a drag-reorder was lost. Without the key Obsidian keeps the current order.
+ */
+export function layoutForRestore(layout: unknown): unknown {
+  if (layout === null || typeof layout !== "object") return layout;
+  const { ["left-ribbon"]: _ribbon, ...windows } = layout as Record<string, unknown>;
+  return windows;
+}

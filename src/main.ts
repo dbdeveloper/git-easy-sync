@@ -23,6 +23,7 @@ import {
 } from "obsidian";
 import {
   isLayoutRestoreFresh,
+  layoutForRestore,
   historyDeletedOrphans,
 } from "./diff2/history-deleted-lifecycle";
 import { GitHubSyncSettings, DEFAULT_SETTINGS } from "./settings/settings";
@@ -4783,7 +4784,7 @@ export default class GitHubSyncPlugin extends Plugin {
       }
       await (this.app.workspace as unknown as {
         changeLayout: (l: unknown) => Promise<void>;
-      }).changeLayout(layout);
+      }).changeLayout(layoutForRestore(layout)); // windows only — never the ribbon order
       this.logger?.info("diff2 layout restored (fast reload)");
     } catch (err) {
       this.logger?.warn("restoreDiff2Layout failed", { err: `${err}` });
