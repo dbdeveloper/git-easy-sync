@@ -674,11 +674,35 @@ export class Sync2Manager {
     return n;
   }
 
-  async resumeQueue(): Promise<"done" | "busy"> {
+  // `summary`: a USER's drain (Sync with "Sync starts with commit" off,
+  // "Pull from repo and push stored commits") ends in the same summary as a
+  // full sync — sent / received / plugins / conflicts are the drain's own
+  // numbers (owner, 2026-10-31). A background drain asks for none.
+  async resumeQueue(opts: { summary?: boolean } = {}): Promise<"done" | "busy"> {
     if (!this.claimSync("drain")) return "busy";
     try {
       this.clearSyncCounts();
-      await this.drain();
+      if (!opts.summary) {
+        await this.drain();
+      } else {
+        let ok = false;
+        this.deps.onSyncStarted?.();
+        try {
+          this.lastDrainWasCancelled = false;
+          await this.drain();
+          ok = !this.lastDrainWasCancelled;
+        } finally {
+          this.deps.onSyncCompleted?.({
+            pushedFiles: this.sentThisSync.size,
+            pulledFiles: this.receivedThisSync.size,
+            pluginsUpdated: this.pluginCount("updated"),
+            pluginsRemoved: this.pluginCount("removed"),
+            conflicts: this.trackedConflictPaths(),
+            ok,
+            cancelled: this.lastDrainWasCancelled,
+          });
+        }
+      }
     } finally {
       this.syncBusy = false;
     }

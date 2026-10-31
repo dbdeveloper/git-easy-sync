@@ -2058,7 +2058,9 @@ export default class GitHubSyncPlugin extends Plugin {
         // Remote-Repository settings edit does (see settings/tab.ts). SET on an
         // auth error below.
       } else {
-        await this.sync2Manager.resumeQueue();
+        // A user's drain-only Sync ends in the full summary (owner,
+        // 2026-10-31); a background one keeps the short "Sync done".
+        await this.sync2Manager.resumeQueue({ summary: !background });
         // E1: resumeQueue is drain-only — an empty queue makes NO authed call
         // (drain only does bootstrapIfNeeded, O(1) no-op once adopted), so a
         // success here does NOT prove auth. Never clear on a drain-only path,
@@ -4003,7 +4005,7 @@ export default class GitHubSyncPlugin extends Plugin {
     if (this.gateOnTokenExpired("user")) return;
     if (!(await this.confirmPendingConflictsBeforeSync())) return;
     try {
-      await this.sync2Manager.resumeQueue();
+      await this.sync2Manager.resumeQueue({ summary: true }); // the full summary (owner, 2026-10-31)
       // §35: drain-only path — a successful sync never clears the latch. SET on
       // an auth error below.
     } catch (err) {

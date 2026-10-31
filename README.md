@@ -547,7 +547,11 @@ same pass rather than in separate phases, and their totals can GROW
 mid-sync: the plugin genuinely learns of more work as it goes (another
 batch of local changes, another answer from the server) and would rather
 show that than a total it guessed. A quick sync shows no progress at
-all — only the summary.
+all — only the summary. The summary is the same whether your Sync
+starts with a commit or only sends what is already committed (*Sync
+starts with commit* off, or *Pull from repo and push stored commits*):
+the numbers are what was sent and received. An automatic sync in the
+background ends with a short `Sync done`.
 
 A commit that is forecast to take a while says so first —
 `Committing…`, then `Checking N of M files` (the first commit after

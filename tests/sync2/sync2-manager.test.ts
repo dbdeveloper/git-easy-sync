@@ -1674,6 +1674,34 @@ describe("Sync2Manager (THE SWITCH shell)", () => {
     expect(completed[0]).toMatchObject({ pluginsUpdated: 3, pluginsRemoved: 1 });
   });
 
+  // Owner, 2026-10-31: sent / received / plugins / conflicts are the
+  // DRAIN's numbers, so a Sync with "Sync starts with commit" off — a drain
+  // only — must end in the same summary as a full sync. The phone (commit
+  // off) said a bare "Sync done" while B said "1 plugin updated".
+  it("🔑 a user's drain-only sync reports the same summary as a full sync", async () => {
+    drainResult = okResult({
+      vaultStepWrites: ["note.md"],
+      selfUpdateStaged: [`${CONFIG_DIR}/plugins/${PLUGIN_ID}/main.js`],
+      pushedPaths: ["x.md"],
+    });
+    await manager.resumeQueue({ summary: true });
+    expect(completed).toHaveLength(1);
+    expect(completed[0]).toMatchObject({
+      pushedFiles: 1,
+      pulledFiles: 2,
+      pluginsUpdated: 1,
+      pluginsRemoved: 0,
+      ok: true,
+      cancelled: false,
+    });
+  });
+
+  it("a background drain (no summary asked) stays quiet — no summary", async () => {
+    drainResult = okResult({ vaultStepWrites: ["note.md"] });
+    await manager.resumeQueue();
+    expect(completed).toHaveLength(0);
+  });
+
   // ── Which vault-step failures the USER hears about ────────────────
   //
   // Owner's rule, 2026-10-02: «там де є сподівання, що наступна
