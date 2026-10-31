@@ -20,7 +20,7 @@ import { renderTokenHelpBox } from "src/sync2/views/token-help";
 import { pluginsDataJsonToggleState } from "src/settings/toggle-rules";
 import { autoMergeSizeKbFromInput, DEFAULT_AUTO_MERGE_KB } from "src/settings/auto-merge-size";
 import {
-  DIFF_EDITOR_SITUATIONS,
+  SETTINGS_SITUATIONS,
   autoFocusFor,
   editingFor,
   highlightFor,
@@ -799,7 +799,8 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       // hold one value per situation the editor is opened in (owner, 2026-10-31): ONE block per setting, one description,
       // and a row of columns — label above, control below; a column that does not fit wraps
       // to the next line. A situation with no stored value shows its default
-      // (diff-editor-defaults.ts: per situation, per platform).
+      // (diff-editor-defaults.ts: per situation, per platform). Deleted has no column: its
+      // values are fixed (owner, 2026-10-31).
       const situationLabels: Record<DiffEditorSituation, string> = {
           conflict: "Conflicts",
           history: "History",
@@ -813,7 +814,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       ): void => {
           const block = new Setting(containerEl).setName(name).setDesc(desc);
           const row = block.infoEl.createDiv({ cls: "ges-situation-row" });
-          for (const situation of DIFF_EDITOR_SITUATIONS) {
+          for (const situation of SETTINGS_SITUATIONS) {
               const col = row.createDiv({ cls: "ges-situation-col" });
               col.createDiv({ cls: "ges-situation-label", text: situationLabels[situation] });
               control(col, situation);

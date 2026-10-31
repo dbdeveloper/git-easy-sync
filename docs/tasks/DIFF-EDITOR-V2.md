@@ -1701,15 +1701,19 @@ mobile — Editor mode OFF (read-only). Інверсія `editorMode = !touchOnl
 `diffEditorDiffMode` більше НЕ читаються (без перенесення — власник). Ситуація без збереженого значення бере
 default (`src/settings/diff-editor-defaults.ts`):
 
-| | Conflicts | History | Deleted | Other |
+| | Conflicts | History | Deleted (фіксовано) | Other |
 |---|---|---|---|---|
-| Editor mode — desktop | on | off | off | on |
-| Editor mode — mobile | off | off | off | off |
-| Diff highlight (обидві) | Words | Words | Words | Words |
-| Auto-focus (обидві) | on | on | on | on |
+| Editor mode — desktop | on | off | **off** | on |
+| Editor mode — mobile | off | off | **off** | off |
+| Diff highlight (обидві) | Word | Word | **Word** | Word |
+| Auto-focus (обидві) | on | on | **off** | on |
 
-У Settings кожне — один блок з одним описом і рядком колонок (підпис над перемикачем / списком), колонки, що не
-влазять, переносяться.
+**Deleted — без налаштувань (власник, 2026-10-31):** видалена версія — це завжди порожній бік проти повного, тож
+нема куди «фокусуватись», нічого редагувати й нічого тонко підсвічувати. Колонки Deleted у Settings НЕМА, а її
+значення фіксовані (вище), незалежно від платформи і від того, що лежить у `data.json`.
+
+У Settings кожне — один блок з одним описом і рядком колонок Conflicts / History / Other (підпис над перемикачем /
+списком), колонки, що не влазять, переносяться.
 
 
 #### 2.2.15. Toolbar для diff-еditor-v2

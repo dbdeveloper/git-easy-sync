@@ -587,15 +587,17 @@ completed is not sent again.
 ### Diff Editor
 
 Each of these three settings has one value per situation the editor
-is opened in — `Conflicts`, `History`, `Deleted` and `Other`
-(comparing two ordinary files) — shown side by side under one
-description.
+is opened in — `Conflicts`, `History` and `Other` (comparing two
+ordinary files) — shown side by side under one description. A deleted
+file's version has no settings: it is always an empty side against a
+full one, so it opens read-only, without auto-focus, highlighting
+whole words.
 
 - **Editor mode (enable editing)** — open the editor with typing
   enabled. When off it is read-only: you resolve with the on-screen
   buttons, and the phone keyboard stays down. Default on desktop: on
-  for conflicts and other, off for history and deleted; on a phone:
-  off everywhere. Each document has its own `Edit` switch in the
+  for conflicts and other, off for history; on a phone: off
+  everywhere. Each document has its own `Edit` switch in the
   toolbar.
 - **Auto-focus** — on opening, and after each resolve, scroll to the
   first remaining difference. On by default; also switchable per

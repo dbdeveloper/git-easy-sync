@@ -21,6 +21,12 @@ export const DIFF_EDITOR_SITUATIONS: readonly DiffEditorSituation[] = [
   "other",
 ];
 
+// The situations Settings show. Deleted is not one of them (owner,
+// 2026-10-31): a deleted version is always an empty side against a full one —
+// nothing to jump to, nothing to edit, nothing to highlight finely — so it
+// has FIXED values (below), whatever data.json holds, on every platform.
+export const SETTINGS_SITUATIONS: readonly DiffEditorSituation[] = ["conflict", "history", "other"];
+
 export type DiffHighlight = "characters" | "words";
 
 export interface DiffEditorSituationSettings {
@@ -29,17 +35,17 @@ export interface DiffEditorSituationSettings {
   diffEditorAutoFocus?: Partial<Record<DiffEditorSituation, boolean>>;
 }
 
-// The owner's defaults (2026-10-31).
+// The owner's defaults (2026-10-31) — and Deleted's fixed values.
 const EDITING_DESKTOP: Record<DiffEditorSituation, boolean> = {
   conflict: true,
   history: false,
-  deleted: false,
+  deleted: false, // fixed
   other: true,
 };
 const EDITING_MOBILE: Record<DiffEditorSituation, boolean> = {
   conflict: false,
   history: false,
-  deleted: false,
+  deleted: false, // fixed
   other: false,
 };
 
@@ -50,6 +56,7 @@ export function editingFor(
   situation: DiffEditorSituation,
   isMobile: boolean,
 ): boolean {
+  if (situation === "deleted") return false;
   return (
     settings.diffEditorEditing?.[situation] ??
     (isMobile ? EDITING_MOBILE : EDITING_DESKTOP)[situation]
@@ -60,6 +67,7 @@ export function highlightFor(
   settings: DiffEditorSituationSettings,
   situation: DiffEditorSituation,
 ): DiffHighlight {
+  if (situation === "deleted") return "words";
   return settings.diffEditorHighlight?.[situation] ?? "words";
 }
 
@@ -67,5 +75,6 @@ export function autoFocusFor(
   settings: DiffEditorSituationSettings,
   situation: DiffEditorSituation,
 ): boolean {
+  if (situation === "deleted") return false;
   return settings.diffEditorAutoFocus?.[situation] ?? true;
 }
