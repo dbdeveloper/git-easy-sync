@@ -427,10 +427,11 @@ export default class WorkerClient {
   // and the merge answers "conflict" — the worker survives). Two sides
   // must fit inside MERGE_TIMEOUT_MS with room for the rest.
   static readonly MERGE_SIDE_TIMEOUT_MS = 25_000;
-  // DIFF-EDITOR-V2.md §2.1.1 (owner, 2026-10-30): the diff editor compares
-  // for at most one minute, on the phone too. The library gives up on its
-  // own; a worker silent DIFF_GRACE_MS after that is stopped and replaced.
-  static readonly DIFF_TIMEOUT_MS = 60_000;
+  // DIFF-EDITOR-V2.md §2.1.1: the diff editor compares for at most three
+  // minutes (owner, 2026-10-31; one minute before), on the phone too. The
+  // library gives up on its own; a worker silent DIFF_GRACE_MS after that is
+  // stopped and replaced.
+  static readonly DIFF_TIMEOUT_MS = 180_000;
   static readonly DIFF_GRACE_MS = 5_000;
 
   // Decode a base64 string to bytes. Routes the work to the CPU

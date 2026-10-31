@@ -17,7 +17,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { diffLines as jsdiffLines } from "diff";
 import { CancelledError } from "../../src/errors";
-import { MAX_DIFF_GROUPS, cachedLineDiff, clearLineDiffCache } from "../../src/diff2/line-diff";
+import { cachedLineDiff, clearLineDiffCache } from "../../src/diff2/line-diff";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -477,7 +477,7 @@ describe("DiffDetailController host seam (S2)", () => {
     await ctl.mount(container, entry);
 
     const msg = container.querySelector(".diff2-detail-too-big")?.textContent ?? "";
-    expect(msg).toContain("took over a minute");
+    expect(msg).toContain("took over three minutes");
     expect(msg).toContain("deleting the conflict copy");
     expect(ctl.getView()).toBeNull();
     expect(container.classList.contains("diff2-detail-too-big-host")).toBe(true); // hides the toolbar
@@ -497,7 +497,7 @@ describe("DiffDetailController host seam (S2)", () => {
     });
     const msg = container.querySelector(".diff2-detail-too-big p")?.textContent ?? "";
     expect(msg).toContain("this version with the current file");
-    expect(msg).toContain("took over a minute");
+    expect(msg).toContain("took over three minutes");
     expect(msg).not.toContain("conflict");
     ctl.dispose();
   });
@@ -552,26 +552,20 @@ describe("DiffDetailController host seam (S2)", () => {
     ctl.dispose();
   });
 
-  it("🔑 more diff groups than the limit → the message names the count and the limit", async () => {
-    const { entry, conflictId } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");
-    // The comparison's answer, built directly (a real one of this size takes minutes).
-    const over: NonNullable<DiffEditViewDeps["diffLines"]> = async () => {
-      const parts: { value: string; added?: boolean; removed?: boolean }[] = [];
-      for (let i = 0; i < MAX_DIFF_GROUPS + 1; i++) {
-        parts.push({ value: `same ${i}\n` }, { value: `m${i}\n`, removed: true }, { value: `t${i}\n`, added: true });
-      }
-      return parts;
-    };
-    const ctl = new DiffDetailController({} as unknown as App, limitDeps(over), recordingHost());
+  it("🔑 more diff groups than the old 1000 limit open the editor (no group limit any more)", async () => {
+    let base = "";
+    let sibling = "";
+    for (let i = 0; i < 1200; i++) {
+      base += `same ${i}\nmine ${i}\n`;
+      sibling += `same ${i}\ntheirs ${i}\n`;
+    }
+    const { entry } = await writeInputs(base, sibling);
+    const ctl = new DiffDetailController({} as unknown as App, limitDeps(realLines), recordingHost());
     await ctl.mount(container, entry);
-
-    const msg = container.querySelector(".diff2-detail-too-big")?.textContent ?? "";
-    expect(msg).toContain(`${MAX_DIFF_GROUPS + 1} changed places`);
-    expect(msg).toContain(`${MAX_DIFF_GROUPS}`);
-    expect(ctl.getView()).toBeNull();
-    expect(await fx.vault.adapter.exists(autosaveDir(conflictId))).toBe(false);
+    expect(container.querySelector(".diff2-detail-too-big")).toBeNull();
+    expect(ctl.getView()).not.toBeNull();
     ctl.dispose();
-  });
+  }, 30_000);
 
   it("🔑 closing the tab mid-comparison stops it: no session, no editor, no message", async () => {
     const { entry, conflictId } = await writeInputs("a\nMINE\nc\n", "a\nTHEIRS\nc\n");

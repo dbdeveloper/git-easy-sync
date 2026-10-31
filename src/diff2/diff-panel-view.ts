@@ -95,7 +95,7 @@ export interface DiffEditViewDeps {
   // Diff highlight granularity: true → word-level, false → char-level (default). Read at open.
   diffWordLevel?: () => boolean;
   // DIFF-EDITOR-V2.md §2.1.1 — the line comparison off the main thread (the
-  // CPU worker): null = gave up (over a minute); rejects with CancelledError
+  // CPU worker): null = gave up (over three minutes); rejects with CancelledError
   // when `signal` aborts. Optional (test fixtures omit it → compared inline,
   // within the same limits).
   diffLines?: (base: string, sibling: string, signal?: AbortSignal) => Promise<LineDiffPart[] | null>;

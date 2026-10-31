@@ -15,7 +15,6 @@ vi.mock("diff", async (orig) => {
 import { buildModel } from "../../src/diff2/diff-model";
 import {
   DiffTooLargeError,
-  MAX_DIFF_GROUPS,
   clearLineDiffCache,
   countDiffGroups,
   prepareLineDiff,
@@ -66,25 +65,19 @@ describe("countDiffGroups", () => {
 });
 
 describe("prepareLineDiff — limits", () => {
-  it("🔑 the comparison gave up (time limit) → DiffTooLargeError 'time'", async () => {
+  it("🔑 the comparison gave up (time limit) → DiffTooLargeError", async () => {
     const giveUp: LineDiffRunner = async () => null;
     const err = await prepareLineDiff("a\n", "b\n", giveUp, new AbortController().signal).catch((e) => e);
     expect(err).toBeInstanceOf(DiffTooLargeError);
-    expect((err as DiffTooLargeError).reason).toBe("time");
+    expect((err as DiffTooLargeError).message).toContain("three minutes");
   });
 
-  it("🔑 more diff groups than the editor may show → DiffTooLargeError 'groups' with the count", async () => {
-    const over: LineDiffRunner = async () => partsWithGroups(MAX_DIFF_GROUPS + 1);
-    const err = await prepareLineDiff("a\n", "b\n", over, new AbortController().signal).catch((e) => e);
-    expect(err).toBeInstanceOf(DiffTooLargeError);
-    expect((err as DiffTooLargeError).reason).toBe("groups");
-    expect((err as DiffTooLargeError).groups).toBe(MAX_DIFF_GROUPS + 1);
-  });
-
-  it("exactly the limit still opens", async () => {
-    const at: LineDiffRunner = async () => partsWithGroups(MAX_DIFF_GROUPS);
-    const r = await prepareLineDiff("a\n", "b\n", at, new AbortController().signal);
-    expect(r.groups).toBe(MAX_DIFF_GROUPS);
+  // Owner, 2026-10-31: with Obsidian 1.14.5 (its CM6 fixed) a 1.3 MB file with
+  // ~5000 groups is fluent — the number of groups is no longer a limit.
+  it("🔑 any number of diff groups opens — only the time limit stops a comparison", async () => {
+    const many: LineDiffRunner = async () => partsWithGroups(20_000);
+    const r = await prepareLineDiff("a\n", "b\n", many, new AbortController().signal);
+    expect(r.groups).toBe(20_000);
   });
 });
 

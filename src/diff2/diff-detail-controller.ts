@@ -73,7 +73,6 @@ import { CancelledError } from "../errors";
 import WorkerClient from "../worker/worker-client";
 import {
   DiffTooLargeError,
-  MAX_DIFF_GROUPS,
   prepareLineDiff,
   type LineDiffRunner,
 } from "./line-diff";
@@ -472,15 +471,8 @@ export class DiffDetailController {
     const stopped = (err: unknown): boolean => {
       if (err instanceof CancelledError && abort.signal.aborted) return true; // the tab closed
       if (!(err instanceof DiffTooLargeError)) return false;
-      const why =
-        err.reason === "time"
-          ? "the comparison took over a minute"
-          : `${err.groups} changed places, more than the ${MAX_DIFF_GROUPS} the editor can show`;
-      this.deps.logger?.info("diff2 too many changes to show", {
-        base: entry.basePath,
-        reason: err.reason,
-        groups: err.groups,
-      });
+      const why = err.message;
+      this.deps.logger?.info("diff2 too many changes to show", { base: entry.basePath, reason: "time" });
       parent.classList.add("diff2-detail-too-big-host"); // the toolbar stays hidden
       // The message stays until the user closes it (owner, 2026-10-30: a tab
       // that vanished by itself left "what was there?" unanswered).

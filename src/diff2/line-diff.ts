@@ -7,16 +7,13 @@
 // Obsidian for minutes on open — `diffLines` ran with no limit, on the main
 // thread, and twice (session fingerprint + editor). Now the comparison runs
 // ONCE per (base, sibling) pair through a runner (the CPU worker in
-// production), within a time limit and a limit on diff groups; every later
-// `buildModel` of that pair takes the result from here.
+// production), within a time limit; every later `buildModel` of that pair
+// takes the result from here. The number of diff groups is NOT a limit
+// (owner, 2026-10-31): the slowness a 1000-group cap guarded against was a
+// CM6 bug in Obsidian < 1.14.5 desktop; with it fixed, ~5000 groups in a
+// 1.3 MB file scroll fluently.
 
 import type { LineDiffPart } from "../worker/types";
-
-// Starting value 1000 — to be tuned in the field (the phone may need less).
-// TEMPORARILY 10 000 (owner, 2026-10-30): the field test opens files of
-// different sizes to find where the editor gets slow; set the real value
-// from those numbers.
-export const MAX_DIFF_GROUPS = 10_000;
 
 // (base, sibling, signal) → the parts, or null = gave up (time limit).
 // Rejects with CancelledError when `signal` aborts (the tab closed).
@@ -26,12 +23,10 @@ export type LineDiffRunner = (
   signal?: AbortSignal,
 ) => Promise<LineDiffPart[] | null>;
 
+// The comparison ran out of time.
 export class DiffTooLargeError extends Error {
-  constructor(
-    readonly reason: "time" | "groups",
-    readonly groups?: number,
-  ) {
-    super(reason === "time" ? "the comparison took over a minute" : `${groups} changed places`);
+  constructor() {
+    super("the comparison took over three minutes");
   }
 }
 
@@ -64,8 +59,8 @@ export function countDiffGroups(parts: readonly LineDiffPart[]): number {
   return groups;
 }
 
-// Compare the pair once (a no-op when it is already prepared) and check the
-// limits. Throws DiffTooLargeError over a limit; CancelledError when the tab
+// Compare the pair once (a no-op when it is already prepared). Throws
+// DiffTooLargeError when it ran out of time; CancelledError when the tab
 // closed. `compared` is false when the result came from the cache.
 export async function prepareLineDiff(
   base: string,
@@ -78,9 +73,8 @@ export async function prepareLineDiff(
   const t0 = performance.now();
   const parts = await run(base, sibling, signal);
   const ms = Math.round(performance.now() - t0);
-  if (parts === null) throw new DiffTooLargeError("time");
+  if (parts === null) throw new DiffTooLargeError();
   const groups = countDiffGroups(parts);
-  if (groups > MAX_DIFF_GROUPS) throw new DiffTooLargeError("groups", groups);
   cache.unshift({ base, sibling, parts });
   cache.length = Math.min(cache.length, 2);
   return { groups, ms, compared: true };

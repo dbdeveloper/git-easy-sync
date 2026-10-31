@@ -942,7 +942,8 @@ describe("WorkerClient merge — always in a worker, never longer than the limit
 
 // DIFF-EDITOR-V2.md §2.1.1 (owner, 2026-10-30): the diff editor's line
 // comparison runs in a CPU worker — Obsidian stays alive and the loading
-// spinner turns — within one minute; closing the tab stops it at once.
+// spinner turns — within three minutes (owner, 2026-10-31); closing the tab
+// stops it at once.
 describe("WorkerClient diffLines — the diff editor's comparison, off the main thread", () => {
   function client(extra?: { diffTimeoutMs?: number }) {
     return new WorkerClient({
@@ -954,7 +955,7 @@ describe("WorkerClient diffLines — the diff editor's comparison, off the main 
     });
   }
 
-  it("🔑 posts a diff-lines job carrying the one-minute budget", async () => {
+  it("🔑 posts a diff-lines job carrying the three-minute budget", async () => {
     FakeWorker.instances = [];
     FakeWorker.replyMode = "drop";
     const posted: WorkerRequest[] = [];
@@ -974,7 +975,7 @@ describe("WorkerClient diffLines — the diff editor's comparison, off the main 
     await Promise.resolve();
     const job = posted.find((m) => m.op === "diff-lines") as Extract<WorkerRequest, { op: "diff-lines" }> | undefined;
     expect(job).toBeDefined();
-    expect(job!.timeout).toBe(60_000);
+    expect(job!.timeout).toBe(180_000);
     c.terminate();
   });
 
