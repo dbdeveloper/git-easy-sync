@@ -597,12 +597,12 @@ description.
   for conflicts and other, off for history and deleted; on a phone:
   off everywhere. Each document has its own `Edit` switch in the
   toolbar.
-- **Diff highlight mode** — `Char` marks only the differing
-  characters inside a changed line, `Word` (default) marks whole
-  words. Large blocks always use words.
 - **Auto-focus** — on opening, and after each resolve, scroll to the
   first remaining difference. On by default; also switchable per
   document.
+- **Diff highlight mode** — `Char` marks only the differing
+  characters inside a changed line, `Word` (default) marks whole
+  words. Large blocks always use words.
 
 **Very large comparisons.** The editor compares the two files in the
 background, so Obsidian stays responsive and a spinner shows the

@@ -795,8 +795,8 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       // ── Diff Editor ─────────────────────────────────────────────────
       new Setting(containerEl).setName("Diff Editor").setHeading();
 
-      // Editor mode, Diff highlight mode and Auto-focus each hold one value per situation
-      // the editor is opened in (owner, 2026-10-31): ONE block per setting, one description,
+      // Editor mode, Auto-focus and Diff highlight mode (in the editor toolbar's order) each
+      // hold one value per situation the editor is opened in (owner, 2026-10-31): ONE block per setting, one description,
       // and a row of columns — label above, control below; a column that does not fit wraps
       // to the next line. A situation with no stored value shows its default
       // (diff-editor-defaults.ts: per situation, per platform).
@@ -839,6 +839,21 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
       );
 
       situationRow(
+          "Auto-focus",
+          "On opening, and after each resolve, scroll the diff editor to the first " +
+          "remaining difference (cursor at its start). Each document can switch it " +
+          "in its toolbar.",
+          (col, situation) => {
+              new ToggleComponent(col)
+                  .setValue(autoFocusFor(settings, situation))
+                  .onChange(async (value) => {
+                      settings.diffEditorAutoFocus = { ...(settings.diffEditorAutoFocus ?? {}), [situation]: value };
+                      await this.plugin.saveSettings();
+                  });
+          },
+      );
+
+      situationRow(
           "Diff highlight mode",
           "How the changed parts inside a line are highlighted: 'Char' marks only " +
           "the differing characters, 'Word' marks whole changed words. Large blocks " +
@@ -853,21 +868,6 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
                           ...(settings.diffEditorHighlight ?? {}),
                           [situation]: value === "characters" ? "characters" : "words",
                       };
-                      await this.plugin.saveSettings();
-                  });
-          },
-      );
-
-      situationRow(
-          "Auto-focus",
-          "On opening, and after each resolve, scroll the diff editor to the first " +
-          "remaining difference (cursor at its start). Each document can switch it " +
-          "in its toolbar.",
-          (col, situation) => {
-              new ToggleComponent(col)
-                  .setValue(autoFocusFor(settings, situation))
-                  .onChange(async (value) => {
-                      settings.diffEditorAutoFocus = { ...(settings.diffEditorAutoFocus ?? {}), [situation]: value };
                       await this.plugin.saveSettings();
                   });
           },
