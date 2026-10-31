@@ -502,9 +502,13 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       manifest on disk, `heldPluginUpdates` emptied; the next Sync `pulled:0`, nothing
       committed. The probe was NOT reloaded — the gate refused the 99.0.0 manifest, which is
       correct for this staging; see the gate item above.)*
-- [ ] **§28 — plugin collisions are decided by SEMVER, not mtime.** Two devices update
+- [x] **§28 — plugin collisions are decided by SEMVER, not mtime.** Two devices update
       the same third-party plugin: the HIGHER `manifest.json` version wins regardless of
-      which was written later.
+      which was written later. *(Field 2026-10-31, 2.0.10-beta, desktop, Obsidian 1.14.5,
+      reload probe: A pushed 3.0.0; then 2.5.0 was written LATER on B and on T3. Both
+      branches of the resolver ran — B drain-only (pull side), T3 with commit (2.5.0 already
+      in a batch, reconcile side): `plugin-core collision resolved by VERSION … winner=remote`
+      for main.js and manifest.json alike, 3.0.0 on disk, nothing pushed, no conflict.)*
 - [ ] 📱 **`isDesktopOnly` on a phone — the ONE Фаза 1 branch never run on real
       hardware.** A plugin that is RUNNING on mobile because an older version had no
       such flag sits in `enabledPlugins`, so the "skip disabled" filter never fires and
