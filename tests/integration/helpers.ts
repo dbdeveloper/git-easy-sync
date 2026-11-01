@@ -343,23 +343,36 @@ export async function writeRemoteFile(
   env: RepoEnv = requireEnv(),
 ): Promise<void> {
   const { token, owner, repo } = env;
-  const existingSha = await getRemoteFileSha(branch, path, env);
   const buf = Buffer.isBuffer(content)
     ? content
     : Buffer.from(content, "utf-8");
-  const body: Record<string, unknown> = {
-    message,
-    content: buf.toString("base64"),
-    branch,
-  };
-  if (existingSha) body.sha = existingSha;
-  const res = await ghFetch(
-    `${GH}/repos/${owner}/${repo}/contents/${encodePathForUrl(path)}`,
-    { method: "PUT", token, body },
-  );
-  if (res.status !== 200 && res.status !== 201) {
-    throw new Error(`writeRemoteFile → ${res.status}: ${res.text}`);
+  // The sha comes from the branch's tree read BY NAME, which GitHub
+  // serves eventually-consistent: right after a previous write it can
+  // still answer the old tree, and the PUT then fails with 409 "<path>
+  // does not match <sha>" (field: integration run 2026-10-31,
+  // resolve-in-one-sync). Re-read the sha and retry — the same stale
+  // read the engine survives (SYNC2 §7.10), here in the test harness.
+  let last = "";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const existingSha = await getRemoteFileSha(branch, path, env);
+    const body: Record<string, unknown> = {
+      message,
+      content: buf.toString("base64"),
+      branch,
+    };
+    if (existingSha) body.sha = existingSha;
+    const res = await ghFetch(
+      `${GH}/repos/${owner}/${repo}/contents/${encodePathForUrl(path)}`,
+      { method: "PUT", token, body },
+    );
+    if (res.status === 200 || res.status === 201) return;
+    if (res.status !== 409) {
+      throw new Error(`writeRemoteFile → ${res.status}: ${res.text}`);
+    }
+    last = res.text;
+    await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
   }
+  throw new Error(`writeRemoteFile → 409 after retries: ${last}`);
 }
 
 /**
