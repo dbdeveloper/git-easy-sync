@@ -154,7 +154,7 @@ import {
   type DiffEditorOrigin,
   type EditorTabState,
 } from "./diff2/editor-tabs";
-import { EditorBusyModal, ConflictResolvedModal } from "./diff2/recovery-dialog";
+import { EditorBusyModal } from "./diff2/recovery-dialog";
 import {
   autosaveIdForEntry,
   findAllConflicts,
@@ -713,16 +713,8 @@ export default class GitHubSyncPlugin extends Plugin {
       this.logger.info("Plugin onload: initSync2 done");
 
       this.app.workspace.onLayoutReady(() => {
-        // Start-up ends once the restored layout has had one pass of the
-        // editor-tab cleaner (owner, 2026-10-12): until then no window about
-        // a replaced conflict copy.
-        void (async () => {
-          try {
-            await this.closeVanishedCopyEditors();
-          } finally {
-            this.startingUp = false;
-          }
-        })();
+        // One pass of the editor-tab cleaner over the restored layout.
+        void this.closeVanishedCopyEditors();
         // §4.5.3 (B3) — replay a fresh saved layout (fast reload) so our windows return
         // in place; then start snapshotting the layout on every change so onunload has a
         // current pre-teardown snapshot. Restore FIRST (its changeLayout fires a
@@ -1863,41 +1855,20 @@ export default class GitHubSyncPlugin extends Plugin {
       },
       // The drain touched a conflict (owner, 2026-10-09): every open Diff
       // Panel re-reads its list — the count alone misses a replaced copy.
-      // The drain REPLACED a conflict copy (owner, 2026-10-09): forget the
-      // OLD one at once — close its editor tabs, wipe its autosave dir,
-      // whether a tab was open or not. Tabs are read from their SERIALIZED
-      // state, so a deferred (background) leaf counts too.
-      // NOT awaited by the drain's progress (owner, 2026-10-12): the focused
-      // tab now shows a window that waits for a click, and a drain must never
-      // stand still on a click. The forget runs on its own; its own order
-      // (close tabs, then wipe the autosave) is unchanged.
+      // The drain REPLACED a conflict copy (owner, 2026-10-09): wipe the OLD
+      // copy's autosave dir, whether a tab was open or not. Its editor tabs
+      // are closed by the vanished-copy cleaner on the old copy's delete —
+      // silently, the focused one to the Diff Panel (owner, 2026-11-04,
+      // TODO 59; see forget-replaced-copy.ts). No window, so nothing waits
+      // on a click and the drain may await this; its own catch logs a
+      // failure.
       onConflictCopyReplaced: async (path: string, oldSiblingPath: string) => {
-        void (async () => {
         const r = await forgetReplacedConflictCopy(
-          {
-            editorTabs: () =>
-              this.app.workspace.getLeavesOfType(DIFF2_EDITOR_VIEW_TYPE).map((l) => {
-                const st = l.getViewState()?.state as { siblingPath?: unknown } | undefined;
-                return {
-                  siblingPath: typeof st?.siblingPath === "string" ? st.siblingPath : null,
-                  isActive: this.isTabInUse(l),
-                  detach: () => l.detach(),
-                };
-              }),
-            adapter: this.app.vault.adapter,
-            notifyReplaced: async (basePath: string) => {
-              if (this.startingUp) return; // no windows at start-up (owner)
-              await new ConflictResolvedModal(this.app, basePath, "replaced").prompt();
-            },
-            onFocusedClosed: () => void this.activateDiffEditView(),
-          },
+          { adapter: this.app.vault.adapter },
           path,
           oldSiblingPath,
         );
         this.logger.warn("Replaced conflict copy forgotten", { path, oldSiblingPath, ...r });
-        })().catch((err) =>
-          this.logger.warn("Could not forget the replaced conflict copy (tabs / autosave)", { path, err: `${err}` }),
-        );
       },
       onConflictsTouched: () => {
         for (const leaf of this.app.workspace.getLeavesOfType(DIFF2_PANEL_VIEW_TYPE)) {
@@ -2189,10 +2160,6 @@ export default class GitHubSyncPlugin extends Plugin {
   private isTabInUse(leaf: WorkspaceLeaf): boolean {
     return leaf === this.app?.workspace?.getMostRecentLeaf?.();
   }
-
-  // True from onload until the first editor-tab cleaner pass after the
-  // layout is ready — no "copy replaced" window in that window.
-  private startingUp = true;
 
   // Is this conflict copy resolved — gone, or byte-equal to its base? The
   // conflict model's per-copy rule (conflict-live.ts), for a copy known by

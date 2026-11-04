@@ -3,9 +3,15 @@
 // AGPL-3.0 — see LICENSE.
 
 // Owner, 2026-10-09: when the drain REPLACES a conflict copy with a newer
-// server version, the OLD copy is forgotten at once: (1) its editor tabs
-// close, (2) its diff2-autosave dir is wiped — whether a tab was open or not.
-// Nothing else, and no other case.
+// server version, the OLD copy's diff2-autosave dir is wiped — whether a tab
+// was open or not.
+//
+// Owner, 2026-11-04 (TODO 59): the OLD copy's editor tabs are NOT this
+// function's business any more. The replace transaction deletes the old copy
+// before the drain calls us, and the vanished-copy cleaner closes its tabs
+// on that delete — silently, the focused one to the Diff Panel. Field run
+// 2026-11-04: the cleaner won both times, and this function then failed on
+// the dir the cleaner had just wiped (ENOENT) and logged a false WARN.
 
 import { describe, expect, it } from "vitest";
 import { forgetReplacedConflictCopy } from "../../src/diff2/forget-replaced-copy";
@@ -15,72 +21,60 @@ const BASE = "notes/a.md";
 const OLD = "notes/a.conflict-from-Mac-2026-10-09T18-26-16Z.md";
 const NEW = "notes/a.conflict-from-Mac-2026-10-09T18-26-52Z.md";
 
-function setup(openTabs: (string | null)[], dirs: string[], activeIndex = -1) {
+function setup(dirs: string[]) {
   const existing = new Set(dirs);
-  const order: string[] = [];
-  const tabs = openTabs.map((siblingPath, i) => ({
-    siblingPath,
-    isActive: i === activeIndex,
-    detach: () => order.push(`close:${i}`),
-  }));
+  const removed: string[] = [];
   const adapter = {
     exists: async (p: string) => existing.has(p),
-    rmdir: async (p: string) => {
-      order.push(`rmdir:${p}`);
+    rmdir: async (p: string, _recursive?: boolean) => {
+      if (!existing.has(p)) throw new Error(`ENOENT: no such file or directory, lstat '${p}'`);
+      removed.push(p);
       existing.delete(p);
     },
   };
-  return {
-    order,
-    existing,
-    deps: {
-      editorTabs: () => tabs,
-      adapter,
-      notifyReplaced: async (basePath: string) => {
-        order.push(`notify:${basePath}`);
-      },
-      onFocusedClosed: () => order.push("panel"),
-    },
-  };
+  return { existing, removed, adapter };
 }
 
 describe("forgetReplacedConflictCopy", () => {
-  const trackedDir = autosaveDir(deriveAutosaveId("tracked", BASE, OLD));
+  const oldDir = autosaveDir(deriveAutosaveId("tracked", BASE, OLD));
   const newDir = autosaveDir(deriveAutosaveId("tracked", BASE, NEW));
 
-  it("🔑 closes the OLD copy's tabs FIRST, then wipes its autosave dir; the new copy is untouched", async () => {
-    const s = setup([OLD, NEW, null], [trackedDir, newDir]);
-    const r = await forgetReplacedConflictCopy(s.deps, BASE, OLD);
-    expect(s.order).toEqual(["close:0", `rmdir:${trackedDir}`]);
+  it("🔑 wipes the OLD copy's autosave dir; the new copy's dir is untouched", async () => {
+    const s = setup([oldDir, newDir]);
+    const r = await forgetReplacedConflictCopy({ adapter: s.adapter }, BASE, OLD);
+    expect(s.removed).toEqual([oldDir]);
     expect(s.existing.has(newDir)).toBe(true);
-    expect(r).toEqual({ closedTabs: 1, wipedDirs: 1 });
-  });
-
-  it("🔑 no tab open → the dir is wiped anyway", async () => {
-    const s = setup([], [trackedDir]);
-    const r = await forgetReplacedConflictCopy(s.deps, BASE, OLD);
-    expect(s.existing.has(trackedDir)).toBe(false);
-    expect(r).toEqual({ closedTabs: 0, wipedDirs: 1 });
+    expect(r).toEqual({ wipedDirs: 1 });
   });
 
   it("nothing there → nothing done", async () => {
-    const s = setup([NEW], [newDir]);
-    expect(await forgetReplacedConflictCopy(s.deps, BASE, OLD)).toEqual({ closedTabs: 0, wipedDirs: 0 });
-    expect(s.order).toEqual([]);
+    const s = setup([newDir]);
+    expect(await forgetReplacedConflictCopy({ adapter: s.adapter }, BASE, OLD)).toEqual({ wipedDirs: 0 });
+    expect(s.removed).toEqual([]);
   });
 
-  // Owner, 2026-10-12: the copy the user is editing RIGHT NOW was replaced by a
-  // newer server version — they are told ([Exit]) before the tab goes, and
-  // land in the Diff Panel. A tab not in focus closes silently, as before.
-  it("🔑 the FOCUSED tab of the replaced copy: notify → close → back to the panel", async () => {
-    const s = setup([OLD], [trackedDir], 0);
-    await forgetReplacedConflictCopy(s.deps, BASE, OLD);
-    expect(s.order.slice(0, 3)).toEqual([`notify:${BASE}`, "close:0", "panel"]);
+  // The field race of 2026-11-04: `exists` says yes, the vanished-copy
+  // cleaner wipes the same dir, then our rmdir finds nothing.
+  it("🔑 the dir vanishes between exists and rmdir (the cleaner got there first) → no throw", async () => {
+    const s = setup([oldDir]);
+    const adapter = {
+      exists: s.adapter.exists,
+      rmdir: async (p: string) => {
+        s.existing.delete(p); // the other deleter, a moment earlier
+        return s.adapter.rmdir(p, true);
+      },
+    };
+    await expect(forgetReplacedConflictCopy({ adapter }, BASE, OLD)).resolves.toEqual({ wipedDirs: 0 });
   });
 
-  it("a tab NOT in focus: no window, no panel", async () => {
-    const s = setup([OLD], [trackedDir]);
-    await forgetReplacedConflictCopy(s.deps, BASE, OLD);
-    expect(s.order.filter((o) => o.startsWith("notify") || o === "panel")).toEqual([]);
+  it("a real rmdir failure (the dir is still there) is NOT swallowed", async () => {
+    const s = setup([oldDir]);
+    const adapter = {
+      exists: s.adapter.exists,
+      rmdir: async () => {
+        throw new Error("EACCES: permission denied");
+      },
+    };
+    await expect(forgetReplacedConflictCopy({ adapter }, BASE, OLD)).rejects.toThrow("EACCES");
   });
 });
