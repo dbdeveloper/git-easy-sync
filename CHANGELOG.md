@@ -333,6 +333,14 @@ that cannot break Obsidian, and GitHub's real file-size limit.
   conflict that no longer existed. The tab now closes by itself and
   writes nothing — the files on disk have the last word. Unsaved
   edits in that tab are discarded.
+- **A conflict copy replaced by a newer server version is handled
+  the same way.** If a sync brings a newer version while you have
+  the old copy open, its tab closes quietly and you land in the
+  Diff Panel, where the new copy is listed under its new time. The
+  "The conflict copy was replaced" window is gone: it usually came
+  too late to show at all, and could have contradicted the quiet
+  close. A false "Could not forget the replaced conflict copy"
+  warning in the log is gone too.
 - **Setting "Maximum auto-merge file size" to 0 did nothing.** The
   field took 0 for a typo and quietly stored the 1 MB default, so
   conflicts kept merging automatically. 0 now means what it was
