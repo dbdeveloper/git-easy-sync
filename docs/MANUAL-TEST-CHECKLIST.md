@@ -520,10 +520,18 @@ If `.gitignore` commits keep coming, a conflict copy appears, or a line is lost:
       CDP: still running, 3.0.0 in memory, 3.1.0 on disk — the hold does not look at this
       flag, so the files land and only the gate saves the running instance. No FAILED
       line, no "updated" toast.)*
-- [ ] **Self-update writes through the bootloader.** Updating THIS plugin stages the new
+- [x] **Self-update writes through the bootloader.** Updating THIS plugin stages the new
       bytes beside the live `main.js` and applies them at the next load — the file
       Obsidian is running is never overwritten underneath it. Verify on mobile too
       (Capacitor refuses a rename onto an existing file).
+      *(Field 2026-11-04, Obsidian 1.14.5 desktop / 1.14.4 Pixel 6 Pro: A pushed a new
+      `main.js` (same 2.0.10-beta — the trigger is the bytes, not the version number).
+      B, T3 and the phone each logged `self-update staged for the next start` →
+      `BRAT-style reload done id=git-easy-sync` → `initSync2: applied self-update settled
+      in the baseline`; `main.js` on all four devices hashes `b25c98af…` (= the build),
+      no `*.ges-tmp.*` left behind, no WARN/ERROR from the update — on the phone no
+      "Destination file already exists". Earlier sightings: Pixel 2026-10-29
+      (2.0.8 → 2.0.9-beta) and T3 2026-10-30 (staged files applied on click-enable), §7.)*
 
 ## 5d. Sync progress, cancel, and what the engine tells you (🖥️📱)
 
