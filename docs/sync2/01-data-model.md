@@ -142,7 +142,8 @@ repository can look exactly like a mass deletion — so only identity can.
 > watermark and always falls through to the per-file stat comparison (§1.4).
 > `lastSyncTreeSha` is written by the drain's epilogue and read only by that
 > same epilogue, to avoid re-fetching the tree when the head did not move; no
-> other code reads it. Both are listed in the chapter's review notes.
+> other code reads it. This note is temporary: it is removed once the owner
+> has decided what both fields should be.
 
 ## 1.4 Per-file baselines (cold metadata)
 
@@ -346,7 +347,8 @@ re-derived from the filesystem; it is an ordered list because the newest copy
 is the one later merges work with. An empty list is a legal state, distinct
 from "no record".
 
-The ledger is written only by the drain. Everything else — the user interface,
+The ledger is written by the drain; the only other writer is the identity
+check (§1.3), which clears it when the Repo changes. Everything else — the user interface,
 the commit pass — reads it together with the disk to answer "is this conflict
 still in force?" through one predicate (chapter 5). A ledger that cannot be
 parsed reads as empty and the event is logged as a real degradation: the
