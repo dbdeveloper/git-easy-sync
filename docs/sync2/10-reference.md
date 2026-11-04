@@ -39,11 +39,11 @@ Per-section rows are added as the chapters are written.
 
 | Document | New section(s) |
 |---|---|
-| `SYNC2-NEW-DRAIN.md` | — |
-| `SYNC2-FIX.md` | — |
+| `SYNC2-NEW-DRAIN.md` | §I → 1.1, 1.4; §V → 1.6 |
+| `SYNC2-FIX.md` | §2 → 1.9 (invariants); §12 → 1.5 (sync store) |
 | `SYNC2-DOT-FILES-REFACTOR.md` | — |
 | `SYNC2-PLUGIN-UPDATE-COMPAT.md` | — |
-| `SYNC2-METAFILE-REFACTOR.md` | — |
+| `SYNC2-METAFILE-REFACTOR.md` | §1–§2 → 1.3 (hot), 1.4 (cold) |
 | `SYNC2-COMMIT-PASS-PERF.md` | — |
 | `SYNC2-RESET-PLUGIN.md` | — |
 | `SYNC2-MASTER-PLAN.md` | — |

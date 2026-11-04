@@ -22,7 +22,7 @@ separately in [`PSEUDO-MERGE-MODE.md`](./PSEUDO-MERGE-MODE.md).
 
 | # | Chapter | Status |
 |---|---|---|
-| 1 | [Data Model](./sync2/01-data-model.md) | not yet written |
+| 1 | [Data Model](./sync2/01-data-model.md) | written |
 | 2 | [Scope: What Is Synchronized](./sync2/02-scope.md) | not yet written |
 | 3 | [The Commit Pass](./sync2/03-commit-pass.md) | not yet written |
 | 4 | [The Drain](./sync2/04-drain.md) | not yet written |
